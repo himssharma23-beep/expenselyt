@@ -37,7 +37,7 @@ jobs:
             --exclude=.env \
             --exclude=.claude \
             --exclude=*.log \
-            -czf release.tgz . || true 
+            -czf release.tgz . || true
 
       - name: Upload release
         env:
