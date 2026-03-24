@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shared Friends List — Expense Lite AI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--em:#145A3C;--em-l:#1D7A52;--em-xl:#E2F5EC;--amber:#F0A030;--red:#C94444;--green:#16A34A;--bg:#F4F5F7;--t1:#1A1D24;--t2:#5F6B7A;--t3:#9CA3B0;--border:#E4E7EC;--white:#FFF;--card:#FFF}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;color:var(--t1)}
+.topbar{background:var(--em);padding:14px 24px;display:flex;align-items:center;gap:14px}
+.topbar-logo{display:flex;align-items:center;gap:10px}
+.topbar-title{font-size:17px;font-weight:700;color:#fff}
+.topbar-sub{font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:1.2px}
+.page{max-width:900px;margin:0 auto;padding:28px 20px}
+.page-header{margin-bottom:24px}
+.page-header h1{font-size:22px;font-weight:700;color:var(--t1);margin-bottom:4px}
+.page-header p{font-size:14px;color:var(--t3)}
+.badge-exp{display:inline-block;background:#FEF2F2;color:var(--red);border:1px solid #FECACA;border-radius:6px;font-size:11px;font-weight:600;padding:2px 8px;margin-left:8px}
+.friend-card{background:var(--white);border-radius:14px;border:1px solid var(--border);margin-bottom:20px;overflow:hidden}
+.friend-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer;user-select:none}
+.friend-name{font-size:16px;font-weight:600;color:var(--t1)}
+.balance{font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.balance.pos{color:var(--green)}
+.balance.neg{color:var(--red)}
+.balance.zero{color:var(--t3)}
+.chevron{font-size:18px;color:var(--t3);transition:transform 0.2s}
+.friend-card.open .chevron{transform:rotate(180deg)}
+.txn-list{border-top:1px solid var(--border);display:none}
+.friend-card.open .txn-list{display:block}
+.txn-row{display:grid;grid-template-columns:90px 1fr 1fr;gap:8px;padding:10px 20px;border-bottom:1px solid #f0f0f0;font-size:13.5px;align-items:center}
+.txn-row:last-child{border-bottom:none}
+.txn-date{color:var(--t3);font-size:12.5px}
+.txn-detail{color:var(--t1)}
+.txn-amt{text-align:right;font-weight:600;font-family:'JetBrains Mono',monospace;font-size:13px}
+.txn-amt.gave{color:var(--red)}
+.txn-amt.got{color:var(--green)}
+.no-txn{padding:18px 20px;color:var(--t3);font-size:13.5px;text-align:center}
+.loading-state{text-align:center;padding:60px 20px;color:var(--t3)}
+.error-state{text-align:center;padding:60px 20px}
+.error-state h2{color:var(--red);margin-bottom:8px}
+.error-state p{color:var(--t3);font-size:14px}
+.summary-row{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+.sum-card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:14px 20px;flex:1;min-width:140px}
+.sum-label{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:0.8px;font-weight:600;margin-bottom:4px}
+.sum-val{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.sum-val.pos{color:var(--green)}
+.sum-val.neg{color:var(--red)}
+.footer{text-align:center;padding:32px 20px;font-size:12px;color:var(--t3)}
+.footer a{color:var(--em);text-decoration:none;font-weight:600}
+@media(max-width:600px){.txn-row{grid-template-columns:80px 1fr;}.txn-amt{grid-column:2;text-align:left;}.summary-row{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-logo">
+    <svg width="36" height="36" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="alb" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse"><stop stop-color="#051a0f"/><stop offset="1" stop-color="#1A6B44"/></linearGradient>
+        <linearGradient id="alg" x1="0" y1="0" x2="0" y2="1"><stop stop-color="white" stop-opacity="0.18"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient>
+      </defs>
+      <rect width="44" height="44" rx="11" fill="url(#alb)"/>
+      <rect width="44" height="22" rx="11" fill="url(#alg)"/>
+      <rect x="6" y="32" width="4" height="8" rx="1" fill="white" fill-opacity="0.16"/>
+      <rect x="12" y="28" width="4" height="12" rx="1" fill="white" fill-opacity="0.16"/>
+      <rect x="18" y="24" width="4" height="16" rx="1" fill="white" fill-opacity="0.16"/>
+      <rect x="24" y="27" width="4" height="13" rx="1" fill="white" fill-opacity="0.16"/>
+      <rect x="30" y="21" width="4" height="19" rx="1" fill="white" fill-opacity="0.22"/>
+      <polyline points="8,32 14,28 20,23 26,26 32,21" stroke="#F0A030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="32" cy="21" r="2.5" fill="#F0A030"/>
+      <text x="22" y="25" text-anchor="middle" font-family="'DM Sans','Arial',sans-serif" font-size="19" font-weight="800" fill="#F0A030">₹</text>
+    </svg>
+    <div>
+      <div class="topbar-title">Expense Lite AI</div>
+      <div class="topbar-sub">SHARED VIEW · READ ONLY</div>
+    </div>
+  </div>
+</div>
+<div class="page">
+  <div id="content"><div class="loading-state">Loading shared data…</div></div>
+</div>
+<div class="footer">Shared via <a href="/">Expense Lite AI</a> · Read-only view</div>
+<script>
+const fmt = n => '₹' + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+const token = location.pathname.split('/s/')[1]?.split('/')[0];
+
+async function load() {
+  try {
+    const res = await fetch('/api/public/share/' + token);
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Not found'); }
+    const data = await res.json();
+    render(data);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="error-state"><h2>Link not available</h2><p>${err.message}</p></div>`;
+  }
+}
+
+function render(data) {
+  const friends = data.friends || [];
+  const totalOwed = friends.reduce((s,f) => s + (f.balance > 0 ? f.balance : 0), 0);
+  const totalOwe  = friends.reduce((s,f) => s + (f.balance < 0 ? Math.abs(f.balance) : 0), 0);
+  const filters = data.filters || {};
+  let subtitle = '';
+  if (filters.year && filters.month) subtitle = `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][filters.month-1]} ${filters.year}`;
+  else if (filters.year) subtitle = `Year ${filters.year}`;
+  if (data.expires_at) subtitle += (subtitle ? ' · ' : '') + `Expires ${data.expires_at}`;
+
+  let html = `
+    <div class="page-header">
+      <h1>${esc(data.owner_name || 'Shared')}'s Friends &amp; Loans</h1>
+      <p>${subtitle || 'All time · ' + friends.length + ' friend' + (friends.length !== 1 ? 's' : '')}</p>
+    </div>
+    <div class="summary-row">
+      <div class="sum-card"><div class="sum-label">Others owe me</div><div class="sum-val pos">${fmt(totalOwed)}</div></div>
+      <div class="sum-card"><div class="sum-label">I owe others</div><div class="sum-val neg">${fmt(totalOwe)}</div></div>
+    </div>`;
+
+  if (friends.length === 0) {
+    html += '<div class="friend-card"><div class="no-txn">No friends data to display.</div></div>';
+  } else {
+    friends.forEach((f, i) => {
+      const bal = f.balance;
+      const balClass = bal > 0.005 ? 'pos' : bal < -0.005 ? 'neg' : 'zero';
+      const balText = bal > 0.005 ? `+${fmt(bal)}` : bal < -0.005 ? `-${fmt(bal)}` : '₹0';
+      const balLabel = bal > 0.005 ? 'owes me' : bal < -0.005 ? 'I owe' : 'settled';
+      html += `<div class="friend-card" id="fc${i}">
+        <div class="friend-header" onclick="toggle(${i})">
+          <div>
+            <span class="friend-name">${esc(f.name)}</span>
+            <span style="font-size:12px;color:var(--t3);margin-left:8px">${balLabel}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="balance ${balClass}">${balText}</span>
+            <span class="chevron">⌄</span>
+          </div>
+        </div>
+        <div class="txn-list">`;
+      if (!f.transactions || f.transactions.length === 0) {
+        html += `<div class="no-txn">No transactions${filters.year ? ' for this period' : ''}.</div>`;
+      } else {
+        f.transactions.forEach(t => {
+          const gave = t.paid > 0;
+          html += `<div class="txn-row">
+            <span class="txn-date">${t.txn_date}</span>
+            <span class="txn-detail">${esc(t.details)}</span>
+            <span class="txn-amt ${gave ? 'gave' : 'got'}">${gave ? '−' : '+'}${fmt(gave ? t.paid : t.received)}</span>
+          </div>`;
+        });
+      }
+      html += `</div></div>`;
+    });
+  }
+  document.getElementById('content').innerHTML = html;
+}
+
+function toggle(i) {
+  document.getElementById('fc'+i)?.classList.toggle('open');
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+load();
+</script>
+</body>
+</html>

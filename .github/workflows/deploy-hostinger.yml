@@ -1,0 +1,68 @@
+name: Deploy To Hostinger
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: hostinger-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s" "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ vars.HOSTINGER_SSH_PORT || '22' }}" -H "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pack release
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=node_modules \
+            --exclude=data \
+            --exclude=backups \
+            --exclude=.env \
+            --exclude=.claude \
+            -czf release.tgz .
+
+      - name: Upload release
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ vars.HOSTINGER_SSH_PORT || '22' }}
+          APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -p "$PORT" "$USERNAME@$HOST" "mkdir -p '$APP_DIR/incoming/$SHA'"
+          scp -P "$PORT" release.tgz "$USERNAME@$HOST:$APP_DIR/incoming/$SHA/release.tgz"
+
+      - name: Deploy on server
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ vars.HOSTINGER_SSH_PORT || '22' }}
+          APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
+          APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -p "$PORT" "$USERNAME@$HOST" "
+            set -e
+            mkdir -p '$APP_DIR/incoming/$SHA/source'
+            tar -xzf '$APP_DIR/incoming/$SHA/release.tgz' -C '$APP_DIR/incoming/$SHA/source'
+            cd '$APP_DIR/incoming/$SHA/source'
+            chmod +x scripts/deploy-hostinger.sh
+            APP_DIR='$APP_DIR' APP_NAME='$APP_NAME' bash scripts/deploy-hostinger.sh '$APP_DIR/incoming/$SHA/source'
+            rm -rf '$APP_DIR/incoming/$SHA'
+          "

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" fill="none">
+  <defs>
+    <linearGradient id="iconGrad" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A2E1C"/>
+      <stop offset="1" stop-color="#1A6B44"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="white" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon background -->
+  <rect x="0" y="2" width="44" height="44" rx="11" fill="url(#iconGrad)"/>
+  <!-- Gloss overlay -->
+  <rect x="0" y="2" width="44" height="22" rx="11" fill="url(#gloss)"/>
+
+  <!-- Bar chart decoration (bottom, subtle) -->
+  <rect x="6"  y="34" width="4" height="8"  rx="1" fill="white" fill-opacity="0.13"/>
+  <rect x="12" y="30" width="4" height="12" rx="1" fill="white" fill-opacity="0.13"/>
+  <rect x="18" y="26" width="4" height="16" rx="1" fill="white" fill-opacity="0.13"/>
+  <rect x="24" y="29" width="4" height="13" rx="1" fill="white" fill-opacity="0.13"/>
+  <rect x="30" y="23" width="4" height="19" rx="1" fill="white" fill-opacity="0.18"/>
+  <!-- Trend line in amber over bars -->
+  <polyline points="8,34 14,29 20,25 26,28 32,22" stroke="#F0A030" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="22" r="2.2" fill="#F0A030"/>
+
+  <!-- Rupee symbol, large and centered in upper area -->
+  <text x="22" y="27" text-anchor="middle"
+    font-family="'DM Sans', 'Arial', sans-serif"
+    font-size="20" font-weight="800"
+    fill="#F0A030">₹</text>
+
+  <!-- Wordmark -->
+  <!-- "Expense" -->
+  <text x="54" y="22"
+    font-family="'DM Sans', 'Arial', sans-serif"
+    font-size="15" font-weight="700" letter-spacing="-0.3"
+    fill="#0D3D27">Expense</text>
+  <!-- "Manager" lighter -->
+  <text x="54" y="38"
+    font-family="'DM Sans', 'Arial', sans-serif"
+    font-size="13" font-weight="500" letter-spacing="0.5"
+    fill="#1D7A52">MANAGER</text>
+</svg>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Register — Expense Lite AI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--em:#145A3C;--em-l:#1D7A52;--em-xl:#E2F5EC;--amber:#F0A030;--red:#C94444;--bg:#F4F5F7;--t1:#1A1D24;--t2:#5F6B7A;--t3:#9CA3B0;--border:#E4E7EC;--white:#FFF}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.auth-container{display:flex;width:900px;max-width:95vw;min-height:560px;border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.12)}
+.auth-left{flex:1;background:linear-gradient(135deg,#0A2E1D 0%,#145A3C 50%,#1D7A52 100%);padding:48px 40px;display:flex;flex-direction:column;justify-content:center;color:#fff;position:relative;overflow:hidden}
+.auth-left::before{content:'';position:absolute;top:-80px;right:-80px;width:250px;height:250px;border-radius:50%;background:rgba(255,255,255,0.04)}
+.auth-logo{display:flex;align-items:center;gap:14px;margin-bottom:28px}
+.auth-logo-text{font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.3px;line-height:1.15}
+.auth-logo-tag{font-size:10px;color:rgba(255,255,255,0.45);letter-spacing:1.5px;font-weight:500}
+.auth-left h1{font-size:32px;font-weight:700;margin-bottom:12px;letter-spacing:-0.5px}
+.auth-left p{color:rgba(255,255,255,0.6);font-size:15px;line-height:1.6}
+.auth-right{flex:1;background:var(--white);padding:40px 40px;display:flex;flex-direction:column;justify-content:center}
+.auth-right h2{font-size:24px;font-weight:700;color:var(--t1);margin-bottom:6px}
+.auth-right .subtitle{font-size:14px;color:var(--t3);margin-bottom:28px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:13px;font-weight:500;color:var(--t2);margin-bottom:5px}
+.form-group input{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;font-family:'DM Sans',sans-serif;color:var(--t1);outline:none;transition:all 0.15s}
+.form-group input:focus{border-color:var(--em);box-shadow:0 0 0 3px var(--em-xl)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.btn-login{width:100%;padding:13px;border:none;border-radius:12px;background:var(--em);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.15s;margin-top:8px}
+.btn-login:hover{background:var(--em-l);transform:translateY(-1px);box-shadow:0 4px 16px rgba(20,90,60,0.3)}
+.error-msg{background:#FEF2F2;border:1px solid #FECACA;color:var(--red);padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.switch-link{text-align:center;margin-top:22px;font-size:13.5px;color:var(--t3)}
+.switch-link a{color:var(--em);font-weight:600;text-decoration:none}
+.switch-link a:hover{text-decoration:underline}
+.loading{display:none;align-items:center;justify-content:center;gap:8px}
+.loading .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hint{font-size:11px;color:var(--t3);margin-top:3px}
+@media(max-width:700px){.auth-container{flex-direction:column}.auth-left{padding:28px;min-height:160px}.auth-right{padding:28px}.form-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="auth-container">
+  <div class="auth-left">
+    <div class="auth-logo">
+      <svg width="52" height="52" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="alb" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#051a0f"/><stop offset="1" stop-color="#1A6B44"/>
+          </linearGradient>
+          <linearGradient id="alg" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="white" stop-opacity="0.18"/><stop offset="1" stop-color="white" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <rect width="44" height="44" rx="11" fill="url(#alb)"/>
+        <rect width="44" height="22" rx="11" fill="url(#alg)"/>
+        <rect x="6"  y="32" width="4" height="8"  rx="1" fill="white" fill-opacity="0.16"/>
+        <rect x="12" y="28" width="4" height="12" rx="1" fill="white" fill-opacity="0.16"/>
+        <rect x="18" y="24" width="4" height="16" rx="1" fill="white" fill-opacity="0.16"/>
+        <rect x="24" y="27" width="4" height="13" rx="1" fill="white" fill-opacity="0.16"/>
+        <rect x="30" y="21" width="4" height="19" rx="1" fill="white" fill-opacity="0.22"/>
+        <polyline points="8,32 14,28 20,23 26,26 32,21" stroke="#F0A030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="32" cy="21" r="2.5" fill="#F0A030"/>
+        <text x="22" y="25" text-anchor="middle" font-family="'DM Sans','Arial',sans-serif" font-size="19" font-weight="800" fill="#F0A030">₹</text>
+      </svg>
+      <div>
+        <div class="auth-logo-text">Expense Lite AI</div>
+        <div class="auth-logo-tag">TRACK · MANAGE · GROW</div>
+      </div>
+    </div>
+    <h1>Expense Lite AI</h1>
+    <p>Create your account to start managing expenses, track loans, and split bills with friends.</p>
+  </div>
+  <div class="auth-right">
+    <h2>Create account</h2>
+    <p class="subtitle">Fill in your details to get started</p>
+    <div class="error-msg" id="error"></div>
+    <form id="regForm" onsubmit="handleRegister(event)">
+      <div class="form-group">
+        <label>Display Name</label>
+        <input type="text" id="display_name" placeholder="Your full name" required autofocus>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="username" placeholder="Choose a username" required minlength="3">
+          <div class="hint">At least 3 characters</div>
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="email" placeholder="you@example.com" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="password" placeholder="Min 6 characters" required minlength="6">
+        </div>
+        <div class="form-group">
+          <label>Confirm Password</label>
+          <input type="password" id="password2" placeholder="Re-enter password" required>
+        </div>
+      </div>
+      <button type="submit" class="btn-login" id="submitBtn">
+        <span class="btn-text">Create Account</span>
+        <span class="loading" id="loading"><span class="spinner"></span>Creating...</span>
+      </button>
+    </form>
+    <div class="switch-link">Already have an account? <a href="/login">Sign in</a></div>
+  </div>
+</div>
+<script>
+async function handleRegister(e) {
+  e.preventDefault();
+  const errEl = document.getElementById('error');
+  const btn = document.getElementById('submitBtn');
+  errEl.style.display = 'none';
+
+  const pw = document.getElementById('password').value;
+  const pw2 = document.getElementById('password2').value;
+  if (pw !== pw2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
+
+  btn.querySelector('.btn-text').style.display = 'none';
+  btn.querySelector('.loading').style.display = 'flex';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: document.getElementById('display_name').value,
+        username: document.getElementById('username').value,
+        email: document.getElementById('email').value,
+        password: pw,
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      window.location.href = data.redirect || '/';
+    } else {
+      errEl.textContent = data.error || 'Registration failed';
+      errEl.style.display = 'block';
+    }
+  } catch (err) {
+    errEl.textContent = 'Connection error. Is the server running?';
+    errEl.style.display = 'block';
+  }
+  btn.querySelector('.btn-text').style.display = 'inline';
+  btn.querySelector('.loading').style.display = 'none';
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
