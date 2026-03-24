@@ -28,6 +28,7 @@ jobs:
       - name: Pack release
         run: |
           tar \
+            --warning=no-file-changed \
             --exclude=.git \
             --exclude=.github \
             --exclude=node_modules \
@@ -35,6 +36,7 @@ jobs:
             --exclude=backups \
             --exclude=.env \
             --exclude=.claude \
+            --exclude=*.log \
             -czf release.tgz .
 
       - name: Upload release
