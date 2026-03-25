@@ -12,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
 const { isPostgresConfigured, getDbProvider } = require('./db/provider');
 const pgDb = require('./db/postgres-auth');
+const pgCoreDb = require('./db/postgres-core');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -117,14 +118,13 @@ app.get('/contact', (req, res) => {
 });
 
 app.get('/api/public/share/:token', (req, res) => {
-  try {
-    const db = require('./db/database');
-    const data = db.getPublicShareData(req.params.token);
+  const shareDb = isPostgresConfigured() ? pgCoreDb : require('./db/database');
+  Promise.resolve(shareDb.getPublicShareData(req.params.token)).then((data) => {
     if (!data) return res.status(404).json({ error: 'Link not found or expired' });
     res.json(data);
-  } catch (err) {
+  }).catch((err) => {
     res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Trip invite — redirect to app with invite token

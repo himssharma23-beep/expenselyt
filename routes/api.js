@@ -6,24 +6,30 @@ const router = express.Router();
 const multer = require('multer');
 const db = require('../db/database');
 const pgDb = require('../db/postgres-auth');
+const pgCoreDb = require('../db/postgres-core');
 const { isPostgresConfigured } = require('../db/provider');
 const { requireAuth } = require('../middleware/auth');
+
+function getCoreDb() {
+  return isPostgresConfigured() ? pgCoreDb : db;
+}
 
 // All API routes require auth
 router.use(requireAuth);
 
 // ─── EXPENSES ────────────────────────────────────────────────
-router.get('/expenses', (req, res) => {
+router.get('/expenses', async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     // month can arrive as 'YYYY-MM' (mobile) or 'MM' (web) — normalise to 'MM'
     const rawMonth = req.query.month;
     const month = rawMonth && rawMonth.includes('-') ? rawMonth.split('-')[1] : rawMonth;
-    const expenses = db.getExpenses(req.session.userId, {
+    const expenses = await Promise.resolve(coreDb.getExpenses(req.session.userId, {
       year: req.query.year === 'all' ? null : (req.query.year || (rawMonth && rawMonth.includes('-') ? rawMonth.split('-')[0] : null)),
       month,
       search: req.query.search,
       spendType: req.query.spendType,
-    });
+    }));
     const total = expenses.reduce((s, e) => s + e.amount, 0);
     res.json({ expenses, total: Math.round(total * 100) / 100, count: expenses.length });
   } catch (err) {
@@ -31,30 +37,32 @@ router.get('/expenses', (req, res) => {
   }
 });
 
-router.post('/expenses', (req, res) => {
+router.post('/expenses', async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     const { item_name, amount, purchase_date, is_extra } = req.body;
     if (!item_name || !amount || !purchase_date) return res.status(400).json({ error: 'Missing fields' });
-    const result = db.addExpense(req.session.userId, { item_name, amount: parseFloat(amount), purchase_date, is_extra });
-    res.json({ success: true, id: result.lastInsertRowid });
+    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, amount: parseFloat(amount), purchase_date, is_extra }));
+    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.put('/expenses/:id', (req, res) => {
+router.put('/expenses/:id', async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     const { item_name, amount, purchase_date, is_extra } = req.body;
-    db.updateExpense(req.session.userId, req.params.id, { item_name, amount: parseFloat(amount), purchase_date, is_extra });
+    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, amount: parseFloat(amount), purchase_date, is_extra }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/expenses/:id', (req, res) => {
+router.delete('/expenses/:id', async (req, res) => {
   try {
-    db.deleteExpense(req.session.userId, req.params.id);
+    await Promise.resolve(getCoreDb().deleteExpense(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -66,8 +74,9 @@ const XLSX = require('xlsx');
 const XlsxPopulate = require('xlsx-populate');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-router.post('/expenses/import', upload.single('file'), (req, res) => {
+router.post('/expenses/import', upload.single('file'), async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const text = req.file.buffer.toString('utf-8');
     const { mapping } = req.body;
@@ -91,7 +100,7 @@ router.post('/expenses/import', upload.single('file'), (req, res) => {
       is_extra: map.isExtra ? ['yes','true','1','extra'].includes((r[map.isExtra]||'').toLowerCase()) : false,
     })).filter(e => e.item_name && e.amount > 0 && e.purchase_date);
 
-    const count = db.bulkAddExpenses(req.session.userId, expenses);
+    const count = await Promise.resolve(coreDb.bulkAddExpenses(req.session.userId, expenses));
     res.json({ success: true, imported: count, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -144,11 +153,12 @@ router.post('/expenses/import-excel/preview', withUpload, async (req, res) => {
 // Excel import — fixed column layout: B=Date, D=Description, E=Debit, F=Extras
 router.post('/expenses/import-excel', withUpload, async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const sheets = parseSheetParam(req.body.sheets);
     const { rows: expenses, skipped } = await parseExcelBuffer(req.file.buffer, sheets, req.body.password);
     if (expenses.length === 0) return res.status(400).json({ error: 'No valid rows found. Check the file format.' });
-    const count = db.bulkAddExpenses(req.session.userId, expenses);
+    const count = await Promise.resolve(coreDb.bulkAddExpenses(req.session.userId, expenses));
     res.json({ success: true, imported: count, total: expenses.length + skipped });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Import failed' });
@@ -306,9 +316,9 @@ function parseImportDate(str) {
 }
 
 // ─── FRIENDS ─────────────────────────────────────────────────
-router.get('/friends', (req, res) => {
+router.get('/friends', async (req, res) => {
   try {
-    const friends = db.getFriends(req.session.userId);
+    const friends = await Promise.resolve(getCoreDb().getFriends(req.session.userId));
     const netBalance = friends.reduce((s, f) => s + f.balance, 0);
     res.json({ friends, netBalance: Math.round(netBalance * 100) / 100 });
   } catch (err) {
@@ -316,31 +326,32 @@ router.get('/friends', (req, res) => {
   }
 });
 
-router.post('/friends', (req, res) => {
+router.post('/friends', async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Name required' });
-    const result = db.addFriend(req.session.userId, name);
-    res.json({ success: true, id: result.lastInsertRowid });
+    const id = await Promise.resolve(coreDb.addFriend(req.session.userId, name));
+    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.put('/friends/:id', (req, res) => {
+router.put('/friends/:id', async (req, res) => {
   try {
     const { name } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
-    db.getDb().prepare('UPDATE friends SET name=? WHERE id=? AND user_id=?').run(name.trim(), req.params.id, req.session.userId);
+    await Promise.resolve(getCoreDb().updateFriend(req.session.userId, req.params.id, name));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/friends/:id', (req, res) => {
+router.delete('/friends/:id', async (req, res) => {
   try {
-    db.deleteFriend(req.session.userId, req.params.id);
+    await Promise.resolve(getCoreDb().deleteFriend(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -348,9 +359,9 @@ router.delete('/friends/:id', (req, res) => {
 });
 
 // ─── LOAN TRANSACTIONS ──────────────────────────────────────
-router.get('/loans/:friendId', (req, res) => {
+router.get('/loans/:friendId', async (req, res) => {
   try {
-    const txns = db.getLoanTransactions(req.session.userId, req.params.friendId);
+    const txns = await Promise.resolve(getCoreDb().getLoanTransactions(req.session.userId, req.params.friendId));
     const totalPaid = txns.reduce((s, t) => s + t.paid, 0);
     const totalReceived = txns.reduce((s, t) => s + t.received, 0);
     res.json({ transactions: txns, totalPaid, totalReceived, balance: Math.round((totalPaid - totalReceived)*100)/100 });
@@ -359,30 +370,31 @@ router.get('/loans/:friendId', (req, res) => {
   }
 });
 
-router.post('/loans', (req, res) => {
+router.post('/loans', async (req, res) => {
   try {
+    const coreDb = getCoreDb();
     const { friend_id, txn_date, details, paid, received } = req.body;
     if (!friend_id || !details) return res.status(400).json({ error: 'Missing fields' });
-    const result = db.addLoanTransaction(req.session.userId, { friend_id, txn_date, details, paid: parseFloat(paid)||0, received: parseFloat(received)||0 });
-    res.json({ success: true, id: result.lastInsertRowid });
+    const id = await Promise.resolve(coreDb.addLoanTransaction(req.session.userId, { friend_id, txn_date, details, paid: parseFloat(paid)||0, received: parseFloat(received)||0 }));
+    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.put('/loans/:id', (req, res) => {
+router.put('/loans/:id', async (req, res) => {
   try {
     const { txn_date, details, paid, received } = req.body;
-    db.updateLoanTransaction(req.session.userId, req.params.id, { txn_date, details, paid: parseFloat(paid)||0, received: parseFloat(received)||0 });
+    await Promise.resolve(getCoreDb().updateLoanTransaction(req.session.userId, req.params.id, { txn_date, details, paid: parseFloat(paid)||0, received: parseFloat(received)||0 }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/loans/:id', (req, res) => {
+router.delete('/loans/:id', async (req, res) => {
   try {
-    db.deleteLoanTransaction(req.session.userId, req.params.id);
+    await Promise.resolve(getCoreDb().deleteLoanTransaction(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -390,34 +402,29 @@ router.delete('/loans/:id', (req, res) => {
 });
 
 // ─── DIVIDE EXPENSES ─────────────────────────────────────────
-router.get('/divide', (req, res) => {
+router.get('/divide', async (req, res) => {
   try {
-    const groups = db.getDivideGroups(req.session.userId);
+    const groups = await Promise.resolve(getCoreDb().getDivideGroups(req.session.userId));
     res.json({ groups });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/divide/:id', (req, res) => {
+router.delete('/divide/:id', async (req, res) => {
   try {
-    const d = db.getDb();
-    // Verify ownership via divide_groups.user_id
-    const grp = d.prepare('SELECT id FROM divide_groups WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
-    if (!grp) return res.status(404).json({ error: 'Not found' });
-    d.prepare('DELETE FROM divide_splits WHERE group_id=?').run(req.params.id);
-    d.prepare('DELETE FROM divide_groups WHERE id=?').run(req.params.id);
+    await Promise.resolve(getCoreDb().deleteDivideGroup(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.message === 'Not found' ? 404 : 500).json({ error: err.message });
   }
 });
 
-router.post('/divide', (req, res) => {
+router.post('/divide', async (req, res) => {
   try {
     const { divide_date, details, paid_by, total_amount, splits, auto_loans, heading, session_id } = req.body;
     if (!details || !total_amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
-    const id = db.addDivideGroup(req.session.userId, { divide_date, details, paid_by, total_amount: parseFloat(total_amount), splits, auto_loans, heading, session_id });
+    const id = await Promise.resolve(getCoreDb().addDivideGroup(req.session.userId, { divide_date, details, paid_by, total_amount: parseFloat(total_amount), splits, auto_loans, heading, session_id }));
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -425,76 +432,12 @@ router.post('/divide', (req, res) => {
 });
 
 // ─── DASHBOARD ───────────────────────────────────────────────
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', async (req, res) => {
   try {
     const userId = req.session.userId;
-    const rawDb = db.getDb();
     const year = req.query.year || new Date().getFullYear();
-    const yearStr = String(year);
-
-    const validDate = `CAST(substr(purchase_date,1,4) AS INTEGER) BETWEEN 2018 AND ${new Date().getFullYear() + 2}`;
-
-    const monthlyTotals = rawDb.prepare(`
-      SELECT substr(purchase_date,6,2) as month, SUM(amount) as total, COUNT(*) as count
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=? AND ${validDate}
-      GROUP BY month ORDER BY month
-    `).all(userId, yearStr);
-
-    const monthlyByType = rawDb.prepare(`
-      SELECT substr(purchase_date,6,2) as month, is_extra, SUM(amount) as total
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=?
-      GROUP BY month, is_extra ORDER BY month
-    `).all(userId, yearStr);
-
-    const topItems = rawDb.prepare(`
-      SELECT item_name, SUM(amount) as total, COUNT(*) as count
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=? AND ${validDate}
-      GROUP BY item_name ORDER BY total DESC LIMIT 10
-    `).all(userId, yearStr);
-
-    const spendBreakdown = rawDb.prepare(`
-      SELECT is_extra, SUM(amount) as total, COUNT(*) as count
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=? AND ${validDate}
-      GROUP BY is_extra
-    `).all(userId, yearStr);
-
-    const yearTotal = rawDb.prepare(`
-      SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as count
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=? AND ${validDate}
-    `).get(userId, yearStr);
-
-    const now = new Date();
-    const currentMonth = String(now.getMonth()+1).padStart(2,'0');
-    const currentYear = String(now.getFullYear());
-    const monthTotal = rawDb.prepare(`
-      SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as count
-      FROM expenses WHERE user_id=? AND substr(purchase_date,1,4)=? AND substr(purchase_date,6,2)=?
-    `).get(userId, currentYear, currentMonth);
-
-    const friends = db.getFriends(userId);
-    const totalOwed = friends.reduce((s,f) => s + (f.balance > 0 ? f.balance : 0), 0);
-    const totalOwe  = friends.reduce((s,f) => s + (f.balance < 0 ? Math.abs(f.balance) : 0), 0);
-
-    const recentExpenses = rawDb.prepare(`
-      SELECT * FROM expenses WHERE user_id=? AND ${validDate}
-      ORDER BY purchase_date DESC, id DESC LIMIT 5
-    `).all(userId);
-
-    const years = rawDb.prepare(`
-      SELECT DISTINCT substr(purchase_date,1,4) as year FROM expenses WHERE user_id=?
-      AND CAST(substr(purchase_date,1,4) AS INTEGER) BETWEEN 2018 AND ?
-      ORDER BY year DESC
-    `).all(userId, new Date().getFullYear() + 1).map(r => r.year);
-    if (!years.includes(yearStr)) years.unshift(yearStr);
-
-    res.json({
-      monthlyTotals, monthlyByType, topItems, spendBreakdown,
-      yearTotal, monthTotal,
-      totalOwed: Math.round(totalOwed*100)/100,
-      totalOwe:  Math.round(totalOwe*100)/100,
-      friendCount: friends.length,
-      recentExpenses, years, selectedYear: yearStr
-    });
+    const dashboard = await Promise.resolve(getCoreDb().getDashboardData(userId, year));
+    res.json(dashboard);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -548,7 +491,8 @@ router.post('/friends/import-excel', withUpload, async (req, res) => {
     const mapping = JSON.parse(req.body.mapping);
     const sheetNames = JSON.parse(req.body.sheets);
     const wb = await XlsxPopulate.fromDataAsync(req.file.buffer, opts);
-    const allFriends = db.getFriends(req.session.userId);
+    const coreDb = getCoreDb();
+    const allFriends = await Promise.resolve(coreDb.getFriends(req.session.userId));
     const results = [];
     let totalImported = 0;
 
@@ -560,12 +504,12 @@ router.post('/friends/import-excel', withUpload, async (req, res) => {
       // Find or create friend by sheet name
       let friend = allFriends.find(f => f.name.toLowerCase() === sheetName.toLowerCase());
       if (!friend) {
-        const r = db.addFriend(req.session.userId, sheetName);
-        friend = { id: r.lastInsertRowid };
+        const id = await Promise.resolve(coreDb.addFriend(req.session.userId, sheetName));
+        friend = { id };
       }
 
       for (const t of rows) {
-        db.addLoanTransaction(req.session.userId, { friend_id: friend.id, txn_date: t.txn_date, details: t.details, paid: t.paid, received: t.received });
+        await Promise.resolve(coreDb.addLoanTransaction(req.session.userId, { friend_id: friend.id, txn_date: t.txn_date, details: t.details, paid: t.paid, received: t.received }));
       }
       results.push({ sheet: sheetName, imported: rows.length });
       totalImported += rows.length;
@@ -594,170 +538,146 @@ function parseFriendSheet(ws, mapping) {
 }
 
 // ─── REPORTS ─────────────────────────────────────────────────
-const VALID_YEAR = `CAST(substr(purchase_date,1,4) AS INTEGER) BETWEEN 2018 AND ${new Date().getFullYear() + 2}`;
-
 // Year-wise summary
-router.get('/reports/years', (req, res) => {
+router.get('/reports/years', async (req, res) => {
   try {
-    const rawDb = db.getDb();
-    const rows = rawDb.prepare(`
-      SELECT
-        substr(purchase_date,1,4) AS year,
-        SUM(amount) AS total,
-        SUM(CASE WHEN is_extra=0 THEN amount ELSE 0 END) AS fair,
-        SUM(CASE WHEN is_extra=1 THEN amount ELSE 0 END) AS extra,
-        COUNT(*) AS count
-      FROM expenses
-      WHERE user_id=? AND ${VALID_YEAR}
-      GROUP BY year ORDER BY year DESC
-    `).all(req.session.userId);
+    const rows = await Promise.resolve(getCoreDb().getReportYears(req.session.userId));
     res.json({ rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Month-wise summary for a year
-router.get('/reports/months', (req, res) => {
+router.get('/reports/months', async (req, res) => {
   try {
-    const rawDb = db.getDb();
     const year = req.query.year;
-    const rows = rawDb.prepare(`
-      SELECT
-        substr(purchase_date,6,2) AS month,
-        SUM(amount) AS total,
-        SUM(CASE WHEN is_extra=0 THEN amount ELSE 0 END) AS fair,
-        SUM(CASE WHEN is_extra=1 THEN amount ELSE 0 END) AS extra,
-        COUNT(*) AS count
-      FROM expenses
-      WHERE user_id=? AND substr(purchase_date,1,4)=? AND ${VALID_YEAR}
-      GROUP BY month ORDER BY month
-    `).all(req.session.userId, String(year));
+    const rows = await Promise.resolve(getCoreDb().getReportMonths(req.session.userId, year));
     res.json({ rows, year });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── TRIPS ───────────────────────────────────────────────────
-router.get('/trips', (req, res) => {
-  try { res.json({ trips: db.getTrips(req.session.userId) }); }
+router.get('/trips', async (req, res) => {
+  try { res.json({ trips: await Promise.resolve(getCoreDb().getTrips(req.session.userId)) }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/trips', (req, res) => {
+router.post('/trips', async (req, res) => {
   try {
     const { name, start_date, end_date, members } = req.body;
     if (!name || !start_date) return res.status(400).json({ error: 'Name and start date required' });
-    const id = db.createTrip(req.session.userId, { name, start_date, end_date, members: members || [] });
+    const id = await Promise.resolve(getCoreDb().createTrip(req.session.userId, { name, start_date, end_date, members: members || [] }));
     res.json({ success: true, id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/trips/:id', (req, res) => {
+router.get('/trips/:id', async (req, res) => {
   try {
-    const trip = db.getTripById(req.session.userId, req.params.id);
+    const trip = await Promise.resolve(getCoreDb().getTripById(req.session.userId, req.params.id));
     if (!trip) return res.status(404).json({ error: 'Not found' });
     res.json({ trip });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/trips/:id', (req, res) => {
+router.put('/trips/:id', async (req, res) => {
   try {
-    db.updateTrip(req.session.userId, req.params.id, req.body);
+    await Promise.resolve(getCoreDb().updateTrip(req.session.userId, req.params.id, req.body));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/trips/:id', (req, res) => {
+router.delete('/trips/:id', async (req, res) => {
   try {
-    db.deleteTrip(req.session.userId, req.params.id);
+    await Promise.resolve(getCoreDb().deleteTrip(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/trips/:id/expenses', (req, res) => {
+router.post('/trips/:id/expenses', async (req, res) => {
   try {
     const { paid_by_key, paid_by_name, details, amount, expense_date, split_mode, splits } = req.body;
     if (!details || !amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
-    const id = db.addTripExpense(req.session.userId, req.params.id, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits });
+    const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
     res.json({ success: true, id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/trips/:id/expenses/:eid', (req, res) => {
+router.put('/trips/:id/expenses/:eid', async (req, res) => {
   try {
     const { paid_by_key, paid_by_name, details, amount, expense_date, split_mode, splits } = req.body;
-    db.updateTripExpense(req.session.userId, req.params.eid, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits });
+    await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/trips/:id/expenses/:eid', (req, res) => {
+router.delete('/trips/:id/expenses/:eid', async (req, res) => {
   try {
-    db.deleteTripExpense(req.session.userId, req.params.eid);
+    await Promise.resolve(getCoreDb().deleteTripExpense(req.session.userId, req.params.eid));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/trips/:id/members/:mid/lock', (req, res) => {
+router.put('/trips/:id/members/:mid/lock', async (req, res) => {
   try {
-    db.toggleMemberLock(req.session.userId, req.params.mid);
+    await Promise.resolve(getCoreDb().toggleMemberLock(req.session.userId, req.params.mid));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/trips/:id/members/:mid/link', (req, res) => {
+router.put('/trips/:id/members/:mid/link', async (req, res) => {
   try {
     const { linked_user_id, permission } = req.body;
-    db.linkTripMember(req.session.userId, req.params.mid, linked_user_id || null, permission || 'edit');
+    await Promise.resolve(getCoreDb().linkTripMember(req.session.userId, req.params.mid, linked_user_id || null, permission || 'edit'));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/trips/:id/invite/:mid', (req, res) => {
+router.post('/trips/:id/invite/:mid', async (req, res) => {
   try {
-    const token = db.createTripInvite(req.session.userId, req.params.id, req.params.mid);
+    const token = await Promise.resolve(getCoreDb().createTripInvite(req.session.userId, req.params.id, req.params.mid));
     res.json({ success: true, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/trips/invite/:token', (req, res) => {
+router.get('/trips/invite/:token', async (req, res) => {
   try {
-    const invite = db.getTripInviteByToken(req.params.token);
+    const invite = await Promise.resolve(getCoreDb().getTripInviteByToken(req.params.token));
     if (!invite) return res.status(404).json({ error: 'Invalid invite' });
     res.json({ invite });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/trips/invite/:token/accept', (req, res) => {
+router.post('/trips/invite/:token/accept', async (req, res) => {
   try {
-    const tripId = db.acceptTripInvite(req.session.userId, req.params.token);
+    const tripId = await Promise.resolve(getCoreDb().acceptTripInvite(req.session.userId, req.params.token));
     res.json({ success: true, tripId });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── USER SEARCH ─────────────────────────────────────────────
-router.get('/users/search', (req, res) => {
+router.get('/users/search', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.length < 2) return res.json({ users: [] });
-    res.json({ users: db.searchUsers(q, req.session.userId) });
+    res.json({ users: await Promise.resolve(getCoreDb().searchUsers(q, req.session.userId)) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── SHARE LINKS ─────────────────────────────────────────────
-router.get('/shares', (req, res) => {
-  try { res.json({ links: db.getShareLinks(req.session.userId) }); }
+router.get('/shares', async (req, res) => {
+  try { res.json({ links: await Promise.resolve(getCoreDb().getShareLinks(req.session.userId)) }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/shares', (req, res) => {
+router.post('/shares', async (req, res) => {
   try {
-    const token = db.createShareLink(req.session.userId, req.body);
+    const token = await Promise.resolve(getCoreDb().createShareLink(req.session.userId, req.body));
     res.json({ success: true, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/shares/:id', (req, res) => {
+router.delete('/shares/:id', async (req, res) => {
   try {
-    db.deleteShareLink(req.session.userId, req.params.id);
+    await Promise.resolve(getCoreDb().deleteShareLink(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
