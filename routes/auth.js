@@ -3,9 +3,8 @@
 // ============================================================
 const express = require('express');
 const router = express.Router();
-const db = require('../db/database');
 const pgDb = require('../db/postgres-auth');
-const { isPostgresConfigured } = require('../db/provider');
+const { assertPostgresConfigured } = require('../db/provider');
 const { guestOnly, requireAuth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
@@ -32,9 +31,7 @@ const upload = multer({
   },
 });
 
-function getAuthDb() {
-  return isPostgresConfigured() ? pgDb : db;
-}
+assertPostgresConfigured();
 
 // GET /login
 router.get('/login', guestOnly, (req, res) => {
@@ -49,7 +46,7 @@ router.get('/register', guestOnly, (req, res) => {
 // POST /api/auth/register
 router.post('/api/auth/register', async (req, res) => {
   try {
-    const authDb = getAuthDb();
+    const authDb = pgDb;
     const { username, email, password, display_name } = req.body;
 
     if (!username || !email || !password || !display_name) {
@@ -78,7 +75,7 @@ router.post('/api/auth/register', async (req, res) => {
 // POST /api/auth/login
 router.post('/api/auth/login', async (req, res) => {
   try {
-    const authDb = getAuthDb();
+    const authDb = pgDb;
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -113,14 +110,14 @@ router.post('/api/auth/logout', (req, res) => {
 // GET /api/auth/me
 router.get('/api/auth/me', async (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not logged in' });
-  const user = await getAuthDb().findUserById(req.session.userId);
+  const user = await pgDb.findUserById(req.session.userId);
   if (!user) return res.status(401).json({ error: 'User not found' });
   res.json(user);
 });
 
 router.put('/api/auth/profile', requireAuth, async (req, res) => {
   try {
-    const user = await getAuthDb().updateUserProfile(req.session.userId, req.body || {});
+    const user = await pgDb.updateUserProfile(req.session.userId, req.body || {});
     req.session.displayName = user.display_name;
     res.json({ success: true, user });
   } catch (err) {
@@ -131,7 +128,7 @@ router.put('/api/auth/profile', requireAuth, async (req, res) => {
 router.post('/api/auth/change-password', requireAuth, async (req, res) => {
   try {
     const { current_password, new_password } = req.body || {};
-    await getAuthDb().changeUserPassword(req.session.userId, current_password, new_password);
+    await pgDb.changeUserPassword(req.session.userId, current_password, new_password);
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -142,7 +139,7 @@ router.post('/api/auth/profile-photo', requireAuth, upload.single('photo'), asyn
   try {
     if (!req.file) return res.status(400).json({ error: 'Photo file is required' });
     const avatarUrl = `/uploads/profile/${req.file.filename}`;
-    const user = await getAuthDb().updateUserProfile(req.session.userId, { avatar_url: avatarUrl });
+    const user = await pgDb.updateUserProfile(req.session.userId, { avatar_url: avatarUrl });
     req.session.displayName = user.display_name;
     res.json({ success: true, avatar_url: avatarUrl, user });
   } catch (err) {
@@ -155,7 +152,7 @@ router.get('/reset-password', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.redirect('/login');
   try {
-    const reset = await getAuthDb().getPasswordResetByToken(token);
+    const reset = await pgDb.getPasswordResetByToken(token);
     if (!reset) {
       return res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>Link expired or invalid</h2><a href="/login">Back to login</a></body></html>`);
     }
@@ -194,7 +191,7 @@ router.post('/api/reset-password', async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password || password.length < 6) return res.status(400).json({ error: 'Invalid request' });
-    const success = await getAuthDb().usePasswordReset(token, bcrypt.hashSync(password, 10));
+    const success = await pgDb.usePasswordReset(token, bcrypt.hashSync(password, 10));
     if (!success) return res.status(400).json({ error: 'Link expired or already used' });
     res.json({ success: true });
   } catch (err) {

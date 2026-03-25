@@ -4,15 +4,31 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const db = require('../db/database');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
-const { isPostgresConfigured } = require('../db/provider');
+const pgOpsDb = require('../db/postgres-ops');
+const pgBillingDb = require('../db/postgres-billing');
+const pgFinanceDb = require('../db/postgres-finance');
+const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth } = require('../middleware/auth');
 
 function getCoreDb() {
-  return isPostgresConfigured() ? pgCoreDb : db;
+  return pgCoreDb;
 }
+
+function getOpsDb() {
+  return pgOpsDb;
+}
+
+function getBillingDb() {
+  return pgBillingDb;
+}
+
+function getFinanceDb() {
+  return pgFinanceDb;
+}
+
+assertPostgresConfigured();
 
 // All API routes require auth
 router.use(requireAuth);
@@ -683,108 +699,108 @@ router.delete('/shares/:id', async (req, res) => {
 });
 
 // ─── EMI ROUTES ──────────────────────────────────────────────
-router.get('/emi/records', (req, res) => {
-  try { res.json({ records: db.getEmiRecords(req.session.userId, parseInt(req.query.for_friend)||0) }); }
+router.get('/emi/records', async (req, res) => {
+  try { res.json({ records: await Promise.resolve(getFinanceDb().getEmiRecords(req.session.userId, parseInt(req.query.for_friend) || 0)) }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/emi/records', (req, res) => {
+router.post('/emi/records', async (req, res) => {
   try {
-    const result = db.saveEmiRecord(req.session.userId, req.body);
-    res.json({ success: true, id: result.lastInsertRowid });
+    const id = await Promise.resolve(getFinanceDb().saveEmiRecord(req.session.userId, req.body));
+    res.json({ success: true, id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/emi/records/:id', (req, res) => {
+router.get('/emi/records/:id', async (req, res) => {
   try {
-    const record = db.getEmiRecord(req.session.userId, req.params.id);
+    const record = await Promise.resolve(getFinanceDb().getEmiRecord(req.session.userId, req.params.id));
     if (!record) return res.status(404).json({ error: 'Not found' });
     res.json({ record });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/emi/records/:id', (req, res) => {
-  try { db.updateEmiRecord(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
+router.put('/emi/records/:id', async (req, res) => {
+  try { await Promise.resolve(getFinanceDb().updateEmiRecord(req.session.userId, req.params.id, req.body)); res.json({ success: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/emi/records/:id', (req, res) => {
-  try { db.deleteEmiRecord(req.session.userId, req.params.id); res.json({ success: true }); }
+router.delete('/emi/records/:id', async (req, res) => {
+  try { await Promise.resolve(getFinanceDb().deleteEmiRecord(req.session.userId, req.params.id)); res.json({ success: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/emi/records/:id/activate', (req, res) => {
+router.post('/emi/records/:id/activate', async (req, res) => {
   try {
     const { start_date, add_expenses, expense_type } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
-    db.activateEmi(req.session.userId, req.params.id, start_date, !!add_expenses, parseInt(expense_type) || 0);
+    await Promise.resolve(getFinanceDb().activateEmi(req.session.userId, req.params.id, start_date, !!add_expenses, parseInt(expense_type) || 0));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/emi/installments/:id/pay', (req, res) => {
+router.put('/emi/installments/:id/pay', async (req, res) => {
   try {
     const { paid_amount, paid_date, notes, bank_account_id } = req.body;
-    db.payInstallment(req.session.userId, req.params.id, parseFloat(paid_amount)||0, paid_date, notes, bank_account_id || null);
+    await Promise.resolve(getFinanceDb().payInstallment(req.session.userId, req.params.id, parseFloat(paid_amount) || 0, paid_date, notes, bank_account_id || null));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/emi/installments/:id/amount', (req, res) => {
+router.put('/emi/installments/:id/amount', async (req, res) => {
   try {
     const { emi_amount } = req.body;
     if (!emi_amount || emi_amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-    db.updateInstallmentAmount(req.session.userId, req.params.id, parseFloat(emi_amount));
+    await Promise.resolve(getFinanceDb().updateInstallmentAmount(req.session.userId, req.params.id, parseFloat(emi_amount)));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/emi/installments/:id/components', (req, res) => {
+router.put('/emi/installments/:id/components', async (req, res) => {
   try {
     const { emi_amount, interest_component, principal_component } = req.body;
     if (!emi_amount || emi_amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-    db.updateInstallmentComponents(req.session.userId, req.params.id, {
+    await Promise.resolve(getFinanceDb().updateInstallmentComponents(req.session.userId, req.params.id, {
       emi_amount: parseFloat(emi_amount),
       interest_component: parseFloat(interest_component) || 0,
       principal_component: parseFloat(principal_component) || 0
-    });
+    }));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/emi/records/:id/bulk-amount', (req, res) => {
+router.put('/emi/records/:id/bulk-amount', async (req, res) => {
   try {
     const { emi_amount } = req.body;
     if (!emi_amount || emi_amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-    db.bulkUpdateInstallmentAmount(req.session.userId, req.params.id, parseFloat(emi_amount));
+    await Promise.resolve(getFinanceDb().bulkUpdateInstallmentAmount(req.session.userId, req.params.id, parseFloat(emi_amount)));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/emi/records/:id/activate-with-schedule', (req, res) => {
+router.post('/emi/records/:id/activate-with-schedule', async (req, res) => {
   try {
     const { start_date, schedule, add_expenses, expense_type } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
     if (!Array.isArray(schedule) || schedule.length === 0) return res.status(400).json({ error: 'schedule required' });
-    db.activateEmiWithSchedule(req.session.userId, req.params.id, start_date, schedule, !!add_expenses, parseInt(expense_type) || 0);
+    await Promise.resolve(getFinanceDb().activateEmiWithSchedule(req.session.userId, req.params.id, start_date, schedule, !!add_expenses, parseInt(expense_type) || 0));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/emi/records/:id/add-expenses', (req, res) => {
+router.post('/emi/records/:id/add-expenses', async (req, res) => {
   try {
     const expense_type = parseInt(req.body?.expense_type) || 0;
-    db.addEmiExpensesManual(req.session.userId, req.params.id, expense_type);
+    await Promise.resolve(getFinanceDb().addEmiExpensesManual(req.session.userId, req.params.id, expense_type));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/emi/records/:id/add-credit-card', (req, res) => {
+router.post('/emi/records/:id/add-credit-card', async (req, res) => {
   try {
     const credit_card_id = parseInt(req.body?.credit_card_id) || 0;
     const gst_month_offset = parseInt(req.body?.gst_month_offset) || 0;
     if (!credit_card_id) return res.status(400).json({ error: 'credit_card_id required' });
-    db.addEmiToCreditCardManual(req.session.userId, req.params.id, credit_card_id, gst_month_offset);
+    await Promise.resolve(getFinanceDb().addEmiToCreditCardManual(req.session.userId, req.params.id, credit_card_id, gst_month_offset));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -873,7 +889,7 @@ router.post('/emi/import-excel', withUpload, async (req, res) => {
         const { emiData, installments } = await parseEmiExcel(req.file.buffer, sn, password, mapping);
         emiData.for_friend  = forFriend;
         emiData.friend_name = friendName;
-        const r = db.importEmiFromExcel(req.session.userId, emiData, installments);
+        const r = await Promise.resolve(getFinanceDb().importEmiFromExcel(req.session.userId, emiData, installments));
         imported.push({ sheet: sn, id: r.id, name: emiData.name });
       } catch (e) { errors.push({ sheet: sn, error: e.message }); }
     }
@@ -927,7 +943,7 @@ router.post('/emi/import-excel/simple', withUpload, async (req, res) => {
         const { emiData, installments } = await parseEmiSimple(req.file.buffer, sn, password, sheetLoanAmount, dateCol, srCol, totalCol, paidCol);
         emiData.for_friend  = forFriend;
         emiData.friend_name = friendName;
-        const r = db.importEmiFromExcel(req.session.userId, emiData, installments);
+        const r = await Promise.resolve(getFinanceDb().importEmiFromExcel(req.session.userId, emiData, installments));
         imported.push({ sheet: sn, id: r.id, name: emiData.name });
       } catch (e) { errors.push({ sheet: sn, error: e.message }); }
     }
@@ -1194,19 +1210,18 @@ async function parseEmiExcel(buffer, sheetName, password, mapping) {
   };
 }
 
-router.get('/emi/summary', (req, res) => {
+router.get('/emi/summary', async (req, res) => {
   try {
     const month = req.query.month || new Date().toISOString().slice(0, 7);
-    res.json(db.getEmiMonthSummary(req.session.userId, month));
+    res.json(await Promise.resolve(getFinanceDb().getEmiMonthSummary(req.session.userId, month)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── Current user access ─────────────────────────────────────
 router.get('/auth/me/access', (req, res) => {
-  const authDb = isPostgresConfigured() ? pgDb : db;
   Promise.all([
-    Promise.resolve(authDb.findUserById(req.session.userId)),
-    Promise.resolve(authDb.getUserAccessiblePages(req.session.userId)),
+    Promise.resolve(pgDb.findUserById(req.session.userId)),
+    Promise.resolve(pgDb.getUserAccessiblePages(req.session.userId)),
   ]).then(([user, pages]) => {
     res.json({ role: user?.role || 'user', pages });
   }).catch((err) => {
@@ -1219,15 +1234,13 @@ const { requireAdmin } = require('../middleware/auth');
 
 router.get('/admin/users', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    res.json({ users: await Promise.resolve(authDb.getAllUsers()) });
+    res.json({ users: await Promise.resolve(pgDb.getAllUsers()) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/admin/users/:id', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.updateUserAdmin(req.params.id, req.body));
+    await Promise.resolve(pgDb.updateUserAdmin(req.params.id, req.body));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -1238,16 +1251,14 @@ router.post('/admin/users/:id/set-password', requireAdmin, async (req, res) => {
     const { password } = req.body;
     if (!password || password.length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
     const bcrypt = require('bcryptjs');
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.resetUserPassword(req.params.id, bcrypt.hashSync(password, 10)));
+    await Promise.resolve(pgDb.resetUserPassword(req.params.id, bcrypt.hashSync(password, 10)));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/admin/users/:id/reset-link', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    const token = await Promise.resolve(authDb.createPasswordReset(req.params.id));
+    const token = await Promise.resolve(pgDb.createPasswordReset(req.params.id));
     const link = `${req.protocol}://${req.get('host')}/reset-password?token=${token}`;
     res.json({ success: true, token, link });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1256,32 +1267,28 @@ router.post('/admin/users/:id/reset-link', requireAdmin, async (req, res) => {
 router.post('/admin/users/:id/otp', requireAdmin, async (req, res) => {
   try {
     const { purpose, channel } = req.body;
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    const code = await Promise.resolve(authDb.generateOtp(req.params.id, purpose || 'login', channel || 'email'));
+    const code = await Promise.resolve(pgDb.generateOtp(req.params.id, purpose || 'login', channel || 'email'));
     res.json({ success: true, otp: code });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.get('/admin/plans', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    res.json({ plans: await Promise.resolve(authDb.getPlans()) });
+    res.json({ plans: await Promise.resolve(pgDb.getPlans()) });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/admin/plans', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    res.json({ success: true, id: await Promise.resolve(authDb.createPlan(req.body)) });
+    res.json({ success: true, id: await Promise.resolve(pgDb.createPlan(req.body)) });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/admin/plans/:id', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.updatePlan(req.params.id, req.body));
+    await Promise.resolve(pgDb.updatePlan(req.params.id, req.body));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -1289,8 +1296,7 @@ router.put('/admin/plans/:id', requireAdmin, async (req, res) => {
 
 router.delete('/admin/plans/:id', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.deletePlan(req.params.id));
+    await Promise.resolve(pgDb.deletePlan(req.params.id));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -1298,24 +1304,21 @@ router.delete('/admin/plans/:id', requireAdmin, async (req, res) => {
 
 router.get('/admin/subscriptions', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    res.json({ subscriptions: await Promise.resolve(authDb.getSubscriptions()) });
+    res.json({ subscriptions: await Promise.resolve(pgDb.getSubscriptions()) });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/admin/subscriptions', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    res.json({ success: true, id: await Promise.resolve(authDb.createSubscription(req.body)) });
+    res.json({ success: true, id: await Promise.resolve(pgDb.createSubscription(req.body)) });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.updateSubscription(req.params.id, req.body));
+    await Promise.resolve(pgDb.updateSubscription(req.params.id, req.body));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -1323,8 +1326,7 @@ router.put('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
 
 router.delete('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
   try {
-    const authDb = isPostgresConfigured() ? pgDb : db;
-    await Promise.resolve(authDb.deleteSubscription(req.params.id));
+    await Promise.resolve(pgDb.deleteSubscription(req.params.id));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -1332,59 +1334,72 @@ router.delete('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
 
 // ─── BANK ACCOUNTS ────────────────────────────────────────────
 router.get('/banks', (req, res) => {
-  try { res.json({ accounts: db.getBankAccounts(req.session.userId) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)).then((accounts) => {
+    res.json({ accounts });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.post('/banks', (req, res) => {
-  try { const r = db.addBankAccount(req.session.userId, req.body); res.json({ success: true, id: r.lastInsertRowid }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().addBankAccount(req.session.userId, req.body)).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/banks/:id', (req, res) => {
-  try { db.updateBankAccount(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().updateBankAccount(req.session.userId, req.params.id, req.body)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.delete('/banks/:id', (req, res) => {
-  try { db.deleteBankAccount(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().deleteBankAccount(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.patch('/banks/:id/balance', (req, res) => {
   try {
     const balance = parseFloat(req.body.balance);
     if (isNaN(balance) || balance < 0) return res.status(400).json({ error: 'Invalid balance' });
-    db.updateBankBalance(req.session.userId, req.params.id, balance);
-    res.json({ success: true });
+    Promise.resolve(getOpsDb().updateBankBalance(req.session.userId, req.params.id, balance)).then(() => {
+      res.json({ success: true });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 router.put('/banks/:id/default', (req, res) => {
-  try { db.setDefaultBankAccount(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().setDefaultBankAccount(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 // ─── DEFAULT PAYMENTS ─────────────────────────────────────────
 router.get('/planner/defaults', (req, res) => {
-  try { res.json({ defaults: db.getDefaultPayments(req.session.userId) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().getDefaultPayments(req.session.userId)).then((defaults) => {
+    res.json({ defaults });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.post('/planner/defaults', (req, res) => {
-  try { const r = db.addDefaultPayment(req.session.userId, req.body); res.json({ success: true, id: r.lastInsertRowid }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().addDefaultPayment(req.session.userId, req.body)).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/planner/defaults/:id', (req, res) => {
-  try { db.updateDefaultPayment(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().updateDefaultPayment(req.session.userId, req.params.id, req.body)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.delete('/planner/defaults/:id', (req, res) => {
-  try { db.deleteDefaultPayment(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().deleteDefaultPayment(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 // ─── PLANNER PREVIEW (future month, read-only) ────────────────
 router.get('/planner/preview', (req, res) => {
   try {
     const month    = req.query.month || new Date().toISOString().slice(0, 7);
-    const accounts = db.getBankAccounts(req.session.userId);
-    const preview  = db.getPreviewDataForMonth(req.session.userId, month);
-    res.json({ accounts, ...preview });
+    Promise.all([
+      Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
+      Promise.resolve(getFinanceDb().getPreviewDataForMonth(req.session.userId, month, getBillingDb())),
+    ]).then(([accounts, preview]) => {
+      res.json({ accounts, ...preview });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1392,97 +1407,108 @@ router.get('/planner/preview', (req, res) => {
 router.get('/planner/monthly', (req, res) => {
   try {
     const month = req.query.month || new Date().toISOString().slice(0, 7);
-    const payments = db.getMonthlyPayments(req.session.userId, month);
-    const skipped  = db.getSkippedPayments(req.session.userId, month);
-    const accounts = db.getBankAccounts(req.session.userId);
-    const ccDues   = db.getCcDuesForMonth(req.session.userId, month);
-    const emiDues  = db.getEmiDuesForMonth(req.session.userId, month);
-    res.json({ payments, skipped, accounts, ccDues, emiDues });
+    Promise.all([
+      Promise.resolve(getOpsDb().getMonthlyPayments(req.session.userId, month)),
+      Promise.resolve(getOpsDb().getSkippedPayments(req.session.userId, month)),
+      Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
+      Promise.resolve(getBillingDb().getCcDuesForMonth(req.session.userId, month)),
+      Promise.resolve(getFinanceDb().getEmiDuesForMonth(req.session.userId, month)),
+    ]).then(([payments, skipped, accounts, ccDues, emiDues]) => {
+      res.json({ payments, skipped, accounts, ccDues, emiDues });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 router.post('/planner/monthly', (req, res) => {
-  try { const r = db.addMonthlyPayment(req.session.userId, req.body); res.json({ success: true, id: r.lastInsertRowid }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().addMonthlyPayment(req.session.userId, req.body)).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/planner/monthly/:id', (req, res) => {
-  try { db.updateMonthlyPayment(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().updateMonthlyPayment(req.session.userId, req.params.id, req.body)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.delete('/planner/monthly/:id', (req, res) => {
-  try { db.deleteMonthlyPayment(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().deleteMonthlyPayment(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/planner/monthly/:id/restore', (req, res) => {
-  try { db.restoreMonthlyPayment(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().restoreMonthlyPayment(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.delete('/planner/monthly/:id/hard', (req, res) => {
-  try { db.hardDeleteMonthlyPayment(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().hardDeleteMonthlyPayment(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/planner/monthly/:id/pay', (req, res) => {
-  try {
-    db.payMonthlyPayment(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date);
+  Promise.resolve(getOpsDb().payMonthlyPayment(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date)).then(() => {
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 // ─── CREDIT CARDS ─────────────────────────────────────────────
 router.get('/cc/cards', (req, res) => {
-  try { res.json({ cards: db.getCreditCards(req.session.userId) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().getCreditCards(req.session.userId)).then((cards) => {
+    res.json({ cards });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/cc/cards', (req, res) => {
-  try {
-    const r = db.addCreditCard(req.session.userId, req.body);
-    res.json({ success: true, id: r.lastInsertRowid });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().addCreditCard(req.session.userId, req.body)).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.put('/cc/cards/:id', (req, res) => {
-  try { db.updateCreditCard(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().updateCreditCard(req.session.userId, req.params.id, req.body)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.delete('/cc/cards/:id', (req, res) => {
-  try { db.deleteCreditCard(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().deleteCreditCard(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/cc/cards/:id/current', (req, res) => {
-  try { res.json(db.getCcCurrentCycle(req.session.userId, req.params.id)); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().getCcCurrentCycle(req.session.userId, req.params.id)).then((data) => {
+    res.json(data);
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/cc/cards/:id/cycles', (req, res) => {
-  try { res.json({ cycles: db.getCcCycles(req.session.userId, req.params.id) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().getCcCycles(req.session.userId, req.params.id)).then((cycles) => {
+    res.json({ cycles });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/cc/cards/:id/monthly', (req, res) => {
-  try {
-    const year = req.query.year || null;
-    res.json({ months: db.getCcMonthlySummary(req.session.userId, req.params.id, year) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  const year = req.query.year || null;
+  Promise.resolve(getBillingDb().getCcMonthlySummary(req.session.userId, req.params.id, year)).then((months) => {
+    res.json({ months });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/cc/cards/:id/yearly', (req, res) => {
-  try {
-    res.json({ years: db.getCcYearlySummary(req.session.userId, req.params.id) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().getCcYearlySummary(req.session.userId, req.params.id)).then((years) => {
+    res.json({ years });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/cc/cards/:id/years', (req, res) => {
-  try { res.json({ years: db.getCcAvailableYears(req.session.userId, req.params.id) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().getCcAvailableYears(req.session.userId, req.params.id)).then((years) => {
+    res.json({ years });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/cc/txns', (req, res) => {
-  try {
-    const r = db.addCcTxn(req.session.userId, req.body);
-    res.json({ success: true, id: r.lastInsertRowid });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getBillingDb().addCcTxn(req.session.userId, req.body)).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/cc/import-excel/sheets', withUpload, async (req, res) => {
@@ -1524,7 +1550,7 @@ router.post('/cc/import-excel', withUpload, async (req, res) => {
     const defaultTxnDate = req.body.default_txn_date || null;
     const { rows, skipped } = await parseCcExcelBuffer(req.file.buffer, sheets, req.body.password, defaultTxnDate);
     if (!rows.length) return res.status(400).json({ error: 'No valid rows found. Check the file format.' });
-    const count = db.bulkAddCcTxnsToCycle(req.session.userId, cycleId, rows, discountPct);
+    const count = await Promise.resolve(getBillingDb().bulkAddCcTxnsToCycle(req.session.userId, cycleId, rows, discountPct));
     res.json({ success: true, imported: count, total: rows.length + skipped });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Import failed' });
@@ -1532,12 +1558,12 @@ router.post('/cc/import-excel', withUpload, async (req, res) => {
 });
 
 router.put('/cc/txns/:id', (req, res) => {
-  try { db.updateCcTxn(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
+  try { Promise.resolve(getBillingDb().updateCcTxn(req.session.userId, req.params.id, req.body)).then(() => res.json({ success: true })).catch((err) => res.status(500).json({ error: err.message })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.delete('/cc/txns/:id', (req, res) => {
-  try { db.deleteCcTxn(req.session.userId, req.params.id); res.json({ success: true }); }
+  try { Promise.resolve(getBillingDb().deleteCcTxn(req.session.userId, req.params.id)).then(() => res.json({ success: true })).catch((err) => res.status(500).json({ error: err.message })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1546,33 +1572,38 @@ router.post('/cc/cycles/import', (req, res) => {
   try {
     const { card_id, rows } = req.body;
     if (!card_id || !Array.isArray(rows)) return res.status(400).json({ error: 'card_id and rows required' });
-    const count = db.importHistoricalCycles(req.session.userId, card_id, rows);
-    res.json({ success: true, imported: count });
+    Promise.resolve(getBillingDb().importHistoricalCycles(req.session.userId, card_id, rows)).then((count) => {
+      res.json({ success: true, imported: count });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/cc/cycles/:id/txns', (req, res) => {
   try {
-    const r = db.addCcTxnToCycle(req.session.userId, req.params.id, req.body);
-    res.json({ success: true, id: r.lastInsertRowid });
+    Promise.resolve(getBillingDb().addCcTxnToCycle(req.session.userId, req.params.id, req.body)).then((id) => {
+      res.json({ success: true, id });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 router.put('/cc/cycles/:id', (req, res) => {
   try {
-    db.updateCcCycle(req.session.userId, req.params.id, req.body);
-    res.json({ success: true });
+    Promise.resolve(getBillingDb().updateCcCycle(req.session.userId, req.params.id, req.body)).then(() => {
+      res.json({ success: true });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 router.delete('/cc/cycles/:id', (req, res) => {
   try {
-    db.deleteCcCycle(req.session.userId, req.params.id);
-    res.json({ success: true });
+    Promise.resolve(getBillingDb().deleteCcCycle(req.session.userId, req.params.id)).then(() => {
+      res.json({ success: true });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 router.post('/cc/cycles/:id/close', (req, res) => {
   try {
-    db.closeCcCycle(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date);
-    res.json({ success: true });
+    Promise.resolve(getBillingDb().closeCcCycle(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date)).then(() => {
+      res.json({ success: true });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1580,11 +1611,11 @@ router.post('/cc/cycles/:id/close', (req, res) => {
 const Anthropic = require('@anthropic-ai/sdk');
 
 router.get('/ai/lookup/status', (req, res) => {
-  try {
-    res.json({ success: true, ...db.getAiLookupStatus(req.session.userId) });
-  } catch (err) {
+  Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId)).then((status) => {
+    res.json({ success: true, ...status });
+  }).catch((err) => {
     res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 router.post('/ai/lookup', async (req, res) => {
@@ -1592,7 +1623,7 @@ router.post('/ai/lookup', async (req, res) => {
     const { question, history } = req.body;
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
-    const aiStatus = db.getAiLookupStatus(req.session.userId);
+    const aiStatus = await Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId));
     if (!aiStatus.canAsk) {
       return res.status(402).json({
         error: `You have used all ${aiStatus.dailyFreeLimit} free AI lookups for today. Buy a paid plan for more queries.`,
@@ -1604,7 +1635,7 @@ router.post('/ai/lookup', async (req, res) => {
     if (!apiKey) return res.status(503).json({ error: 'AI service not configured. Set ANTHROPIC_API_KEY environment variable.' });
 
     // Gather user's complete financial data
-    const summary = db.getUserFinancialSummary(req.session.userId);
+    const summary = await Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId));
 
     const systemPrompt = `You are a personal finance assistant for the Expense Lite AI application.
 You have access to the user's complete financial data as of ${summary.as_of}. Answer their questions accurately based on this data.
@@ -1633,7 +1664,7 @@ ${JSON.stringify(summary, null, 2)}`;
     });
 
     const answer = response.content[0]?.text || 'No response';
-    const nextStatus = db.recordAiLookupUsage(req.session.userId);
+    const nextStatus = await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId));
     res.json({ success: true, answer, ai_status: nextStatus });
   } catch (err) {
     console.error('[AI lookup]', err.message);
@@ -1643,33 +1674,39 @@ ${JSON.stringify(summary, null, 2)}`;
 
 // ─── DAILY TRACKERS ──────────────────────────────────────────
 router.get('/trackers', (req, res) => {
-  try { res.json({ trackers: db.getDailyTrackers(req.session.userId) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().getDailyTrackers(req.session.userId)).then((trackers) => {
+    res.json({ trackers });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/trackers', (req, res) => {
   try {
     const { name, unit, price_per_unit, default_qty } = req.body;
     if (!name || !price_per_unit) return res.status(400).json({ error: 'Missing required fields' });
-    const r = db.addDailyTracker(req.session.userId, { name, unit, price_per_unit, default_qty });
-    res.json({ success: true, id: r.lastInsertRowid });
+    Promise.resolve(getOpsDb().addDailyTracker(req.session.userId, { name, unit, price_per_unit, default_qty })).then((id) => {
+      res.json({ success: true, id });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/trackers/:id', (req, res) => {
-  try { db.updateDailyTracker(req.session.userId, req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().updateDailyTracker(req.session.userId, req.params.id, req.body)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.delete('/trackers/:id', (req, res) => {
-  try { db.deleteDailyTracker(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().deleteDailyTracker(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.get('/trackers/:id/entries', (req, res) => {
   try {
     const { year, month } = req.query;
-    res.json({ entries: db.getDailyEntries(req.session.userId, req.params.id, year, month) });
+    Promise.resolve(getOpsDb().getDailyEntries(req.session.userId, req.params.id, year, month)).then((entries) => {
+      res.json({ entries });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1677,38 +1714,44 @@ router.post('/trackers/:id/entries', (req, res) => {
   try {
     const { date, qty, is_auto } = req.body;
     if (!date || qty == null) return res.status(400).json({ error: 'Missing date or qty' });
-    const r = db.upsertDailyEntry(req.session.userId, req.params.id, date, qty, is_auto ? 1 : 0);
-    res.json({ success: true, amount: r.amount });
+    Promise.resolve(getOpsDb().upsertDailyEntry(req.session.userId, req.params.id, date, qty, is_auto ? 1 : 0)).then((r) => {
+      res.json({ success: true, amount: r.amount });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/trackers/:id/autofill', (req, res) => {
   try {
     const { year, month } = req.body;
-    const filled = db.autoFillDailyEntries(req.session.userId, req.params.id, year, month);
-    res.json({ success: true, filled });
+    Promise.resolve(getOpsDb().autoFillDailyEntries(req.session.userId, req.params.id, year, month)).then((filled) => {
+      res.json({ success: true, filled });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.get('/trackers/:id/summary', (req, res) => {
   try {
     const { year, month } = req.query;
-    res.json({ summary: db.getDailyMonthSummary(req.session.userId, req.params.id, year, month) });
+    Promise.resolve(getOpsDb().getDailyMonthSummary(req.session.userId, req.params.id, year, month)).then((summary) => {
+      res.json({ summary });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/trackers/:id/month-expense', (req, res) => {
   try {
     const { year, month } = req.body;
-    const amount = db.addTrackerMonthToExpense(req.session.userId, req.params.id, year, month);
-    res.json({ success: true, amount });
+    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month)).then((amount) => {
+      res.json({ success: true, amount });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── RECURRING ENTRIES ───────────────────────────────────────
 router.get('/recurring', (req, res) => {
-  try { res.json({ entries: db.getRecurringEntries(req.session.userId) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().getRecurringEntries(req.session.userId)).then((entries) => {
+    res.json({ entries });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/recurring', (req, res) => {
@@ -1726,7 +1769,7 @@ router.post('/recurring', (req, res) => {
       apply_current_month,
     } = req.body;
     if (!type || !description || !amount) return res.status(400).json({ error: 'Missing required fields' });
-    const r = db.addRecurringEntry(req.session.userId, {
+    Promise.resolve(getOpsDb().addRecurringEntry(req.session.userId, {
       type,
       description,
       amount,
@@ -1736,29 +1779,29 @@ router.post('/recurring', (req, res) => {
       discount_pct,
       also_expense,
       is_extra,
-    });
-    if (apply_current_month) db.applyRecurringEntryForCurrentMonth(req.session.userId, r.lastInsertRowid);
-    res.json({ success: true, id: r.lastInsertRowid });
+    })).then(async (id) => {
+      if (apply_current_month) await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));
+      res.json({ success: true, id });
+    }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/recurring/:id', (req, res) => {
-  try {
-    db.updateRecurringEntry(req.session.userId, req.params.id, req.body);
+  Promise.resolve(getOpsDb().updateRecurringEntry(req.session.userId, req.params.id, req.body)).then(() => {
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.delete('/recurring/:id', (req, res) => {
-  try { db.deleteRecurringEntry(req.session.userId, req.params.id); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  Promise.resolve(getOpsDb().deleteRecurringEntry(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 router.post('/recurring/apply', (req, res) => {
-  try {
-    const applied = db.applyRecurringEntries(req.session.userId);
+  Promise.resolve(getOpsDb().applyRecurringEntries(req.session.userId)).then((applied) => {
     res.json({ success: true, applied: applied.length, ids: applied });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
 module.exports = router;

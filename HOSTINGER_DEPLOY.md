@@ -95,7 +95,7 @@ On every push to `main`, GitHub Actions will:
 1. package the repo
 2. upload it to the VPS over SSH
 3. sync code into `/var/www/expense-lite-ai/app`
-4. preserve shared SQLite data and uploaded profile pictures
+4. preserve shared environment files and uploaded profile pictures
 5. run `npm ci --omit=dev`
 6. run `npm run build`
 7. restart or reload the app with PM2
@@ -144,10 +144,7 @@ pm2 restart expense-lite-ai --update-env
 curl http://127.0.0.1:3000/health
 ```
 
-If `/health` shows `"db_provider":"postgres"`, the runtime is reading Postgres configuration.
-
-Important:
-This enables Postgres infrastructure and Postgres-backed sessions. The main application query layer is still SQLite-based today, so a full DB migration is still required before the whole app truly runs on Postgres.
+If `/health` shows `"db_provider":"postgres"`, the live app is running in Postgres mode.
 
 ## 7. Optional live admin password reset during deploy
 
@@ -165,6 +162,6 @@ This only runs when both `ADMIN_RESET_EMAIL` and `ADMIN_RESET_PASSWORD` are prov
 
 ## Notes
 
-- SQLite data is stored in `/var/www/expense-lite-ai/shared/data`
+- PostgreSQL data lives in your configured Postgres server/database
 - Profile uploads are stored in `/var/www/expense-lite-ai/shared/public/uploads/profile`
 - The workflow assumes your production branch is `main`

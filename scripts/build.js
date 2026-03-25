@@ -8,7 +8,11 @@ const filesToCheck = [
   'server.js',
   'routes/auth.js',
   'routes/api.js',
-  'db/database.js',
+  'db/postgres-auth.js',
+  'db/postgres-core.js',
+  'db/postgres-ops.js',
+  'db/postgres-billing.js',
+  'db/postgres-finance.js',
   'public/js/app.js',
   'public/js/pdf.js',
 ];

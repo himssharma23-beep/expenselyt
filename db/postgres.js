@@ -2,11 +2,16 @@ const { Pool } = require('pg');
 
 let pool;
 
+function hasExplicitPgConfig() {
+  return !!(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
+}
+
 function getPool() {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL || '';
+    const useExplicitConfig = hasExplicitPgConfig();
     pool = new Pool(
-      connectionString
+      !useExplicitConfig && connectionString
         ? {
             connectionString,
             ssl: process.env.PGSSL === 'require'

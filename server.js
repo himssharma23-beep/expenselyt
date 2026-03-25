@@ -1,5 +1,5 @@
 // ============================================================
-// Server — Express + Session + SQLite
+// Server — Express + Session + Postgres
 // ============================================================
 // Load .env if present
 try { require('fs').readFileSync('.env','utf8').split('\n').forEach(l=>{const[k,...v]=l.split('=');if(k&&!k.startsWith('#')&&!process.env[k.trim()])process.env[k.trim()]=v.join('=').trim();}); } catch(_){}
@@ -10,12 +10,15 @@ const path = require('path');
 const { requireAuth } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
-const { isPostgresConfigured, getDbProvider } = require('./db/provider');
+const { assertPostgresConfigured, getDbProvider } = require('./db/provider');
 const pgDb = require('./db/postgres-auth');
 const pgCoreDb = require('./db/postgres-core');
+const { getPool } = require('./db/postgres');
+const PgSession = require('connect-pg-simple')(session);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+assertPostgresConfigured();
 
 // Ensure data directory exists
 const fs = require('fs');
@@ -36,20 +39,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Session store: Postgres when configured, otherwise SQLite
-let sessionStore;
-if (isPostgresConfigured()) {
-  const PgSession = require('connect-pg-simple')(session);
-  const { getPool } = require('./db/postgres');
-  sessionStore = new PgSession({
-    pool: getPool(),
-    tableName: process.env.PGSESSION_TABLE || 'user_sessions',
-    createTableIfMissing: true,
-  });
-} else {
-  const SQLiteStore = require('connect-sqlite3')(session);
-  sessionStore = new SQLiteStore({ dir: './data', db: 'sessions.db' });
-}
+const sessionStore = new PgSession({
+  pool: getPool(),
+  tableName: process.env.PGSESSION_TABLE || 'user_sessions',
+  createTableIfMissing: true,
+});
 
 app.use(session({
   store: sessionStore,
@@ -66,22 +60,9 @@ app.use(session({
 // Static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Routes ──────────────────────────────────────────────────
-app.use(authRoutes);
-app.use('/api', apiRoutes);
-
-// Landing page for guests, app for logged-in users
-app.get('/', (req, res) => {
-  if (req.session && req.session.userId) {
-    return res.sendFile('app.html', { root: './views' });
-  }
-  res.sendFile('landing.html', { root: './views' });
-});
-
 // Public plans API — no auth required
 app.get('/api/public/plans', (req, res) => {
-  const plansDb = isPostgresConfigured() ? pgDb : require('./db/database');
-  Promise.resolve(plansDb.getPlans()).then((plans) => {
+  Promise.resolve(pgDb.getPlans()).then((plans) => {
     res.json({ plans: plans.filter((p) => p.is_active) });
   }).catch((err) => {
     res.status(500).json({ error: err.message });
@@ -118,13 +99,24 @@ app.get('/contact', (req, res) => {
 });
 
 app.get('/api/public/share/:token', (req, res) => {
-  const shareDb = isPostgresConfigured() ? pgCoreDb : require('./db/database');
-  Promise.resolve(shareDb.getPublicShareData(req.params.token)).then((data) => {
+  Promise.resolve(pgCoreDb.getPublicShareData(req.params.token)).then((data) => {
     if (!data) return res.status(404).json({ error: 'Link not found or expired' });
     res.json(data);
   }).catch((err) => {
     res.status(500).json({ error: err.message });
   });
+});
+
+// ─── Routes ──────────────────────────────────────────────────
+app.use(authRoutes);
+app.use('/api', apiRoutes);
+
+// Landing page for guests, app for logged-in users
+app.get('/', (req, res) => {
+  if (req.session && req.session.userId) {
+    return res.sendFile('app.html', { root: './views' });
+  }
+  res.sendFile('landing.html', { root: './views' });
 });
 
 // Trip invite — redirect to app with invite token

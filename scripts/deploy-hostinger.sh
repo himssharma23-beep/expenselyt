@@ -66,15 +66,21 @@ if [[ -n "$ADMIN_RESET_EMAIL" && -n "$ADMIN_RESET_PASSWORD" ]]; then
   echo "🔐 Resetting admin password..."
   ADMIN_RESET_EMAIL="$ADMIN_RESET_EMAIL" ADMIN_RESET_PASSWORD="$ADMIN_RESET_PASSWORD" node -e "
     const bcrypt = require('bcryptjs');
-    const db = require('./db/database').getDb();
-    const email = String(process.env.ADMIN_RESET_EMAIL || '').toLowerCase().trim();
-    const password = String(process.env.ADMIN_RESET_PASSWORD || '');
-    if (!email || !password) throw new Error('Missing credentials');
-    const user = db.prepare('SELECT id, email, role FROM users WHERE lower(email)=?').get(email);
-    if (!user) throw new Error('User not found');
-    db.prepare('UPDATE users SET password_hash=? WHERE id=?')
-      .run(bcrypt.hashSync(password, 10), user.id);
-    console.log('✅ Password reset for:', user.email);
+    const { query } = require('./db/postgres');
+    (async () => {
+      const email = String(process.env.ADMIN_RESET_EMAIL || '').toLowerCase().trim();
+      const password = String(process.env.ADMIN_RESET_PASSWORD || '');
+      if (!email || !password) throw new Error('Missing credentials');
+      const userR = await query('SELECT id, email, role FROM users WHERE lower(email)=lower($1) LIMIT 1', [email]);
+      const user = userR.rows[0];
+      if (!user) throw new Error('User not found');
+      await query('UPDATE users SET password_hash=$1 WHERE id=$2', [bcrypt.hashSync(password, 10), user.id]);
+      console.log('✅ Password reset for:', user.email);
+      process.exit(0);
+    })().catch((err) => {
+      console.error(err.message);
+      process.exit(1);
+    });
   "
 fi
 

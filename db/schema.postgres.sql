@@ -1,6 +1,5 @@
--- Expense Lite AI - PostgreSQL baseline schema
--- This is the target platform schema for the SQLite -> Postgres migration.
--- Apply with psql before switching the app runtime fully to Postgres.
+-- Expense Lite AI - PostgreSQL schema
+-- Apply with psql before starting the app in a fresh environment.
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,

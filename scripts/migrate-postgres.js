@@ -1,5 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+try {
+  require('fs').readFileSync('.env', 'utf8').split(/\r?\n/).forEach((line) => {
+    const [key, ...rest] = line.split('=');
+    if (key && !key.startsWith('#') && !process.env[key.trim()]) process.env[key.trim()] = rest.join('=').trim();
+  });
+} catch (_) {}
 const { getPool } = require('../db/postgres');
 const { isPostgresConfigured } = require('../db/provider');
 

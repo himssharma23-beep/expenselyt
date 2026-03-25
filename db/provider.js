@@ -5,11 +5,18 @@ function isPostgresConfigured() {
   );
 }
 
+function assertPostgresConfigured() {
+  if (!isPostgresConfigured()) {
+    throw new Error('Postgres is required. Set DATABASE_URL or PGHOST/PGUSER/PGDATABASE.');
+  }
+}
+
 function getDbProvider() {
-  return isPostgresConfigured() ? 'postgres' : 'sqlite';
+  return 'postgres';
 }
 
 module.exports = {
   isPostgresConfigured,
+  assertPostgresConfigured,
   getDbProvider,
 };
