@@ -21,7 +21,7 @@ jobs:
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
-          printf "%s" "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_rsa
+          echo "%s" "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ vars.HOSTINGER_SSH_PORT || '22' }}" -H "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts
 
