@@ -1,29 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0A2E1C"/>
-      <stop offset="1" stop-color="#1A6B44"/>
+    <linearGradient id="bg" x1="40" y1="20" x2="472" y2="492" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3F8451"/>
+      <stop offset="1" stop-color="#052D12"/>
     </linearGradient>
-    <linearGradient id="gl" x1="0" y1="0" x2="0" y2="1">
-      <stop stop-color="white" stop-opacity="0.14"/>
-      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    <linearGradient id="bar1" x1="92" y1="350" x2="92" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#44CF72"/>
+      <stop offset="1" stop-color="#1D9447"/>
     </linearGradient>
+    <linearGradient id="bar2" x1="160" y1="314" x2="160" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#48D474"/>
+      <stop offset="1" stop-color="#229D4D"/>
+    </linearGradient>
+    <linearGradient id="bar3" x1="228" y1="278" x2="228" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#49D472"/>
+      <stop offset="1" stop-color="#26A04F"/>
+    </linearGradient>
+    <linearGradient id="bar4" x1="298" y1="215" x2="298" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4BD477"/>
+      <stop offset="1" stop-color="#28A350"/>
+    </linearGradient>
+    <linearGradient id="bar5" x1="372" y1="185" x2="372" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4FD57A"/>
+      <stop offset="1" stop-color="#2AA652"/>
+    </linearGradient>
+    <linearGradient id="bar6" x1="442" y1="125" x2="442" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#51D87C"/>
+      <stop offset="1" stop-color="#2CAB56"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="76" y1="370" x2="446" y2="91" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD56B"/>
+      <stop offset="0.55" stop-color="#F0A030"/>
+      <stop offset="1" stop-color="#C96A10"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0" cy="0" r="1" gradientTransform="translate(305 245) rotate(90) scale(63)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF6D6"/>
+      <stop offset="0.28" stop-color="#FBE3A7"/>
+      <stop offset="0.58" stop-color="#D28C3B"/>
+      <stop offset="1" stop-color="#8C4308"/>
+    </radialGradient>
+    <radialGradient id="orbGlow" cx="0" cy="0" r="1" gradientTransform="translate(291 231) rotate(90) scale(18)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFBEA"/>
+      <stop offset="1" stop-color="#FFFBEA" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <rect width="44" height="44" rx="11" fill="url(#bg)"/>
-  <rect width="44" height="22" rx="11" fill="url(#gl)"/>
-
-  <!-- Bar chart -->
-  <rect x="6"  y="32" width="4" height="8"  rx="1" fill="white" fill-opacity="0.14"/>
-  <rect x="12" y="28" width="4" height="12" rx="1" fill="white" fill-opacity="0.14"/>
-  <rect x="18" y="24" width="4" height="16" rx="1" fill="white" fill-opacity="0.14"/>
-  <rect x="24" y="27" width="4" height="13" rx="1" fill="white" fill-opacity="0.14"/>
-  <rect x="30" y="21" width="4" height="19" rx="1" fill="white" fill-opacity="0.20"/>
-  <!-- Trend line -->
-  <polyline points="8,32 14,28 20,23 26,26 32,21" stroke="#F0A030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="32" cy="21" r="2.5" fill="#F0A030"/>
-  <!-- ₹ -->
-  <text x="22" y="25" text-anchor="middle"
-    font-family="'DM Sans','Arial',sans-serif"
-    font-size="19" font-weight="800"
-    fill="#F0A030">₹</text>
+  <rect width="512" height="512" rx="0" fill="url(#bg)"/>
+  <rect x="67" y="350" width="49" height="82" rx="8" fill="url(#bar1)"/>
+  <rect x="135" y="314" width="49" height="118" rx="8" fill="url(#bar2)"/>
+  <rect x="203" y="278" width="49" height="154" rx="8" fill="url(#bar3)"/>
+  <rect x="273" y="215" width="49" height="217" rx="8" fill="url(#bar4)"/>
+  <rect x="347" y="185" width="49" height="247" rx="8" fill="url(#bar5)"/>
+  <rect x="417" y="125" width="49" height="307" rx="8" fill="url(#bar6)"/>
+  <path d="M78 351C129 349 162 311 208 273L421 113C428 108 437 110 442 118C447 126 445 137 437 143L224 303C172 345 134 386 75 386C64 386 55 377 55 366C55 357 63 351 78 351Z" fill="url(#arrow)"/>
+  <path d="M415 98L454 112L431 147L415 98Z" fill="#F3C05D"/>
+  <circle cx="301" cy="245" r="43" fill="url(#orb)"/>
+  <circle cx="288" cy="232" r="13" fill="url(#orbGlow)"/>
 </svg>

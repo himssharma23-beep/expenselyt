@@ -53,6 +53,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
+function toggleSidebar(forceOpen) {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar || !backdrop || window.innerWidth > 768) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', open);
+  backdrop.classList.toggle('show', open);
+  document.body.classList.toggle('sidebar-open', open);
+}
+
 function renderUserBox() {
   const box = document.getElementById('userBox');
   if (!box || !_currentUser) return;
@@ -163,8 +173,19 @@ function switchTab(tab) {
   currentTab = tab;
   selectedFriend = null;
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  if (window.innerWidth <= 768) toggleSidebar(false);
   loadTab();
 }
+
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 768) {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    if (sidebar) sidebar.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('show');
+    document.body.classList.remove('sidebar-open');
+  }
+});
 
 function loadTab() {
   if (currentTab === 'dashboard') loadDashboard();
