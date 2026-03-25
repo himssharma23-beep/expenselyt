@@ -109,6 +109,46 @@ pm2 restart expense-lite-ai
 curl http://127.0.0.1:3000/health
 ```
 
+## PostgreSQL enablement
+
+Add Postgres env vars into:
+
+`/var/www/expense-lite-ai/shared/.env`
+
+Example:
+
+```env
+DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/expense_lite_ai
+PGSSL=require
+```
+
+Or:
+
+```env
+PGHOST=127.0.0.1
+PGPORT=5432
+PGUSER=postgres
+PGPASSWORD=your-password
+PGDATABASE=expense_lite_ai
+PGSSL=require
+```
+
+Then on the server:
+
+```bash
+cd /var/www/expense-lite-ai/app
+npm install
+npm run check:postgres
+npm run migrate:postgres
+pm2 restart expense-lite-ai --update-env
+curl http://127.0.0.1:3000/health
+```
+
+If `/health` shows `"db_provider":"postgres"`, the runtime is reading Postgres configuration.
+
+Important:
+This enables Postgres infrastructure and Postgres-backed sessions. The main application query layer is still SQLite-based today, so a full DB migration is still required before the whole app truly runs on Postgres.
+
 ## 7. Optional live admin password reset during deploy
 
 If you need to reset the live admin password, the deploy script supports it with env vars:

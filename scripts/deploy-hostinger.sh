@@ -37,7 +37,7 @@ rsync -a --delete \
   --exclude "node_modules" \
   --exclude "data" \
   --exclude ".env" \
-  --exclude "public/uploads/profile" \
+  --exclude "public/uploads" \
   "$SOURCE_DIR"/ "$LIVE_DIR"/
 
 echo "🔗 Linking shared folders..."

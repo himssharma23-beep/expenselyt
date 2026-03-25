@@ -10,6 +10,7 @@ const path = require('path');
 const { requireAuth } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
+const { isPostgresConfigured, getDbProvider } = require('./db/provider');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,10 +34,23 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Session with SQLite store
-const SQLiteStore = require('connect-sqlite3')(session);
+// Session store: Postgres when configured, otherwise SQLite
+let sessionStore;
+if (isPostgresConfigured()) {
+  const PgSession = require('connect-pg-simple')(session);
+  const { getPool } = require('./db/postgres');
+  sessionStore = new PgSession({
+    pool: getPool(),
+    tableName: process.env.PGSESSION_TABLE || 'user_sessions',
+    createTableIfMissing: true,
+  });
+} else {
+  const SQLiteStore = require('connect-sqlite3')(session);
+  sessionStore = new SQLiteStore({ dir: './data', db: 'sessions.db' });
+}
+
 app.use(session({
-  store: new SQLiteStore({ dir: './data', db: 'sessions.db' }),
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'expense-manager-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
@@ -83,6 +97,7 @@ app.get('/health', (req, res) => {
   res.json({
     ok: true,
     app: 'Expense Lite AI',
+    db_provider: getDbProvider(),
     env: process.env.NODE_ENV || 'development',
     uptime_seconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
