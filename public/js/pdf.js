@@ -22,7 +22,7 @@ const _P = (() => {
     doc.rect(0, 0, w, 22, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(7.5); doc.setFont('helvetica', 'bold');
-    doc.text('EXPENSEMANAGER', 14, 8);
+    doc.text('EXPENSE LITE AI', 14, 8);
     doc.setFontSize(13); doc.text(title, 14, 17.5);
     if (subtitle) {
       doc.setFontSize(8); doc.setFont('helvetica', 'normal');
@@ -62,7 +62,7 @@ const _P = (() => {
           doc.setFillColor(...GREEN);
           doc.rect(0, 0, pw, 7, 'F');
           doc.setFontSize(6.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(255,255,255);
-          doc.text('EXPENSEMANAGER (cont.)', 14, 5);
+          doc.text('EXPENSE LITE AI (cont.)', 14, 5);
           doc.setTextColor(0,0,0); doc.setFont('helvetica','normal');
         }
       }
