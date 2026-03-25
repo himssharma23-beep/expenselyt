@@ -109,6 +109,20 @@ pm2 restart expense-lite-ai
 curl http://127.0.0.1:3000/health
 ```
 
+## 7. Optional live admin password reset during deploy
+
+If you need to reset the live admin password, the deploy script supports it with env vars:
+
+```bash
+ADMIN_RESET_EMAIL=hims.sharma23@gmail.com \
+ADMIN_RESET_PASSWORD='Admin@12345' \
+APP_DIR=/var/www/expense-lite-ai \
+APP_NAME=expense-lite-ai \
+bash scripts/deploy-hostinger.sh /path/to/source
+```
+
+This only runs when both `ADMIN_RESET_EMAIL` and `ADMIN_RESET_PASSWORD` are provided.
+
 ## Notes
 
 - SQLite data is stored in `/var/www/expense-lite-ai/shared/data`

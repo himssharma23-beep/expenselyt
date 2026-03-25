@@ -7,6 +7,8 @@ APP_NAME="${APP_NAME:-expense-lite-ai}"
 LIVE_DIR="$APP_DIR/app"
 SHARED_DIR="$APP_DIR/shared"
 INCOMING_DIR="$APP_DIR/incoming"
+ADMIN_RESET_EMAIL="${ADMIN_RESET_EMAIL:-}"
+ADMIN_RESET_PASSWORD="${ADMIN_RESET_PASSWORD:-}"
 
 if [[ -z "$SOURCE_DIR" ]]; then
   echo "Usage: APP_DIR=/var/www/expense-lite-ai APP_NAME=expense-lite-ai bash scripts/deploy-hostinger.sh /path/to/extracted/source"
@@ -60,6 +62,21 @@ npm ci --omit=dev
 
 echo "Running build validation ..."
 #npm run build
+
+if [[ -n "$ADMIN_RESET_EMAIL" && -n "$ADMIN_RESET_PASSWORD" ]]; then
+  echo "Resetting admin password for $ADMIN_RESET_EMAIL ..."
+  ADMIN_RESET_EMAIL="$ADMIN_RESET_EMAIL" ADMIN_RESET_PASSWORD="$ADMIN_RESET_PASSWORD" node -e "
+    const bcrypt = require('bcryptjs');
+    const db = require('./db/database').getDb();
+    const email = String(process.env.ADMIN_RESET_EMAIL || '').toLowerCase().trim();
+    const password = String(process.env.ADMIN_RESET_PASSWORD || '');
+    if (!email || !password) throw new Error('Missing ADMIN_RESET_EMAIL or ADMIN_RESET_PASSWORD');
+    const user = db.prepare('SELECT id, email, username, role FROM users WHERE lower(email)=?').get(email);
+    if (!user) throw new Error('User not found for email: ' + email);
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(bcrypt.hashSync(password, 10), user.id);
+    console.log('Password reset completed for:', user.email, '(' + user.role + ')');
+  "
+fi
 
 echo "Stopping existing PM2 app (if running)..."
 pm2 delete "$APP_NAME" || true
