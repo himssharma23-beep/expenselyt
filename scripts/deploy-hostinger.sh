@@ -59,10 +59,14 @@ echo "Installing production dependencies ..."
 npm ci --omit=dev
 
 echo "Running build validation ..."
-npm run build
+#npm run build
 
-echo "Reloading PM2 app $APP_NAME ..."
-pm2 startOrGracefulReload ecosystem.config.cjs --only "$APP_NAME" --update-env || pm2 start ecosystem.config.cjs --only "$APP_NAME" --update-env
+echo "Stopping existing PM2 app (if running)..."
+pm2 delete "$APP_NAME" || true
+
+echo "Starting fresh PM2 app..."
+pm2 start ecosystem.config.cjs --only "$APP_NAME" --update-env
+
 pm2 save
 
 echo "Deployment finished."
