@@ -89,6 +89,18 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/privacy-policy', (req, res) => {
+  res.sendFile('privacy.html', { root: './views' });
+});
+
+app.get('/terms-and-conditions', (req, res) => {
+  res.sendFile('terms.html', { root: './views' });
+});
+
+app.get('/contact', (req, res) => {
+  res.sendFile('contact.html', { root: './views' });
+});
+
 app.get('/api/public/share/:token', (req, res) => {
   try {
     const db = require('./db/database');
