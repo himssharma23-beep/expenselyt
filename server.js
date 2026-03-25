@@ -11,6 +11,7 @@ const { requireAuth } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
 const { isPostgresConfigured, getDbProvider } = require('./db/provider');
+const pgDb = require('./db/postgres-auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -78,13 +79,12 @@ app.get('/', (req, res) => {
 
 // Public plans API — no auth required
 app.get('/api/public/plans', (req, res) => {
-  try {
-    const db = require('./db/database');
-    const plans = db.getPlans().filter(p => p.is_active);
-    res.json({ plans });
-  } catch (err) {
+  const plansDb = isPostgresConfigured() ? pgDb : require('./db/database');
+  Promise.resolve(plansDb.getPlans()).then((plans) => {
+    res.json({ plans: plans.filter((p) => p.is_active) });
+  }).catch((err) => {
     res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Public share page — no auth required

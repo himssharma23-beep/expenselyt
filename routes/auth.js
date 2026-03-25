@@ -1,9 +1,11 @@
 // ============================================================
-// Auth Routes — Login / Register / Logout
+// Auth Routes - Login / Register / Logout
 // ============================================================
 const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
+const pgDb = require('../db/postgres-auth');
+const { isPostgresConfigured } = require('../db/provider');
 const { guestOnly, requireAuth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
@@ -30,6 +32,10 @@ const upload = multer({
   },
 });
 
+function getAuthDb() {
+  return isPostgresConfigured() ? pgDb : db;
+}
+
 // GET /login
 router.get('/login', guestOnly, (req, res) => {
   res.sendFile('login.html', { root: './views' });
@@ -41,8 +47,9 @@ router.get('/register', guestOnly, (req, res) => {
 });
 
 // POST /api/auth/register
-router.post('/api/auth/register', (req, res) => {
+router.post('/api/auth/register', async (req, res) => {
   try {
+    const authDb = getAuthDb();
     const { username, email, password, display_name } = req.body;
 
     if (!username || !email || !password || !display_name) {
@@ -52,12 +59,11 @@ router.post('/api/auth/register', (req, res) => {
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' });
 
-    // Check duplicates
-    if (db.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
-    if (db.findUserByEmail(email)) return res.status(400).json({ error: 'Email already registered' });
+    if (await authDb.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
+    if (await authDb.findUserByEmail(email)) return res.status(400).json({ error: 'Email already registered' });
 
-    const userId = db.createUser(username, email, password, display_name);
-    db.assignSignupPlanToUser(userId);
+    const userId = await authDb.createUser(username, email, password, display_name);
+    await authDb.assignSignupPlanToUser(userId);
     req.session.userId = userId;
     req.session.displayName = display_name;
 
@@ -70,19 +76,19 @@ router.post('/api/auth/register', (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/api/auth/login', (req, res) => {
+router.post('/api/auth/login', async (req, res) => {
   try {
+    const authDb = getAuthDb();
     const { username, password } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
-    // Allow login with username or email
-    let user = db.findUserByUsername(username);
-    if (!user) user = db.findUserByEmail(username);
+    let user = await authDb.findUserByUsername(username);
+    if (!user) user = await authDb.findUserByEmail(username);
 
-    if (!user || !db.verifyPassword(password, user.password_hash)) {
+    if (!user || !authDb.verifyPassword(password, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -105,16 +111,16 @@ router.post('/api/auth/logout', (req, res) => {
 });
 
 // GET /api/auth/me
-router.get('/api/auth/me', (req, res) => {
+router.get('/api/auth/me', async (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not logged in' });
-  const user = db.findUserById(req.session.userId);
+  const user = await getAuthDb().findUserById(req.session.userId);
   if (!user) return res.status(401).json({ error: 'User not found' });
   res.json(user);
 });
 
-router.put('/api/auth/profile', requireAuth, (req, res) => {
+router.put('/api/auth/profile', requireAuth, async (req, res) => {
   try {
-    const user = db.updateUserProfile(req.session.userId, req.body || {});
+    const user = await getAuthDb().updateUserProfile(req.session.userId, req.body || {});
     req.session.displayName = user.display_name;
     res.json({ success: true, user });
   } catch (err) {
@@ -122,21 +128,21 @@ router.put('/api/auth/profile', requireAuth, (req, res) => {
   }
 });
 
-router.post('/api/auth/change-password', requireAuth, (req, res) => {
+router.post('/api/auth/change-password', requireAuth, async (req, res) => {
   try {
     const { current_password, new_password } = req.body || {};
-    db.changeUserPassword(req.session.userId, current_password, new_password);
+    await getAuthDb().changeUserPassword(req.session.userId, current_password, new_password);
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-router.post('/api/auth/profile-photo', requireAuth, upload.single('photo'), (req, res) => {
+router.post('/api/auth/profile-photo', requireAuth, upload.single('photo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Photo file is required' });
     const avatarUrl = `/uploads/profile/${req.file.filename}`;
-    const user = db.updateUserProfile(req.session.userId, { avatar_url: avatarUrl });
+    const user = await getAuthDb().updateUserProfile(req.session.userId, { avatar_url: avatarUrl });
     req.session.displayName = user.display_name;
     res.json({ success: true, avatar_url: avatarUrl, user });
   } catch (err) {
@@ -144,13 +150,16 @@ router.post('/api/auth/profile-photo', requireAuth, upload.single('photo'), (req
   }
 });
 
-// GET /reset-password — show reset form
-router.get('/reset-password', (req, res) => {
+// GET /reset-password - show reset form
+router.get('/reset-password', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.redirect('/login');
-  const reset = db.getPasswordResetByToken(token);
-  if (!reset) return res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>Link expired or invalid</h2><a href="/login">Back to login</a></body></html>`);
-  res.send(`<!DOCTYPE html><html><head><title>Reset Password</title>
+  try {
+    const reset = await getAuthDb().getPasswordResetByToken(token);
+    if (!reset) {
+      return res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>Link expired or invalid</h2><a href="/login">Back to login</a></body></html>`);
+    }
+    res.send(`<!DOCTYPE html><html><head><title>Reset Password</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>body{font-family:'DM Sans',sans-serif;background:#f5f6fa;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
   .box{background:#fff;border-radius:12px;padding:40px;width:360px;box-shadow:0 4px 24px #0001}
@@ -175,17 +184,22 @@ router.get('/reset-password', (req, res) => {
   }
   function showMsg(m,bg){const e=document.getElementById('msg');e.textContent=m;e.style.background=bg;e.style.display='block';}
   </script></div></body></html>`);
+  } catch (_err) {
+    res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>Link expired or invalid</h2><a href="/login">Back to login</a></body></html>`);
+  }
 });
 
-// POST /api/reset-password — process reset (no auth required)
-router.post('/api/reset-password', (req, res) => {
+// POST /api/reset-password - process reset (no auth required)
+router.post('/api/reset-password', async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password || password.length < 6) return res.status(400).json({ error: 'Invalid request' });
-    const success = db.usePasswordReset(token, bcrypt.hashSync(password, 10));
+    const success = await getAuthDb().usePasswordReset(token, bcrypt.hashSync(password, 10));
     if (!success) return res.status(400).json({ error: 'Link expired or already used' });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

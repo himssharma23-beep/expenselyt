@@ -3,6 +3,7 @@
 // ============================================================
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
+const { isPostgresConfigured } = require('../db/provider');
 
 function requireAuth(req, res, next) {
   // 1. JWT Bearer token (mobile apps)
@@ -36,12 +37,20 @@ function guestOnly(req, res, next) {
   return next();
 }
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
-  const db = require('../db/database');
-  const user = db.findUserById(req.session.userId);
-  if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-  next();
+  try {
+    let user;
+    if (isPostgresConfigured()) {
+      user = await require('../db/postgres-auth').findUserById(req.session.userId);
+    } else {
+      user = require('../db/database').findUserById(req.session.userId);
+    }
+    if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Admin check failed' });
+  }
 }
 
 module.exports = { requireAuth, guestOnly, requireAdmin };

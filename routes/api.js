@@ -5,6 +5,8 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const db = require('../db/database');
+const pgDb = require('../db/postgres-auth');
+const { isPostgresConfigured } = require('../db/provider');
 const { requireAuth } = require('../middleware/auth');
 
 // All API routes require auth
@@ -1281,89 +1283,130 @@ router.get('/emi/summary', (req, res) => {
 
 // ─── Current user access ─────────────────────────────────────
 router.get('/auth/me/access', (req, res) => {
-  try {
-    const user = db.findUserById(req.session.userId);
-    const pages = db.getUserAccessiblePages(req.session.userId);
+  const authDb = isPostgresConfigured() ? pgDb : db;
+  Promise.all([
+    Promise.resolve(authDb.findUserById(req.session.userId)),
+    Promise.resolve(authDb.getUserAccessiblePages(req.session.userId)),
+  ]).then(([user, pages]) => {
     res.json({ role: user?.role || 'user', pages });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  }).catch((err) => {
+    res.status(500).json({ error: err.message });
+  });
 });
 
 // ─── ADMIN ROUTES ────────────────────────────────────────────
 const { requireAdmin } = require('../middleware/auth');
 
-router.get('/admin/users', requireAdmin, (req, res) => {
-  try { res.json({ users: db.getAllUsers() }); }
+router.get('/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    res.json({ users: await Promise.resolve(authDb.getAllUsers()) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.updateUserAdmin(req.params.id, req.body));
+    res.json({ success: true });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/admin/users/:id', requireAdmin, (req, res) => {
-  try { db.updateUserAdmin(req.params.id, req.body); res.json({ success: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-router.post('/admin/users/:id/set-password', requireAdmin, (req, res) => {
+router.post('/admin/users/:id/set-password', requireAdmin, async (req, res) => {
   try {
     const { password } = req.body;
     if (!password || password.length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
     const bcrypt = require('bcryptjs');
-    db.resetUserPassword(req.params.id, bcrypt.hashSync(password, 10));
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.resetUserPassword(req.params.id, bcrypt.hashSync(password, 10)));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/users/:id/reset-link', requireAdmin, (req, res) => {
+router.post('/admin/users/:id/reset-link', requireAdmin, async (req, res) => {
   try {
-    const token = db.createPasswordReset(req.params.id);
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    const token = await Promise.resolve(authDb.createPasswordReset(req.params.id));
     const link = `${req.protocol}://${req.get('host')}/reset-password?token=${token}`;
     res.json({ success: true, token, link });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/users/:id/otp', requireAdmin, (req, res) => {
+router.post('/admin/users/:id/otp', requireAdmin, async (req, res) => {
   try {
     const { purpose, channel } = req.body;
-    const code = db.generateOtp(req.params.id, purpose || 'login', channel || 'email');
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    const code = await Promise.resolve(authDb.generateOtp(req.params.id, purpose || 'login', channel || 'email'));
     res.json({ success: true, otp: code });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/admin/plans', requireAdmin, (req, res) => {
-  try { res.json({ plans: db.getPlans() }); }
+router.get('/admin/plans', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    res.json({ plans: await Promise.resolve(authDb.getPlans()) });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/plans', requireAdmin, (req, res) => {
-  try { res.json({ success: true, id: db.createPlan(req.body) }); }
+router.post('/admin/plans', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    res.json({ success: true, id: await Promise.resolve(authDb.createPlan(req.body)) });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/admin/plans/:id', requireAdmin, (req, res) => {
-  try { db.updatePlan(req.params.id, req.body); res.json({ success: true }); }
+router.put('/admin/plans/:id', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.updatePlan(req.params.id, req.body));
+    res.json({ success: true });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/admin/plans/:id', requireAdmin, (req, res) => {
-  try { db.deletePlan(req.params.id); res.json({ success: true }); }
+router.delete('/admin/plans/:id', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.deletePlan(req.params.id));
+    res.json({ success: true });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/admin/subscriptions', requireAdmin, (req, res) => {
-  try { res.json({ subscriptions: db.getSubscriptions() }); }
+router.get('/admin/subscriptions', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    res.json({ subscriptions: await Promise.resolve(authDb.getSubscriptions()) });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/subscriptions', requireAdmin, (req, res) => {
-  try { res.json({ success: true, id: db.createSubscription(req.body).lastInsertRowid }); }
+router.post('/admin/subscriptions', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    res.json({ success: true, id: await Promise.resolve(authDb.createSubscription(req.body)) });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/admin/subscriptions/:id', requireAdmin, (req, res) => {
-  try { db.updateSubscription(req.params.id, req.body); res.json({ success: true }); }
+router.put('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.updateSubscription(req.params.id, req.body));
+    res.json({ success: true });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/admin/subscriptions/:id', requireAdmin, (req, res) => {
-  try { db.deleteSubscription(req.params.id); res.json({ success: true }); }
+router.delete('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
+  try {
+    const authDb = isPostgresConfigured() ? pgDb : db;
+    await Promise.resolve(authDb.deleteSubscription(req.params.id));
+    res.json({ success: true });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
