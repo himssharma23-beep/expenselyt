@@ -3,16 +3,35 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
-  username TEXT UNIQUE NOT NULL,
-  email TEXT UNIQUE NOT NULL,
+  username TEXT NOT NULL,
+  email TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   display_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   mobile TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   avatar_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  currency_code TEXT,
+  locale_code TEXT,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS currency_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locale_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_active_unique ON users (lower(username)) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_active_unique ON users (lower(email)) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
@@ -386,3 +405,48 @@ CREATE TABLE IF NOT EXISTS ai_lookup_usage (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, usage_date)
 );
+
+DO $$
+DECLARE
+  tbl TEXT;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'expenses',
+    'friends',
+    'loan_transactions',
+    'divide_groups',
+    'divide_splits',
+    'trips',
+    'trip_members',
+    'trip_expenses',
+    'trip_expense_splits',
+    'emi_records',
+    'emi_installments',
+    'bank_accounts',
+    'default_payments',
+    'monthly_payments',
+    'credit_cards',
+    'cc_cycles',
+    'cc_txns',
+    'daily_trackers',
+    'daily_entries',
+    'recurring_entries',
+    'trip_invites',
+    'share_links',
+    'plans',
+    'plan_pages',
+    'user_subscriptions',
+    'otps',
+    'password_resets',
+    'ai_lookup_usage'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL', tbl);
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL', tbl);
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL', tbl);
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()', tbl);
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ', tbl);
+  END LOOP;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);

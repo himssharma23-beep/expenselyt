@@ -15,6 +15,8 @@ const pgDb = require('./db/postgres-auth');
 const pgCoreDb = require('./db/postgres-core');
 const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
+const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
+const { verifyRecaptcha } = require('./utils/recaptcha');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -61,6 +63,15 @@ app.use(session({
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Public plans API — no auth required
+app.get('/runtime-config.js', (_req, res) => {
+  res.type('application/javascript');
+  res.send(
+    `window.__appRuntimeConfig = ${JSON.stringify({
+      gaMeasurementId: process.env.GA_MEASUREMENT_ID || '',
+    })};`
+  );
+});
+
 app.get('/api/public/plans', (req, res) => {
   Promise.resolve(pgDb.getPlans()).then((plans) => {
     res.json({ plans: plans.filter((p) => p.is_active) });
@@ -95,7 +106,9 @@ app.get('/terms-and-conditions', (req, res) => {
 });
 
 app.get('/contact', (req, res) => {
-  res.sendFile('contact.html', { root: './views' });
+  const html = fs.readFileSync(path.join(__dirname, 'views', 'contact.html'), 'utf8')
+    .replace(/__RECAPTCHA_SITE_KEY__/g, process.env.RECAPTCHA_SITE_KEY || '');
+  res.send(html);
 });
 
 app.get('/api/public/share/:token', (req, res) => {
@@ -105,6 +118,39 @@ app.get('/api/public/share/:token', (req, res) => {
   }).catch((err) => {
     res.status(500).json({ error: err.message });
   });
+});
+
+app.post('/api/public/contact', async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const subject = String(req.body?.subject || '').trim();
+    const message = String(req.body?.message || '').trim();
+    const captchaToken = String(req.body?.captchaToken || '').trim();
+
+    if (!name || !email || !subject || !message) {
+      return res.status(400).json({ error: 'All fields are required.' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Valid email is required.' });
+    }
+
+    const captcha = await verifyRecaptcha(captchaToken, req.ip);
+    if (captcha.enabled && !captcha.success) {
+      return res.status(400).json({ error: 'Captcha verification failed. Please try again.' });
+    }
+
+    if (isEmailEnabled()) {
+      await Promise.allSettled([
+        sendContactEmail({ name, email, subject, message }),
+        sendContactAckEmail({ to: email, name, subject }),
+      ]);
+    }
+
+    res.json({ success: true, message: 'Your message has been sent successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Routes ──────────────────────────────────────────────────

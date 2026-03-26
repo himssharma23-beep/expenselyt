@@ -19,6 +19,8 @@
 <link rel="canonical" href="https://expenselyt.com/register">
 <title>Register — Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="/runtime-config.js"></script>
+<script src="/js/analytics.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -110,6 +112,22 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
   </div>
 </div>
 <script>
+function detectCurrencyPrefs() {
+  const locale = (navigator.language || 'en-US').replace(/_/g, '-');
+  const region = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
+  const currencyByRegion = {
+    IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD',
+    CA: 'CAD', SG: 'SGD', JP: 'JPY', CN: 'CNY', DE: 'EUR',
+    FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
+  };
+  const currencyByCode = {
+    INR: 'en-IN', USD: 'en-US', EUR: 'de-DE', GBP: 'en-GB', AED: 'en-AE',
+    CAD: 'en-CA', AUD: 'en-AU', SGD: 'en-SG', JPY: 'ja-JP', CNY: 'zh-CN',
+  };
+  const currency_code = currencyByRegion[region] || 'USD';
+  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US' };
+}
+
 async function handleRegister(e) {
   e.preventDefault();
   const errEl = document.getElementById('error');
@@ -125,6 +143,7 @@ async function handleRegister(e) {
   btn.disabled = true;
 
   try {
+    const prefs = detectCurrencyPrefs();
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -133,6 +152,7 @@ async function handleRegister(e) {
         username: document.getElementById('username').value,
         email: document.getElementById('email').value,
         password: pw,
+        ...prefs,
       }),
     });
     const data = await res.json();

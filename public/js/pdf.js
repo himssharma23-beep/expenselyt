@@ -35,7 +35,8 @@ const _P = (() => {
   function footer(doc) {
     const w = W(doc), h = H(doc);
     const n = doc.internal.getNumberOfPages();
-    const date = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const localeCode = (window.__currencyPrefs && window.__currencyPrefs.localeCode) || 'en-IN';
+    const date = new Date().toLocaleDateString(localeCode, { day: '2-digit', month: 'short', year: 'numeric' });
     for (let i = 1; i <= n; i++) {
       doc.setPage(i);
       doc.setFillColor(237, 240, 243);
@@ -113,13 +114,15 @@ const _P = (() => {
   }
 
   function cur(n) {
+    if (typeof fmtCur === 'function') return fmtCur(n);
     const v = parseFloat(n)||0, neg = v < 0;
-    return (neg?'- Rs.':'Rs.') + ' ' + Math.abs(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+    return (neg?'- INR ':'INR ') + Math.abs(v).toFixed(2);
   }
 
   function dt(d) {
     if (!d) return '—';
-    return new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+    const localeCode = (window.__currencyPrefs && window.__currencyPrefs.localeCode) || 'en-IN';
+    return new Date(d+'T00:00:00').toLocaleDateString(localeCode,{day:'2-digit',month:'short',year:'numeric'});
   }
 
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];

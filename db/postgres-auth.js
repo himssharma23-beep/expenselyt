@@ -2,8 +2,39 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { query, withTransaction } = require('./postgres');
 
+const DEFAULT_LOCALE_BY_CURRENCY = {
+  INR: 'en-IN',
+  USD: 'en-US',
+  EUR: 'de-DE',
+  GBP: 'en-GB',
+  AED: 'en-AE',
+  CAD: 'en-CA',
+  AUD: 'en-AU',
+  SGD: 'en-SG',
+  JPY: 'ja-JP',
+  CNY: 'zh-CN',
+};
+
+function normalizeCurrencyCode(code) {
+  if (!code) return null;
+  const normalized = String(code).trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
+}
+
+function normalizeLocaleCode(locale, currencyCode) {
+  const cleaned = String(locale || '').trim().replace(/_/g, '-');
+  if (/^[a-z]{2,3}(?:-[A-Z]{2})?$/i.test(cleaned)) return cleaned;
+  return DEFAULT_LOCALE_BY_CURRENCY[currencyCode] || 'en-US';
+}
+
 function normalizeUser(row) {
-  return row ? { ...row } : null;
+  if (!row) return null;
+  const currencyCode = normalizeCurrencyCode(row.currency_code) || 'INR';
+  return {
+    ...row,
+    currency_code: currencyCode,
+    locale_code: normalizeLocaleCode(row.locale_code, currencyCode),
+  };
 }
 
 function normalizePlan(row) {
@@ -25,17 +56,21 @@ function normalizeSubscription(row) {
   };
 }
 
-async function createUser(username, email, password, displayName) {
+async function createUser(username, email, password, displayName, preferences = {}) {
   const hash = bcrypt.hashSync(password, 10);
+  const currencyCode = normalizeCurrencyCode(preferences.currency_code) || 'INR';
+  const localeCode = normalizeLocaleCode(preferences.locale_code, currencyCode);
   const result = await query(
-    `INSERT INTO users (username, email, password_hash, display_name)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO users (username, email, password_hash, display_name, currency_code, locale_code)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
     [
       String(username).toLowerCase().trim(),
       String(email).toLowerCase().trim(),
       hash,
       String(displayName).trim(),
+      currencyCode,
+      localeCode,
     ]
   );
   return Number(result.rows[0].id);
@@ -46,6 +81,7 @@ async function findUserByUsername(username) {
     `SELECT *
      FROM users
      WHERE lower(username) = lower($1)
+       AND deleted_at IS NULL
      LIMIT 1`,
     [String(username || '').trim()]
   );
@@ -57,17 +93,34 @@ async function findUserByEmail(email) {
     `SELECT *
      FROM users
      WHERE lower(email) = lower($1)
+       AND deleted_at IS NULL
      LIMIT 1`,
     [String(email || '').trim()]
   );
   return normalizeUser(result.rows[0] || null);
 }
 
+async function findUserByMobile(mobile) {
+  const cleaned = String(mobile || '').trim();
+  if (!cleaned) return null;
+  const result = await query(
+    `SELECT *
+     FROM users
+     WHERE regexp_replace(COALESCE(mobile, ''), '[^0-9+]', '', 'g') = regexp_replace($1, '[^0-9+]', '', 'g')
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [cleaned]
+  );
+  return normalizeUser(result.rows[0] || null);
+}
+
 async function findUserById(id) {
   const result = await query(
-    `SELECT id, username, email, display_name, role, mobile, avatar_url, is_active, created_at
+    `SELECT id, username, email, display_name, role, mobile, avatar_url, currency_code, locale_code, is_active,
+            created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
      FROM users
      WHERE id = $1
+       AND deleted_at IS NULL
      LIMIT 1`,
     [id]
   );
@@ -79,7 +132,7 @@ function verifyPassword(plain, hash) {
 }
 
 async function updateUserProfile(userId, data) {
-  const currentResult = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const currentResult = await query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1', [userId]);
   const current = currentResult.rows[0];
   if (!current) throw new Error('User not found');
 
@@ -87,13 +140,15 @@ async function updateUserProfile(userId, data) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw new Error('Invalid email address');
 
   const duplicate = await query(
-    'SELECT id FROM users WHERE lower(email) = lower($1) AND id != $2 LIMIT 1',
+    'SELECT id FROM users WHERE lower(email) = lower($1) AND id != $2 AND deleted_at IS NULL LIMIT 1',
     [nextEmail, userId]
   );
   if (duplicate.rows[0]) throw new Error('Email already registered');
 
   const nextName = data.display_name != null ? String(data.display_name).trim() : current.display_name;
   if (!nextName) throw new Error('Display name is required');
+  const currencyCode = normalizeCurrencyCode(data.currency_code != null ? data.currency_code : current.currency_code) || 'INR';
+  const localeCode = normalizeLocaleCode(data.locale_code != null ? data.locale_code : current.locale_code, currencyCode);
 
   const avatarUrl = data.avatar_url != null ? String(data.avatar_url).trim() : (current.avatar_url || null);
   const normalizedAvatar = avatarUrl || null;
@@ -106,13 +161,20 @@ async function updateUserProfile(userId, data) {
      SET display_name = $1,
          email = $2,
          mobile = $3,
-         avatar_url = $4
-     WHERE id = $5`,
+         avatar_url = $4,
+         currency_code = $5,
+         locale_code = $6,
+         updated_at = NOW(),
+         updated_by = $7
+     WHERE id = $8`,
     [
       nextName,
       nextEmail,
       data.mobile != null ? (String(data.mobile).trim() || null) : (current.mobile || null),
       normalizedAvatar,
+      currencyCode,
+      localeCode,
+      userId,
       userId,
     ]
   );
@@ -121,7 +183,7 @@ async function updateUserProfile(userId, data) {
 }
 
 async function changeUserPassword(userId, currentPassword, newPassword) {
-  const result = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const result = await query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1', [userId]);
   const user = result.rows[0];
   if (!user) throw new Error('User not found');
   if (!currentPassword || !verifyPassword(currentPassword, user.password_hash)) {
@@ -130,7 +192,10 @@ async function changeUserPassword(userId, currentPassword, newPassword) {
   if (!newPassword || String(newPassword).length < 6) {
     throw new Error('Password must be at least 6 characters');
   }
-  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [bcrypt.hashSync(String(newPassword), 10), userId]);
+  await query(
+    'UPDATE users SET password_hash = $1, updated_at = NOW(), updated_by = $2 WHERE id = $2',
+    [bcrypt.hashSync(String(newPassword), 10), userId]
+  );
   return true;
 }
 
@@ -145,6 +210,11 @@ async function getAllUsers() {
        u.mobile,
        u.is_active,
        u.created_at,
+       u.updated_at,
+       u.deleted_at,
+       u.created_by,
+       u.updated_by,
+       u.deleted_by,
        s.id AS subscription_id,
        s.plan_id AS subscription_plan_id,
        s.billing_cycle AS subscription_billing_cycle,
@@ -174,6 +244,11 @@ async function getAllUsers() {
     mobile: row.mobile,
     is_active: row.is_active,
     created_at: row.created_at,
+    updated_at: row.updated_at,
+    deleted_at: row.deleted_at,
+    created_by: row.created_by != null ? Number(row.created_by) : null,
+    updated_by: row.updated_by != null ? Number(row.updated_by) : null,
+    deleted_by: row.deleted_by != null ? Number(row.deleted_by) : null,
     subscription: row.subscription_id ? {
       id: Number(row.subscription_id),
       plan_id: Number(row.subscription_plan_id),
@@ -187,7 +262,7 @@ async function getAllUsers() {
   }));
 }
 
-async function updateUserAdmin(id, data) {
+async function updateUserAdmin(id, data, actorUserId = null) {
   const fields = [];
   const params = [];
   if (data.role !== undefined) {
@@ -206,13 +281,57 @@ async function updateUserAdmin(id, data) {
     params.push(String(data.display_name).trim());
     fields.push(`display_name = $${params.length}`);
   }
+  params.push(actorUserId);
+  fields.push(`updated_by = $${params.length}`);
+  fields.push('updated_at = NOW()');
   if (fields.length === 0) return;
   params.push(id);
   await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
 }
 
 async function resetUserPassword(id, newHash) {
-  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, id]);
+  await query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [newHash, id]);
+}
+
+async function softDeleteUser(id, actorUserId) {
+  if (!actorUserId) throw new Error('Actor is required');
+  const targetResult = await query('SELECT id, role, deleted_at FROM users WHERE id = $1 LIMIT 1', [id]);
+  const target = targetResult.rows[0];
+  if (!target) throw new Error('User not found');
+  if (target.deleted_at) return false;
+  if (Number(target.id) === Number(actorUserId) && target.role === 'admin') {
+    const adminCountResult = await query(
+      "SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND deleted_at IS NULL AND is_active = TRUE"
+    );
+    if (Number(adminCountResult.rows[0]?.count || 0) <= 1) {
+      throw new Error('You cannot delete the last active admin account');
+    }
+  }
+  await query(
+    `UPDATE users
+     SET is_active = FALSE,
+         deleted_at = NOW(),
+         deleted_by = $2,
+         updated_at = NOW(),
+         updated_by = $2
+     WHERE id = $1`,
+    [id, actorUserId]
+  );
+  return true;
+}
+
+async function restoreUser(id, actorUserId) {
+  await query(
+    `UPDATE users
+     SET is_active = TRUE,
+         deleted_at = NULL,
+         deleted_by = NULL,
+         updated_at = NOW(),
+         updated_by = $2
+     WHERE id = $1`,
+    [id, actorUserId]
+  );
+  return true;
 }
 
 async function getPlans() {
@@ -472,6 +591,25 @@ async function createPasswordReset(userId) {
   return token;
 }
 
+async function useOtp(userId, code, purpose) {
+  const result = await query(
+    `SELECT id
+     FROM otps
+     WHERE user_id = $1
+       AND otp_code = $2
+       AND purpose = $3
+       AND used = FALSE
+       AND expires_at > NOW()
+     ORDER BY id DESC
+     LIMIT 1`,
+    [userId, String(code || '').trim(), purpose]
+  );
+  const otp = result.rows[0];
+  if (!otp) return false;
+  await query('UPDATE otps SET used = TRUE WHERE id = $1', [otp.id]);
+  return true;
+}
+
 async function getPasswordResetByToken(token) {
   const result = await query(
     `SELECT *
@@ -509,6 +647,7 @@ module.exports = {
   createUser,
   findUserByUsername,
   findUserByEmail,
+  findUserByMobile,
   findUserById,
   verifyPassword,
   updateUserProfile,
@@ -516,6 +655,8 @@ module.exports = {
   getAllUsers,
   updateUserAdmin,
   resetUserPassword,
+  softDeleteUser,
+  restoreUser,
   getPlans,
   createPlan,
   updatePlan,
@@ -528,6 +669,7 @@ module.exports = {
   getUserAccessiblePages,
   generateOtp,
   createPasswordReset,
+  useOtp,
   getPasswordResetByToken,
   usePasswordReset,
 };

@@ -21,6 +21,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (user && user.display_name) {
     _currentUserId = user.id || null;
     _currentUser = user;
+    if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
     renderUserBox();
   }
   if (access) {
@@ -86,6 +87,7 @@ async function refreshCurrentUser() {
   if (user) {
     _currentUser = user;
     _currentUserId = user.id || null;
+    if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
     renderUserBox();
   }
   return user;
@@ -93,11 +95,17 @@ async function refreshCurrentUser() {
 
 function showProfileSettings() {
   if (!_currentUser) return;
+  const currencyCode = _currentUser.currency_code || 'INR';
   openModal('Profile Settings', `
     <div class="fg">
       <label class="fl">Display Name<input class="fi" id="pfName" value="${escHtml(_currentUser.display_name || '')}"></label>
       <label class="fl">Email<input class="fi" id="pfEmail" type="email" value="${escHtml(_currentUser.email || '')}"></label>
       <label class="fl">Phone Number<input class="fi" id="pfMobile" value="${escHtml(_currentUser.mobile || '')}" placeholder="+91 9876543210"></label>
+      <label class="fl">Currency
+        <select class="fi" id="pfCurrency">
+          ${['INR','USD','EUR','GBP','AED','CAD','AUD','SGD','JPY','CNY'].map(code => `<option value="${code}" ${currencyCode===code?'selected':''}>${code}</option>`).join('')}
+        </select>
+      </label>
       <label class="fl">Profile Picture URL<input class="fi" id="pfAvatar" value="${escHtml(_currentUser.avatar_url || '')}" placeholder="https://..."></label>
       <label class="fl full">Upload Profile Picture<input class="fi" id="pfPhoto" type="file" accept="image/*"></label>
     </div>
@@ -112,7 +120,25 @@ function showProfileSettings() {
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="saveProfileSettings()">Save Changes</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+      <button class="btn" style="background:#fff5f5;color:var(--red);border:1px solid #f3c5c5" onclick="deleteOwnAccount()">Delete Account</button>
     </div>`);
+  const body = document.querySelector('#modalContent .modal-body');
+  if (body) body.insertAdjacentHTML('beforeend', formatAuditMeta(_currentUser));
+}
+
+function formatAuditMeta(user) {
+  const rows = [
+    ['Created', user?.created_at ? `${fmtDate(user.created_at)}${user.created_by ? ` by #${user.created_by}` : ''}` : 'Not available'],
+    ['Modified', user?.updated_at ? `${fmtDate(user.updated_at)}${user.updated_by ? ` by #${user.updated_by}` : ''}` : 'Not available'],
+    ['Deleted', user?.deleted_at ? `${fmtDate(user.deleted_at)}${user.deleted_by ? ` by #${user.deleted_by}` : ''}` : 'Not deleted'],
+  ];
+  return `
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:12px">
+      <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:10px">AUDIT</div>
+      <div style="display:grid;gap:6px;font-size:12px;color:var(--t2)">
+        ${rows.map(([label, value]) => `<div><span style="font-weight:600;color:var(--t1)">${label}:</span> ${escHtml(value)}</div>`).join('')}
+      </div>
+    </div>`;
 }
 
 async function uploadCurrentProfilePhoto() {
@@ -130,6 +156,10 @@ async function saveProfileSettings() {
   const display_name = document.getElementById('pfName').value.trim();
   const email = document.getElementById('pfEmail').value.trim();
   const mobile = document.getElementById('pfMobile').value.trim();
+  const currency_code = document.getElementById('pfCurrency').value;
+  const currencyPrefs = typeof getCurrencyPrefsForCode === 'function'
+    ? getCurrencyPrefsForCode(currency_code, _currentUser?.locale_code)
+    : { currency_code, locale_code: _currentUser?.locale_code || 'en-IN' };
   let avatar_url = document.getElementById('pfAvatar').value.trim();
   const current_password = document.getElementById('pfCurrentPwd').value;
   const new_password = document.getElementById('pfNewPwd').value;
@@ -146,9 +176,10 @@ async function saveProfileSettings() {
 
   const profileRes = await api('/api/auth/profile', {
     method: 'PUT',
-    body: { display_name, email, mobile, avatar_url },
+    body: { display_name, email, mobile, avatar_url, ...currencyPrefs },
   });
   if (!profileRes?.success) { toast(profileRes?.error || 'Profile update failed', 'error'); return; }
+  if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(profileRes.user || currencyPrefs);
 
   if (current_password || new_password || confirm_password) {
     if (!current_password || !new_password || !confirm_password) { toast('Fill all password fields to change password', 'warning'); return; }
@@ -163,6 +194,19 @@ async function saveProfileSettings() {
   await refreshCurrentUser();
   closeModal();
   toast('Profile updated', 'success');
+}
+
+async function deleteOwnAccount() {
+  const confirmed = await confirmDialog('Delete your account? This is a soft delete, so data is retained for admin review, but you will be logged out immediately.');
+  if (!confirmed) return;
+  const secondConfirm = await confirmDialog('Please confirm again. Your account will become inactive and inaccessible until restored by an admin.');
+  if (!secondConfirm) return;
+  const res = await api('/api/auth/profile', { method: 'DELETE' });
+  if (!res?.success) {
+    toast(res?.error || 'Account deletion failed', 'error');
+    return;
+  }
+  window.location.href = res.redirect || '/login';
 }
 
 function switchTab(tab) {
@@ -188,6 +232,9 @@ window.addEventListener('resize', () => {
 });
 
 function loadTab() {
+  if (typeof window.analyticsTrackScreen === 'function') {
+    window.analyticsTrackScreen(`tab_${currentTab}`, { screen_class: 'app_tab' });
+  }
   if (currentTab === 'dashboard') loadDashboard();
   else if (currentTab === 'expenses') loadExpenses();
   else if (currentTab === 'friends') selectedFriend ? loadFriendDetail() : loadFriends();
@@ -3743,41 +3790,67 @@ function renderAdminShell() {
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
   const users = data?.users || [];
-  const rows = users.map(u => {
+  const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+  const cards = users.map(u => {
     const subBadge = u.subscription
       ? `<span style="font-size:11px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px">${u.subscription.plan_name}</span>`
       : `<span style="font-size:11px;color:var(--t3)">No plan</span>`;
-    const activeBadge = u.is_active
-      ? `<span style="color:var(--green);font-size:12px">Active</span>`
-      : `<span style="color:var(--red);font-size:12px">Inactive</span>`;
+    const statusText = u.deleted_at ? 'Deleted' : (u.is_active ? 'Active' : 'Inactive');
+    const statusColor = u.deleted_at ? 'var(--red)' : (u.is_active ? 'var(--green)' : 'var(--orange)');
+    const activeBadge = `<span class="admin-user-status" style="color:${statusColor};background:${u.deleted_at ? 'var(--red-l)' : u.is_active ? 'var(--green-l)' : 'var(--border-l)'}">${statusText}</span>`;
     const safeDisplayName = (u.display_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const safeMobile = (u.mobile || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    return `<tr>
-      <td><div style="font-weight:600">${u.display_name}</div><div style="font-size:11px;color:var(--t2)">@${u.username}</div></td>
-      <td style="font-size:12px">${u.email}${u.mobile ? `<br><span style="color:var(--t2)">${u.mobile}</span>` : ''}</td>
-      <td>
-        <select style="font-size:12px;padding:3px 6px;border:1px solid var(--br);border-radius:4px;background:var(--bg2);color:var(--t1)"
+    const auditText = `
+      <div class="admin-user-audit">
+        <div><span>Created</span><strong>${shortAuditDate(u.created_at)}</strong></div>
+        <div><span>Modified</span><strong>${shortAuditDate(u.updated_at)}</strong></div>
+        <div><span>Deleted</span><strong>${shortAuditDate(u.deleted_at)}</strong></div>
+      </div>`;
+    return `<div class="admin-user-card">
+      <div class="admin-user-top">
+        <div>
+          <div class="admin-user-name">${u.display_name}</div>
+          <div class="admin-user-handle">@${u.username}</div>
+        </div>
+        ${activeBadge}
+      </div>
+      <div class="admin-user-meta">
+        <div>
+          <div class="admin-user-label">Contact</div>
+          <div class="admin-user-value">${u.email}</div>
+          <div class="admin-user-sub">${u.mobile || 'No phone added'}</div>
+        </div>
+        <div>
+          <div class="admin-user-label">Role</div>
+          <select class="admin-user-role"
           onchange="adminUpdateUser(${u.id},{role:this.value})">
           <option value="user" ${u.role==='user'?'selected':''}>User</option>
           <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
         </select>
-      </td>
-      <td>${subBadge}</td>
-      <td>${activeBadge}</td>
-      <td>
-        <button class="btn-d" style="color:var(--em)" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0})">Edit</button>
-        <button class="btn-d" onclick="adminGenOtp(${u.id})">OTP</button>
-        <button class="btn-d" onclick="adminResetLink(${u.id})">Reset Link</button>
-      </td>
-    </tr>`;
+        </div>
+        <div>
+          <div class="admin-user-label">Subscription</div>
+          <div class="admin-user-value">${subBadge}</div>
+        </div>
+      </div>
+      ${auditText}
+      <div class="admin-user-actions">
+        <button class="btn btn-s btn-sm" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0},${u.deleted_at ? 1 : 0})">Edit</button>
+        <button class="btn btn-s btn-sm" onclick="adminGenOtp(${u.id})">OTP</button>
+        <button class="btn btn-s btn-sm" onclick="adminResetLink(${u.id})">Reset Link</button>
+        ${u.deleted_at
+          ? `<button class="btn btn-s btn-sm" style="border-color:var(--green);color:var(--green)" onclick="adminRestoreUser(${u.id})">Restore</button>`
+          : `<button class="btn btn-s btn-sm" style="border-color:var(--red);color:var(--red)" onclick="adminDeleteUser(${u.id})">Delete</button>`}
+      </div>
+    </div>`;
   }).join('');
 
   document.getElementById('adminContent').innerHTML = `
-    <div style="font-size:14px;font-weight:700;margin-bottom:12px">Users (${users.length})</div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>User</th><th>Contact</th><th>Role</th><th>Subscription</th><th>Status</th><th style="width:170px">Actions</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="6" style="text-align:center;color:var(--t3)">No users</td></tr>'}</tbody>
-    </table></div>`;
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+      <div style="font-size:14px;font-weight:700">Users (${users.length})</div>
+      <div style="font-size:12px;color:var(--t3)">Soft delete keeps data for audit and restore.</div>
+    </div>
+    <div class="admin-user-grid">${cards || '<div class="card" style="text-align:center;color:var(--t3)">No users</div>'}</div>`;
 }
 
 async function adminUpdateUser(id, data) {
@@ -3787,7 +3860,7 @@ async function adminUpdateUser(id, data) {
   await loadAdminUsers();
 }
 
-function showAdminUserModal(id, name, mobile, isActive) {
+function showAdminUserModal(id, name, mobile, isActive, isDeleted) {
   openModal('Edit User', `
     <div class="fg">
       <label class="fl full">Display Name<input class="fi" id="auName" value="${name}"></label>
@@ -3803,6 +3876,7 @@ function showAdminUserModal(id, name, mobile, isActive) {
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="adminSaveUser(${id})">Save</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+      ${isDeleted ? `<button class="btn" style="background:#eefaf3;color:var(--green);border:1px solid #b6e0c5" onclick="adminRestoreUser(${id})">Restore User</button>` : `<button class="btn" style="background:#fff5f5;color:var(--red);border:1px solid #f3c5c5" onclick="adminDeleteUser(${id})">Soft Delete</button>`}
     </div>`);
 }
 
@@ -3875,6 +3949,29 @@ async function adminResetLink(userId) {
         <button class="btn btn-g" onclick="closeModal()">Close</button>
       </div>`);
   } else toast(r?.error || 'Failed', 'error');
+}
+
+async function adminDeleteUser(id) {
+  if (!await confirmDialog('Soft delete this user? They will be unable to log in, but their data will remain in the database.')) return;
+  const r = await api(`/api/admin/users/${id}`, { method: 'DELETE' });
+  if (r?.success) {
+    toast('User deleted', 'success');
+    closeModal();
+    await loadAdminUsers();
+  } else {
+    toast(r?.error || 'Delete failed', 'error');
+  }
+}
+
+async function adminRestoreUser(id) {
+  const r = await api(`/api/admin/users/${id}/restore`, { method: 'POST' });
+  if (r?.success) {
+    toast('User restored', 'success');
+    closeModal();
+    await loadAdminUsers();
+  } else {
+    toast(r?.error || 'Restore failed', 'error');
+  }
 }
 
 // ── Plans ────────────────────────────────────────────────────

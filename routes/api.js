@@ -1240,10 +1240,26 @@ router.get('/admin/users', requireAdmin, async (req, res) => {
 
 router.put('/admin/users/:id', requireAdmin, async (req, res) => {
   try {
-    await Promise.resolve(pgDb.updateUserAdmin(req.params.id, req.body));
+    await Promise.resolve(pgDb.updateUserAdmin(req.params.id, req.body, req.session.userId));
     res.json({ success: true });
   }
   catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(pgDb.softDeleteUser(req.params.id, req.session.userId));
+    res.json({ success: true });
+  }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.post('/admin/users/:id/restore', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(pgDb.restoreUser(req.params.id, req.session.userId));
+    res.json({ success: true });
+  }
+  catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 router.post('/admin/users/:id/set-password', requireAdmin, async (req, res) => {
@@ -1635,12 +1651,20 @@ router.post('/ai/lookup', async (req, res) => {
     if (!apiKey) return res.status(503).json({ error: 'AI service not configured. Set ANTHROPIC_API_KEY environment variable.' });
 
     // Gather user's complete financial data
-    const summary = await Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId));
+    const [summary, currentUser] = await Promise.all([
+      Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId)),
+      Promise.resolve(pgDb.findUserById(req.session.userId)),
+    ]);
+    const currencyCode = currentUser?.currency_code || 'USD';
+    const localeCode = currentUser?.locale_code || 'en-US';
 
     const systemPrompt = `You are a personal finance assistant for the Expense Lite AI application.
 You have access to the user's complete financial data as of ${summary.as_of}. Answer their questions accurately based on this data.
 Be concise but complete. Use Indian number formatting (₹ symbol, lakhs/crores where appropriate).
 If the user asks something not covered by the data, say so clearly.
+
+PREFERRED FORMATTING:
+Use ${currencyCode} currency formatting with locale ${localeCode}.${currencyCode === 'INR' ? ' Use lakhs/crores where appropriate.' : ''}
 
 USER'S FINANCIAL DATA:
 ${JSON.stringify(summary, null, 2)}`;

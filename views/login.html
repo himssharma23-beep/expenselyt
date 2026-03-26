@@ -19,6 +19,8 @@
 <link rel="canonical" href="https://expenselyt.com/login">
 <title>Login — Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="/runtime-config.js"></script>
+<script src="/js/analytics.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -103,8 +105,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
 
     <form id="loginForm" onsubmit="handleLogin(event)">
       <div class="form-group">
-        <label>Username or Email</label>
-        <input type="text" id="username" placeholder="Enter username or email" required autofocus>
+        <label>Email or Phone Number</label>
+        <input type="text" id="username" placeholder="Enter email or phone number" required autofocus>
       </div>
       <div class="form-group">
         <label>Password</label>
@@ -115,6 +117,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
         <span class="loading" id="loading"><span class="spinner"></span>Signing in...</span>
       </button>
     </form>
+
+    <div class="switch-link" style="margin-top:14px">
+      <a href="/forgot-password">Forgot password?</a>
+    </div>
 
     <div class="switch-link">
       Don't have an account? <a href="/register">Create one</a>
@@ -128,6 +134,22 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
 </div>
 
 <script>
+function detectCurrencyPrefs() {
+  const locale = (navigator.language || 'en-US').replace(/_/g, '-');
+  const region = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
+  const currencyByRegion = {
+    IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD',
+    CA: 'CAD', SG: 'SGD', JP: 'JPY', CN: 'CNY', DE: 'EUR',
+    FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
+  };
+  const currencyByCode = {
+    INR: 'en-IN', USD: 'en-US', EUR: 'de-DE', GBP: 'en-GB', AED: 'en-AE',
+    CAD: 'en-CA', AUD: 'en-AU', SGD: 'en-SG', JPY: 'ja-JP', CNY: 'zh-CN',
+  };
+  const currency_code = currencyByRegion[region] || 'USD';
+  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US' };
+}
+
 async function handleLogin(e) {
   e.preventDefault();
   const errEl = document.getElementById('error');
@@ -138,12 +160,14 @@ async function handleLogin(e) {
   btn.disabled = true;
 
   try {
+    const prefs = detectCurrencyPrefs();
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('username').value,
         password: document.getElementById('password').value,
+        ...prefs,
       }),
     });
     const data = await res.json();

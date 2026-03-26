@@ -3,6 +3,23 @@
 // ═══════════════════════════════════════════════════════════
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const CURRENCY_LOCALE_MAP = {
+  INR: 'en-IN',
+  USD: 'en-US',
+  EUR: 'de-DE',
+  GBP: 'en-GB',
+  AED: 'en-AE',
+  CAD: 'en-CA',
+  AUD: 'en-AU',
+  SGD: 'en-SG',
+  JPY: 'ja-JP',
+  CNY: 'zh-CN',
+};
+const REGION_CURRENCY_MAP = {
+  IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD', CA: 'CAD', SG: 'SGD',
+  JP: 'JPY', CN: 'CNY', DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
+};
+window.__currencyPrefs = { currencyCode: 'INR', localeCode: 'en-IN' };
 
 function escHtml(s) {
   if (!s) return '';
@@ -16,6 +33,51 @@ function getYears() {
 
 function todayStr() { return new Date().toISOString().split('T')[0]; }
 
+function normalizeLocaleCode(locale, currencyCode = 'INR') {
+  const cleaned = String(locale || '').trim().replace(/_/g, '-');
+  if (/^[a-z]{2,3}(?:-[A-Z]{2})?$/i.test(cleaned)) return cleaned;
+  return CURRENCY_LOCALE_MAP[currencyCode] || 'en-US';
+}
+
+function normalizeCurrencyCode(code) {
+  const cleaned = String(code || '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(cleaned) ? cleaned : null;
+}
+
+function deriveCurrencyPrefs(locale, timeZone) {
+  const localeCode = normalizeLocaleCode(locale, 'USD');
+  const region = localeCode.includes('-') ? localeCode.split('-')[1].toUpperCase() : '';
+  let currencyCode = REGION_CURRENCY_MAP[region] || null;
+  if (!currencyCode && /kolkata|calcutta|india/i.test(String(timeZone || ''))) currencyCode = 'INR';
+  currencyCode = currencyCode || 'USD';
+  return { currencyCode, localeCode: CURRENCY_LOCALE_MAP[currencyCode] || localeCode };
+}
+
+function detectCurrencyPrefs() {
+  try {
+    const options = Intl.DateTimeFormat().resolvedOptions();
+    return deriveCurrencyPrefs(navigator.language || options.locale, options.timeZone);
+  } catch (_err) {
+    return { currencyCode: 'INR', localeCode: 'en-IN' };
+  }
+}
+
+function setCurrencyPrefs(source) {
+  const fallback = detectCurrencyPrefs();
+  const currencyCode = normalizeCurrencyCode(source?.currency_code || source?.currencyCode) || fallback.currencyCode;
+  const localeCode = normalizeLocaleCode(source?.locale_code || source?.localeCode, currencyCode);
+  window.__currencyPrefs = { currencyCode, localeCode };
+  return window.__currencyPrefs;
+}
+
+function getCurrencyPrefsForCode(currencyCode, localeCode) {
+  const safeCurrency = normalizeCurrencyCode(currencyCode) || detectCurrencyPrefs().currencyCode;
+  return {
+    currency_code: safeCurrency,
+    locale_code: normalizeLocaleCode(localeCode, safeCurrency),
+  };
+}
+
 // Consistent member key for trip members:
 // friend member → String(friend_id), app-user member → 'u'+linked_user_id, owner → 'self'
 function _memberKey(m) {
@@ -27,10 +89,22 @@ function _memberKey(m) {
 function fmtDate(d) {
   if (!d) return "";
   const dt = new Date(d);
-  return dt.toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
+  return dt.toLocaleDateString(window.__currencyPrefs.localeCode || "en-IN", { day:"2-digit", month:"short", year:"numeric" });
 }
 
 function fmtCur(n) {
+  const value = Number(n || 0);
+  const { currencyCode, localeCode } = window.__currencyPrefs || { currencyCode: 'INR', localeCode: 'en-IN' };
+  try {
+    return new Intl.NumberFormat(localeCode || 'en-IN', {
+      style: 'currency',
+      currency: currencyCode || 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch (_err) {
+    return `${value < 0 ? "- " : ""}${currencyCode || 'INR'} ${Math.abs(value).toFixed(2)}`;
+  }
   const neg = n < 0, abs = Math.abs(n);
   const [int, dec] = abs.toFixed(2).split(".");
   let f;
@@ -44,6 +118,8 @@ function fmtCur(n) {
 }
 
 function amountWords(n) {
+  const { currencyCode } = window.__currencyPrefs || { currencyCode: 'INR' };
+  if (currencyCode !== 'INR') return `${fmtCur(n)} total`;
   const ones=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
   const tens=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
   const tw=(n)=>n<20?ones[n]:tens[Math.floor(n/10)]+(n%10?"-"+ones[n%10]:"");
@@ -147,3 +223,5 @@ function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   document.getElementById('modalOverlay').style.display = 'none';
 }
+
+setCurrencyPrefs(window.__currencyPrefs);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Expense Lite AI helps you track expenses, manage loans and EMIs, plan monthly dues, monitor bank accounts and credit cards, split costs with friends, and use AI-powered financial lookup in one place.">
+<meta name="description" content="Expense Lite AI helps you track expenses, manage loans and EMIs, plan monthly dues, monitor bank accounts and credit cards, split costs with friends, choose your preferred currency, and use AI-powered financial lookup in one place.">
 <meta name="keywords" content="expense tracker, personal finance app, EMI calculator, loan tracker, budget planner, split expenses, credit card tracker, bank balance tracker, Expense Lite AI">
 <meta name="author" content="Expense Lite AI">
 <meta name="robots" content="index,follow">
@@ -11,16 +11,18 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Expense Lite AI">
 <meta property="og:title" content="Expense Lite AI - Personal Finance, Simplified">
-<meta property="og:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, and use AI-powered financial lookup in one streamlined finance workspace.">
+<meta property="og:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, use your preferred currency, and get AI-powered financial lookup in one streamlined finance workspace.">
 <meta property="og:url" content="https://expenselyt.com/">
 <meta property="og:image" content="https://expenselyt.com/logo.svg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Expense Lite AI - Personal Finance, Simplified">
-<meta name="twitter:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, and use AI-powered financial lookup in one place.">
+<meta name="twitter:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, use your preferred currency, and get AI-powered financial lookup in one place.">
 <meta name="twitter:image" content="https://expenselyt.com/logo.svg">
 <link rel="canonical" href="https://expenselyt.com/">
 <title>Expense Lite AI — Personal Finance, Simplified</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="/runtime-config.js"></script>
+<script src="/js/analytics.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {
@@ -29,7 +31,7 @@
   "name": "Expense Lite AI",
   "applicationCategory": "FinanceApplication",
   "operatingSystem": "Web",
-  "description": "Expense Lite AI is a personal finance platform for expenses, loans, EMIs, planner workflows, shared spending, and AI-assisted lookup.",
+  "description": "Expense Lite AI is a personal finance platform for expenses, loans, EMIs, planner workflows, shared spending, currency preferences, and AI-assisted lookup.",
   "url": "https://expenselyt.com/",
   "publisher": {
     "@type": "Organization",
@@ -283,15 +285,15 @@ footer strong{color:rgba(255,255,255,.8)}
   <div class="hero" style="padding-left:0;padding-right:0">
     <div>
       <div class="hero-badge"><span class="hero-badge-dot"></span> Web + Mobile Personal Finance</div>
-      <h1>Know where every <span>rupee</span> goes</h1>
-      <p>Track expenses, split bills with friends, manage loans and EMIs, monitor cards and banks, and plan your monthly finances across web and mobile &mdash; all in one beautifully simple app.</p>
+      <h1>Know where every <span>amount</span> goes</h1>
+      <p>Track expenses, split bills with friends, manage loans and EMIs, monitor cards and banks, set your preferred currency, and plan your monthly finances across web and mobile &mdash; all in one beautifully simple app.</p>
       <div class="hero-cta">
         <a class="btn btn-primary btn-lg" href="/register">Start for free →</a>
         <a class="btn btn-outline btn-lg" href="/login">Log in to your account</a>
       </div>
       <div class="hero-stats">
         <div class="hero-stat"><div class="num">16+</div><div class="lbl">Feature Modules</div></div>
-        <div class="hero-stat"><div class="num">₹</div><div class="lbl">Indian Format</div></div>
+        <div class="hero-stat"><div class="num">10+</div><div class="lbl">Currency Options</div></div>
         <div class="hero-stat"><div class="num">10</div><div class="lbl">Free AI Queries/Day</div></div>
         <div class="hero-stat"><div class="num">Web+App</div><div class="lbl">Cross Platform</div></div>
       </div>
@@ -359,7 +361,7 @@ footer strong{color:rgba(255,255,255,.8)}
     <div class="section-head centered">
       <div class="section-tag">Everything you need</div>
       <div class="section-title">All your finances, one place</div>
-      <p class="section-sub">From daily chai to home loans &mdash; every rupee tracked, every bill planned, every friend settled, every due under control.</p>
+      <p class="section-sub">From daily chai to home loans &mdash; every expense tracked, every bill planned, every friend settled, every due under control, in the currency you prefer.</p>
     </div>
     <div class="features-grid">
       <div class="feat-card">
@@ -455,7 +457,7 @@ footer strong{color:rgba(255,255,255,.8)}
       <div class="feat-card">
         <div class="feat-icon blue">P</div>
         <h3>Profile & Settings</h3>
-        <p>Manage your name, email, phone number, password, and profile picture. Upload from desktop or use camera/gallery on mobile.</p>
+        <p>Manage your name, email, phone number, password, profile picture, and preferred currency. We can default currency from your locale, and you can change it anytime.</p>
         <span class="feat-tag blue">Personalised</span>
       </div>
       <div class="feat-card">
@@ -517,6 +519,7 @@ footer strong{color:rgba(255,255,255,.8)}
         <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Import from CSV or Excel (including password-protected)</div>
         <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Instant credit card charging on add</div>
         <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Sort, search, paginate across all entries</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Currency display follows your profile preference</div>
       </div>
     </div>
   </div>
@@ -677,7 +680,7 @@ footer strong{color:rgba(255,255,255,.8)}
     <div class="section-head centered">
       <div class="section-tag">Pricing</div>
       <div class="section-title">Simple, transparent plans</div>
-      <p class="section-sub">Start free. Upgrade as your financial life grows. AI Lookup includes 10 free queries per day on the free tier.</p>
+      <p class="section-sub">Start free. Upgrade as your financial life grows. AI Lookup includes 10 free queries per day on the free tier. Public pricing is shown in INR by default.</p>
     </div>
     <div class="plans-grid" id="plansGrid">
       <!-- Loaded from API or fallback below -->
@@ -696,7 +699,7 @@ footer strong{color:rgba(255,255,255,.8)}
         <a class="plan-cta plan-cta-outline" href="/register">Get started free</a>
       </div>
     </div>
-    <div id="plansNote" style="text-align:center;margin-top:24px;font-size:13px;color:var(--t3)">Contact the admin for plan upgrades and subscriptions.</div>
+    <div id="plansNote" style="text-align:center;margin-top:24px;font-size:13px;color:var(--t3)">Pricing is shown in INR by default on the website. After signup, each user can keep the detected currency or change it anytime from Profile Settings.</div>
   </div>
 </div>
 
