@@ -192,7 +192,10 @@ async function getFriends(userId) {
        f.*,
        COALESCE(SUM(lt.paid - lt.received), 0) AS balance
      FROM friends f
-     LEFT JOIN loan_transactions lt ON lt.friend_id = f.id
+     LEFT JOIN loan_transactions lt
+       ON lt.friend_id = f.id
+      AND lt.user_id = $1
+      AND lt.deleted_at IS NULL
      WHERE f.user_id = $1 AND f.deleted_at IS NULL
      GROUP BY f.id
      ORDER BY f.name`,

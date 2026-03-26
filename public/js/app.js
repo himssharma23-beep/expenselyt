@@ -2190,7 +2190,7 @@ async function renderReportExpenses() {
 
       <div class="dash-box">
         <div class="rpt-table-top">
-          <input id="rptSearch" class="search-input" placeholder="Search itemsÃ¢â‚¬Â¦" value="${reportSearch}"
+          <input id="rptSearch" class="search-input" placeholder="Search items..." value="${reportSearch}"
             oninput="reportSearch=this.value;reportPage=1;renderReportExpenses()" style="max-width:220px">
         </div>
         <div class="table-wrap">
@@ -2243,7 +2243,7 @@ function printReport(level) {
 
   if (level === 'years') {
     const rows = rptSortArr(_rptYearsData, rptYearSort.field, rptYearSort.dir);
-    title = 'Expense Report Ã¢â‚¬â€ All Years';
+    title = 'Expense Report - All Years';
     subtitle = `Generated on ${now}`;
     const grandTotal = rows.reduce((s,r)=>s+r.total,0);
     const grandFair  = rows.reduce((s,r)=>s+r.fair,0);
@@ -2263,8 +2263,8 @@ function printReport(level) {
   } else if (level === 'months') {
     const year = reportDrillYear;
     const rows = rptSortArr(_rptMonthsData.map(r=>({...r,month:parseInt(r.month)})), rptMonthSort.field, rptMonthSort.dir);
-    title = `Expense Report Ã¢â‚¬â€ ${year}`;
-    subtitle = `Monthly breakdown Ã‚Â· Generated on ${now}`;
+    title = `Expense Report - ${year}`;
+    subtitle = `Monthly breakdown · Generated on ${now}`;
     const yTotal = rows.reduce((s,r)=>s+r.total,0);
     const yFair  = rows.reduce((s,r)=>s+r.fair,0);
     const yExtra = rows.reduce((s,r)=>s+r.extra,0);
@@ -2287,8 +2287,8 @@ function printReport(level) {
     const list = rptSortArr(_rptExpData.map(e=>({...e,date:e.purchase_date,name:e.item_name})),
       rptExpSort.field === 'date' ? 'date' : rptExpSort.field === 'amount' ? 'amount' : rptExpSort.field === 'name' ? 'name' : 'is_extra',
       rptExpSort.dir);
-    title = `Expense Report Ã¢â‚¬â€ ${mName} ${year}`;
-    subtitle = `${list.length} expenses Ã‚Â· Generated on ${now}`;
+    title = `Expense Report - ${mName} ${year}`;
+    subtitle = `${list.length} expenses · Generated on ${now}`;
     const total  = list.reduce((s,e)=>s+e.amount,0);
     const fair   = list.filter(e=>!e.is_extra).reduce((s,e)=>s+e.amount,0);
     const extra  = list.filter(e=>e.is_extra).reduce((s,e)=>s+e.amount,0);
@@ -2336,7 +2336,7 @@ function printReport(level) {
   </div>
   ${summaryHTML}
   ${tableHTML}
-  <div class="pr-footer">Expense Lite AI Ã‚Â· Printed on ${now}</div>
+  <div class="pr-footer">Expense Lite AI · Printed on ${now}</div>
   <script>window.onload = () => { window.print(); }<\/script>
   </body></html>`);
   win.document.close();
