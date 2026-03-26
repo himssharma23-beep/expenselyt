@@ -26,7 +26,13 @@ function validateFriendNameInput(name) {
 
 function normalizeInputDate(value) {
   if (!value) return '';
-  const str = String(value);
+  const str = String(value).trim();
+  if (!str) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  const dmy = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return str.length >= 10 ? str.slice(0, 10) : str;
 }
 
@@ -1087,14 +1093,14 @@ async function showLoanForm(friendId, txnId) {
 
   if (isEdit) {
     const data = await api(`/api/loans/${friendId}`);
-    const found = (data?.transactions || []).find(x => x.id === txnId);
+    const found = (data?.transactions || []).find((x) => String(x.id) === String(txnId));
     if (found) t = found;
   }
 
   openModal(isEdit ? 'Edit Transaction' : 'Add Transaction', `
     <div class="fg">
-      <label class="fl">Date<input class="fi" type="date" id="lDate" value="${t.txn_date}"></label>
-      <label class="fl">Details *<input class="fi" id="lDetails" value="${t.details}" placeholder="e.g. Dinner..." autofocus></label>
+      <label class="fl">Date<input class="fi" type="date" id="lDate" value="${normalizeInputDate(t.txn_date) || todayStr()}"></label>
+      <label class="fl">Details *<input class="fi" id="lDetails" value="${escHtml(t.details || '')}" placeholder="e.g. Dinner..." autofocus></label>
       <label class="fl">Paid (you gave)<input class="fi" type="number" step="0.01" id="lPaid" value="${t.paid}" placeholder="0.00"></label>
       <label class="fl">Received (you got)<input class="fi" type="number" step="0.01" id="lReceived" value="${t.received}" placeholder="0.00"></label>
     </div>
@@ -1105,14 +1111,22 @@ async function showLoanForm(friendId, txnId) {
 }
 
 async function saveLoan(friendId, txnId) {
+  const paid = Number(document.getElementById('lPaid').value || 0);
+  const received = Number(document.getElementById('lReceived').value || 0);
   const body = {
     friend_id: friendId,
-    txn_date: document.getElementById('lDate').value,
-    details: document.getElementById('lDetails').value,
-    paid: document.getElementById('lPaid').value,
-    received: document.getElementById('lReceived').value,
+    txn_date: normalizeInputDate(document.getElementById('lDate').value),
+    details: document.getElementById('lDetails').value.trim(),
+    paid,
+    received,
   };
   if (!body.details) { toast('Enter details', 'warning'); return; }
+  if (!body.txn_date) { toast('Select a valid date', 'warning'); return; }
+  if (!Number.isFinite(body.paid) || body.paid < 0 || !Number.isFinite(body.received) || body.received < 0) {
+    toast('Paid/Received must be 0 or more', 'warning');
+    return;
+  }
+  if (body.paid === 0 && body.received === 0) { toast('Enter paid or received amount', 'warning'); return; }
   if (txnId) await api(`/api/loans/${txnId}`, { method: 'PUT', body });
   else await api('/api/loans', { method: 'POST', body });
   closeModal(); loadFriendDetail(true);
@@ -1957,7 +1971,7 @@ async function renderReportYears() {
                 <td class="td-m" style="color:var(--em)">${fmtCur(r.fair)}</td>
                 <td class="td-m" style="color:var(--amber)">${fmtCur(r.extra)}</td>
                 <td style="text-align:center"><span class="badge b-fair">${r.count}</span></td>
-                <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToMonths(${r.year})">View Ã¢â€ â€™</button></td>
+                <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToMonths(${r.year})">View -></button></td>
               </tr>`).join('')}
             </tbody>
             ${rows.length > 0 ? `<tfoot><tr>
@@ -2057,7 +2071,7 @@ async function drillToMonths(year) {
                   <td class="td-m" style="color:var(--em)">${fmtCur(r.fair)}</td>
                   <td class="td-m" style="color:var(--amber)">${fmtCur(r.extra)}</td>
                   <td style="text-align:center"><span class="badge b-fair">${r.count}</span></td>
-                  <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToExpenses(${year},${r.month})">View Ã¢â€ â€™</button></td>
+                  <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToExpenses(${year},${r.month})">View -></button></td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -3000,7 +3014,7 @@ function renderTripList() {
     const netColor = t.selfNet > 0.01 ? 'var(--green)' : t.selfNet < -0.01 ? 'var(--red)' : 'var(--t3)';
     const netLabel = t.selfNet > 0.01 ? `+${fmtCur(t.selfNet)} net` : t.selfNet < -0.01 ? `${fmtCur(Math.abs(t.selfNet))} owed` : 'Settled';
     const memberNames = t.members.map(m => m.member_name).join(', ');
-    const dateStr = t.end_date ? `${fmtDate(t.start_date)} Ã¢â€ â€™ ${fmtDate(t.end_date)}` : `From ${fmtDate(t.start_date)}`;
+    const dateStr = t.end_date ? `${fmtDate(t.start_date)} -> ${fmtDate(t.end_date)}` : `From ${fmtDate(t.start_date)}`;
     return `<div class="card" style="cursor:pointer;margin-bottom:10px" onclick="openTripDetail(${t.id})">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
         <div style="font-size:16px;font-weight:700">${t.name} ${statusBadge}${sharedBadge}</div>
@@ -3008,8 +3022,8 @@ function renderTripList() {
       </div>
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}</div>
       <div style="font-size:12px;color:var(--t3)">
-        <span style="margin-right:12px">Ã°Å¸â€˜Â¥ ${t.members.length} members: ${memberNames}</span>
-        <span>&#8377; ${fmtCur(t.totalExpenses)} total Ã‚Â· ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
+        <span style="margin-right:12px">${t.members.length} members: ${memberNames}</span>
+        <span>${fmtCur(t.totalExpenses)} total · ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
       </div>
     </div>`;
   }).join('') || `<div style="color:var(--t3);text-align:center;padding:40px">No trips found.</div>`;
@@ -3027,7 +3041,7 @@ function renderTripList() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:20px;font-weight:700">Trips</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTripsPdf(_tripsFiltered)">Ã¢â€ â€œ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTripsPdf(_tripsFiltered)">PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCreateTripModal()">+ New Trip</button>
         </div>
       </div>
@@ -7987,16 +8001,16 @@ function renderRecurring() {
   const rows = entries.length ? entries.map(e => {
     const isCC = e.type === 'cc_txn';
     const appliedThisMonth = e.last_applied === currentMonth;
-    const cardLabel = isCC ? `<br><span style="font-size:11px;color:var(--t3)">${escHtml(e.bank_name || '')} ${escHtml(e.card_name || '')} Ã¢â‚¬Â¢Ã¢â‚¬Â¢${escHtml(e.last4 || '')}</span>` : '';
+    const cardLabel = isCC ? `<br><span style="font-size:11px;color:var(--t3)">${escHtml(e.bank_name || '')} ${escHtml(e.card_name || '')} **${escHtml(e.last4 || '')}</span>` : '';
     const interval = parseInt(e.interval_months) || 1;
     const scheduleLabel = interval <= 1 ? 'Every month' : `Every ${interval} months${e.start_month ? ` from ${fmtMonYear(e.start_month + '-01')}` : ''}`;
     const typeBadge = `<span class="badge ${isCC ? 'b-extra' : 'b-fair'}">${isCC ? 'CC Txn' : 'Expense'}</span>`;
     const extraBadge = isCC && e.also_expense ? `<span class="badge b-fair">+Exp</span>` : (!isCC && e.is_extra ? `<span class="badge b-extra">Extra</span>` : '');
     const statusBadge = appliedThisMonth
-      ? `<span class="badge b-fair">Ã¢Å“â€œ Applied</span>`
+      ? `<span class="badge b-fair">Applied</span>`
       : (e.is_active ? `<span class="badge" style="background:var(--bg2);color:var(--t3)">Pending</span>` : `<span class="badge" style="background:var(--bg2);color:var(--t3)">Inactive</span>`);
     return `<tr>
-      <td><input type="checkbox" title="${e.is_active ? 'Active Ã¢â‚¬â€ click to disable' : 'Inactive Ã¢â‚¬â€ click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
+      <td><input type="checkbox" title="${e.is_active ? 'Active - click to disable' : 'Inactive - click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
       <td>${typeBadge}${extraBadge}</td>
       <td>${escHtml(e.description)}${cardLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span></td>
       <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
@@ -8012,7 +8026,7 @@ function renderRecurring() {
           <div>
             <div class="summary-label">RECURRING ENTRIES</div>
             <div class="summary-amount">${entries.length}</div>
-            <div class="summary-words">${activeCount} active Ã‚Â· auto-applied on day 1 of every month</div>
+            <div class="summary-words">${activeCount} active · auto-applied on day 1 of every month</div>
           </div>
           <div class="count-box"><div class="num">${appliedCount}</div><div class="lbl">applied<br>this month</div></div>
         </div>
