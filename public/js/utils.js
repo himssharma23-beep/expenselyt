@@ -20,10 +20,87 @@ const REGION_CURRENCY_MAP = {
   JP: 'JPY', CN: 'CNY', DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
 };
 window.__currencyPrefs = { currencyCode: 'INR', localeCode: 'en-IN' };
+const MOJIBAKE_REPLACEMENTS = [
+  ['Ã¢â‚¬Â¢Ã¢â‚¬Â¢', '**'],
+  ['Ã¢â‚¬â€', '-'],
+  ['â‚¬â€', '-'],
+  ['â€”', '-'],
+  ['â€“', '-'],
+  ['Ã‚Â·', ' · '],
+  ['Â·', ' · '],
+  ['â€¢', ' · '],
+  ['â€¦', '...'],
+  ['â†', '<-'],
+  ['â†’', '->'],
+  ['â†“', ''],
+  ['Ã¢â€ â€œ', ''],
+  ['Ã¢â€žÂ¹', 'Rs'],
+  ['â‚¹', 'Rs'],
+  ['Â ', ' '],
+  ['Â', ''],
+  ['âœ“', 'OK'],
+  ['âœ•', 'x'],
+  ['âš ', '!'],
+  ['â„¹', 'i'],
+];
 
 function escHtml(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function repairMojibakeText(value) {
+  let text = String(value ?? '');
+  for (const [from, to] of MOJIBAKE_REPLACEMENTS) text = text.split(from).join(to);
+  return text.replace(/\s{2,}/g, ' ');
+}
+
+function repairMojibakeInNode(root) {
+  if (!root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    const fixed = repairMojibakeText(root.nodeValue);
+    if (fixed !== root.nodeValue) root.nodeValue = fixed;
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+
+  ['placeholder', 'title', 'aria-label'].forEach((attr) => {
+    const current = root.getAttribute(attr);
+    if (!current) return;
+    const fixed = repairMojibakeText(current);
+    if (fixed !== current) root.setAttribute(attr, fixed);
+  });
+
+  if (root instanceof HTMLInputElement) {
+    const type = (root.type || '').toLowerCase();
+    if (['button', 'submit', 'reset'].includes(type)) {
+      const fixed = repairMojibakeText(root.value);
+      if (fixed !== root.value) root.value = fixed;
+    }
+  }
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let current;
+  while ((current = walker.nextNode())) {
+    const fixed = repairMojibakeText(current.nodeValue);
+    if (fixed !== current.nodeValue) current.nodeValue = fixed;
+  }
+}
+
+function startMojibakeRepairObserver() {
+  const activate = () => {
+    repairMojibakeInNode(document.body);
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => repairMojibakeInNode(node));
+        if (mutation.type === 'characterData' && mutation.target) repairMojibakeInNode(mutation.target);
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+
+  if (document.body) activate();
+  else document.addEventListener('DOMContentLoaded', activate, { once: true });
 }
 
 function getYears() {
@@ -211,6 +288,7 @@ function openModal(title, bodyHTML) {
     <div class="modal-head"><h3>${title}</h3><button onclick="closeModal()">✕</button></div>
     <div class="modal-body">${bodyHTML}</div>`;
   document.getElementById('modalOverlay').style.display = 'flex';
+  repairMojibakeInNode(document.getElementById('modalContent'));
 }
 
 function bindModalSubmit(handler) {
@@ -229,6 +307,7 @@ function bindModalSubmit(handler) {
 function showModal(html) {
   document.getElementById('modalContent').innerHTML = '<div class="modal-inner">' + html + '</div>';
   document.getElementById('modalOverlay').style.display = 'flex';
+  repairMojibakeInNode(document.getElementById('modalContent'));
 }
 
 function closeModal(e) {
@@ -237,3 +316,4 @@ function closeModal(e) {
 }
 
 setCurrencyPrefs(window.__currencyPrefs);
+startMojibakeRepairObserver();

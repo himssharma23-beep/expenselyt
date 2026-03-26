@@ -8792,6 +8792,270 @@ async function doCcPayFromPlanner(cycleId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
+function renderBankAccounts() {
+  const accounts = _bankAccounts;
+  const totalBal = accounts.reduce((s, a) => s + a.balance, 0);
+  const totalMin = accounts.reduce((s, a) => s + a.min_balance, 0);
+  const spendable = totalBal - totalMin;
+
+  const statBar = `
+    <div class="bank-summary-bar">
+      <div class="bank-stat"><div class="lbl">Total Balance</div><div class="val">${fmtCur(totalBal)}</div></div>
+      <div class="bank-stat"><div class="lbl">Locked (Min Balance)</div><div class="val red">${fmtCur(totalMin)}</div></div>
+      <div class="bank-stat"><div class="lbl">Spendable</div><div class="val green">${fmtCur(spendable)}</div></div>
+      <div class="bank-stat"><div class="lbl">Accounts</div><div class="val">${accounts.length}</div></div>
+    </div>`;
+
+  const grid = accounts.length
+    ? accounts.map((a) => {
+        const spnd = a.balance - a.min_balance;
+        const typeLabel = { savings: 'Savings', current: 'Current', salary: 'Salary' }[a.account_type] || a.account_type;
+        return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}
+                ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
+              </div>
+              <div class="bank-card-type">${typeLabel}</div>
+            </div>
+          </div>
+          <div class="bank-card-balance-wrap" id="bankBalWrap_${a.id}" onclick="stopEvent(event);startBalanceEdit(${a.id}, ${a.balance})" title="Click to edit balance">
+            <div class="bank-card-balance bank-bal-display" id="bankBalDisplay_${a.id}">${fmtCur(a.balance)}</div>
+            <span class="bank-bal-edit-hint">Edit</span>
+          </div>
+          <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
+          <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
+          <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
+            <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+        <div style="font-size:32px;margin-bottom:12px">Bank</div>
+        <div style="font-weight:600;margin-bottom:6px">No bank accounts added yet</div>
+        <div style="font-size:13px">Click "Add Account" to track your balances</div>
+      </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">TOTAL SPENDABLE BALANCE</div>
+            <div class="summary-amount">${fmtCur(spendable)}</div>
+            <div class="summary-words">${amountWords(spendable)}</div>
+          </div>
+          <div class="count-box"><div class="num">${accounts.length}</div><div class="lbl">accounts</div></div>
+        </div>
+      </div>
+      ${statBar}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
+        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+      </div>
+      <div class="bank-grid">${grid}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function renderTrackerGrid() {
+  const cards = _trackers.length ? _trackers.map((t) => `
+    <div class="cc-tile tracker-tile" data-tracker-id="${t.id}" onclick="openTrackerDetail(${t.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openTrackerDetail(${t.id}); }">
+      <div class="cc-tile-header">
+        <div>
+          <div class="cc-tile-name">${escHtml(t.name)}</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
+      </div>
+      <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
+      <div class="cc-tile-label">
+        This Month · ${t.current_month_days} days tracked
+        ${t.auto_add_to_expense ? '<br><span style="font-size:10px;opacity:.9">Auto-adds previous month to expenses</span>' : ''}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
+        <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
+        <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
+      </div>
+    </div>`).join('') :
+    `<div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+      <div style="font-size:36px;margin-bottom:12px">Tracker</div>
+      <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No trackers yet</div>
+      <div style="font-size:13px">Add items like Milk, Newspaper to track daily and see monthly totals</div>
+    </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">DAILY TRACKERS</div>
+            <div class="summary-amount">${_trackers.length}</div>
+            <div class="summary-words">Track daily recurring items month by month</div>
+          </div>
+          <div class="count-box"><div class="num">${_trackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
+          <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function openTrackerDetail(id) {
+  _selectedTrackerId = id;
+  _trackerYear = new Date().getFullYear();
+  _trackerMonth = new Date().getMonth() + 1;
+  await api(`/api/trackers/${id}/autofill`, { method: 'POST', body: { year: _trackerYear, month: _trackerMonth } });
+  await renderTrackerDetail();
+}
+
+async function renderTrackerDetail() {
+  const tracker = _trackers.find((t) => t.id === _selectedTrackerId);
+  if (!tracker) { renderTrackerGrid(); return; }
+
+  const monthSeq = getTrackerMonthSequence(6);
+  const [entriesRes, summaryRes, tileSummaries] = await Promise.all([
+    api(`/api/trackers/${_selectedTrackerId}/entries?year=${_trackerYear}&month=${_trackerMonth}`),
+    api(`/api/trackers/${_selectedTrackerId}/summary?year=${_trackerYear}&month=${_trackerMonth}`),
+    Promise.all(monthSeq.map(({ year, month, key }) =>
+      api(`/api/trackers/${_selectedTrackerId}/summary?year=${year}&month=${month}`).then((res) => ({
+        key,
+        year,
+        month,
+        summary: res?.summary || { total_amount: 0, days: 0, added_to_expense: 0 },
+      }))
+    )),
+  ]);
+
+  const entries = entriesRes?.entries || [];
+  const summary = summaryRes?.summary || {};
+  const entryMap = {};
+  entries.forEach((e) => { entryMap[e.entry_date] = e; });
+
+  const today = new Date().toISOString().split('T')[0];
+  const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
+  const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
+  const isCurrentMonth = currentMonthKey === today.slice(0, 7);
+
+  let rows = '';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${currentMonthKey}-${String(d).padStart(2, '0')}`;
+    const e = entryMap[dateStr];
+    const dayLabel = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' });
+    const isFuture = dateStr > today;
+    const isToday = dateStr === today;
+    const rowStyle = isToday ? 'background:var(--bg2)' : '';
+
+    if (isFuture) {
+      rows += `<tr style="color:var(--t3);${rowStyle}">
+        <td><span style="font-weight:${isToday ? 600 : 400}">${d}</span> <span style="font-size:11px">${dayLabel}</span></td>
+        <td style="text-align:right;color:var(--t3)">-</td><td style="text-align:right">-</td><td></td><td></td></tr>`;
+    } else if (e) {
+      const badge = e.is_auto
+        ? `<span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Auto</span>`
+        : `<span class="badge b-fair" style="font-size:10px">Edited</span>`;
+      rows += `<tr id="trow-${dateStr}" style="${rowStyle}">
+        <td><strong>${d}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${isToday ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
+        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(tracker.unit)}</span></td>
+        <td style="text-align:right;font-weight:600">${fmtCur(e.amount)}</td>
+        <td>${badge}</td>
+        <td><button class="btn-d" style="color:var(--em)" onclick="editDayEntry(${tracker.id},'${dateStr}',${e.quantity})">Edit</button></td>
+      </tr>`;
+    } else {
+      rows += `<tr id="trow-${dateStr}" style="color:var(--t3);${rowStyle}">
+        <td><strong>${d}</strong> <span style="font-size:11px">${dayLabel}</span></td>
+        <td style="text-align:right">-</td><td style="text-align:right">-</td>
+        <td><span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Missing</span></td>
+        <td><button class="btn-d" onclick="editDayEntry(${tracker.id},'${dateStr}',${tracker.default_qty})">Add</button></td>
+      </tr>`;
+    }
+  }
+
+  const totalQty = summary.total_qty ? parseFloat(summary.total_qty).toFixed(2) : '0';
+  const totalAmt = summary.total_amount || 0;
+  const addedToExpense = summary.added_to_expense;
+  const monthTiles = tileSummaries.map(({ key, year, month, summary: tile }) => {
+    const active = key === currentMonthKey;
+    const complete = key < today.slice(0, 7);
+    const canAdd = complete && tile.total_amount > 0 && !tile.added_to_expense;
+    return `<button class="chip ${active ? 'active' : ''}" style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:120px;padding:10px 12px" onclick="_trackerYear=${year};_trackerMonth=${month};renderTrackerDetail()">
+      <span style="font-weight:700">${_MONTHS_LONG[month - 1]} ${year}</span>
+      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} · ${tile.days || 0} days</span>
+      <span style="font-size:10px;opacity:.8">${tile.added_to_expense ? 'Added to expenses' : canAdd ? 'Ready to add' : complete ? 'No amount' : 'Current month'}</span>
+    </button>`;
+  }).join('');
+
+  const trackerBank = tracker.expense_bank_account_id ? _bankAccounts.find((a) => a.id == tracker.expense_bank_account_id) : null;
+  const autoNote = tracker.auto_add_to_expense
+    ? `Auto-add enabled${trackerBank ? ` · deduct from ${trackerBank.bank_name}` : ''}`
+    : 'Auto-add disabled';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()"><- Back</button>
+        <div>
+          <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} · Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">${autoNote}</div>
+        </div>
+        <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
+      </div>
+
+      <div class="filter-row" style="gap:8px;overflow:auto;margin-bottom:12px">${monthTiles}</div>
+
+      <div class="summary-card" style="margin-bottom:16px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
+            <div class="summary-amount">${fmtCur(totalAmt)}</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} · ${summary.days || 0} days · ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+          </div>
+          <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
+            ${addedToExpense
+              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">Added to<br>Expenses</div>`
+              : `<button class="btn btn-p btn-sm" onclick="addTrackerExpense(${tracker.id},${_trackerYear},${_trackerMonth})" ${totalAmt && currentMonthKey < today.slice(0, 7) ? '' : 'disabled'}>+ To Expenses</button>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()"><-</button>
+          <span style="font-weight:600;min-width:130px;text-align:center">${_MONTHS_LONG[_trackerMonth - 1]} ${_trackerYear}</span>
+          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>-></button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">PDF</button>
+          ${isCurrentMonth ? `<button class="btn btn-s btn-sm" onclick="autoFillTracker(${tracker.id})">Auto-fill Missing</button>` : ''}
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Date</th>
+            <th style="text-align:right">Quantity</th>
+            <th style="text-align:right">Amount</th>
+            <th>Status</th>
+            <th style="width:80px">Action</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
 
 
 
