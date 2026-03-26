@@ -356,7 +356,10 @@ async function generateMonthlyPayments(userId, month) {
       const dueDate = `${month}-${String(dueDay).padStart(2, '0')}`;
       let bankAccountId = dp.bank_account_id || null;
       if (dp.auto_detect_bank) {
-        const defBank = await client.query('SELECT id FROM bank_accounts WHERE user_id = $1 AND is_default = TRUE AND is_active = TRUE LIMIT 1', [userId]);
+        const defBank = await client.query(
+          'SELECT id FROM bank_accounts WHERE user_id = $1 AND is_default = TRUE AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL LIMIT 1',
+          [userId]
+        );
         if (defBank.rows[0]) bankAccountId = defBank.rows[0].id;
       }
       await client.query(

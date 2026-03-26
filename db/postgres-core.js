@@ -57,7 +57,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
   await run.query(
     `UPDATE bank_accounts
      SET balance = balance + $1, updated_at = NOW()
-     WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE`,
+     WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
     [amount, normalizedId, userId]
   );
 }
@@ -356,14 +356,14 @@ async function getDashboardData(userId, year) {
     query(
       `SELECT to_char(purchase_date, 'MM') AS month, SUM(amount) AS total, COUNT(*) AS count
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()}
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()} AND deleted_at IS NULL
        GROUP BY month ORDER BY month`,
       [userId, yearStr]
     ),
     query(
       `SELECT to_char(purchase_date, 'MM') AS month, is_extra, SUM(amount) AS total
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND deleted_at IS NULL
        GROUP BY month, is_extra
        ORDER BY month`,
       [userId, yearStr]
@@ -371,7 +371,7 @@ async function getDashboardData(userId, year) {
     query(
       `SELECT item_name, SUM(amount) AS total, COUNT(*) AS count
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()}
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()} AND deleted_at IS NULL
        GROUP BY item_name
        ORDER BY total DESC
        LIMIT 10`,
@@ -380,26 +380,26 @@ async function getDashboardData(userId, year) {
     query(
       `SELECT is_extra, SUM(amount) AS total, COUNT(*) AS count
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()}
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()} AND deleted_at IS NULL
        GROUP BY is_extra`,
       [userId, yearStr]
     ),
     query(
       `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()}`,
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()} AND deleted_at IS NULL`,
       [userId, yearStr]
     ),
     query(
       `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
        FROM expenses
-       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND to_char(purchase_date, 'MM') = $3`,
+       WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND to_char(purchase_date, 'MM') = $3 AND deleted_at IS NULL`,
       [userId, currentYear, currentMonth]
     ),
     query(
       `SELECT *
        FROM expenses
-       WHERE user_id = $1 AND ${yearGuardSql()}
+       WHERE user_id = $1 AND ${yearGuardSql()} AND deleted_at IS NULL
        ORDER BY purchase_date DESC, id DESC
        LIMIT 5`,
       [userId]
@@ -407,7 +407,7 @@ async function getDashboardData(userId, year) {
     query(
       `SELECT DISTINCT to_char(purchase_date, 'YYYY') AS year
        FROM expenses
-       WHERE user_id = $1 AND EXTRACT(YEAR FROM purchase_date)::int BETWEEN 2018 AND $2
+       WHERE user_id = $1 AND EXTRACT(YEAR FROM purchase_date)::int BETWEEN 2018 AND $2 AND deleted_at IS NULL
        ORDER BY year DESC`,
       [userId, new Date().getFullYear() + 1]
     ),
@@ -444,7 +444,7 @@ async function getReportYears(userId) {
        SUM(CASE WHEN is_extra = TRUE THEN amount ELSE 0 END) AS extra,
        COUNT(*) AS count
      FROM expenses
-     WHERE user_id = $1 AND ${yearGuardSql()}
+     WHERE user_id = $1 AND ${yearGuardSql()} AND deleted_at IS NULL
      GROUP BY year
      ORDER BY year DESC`,
     [userId]
@@ -461,7 +461,7 @@ async function getReportMonths(userId, year) {
        SUM(CASE WHEN is_extra = TRUE THEN amount ELSE 0 END) AS extra,
        COUNT(*) AS count
      FROM expenses
-     WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()}
+     WHERE user_id = $1 AND to_char(purchase_date, 'YYYY') = $2 AND ${yearGuardSql()} AND deleted_at IS NULL
      GROUP BY month
      ORDER BY month`,
     [userId, String(year)]
@@ -768,7 +768,7 @@ async function getPublicShareData(token) {
   const friendsWithData = [];
   for (const friend of friends) {
     const params = [link.user_id, friend.id];
-    let sql = `SELECT * FROM loan_transactions WHERE user_id = $1 AND friend_id = $2`;
+    let sql = `SELECT * FROM loan_transactions WHERE user_id = $1 AND friend_id = $2 AND deleted_at IS NULL`;
     if (filters.year) {
       params.push(String(filters.year));
       sql += ` AND to_char(txn_date, 'YYYY') = $${params.length}`;

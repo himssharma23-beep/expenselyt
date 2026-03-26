@@ -1912,7 +1912,7 @@ function rptToggleSort(sortObj, field) {
   else { sortObj.field = field; sortObj.dir = field === 'year' || field === 'month' ? 'desc' : 'desc'; }
 }
 function rptArrow(sortObj, field) {
-  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' Ã¢â€ â€˜' : ' Ã¢â€ â€œ') : '';
+  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' ↑' : ' ↓') : '';
 }
 
 async function loadReports() {
@@ -2032,10 +2032,10 @@ async function drillToMonths(year) {
     <div class="tab-content">
       <div class="rpt-header">
         <div>
-          <h2 class="dash-title">Reports Ã¢â‚¬â€ ${year}</h2>
+          <h2 class="dash-title">Reports - ${year}</h2>
           <div class="dash-subtitle rpt-breadcrumb">
             <span class="rpt-bc-link" onclick="loadReports()">All Years</span>
-            <span class="rpt-bc-sep">Ã¢â‚¬Âº</span>
+            <span class="rpt-bc-sep">></span>
             <span>${year}</span>
           </div>
         </div>
@@ -2043,7 +2043,7 @@ async function drillToMonths(year) {
       </div>
 
       <div class="dash-box" style="margin-bottom:16px">
-        <div class="dash-box-title">Monthly Spending Ã¢â‚¬â€ ${year}</div>
+        <div class="dash-box-title">Monthly Spending - ${year}</div>
         <canvas id="rptChart" height="80"></canvas>
       </div>
 
@@ -2158,12 +2158,12 @@ async function renderReportExpenses() {
     <div class="tab-content">
       <div class="rpt-header">
         <div>
-          <h2 class="dash-title">Reports Ã¢â‚¬â€ ${year} Ã¢â‚¬Âº ${mName}</h2>
+          <h2 class="dash-title">Reports - ${year} > ${mName}</h2>
           <div class="dash-subtitle rpt-breadcrumb">
             <span class="rpt-bc-link" onclick="loadReports()">All Years</span>
-            <span class="rpt-bc-sep">Ã¢â‚¬Âº</span>
+            <span class="rpt-bc-sep">></span>
             <span class="rpt-bc-link" onclick="drillToMonths(${year})">${year}</span>
-            <span class="rpt-bc-sep">Ã¢â‚¬Âº</span>
+            <span class="rpt-bc-sep">></span>
             <span>${mName}</span>
           </div>
         </div>

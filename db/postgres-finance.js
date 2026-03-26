@@ -853,20 +853,25 @@ async function getUserFinancialSummary(userId) {
   const currentMonth = today.slice(0, 7);
   const [banks, expYearlyR, expMonthlyR, recentExpensesR, friendsR, emisR, cardsR, tripsR, plannerPaymentsR, defaultsR] = await Promise.all([
     pgOpsDb.getBankAccounts(userId),
-    query(`SELECT to_char(purchase_date, 'YYYY') AS year, COALESCE(SUM(amount),0) AS total, COALESCE(SUM(CASE WHEN is_extra THEN amount ELSE 0 END),0) AS extra, COALESCE(SUM(CASE WHEN NOT is_extra THEN amount ELSE 0 END),0) AS fair, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 GROUP BY year ORDER BY year DESC`, [userId]),
-    query(`SELECT to_char(purchase_date, 'YYYY-MM') AS month, COALESCE(SUM(amount),0) AS total, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND purchase_date >= (CURRENT_DATE - INTERVAL '6 months') GROUP BY month ORDER BY month DESC`, [userId]),
-    query(`SELECT purchase_date, item_name, amount, is_extra FROM expenses WHERE user_id = $1 ORDER BY purchase_date DESC LIMIT 30`, [userId]),
-    query('SELECT id, name FROM friends WHERE user_id = $1', [userId]),
+    query(`SELECT to_char(purchase_date, 'YYYY') AS year, COALESCE(SUM(amount),0) AS total, COALESCE(SUM(CASE WHEN is_extra THEN amount ELSE 0 END),0) AS extra, COALESCE(SUM(CASE WHEN NOT is_extra THEN amount ELSE 0 END),0) AS fair, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND deleted_at IS NULL GROUP BY year ORDER BY year DESC`, [userId]),
+    query(`SELECT to_char(purchase_date, 'YYYY-MM') AS month, COALESCE(SUM(amount),0) AS total, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND deleted_at IS NULL AND purchase_date >= (CURRENT_DATE - INTERVAL '6 months') GROUP BY month ORDER BY month DESC`, [userId]),
+    query(`SELECT purchase_date, item_name, amount, is_extra FROM expenses WHERE user_id = $1 AND deleted_at IS NULL ORDER BY purchase_date DESC LIMIT 30`, [userId]),
+    query('SELECT id, name FROM friends WHERE user_id = $1 AND deleted_at IS NULL', [userId]),
     query(`SELECT r.name, r.status, r.principal, r.annual_rate, r.tenure_months, r.monthly_emi, r.start_date, COUNT(i.id)::int AS total_installments, COALESCE(SUM(CASE WHEN i.paid_amount >= i.emi_amount * 0.99 THEN 1 ELSE 0 END),0)::int AS paid_count, COALESCE(SUM(CASE WHEN i.paid_amount < i.emi_amount * 0.99 THEN i.emi_amount ELSE 0 END),0) AS remaining_amount FROM emi_records r LEFT JOIN emi_installments i ON i.emi_id = r.id WHERE r.user_id = $1 GROUP BY r.id ORDER BY r.id DESC`, [userId]),
     query('SELECT id, card_name, bank_name, last4, credit_limit FROM credit_cards WHERE user_id = $1', [userId]),
     query(`SELECT t.name, t.status, t.start_date, t.end_date, COUNT(e.id)::int AS expense_count, COALESCE(SUM(e.amount),0) AS total_amount FROM trips t LEFT JOIN trip_expenses e ON e.trip_id = t.id WHERE t.user_id = $1 GROUP BY t.id ORDER BY t.id DESC LIMIT 10`, [userId]),
-    query(`SELECT name, amount, due_date FROM monthly_payments WHERE user_id = $1 AND month = $2 AND COALESCE(is_skipped, FALSE) = FALSE`, [userId, currentMonth]),
-    query(`SELECT name, amount, due_day, category FROM default_payments WHERE user_id = $1 AND is_active = TRUE`, [userId]),
+    query(`SELECT name, amount, due_date FROM monthly_payments WHERE user_id = $1 AND month = $2 AND deleted_at IS NULL AND COALESCE(is_skipped, FALSE) = FALSE`, [userId, currentMonth]),
+    query(`SELECT name, amount, due_day, category FROM default_payments WHERE user_id = $1 AND deleted_at IS NULL AND is_active = TRUE`, [userId]),
   ]);
 
   const friendSummaries = [];
   for (const friend of friendsR.rows) {
-    const rowR = await query(`SELECT COALESCE(SUM(paid),0) AS total_paid, COALESCE(SUM(received),0) AS total_received FROM loan_transactions WHERE user_id = $1 AND friend_id = $2`, [userId, friend.id]);
+    const rowR = await query(
+      `SELECT COALESCE(SUM(paid),0) AS total_paid, COALESCE(SUM(received),0) AS total_received
+       FROM loan_transactions
+       WHERE user_id = $1 AND friend_id = $2 AND deleted_at IS NULL`,
+      [userId, friend.id]
+    );
     const totalPaid = num(rowR.rows[0]?.total_paid);
     const totalReceived = num(rowR.rows[0]?.total_received);
     friendSummaries.push({ name: friend.name, you_paid: totalPaid, you_received: totalReceived, net_balance: totalPaid - totalReceived });
