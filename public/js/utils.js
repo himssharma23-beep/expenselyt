@@ -21,6 +21,13 @@ const REGION_CURRENCY_MAP = {
 };
 window.__currencyPrefs = { currencyCode: 'INR', localeCode: 'en-IN' };
 const MOJIBAKE_REPLACEMENTS = [
+  ['Ã¢Å½â„¢', ''],
+  ['âŽ™', ''],
+  ['Ã¢â‚¬Âº', '>'],
+  ['â€º', '>'],
+  ['Ã¢â‚¬Â¦', '...'],
+  ['Ã¢â‚¬Â¢', ' · '],
+  ['Ã¢â‚¬â€', '-'],
   ['Ã¢â‚¬Â¢Ã¢â‚¬Â¢', '**'],
   ['Ã¢â‚¬â€', '-'],
   ['â‚¬â€', '-'],
@@ -52,6 +59,14 @@ function escHtml(s) {
 function repairMojibakeText(value) {
   let text = String(value ?? '');
   for (const [from, to] of MOJIBAKE_REPLACEMENTS) text = text.split(from).join(to);
+  // Additional fallback fixes for patterns that frequently survive replacement tables.
+  text = text
+    .replace(/Â·/g, ' · ')
+    .replace(/â†/g, '<-')
+    .replace(/â†’/g, '->')
+    .replace(/Ã°Å¸â€â€”/g, 'Share')
+    .replace(/Ã°Å¸â€™Â³/g, 'Card')
+    .replace(/Ã°Å¸â€œâ€¹/g, 'Tracker');
   return text.replace(/\s{2,}/g, ' ');
 }
 

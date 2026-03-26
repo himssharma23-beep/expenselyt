@@ -74,6 +74,27 @@ function normalizeDateValue(value, label = 'Date') {
   return normalized;
 }
 
+function dbDateToYmd(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    // DATE columns can arrive as UTC midnight; use UTC getters to avoid day-shift by local timezone.
+    const y = value.getUTCFullYear();
+    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(value.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const dt = new Date(raw);
+  if (!Number.isNaN(dt.getTime())) {
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return raw.slice(0, 10);
+}
+
 async function getDefaultBankAccountId(userId, client = null) {
   const run = client || { query };
   const result = await run.query(
@@ -538,7 +559,14 @@ async function getDailyEntries(userId, trackerId, year, month) {
      ORDER BY entry_date`,
     [userId, trackerId, `${prefix}-%`]
   );
-  return result.rows.map((row) => ({ ...row, quantity: Number(row.quantity || 0), amount: num(row.amount), is_auto: !!row.is_auto, added_to_expense: !!row.added_to_expense }));
+  return result.rows.map((row) => ({
+    ...row,
+    entry_date: dbDateToYmd(row.entry_date),
+    quantity: Number(row.quantity || 0),
+    amount: num(row.amount),
+    is_auto: !!row.is_auto,
+    added_to_expense: !!row.added_to_expense,
+  }));
 }
 
 async function upsertDailyEntry(userId, trackerId, date, qty, isAuto) {
@@ -563,7 +591,6 @@ async function autoFillDailyEntries(userId, trackerId, year, month) {
   const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
   const tracker = trackerR.rows[0];
   if (!tracker) throw new Error('Tracker not found');
-  const today = new Date().toISOString().split('T')[0];
   const prefix = `${year}-${String(month).padStart(2, '0')}`;
   const existingR = await query(
     `SELECT entry_date
@@ -571,13 +598,12 @@ async function autoFillDailyEntries(userId, trackerId, year, month) {
      WHERE tracker_id = $1 AND entry_date::text LIKE $2`,
     [trackerId, `${prefix}-%`]
   );
-  const existing = new Set(existingR.rows.map((row) => String(row.entry_date).slice(0, 10)));
+  const existing = new Set(existingR.rows.map((row) => dbDateToYmd(row.entry_date)));
   const amount = Math.round(parseFloat(tracker.default_qty) * parseFloat(tracker.price_per_unit) * 100) / 100;
   const daysInMonth = new Date(year, month, 0).getDate();
   let filled = 0;
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${prefix}-${String(day).padStart(2, '0')}`;
-    if (dateStr > today) break;
     if (!existing.has(dateStr)) {
       await query(
         `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto)
