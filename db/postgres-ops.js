@@ -23,6 +23,145 @@ function recurringEntryAppliesToMonth(entry, month) {
   return diffMonths >= 0 && diffMonths % interval === 0;
 }
 
+function normalizeBankAccountId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function validationError(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
+function normalizeText(value, label, maxLength = 160) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) throw validationError(`${label} is required`);
+  if (normalized.length > maxLength) throw validationError(`${label} must be ${maxLength} characters or fewer`);
+  return normalized;
+}
+
+function normalizeOptionalText(value, maxLength = 160) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+  if (normalized.length > maxLength) throw validationError(`Value must be ${maxLength} characters or fewer`);
+  return normalized;
+}
+
+function normalizePositiveAmount(value, label = 'Amount') {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) throw validationError(`${label} must be greater than 0`);
+  return Math.round(amount * 100) / 100;
+}
+
+function normalizeNonNegativeAmount(value, label = 'Amount') {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) throw validationError(`${label} cannot be negative`);
+  return Math.round(amount * 100) / 100;
+}
+
+function normalizeMonthValue(value, label = 'Month') {
+  const str = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(str)) throw validationError(`${label} must be in YYYY-MM format`);
+  return str;
+}
+
+function normalizeDateValue(value, label = 'Date') {
+  const str = String(value || '').trim();
+  if (!str) return null;
+  const normalized = str.length >= 10 ? str.slice(0, 10) : str;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw validationError(`${label} must be in YYYY-MM-DD format`);
+  return normalized;
+}
+
+async function getDefaultBankAccountId(userId, client = null) {
+  const run = client || { query };
+  const result = await run.query(
+    `SELECT id
+     FROM bank_accounts
+     WHERE user_id = $1 AND is_default = TRUE AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] ? Number(result.rows[0].id) : null;
+}
+
+async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+  const normalizedId = normalizeBankAccountId(bankAccountId);
+  const amount = Number(delta || 0);
+  if (!normalizedId || !amount) return;
+  const run = client || { query };
+  await run.query(
+    `UPDATE bank_accounts
+     SET balance = balance + $1, updated_at = NOW(), updated_by = $3
+     WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
+    [amount, normalizedId, userId]
+  );
+}
+
+async function insertTrackerMonthExpense(userId, tracker, year, month, client, bankAccountId = null) {
+  const summary = await getDailyMonthSummary(userId, tracker.id, year, month);
+  if (!summary || !summary.total_amount) return 0;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const itemName = `${tracker.name} - ${months[month - 1]} ${year}`;
+  const expenseDate = `${year}-${String(month).padStart(2, '0')}-01`;
+  const targetBankId = normalizeBankAccountId(bankAccountId != null ? bankAccountId : tracker.expense_bank_account_id);
+
+  await client.query(
+    `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, FALSE, $5, $1, $1)`,
+    [userId, itemName, summary.total_amount, expenseDate, targetBankId]
+  );
+  if (targetBankId) await adjustBankBalance(userId, targetBankId, -summary.total_amount, client);
+  await client.query(
+    `UPDATE daily_entries
+     SET added_to_expense = TRUE, updated_at = NOW(), updated_by = $1
+     WHERE user_id = $1 AND tracker_id = $2 AND entry_date::text LIKE $3`,
+    [userId, tracker.id, `${year}-${String(month).padStart(2, '0')}-%`]
+  );
+  return summary.total_amount;
+}
+
+async function autoAddCompletedTrackerExpenses(userId) {
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const year = prev.getFullYear();
+  const month = prev.getMonth() + 1;
+  const prefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const trackersR = await query(
+    `SELECT *
+     FROM daily_trackers
+     WHERE user_id = $1
+       AND is_active = TRUE
+       AND COALESCE(auto_add_to_expense, FALSE) = TRUE
+       AND deleted_at IS NULL`,
+    [userId]
+  );
+  if (!trackersR.rows.length) return [];
+
+  return withTransaction(async (client) => {
+    const applied = [];
+    for (const tracker of trackersR.rows) {
+      const statsR = await client.query(
+        `SELECT
+           COUNT(*)::int AS day_count,
+           COALESCE(SUM(amount), 0) AS total_amount,
+           MAX(CASE WHEN added_to_expense = TRUE THEN 1 ELSE 0 END) AS already_added
+         FROM daily_entries
+         WHERE user_id = $1 AND tracker_id = $2 AND entry_date::text LIKE $3`,
+        [userId, tracker.id, `${prefix}-%`]
+      );
+      const stats = statsR.rows[0];
+      if (!stats || Number(stats.day_count || 0) === 0) continue;
+      if (Number(stats.already_added || 0) === 1) continue;
+      const amount = await insertTrackerMonthExpense(userId, tracker, year, month, client, tracker.expense_bank_account_id);
+      if (amount > 0) applied.push({ tracker_id: Number(tracker.id), year, month, amount });
+    }
+    return applied;
+  });
+}
+
 async function getAiLookupStatus(userId) {
   const today = new Date().toISOString().slice(0, 10);
   const dailyFreeLimit = 10;
@@ -75,7 +214,7 @@ async function getBankAccounts(userId) {
   const result = await query(
     `SELECT *
      FROM bank_accounts
-     WHERE user_id = $1 AND is_active = TRUE
+     WHERE user_id = $1 AND is_active = TRUE AND deleted_at IS NULL
      ORDER BY is_default DESC, created_at ASC`,
     [userId]
   );
@@ -84,14 +223,18 @@ async function getBankAccounts(userId) {
 
 async function addBankAccount(userId, account) {
   return withTransaction(async (client) => {
+    const bankName = normalizeText(account.bank_name, 'Bank name', 80);
+    const accountName = normalizeOptionalText(account.account_name, 80);
+    const balance = normalizeNonNegativeAmount(account.balance || 0, 'Balance');
+    const minBalance = normalizeNonNegativeAmount(account.min_balance || 0, 'Minimum balance');
     const result = await client.query(
-      `INSERT INTO bank_accounts (user_id, bank_name, account_name, account_type, balance, min_balance)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO bank_accounts (user_id, bank_name, account_name, account_type, balance, min_balance, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $1, $1)
        RETURNING id`,
-      [userId, account.bank_name, account.account_name || null, account.account_type || 'savings', account.balance || 0, account.min_balance || 0]
+      [userId, bankName, accountName, account.account_type || 'savings', balance, minBalance]
     );
     const id = Number(result.rows[0].id);
-    const countR = await client.query('SELECT COUNT(*)::int AS c FROM bank_accounts WHERE user_id = $1 AND is_active = TRUE', [userId]);
+    const countR = await client.query('SELECT COUNT(*)::int AS c FROM bank_accounts WHERE user_id = $1 AND is_active = TRUE AND deleted_at IS NULL', [userId]);
     if (countR.rows[0]?.c === 1) {
       await client.query('UPDATE bank_accounts SET is_default = TRUE WHERE id = $1', [id]);
     }
@@ -100,16 +243,21 @@ async function addBankAccount(userId, account) {
 }
 
 async function updateBankAccount(userId, id, account) {
+  const bankName = normalizeText(account.bank_name, 'Bank name', 80);
+  const accountName = normalizeOptionalText(account.account_name, 80);
+  const balance = normalizeNonNegativeAmount(account.balance || 0, 'Balance');
+  const minBalance = normalizeNonNegativeAmount(account.min_balance || 0, 'Minimum balance');
   await query(
     `UPDATE bank_accounts
-     SET bank_name = $1, account_name = $2, account_type = $3, balance = $4, min_balance = $5
+     SET bank_name = $1, account_name = $2, account_type = $3, balance = $4, min_balance = $5, updated_at = NOW(), updated_by = $7
      WHERE id = $6 AND user_id = $7`,
-    [account.bank_name, account.account_name || null, account.account_type || 'savings', account.balance || 0, account.min_balance || 0, id, userId]
+    [bankName, accountName, account.account_type || 'savings', balance, minBalance, id, userId]
   );
 }
 
 async function updateBankBalance(userId, id, balance) {
-  await query('UPDATE bank_accounts SET balance = $1 WHERE id = $2 AND user_id = $3', [balance, id, userId]);
+  const nextBalance = normalizeNonNegativeAmount(balance, 'Balance');
+  await query('UPDATE bank_accounts SET balance = $1, updated_at = NOW(), updated_by = $3 WHERE id = $2 AND user_id = $3', [nextBalance, id, userId]);
 }
 
 async function setDefaultBankAccount(userId, id) {
@@ -125,7 +273,7 @@ async function deleteBankAccount(userId, id) {
     const nextR = await client.query(
       `SELECT id
        FROM bank_accounts
-       WHERE user_id = $1 AND is_active = TRUE
+       WHERE user_id = $1 AND is_active = TRUE AND deleted_at IS NULL
        ORDER BY created_at ASC
        LIMIT 1`,
       [userId]
@@ -135,27 +283,33 @@ async function deleteBankAccount(userId, id) {
 }
 
 async function getDefaultPayments(userId) {
-  const result = await query('SELECT * FROM default_payments WHERE user_id = $1 ORDER BY due_day ASC, name ASC', [userId]);
+  const result = await query('SELECT * FROM default_payments WHERE user_id = $1 AND deleted_at IS NULL ORDER BY due_day ASC, name ASC', [userId]);
   return result.rows.map((row) => ({ ...row, amount: num(row.amount), auto_detect_bank: !!row.auto_detect_bank, is_active: !!row.is_active }));
 }
 
 async function addDefaultPayment(userId, payment) {
+  const name = normalizeText(payment.name, 'Payment name', 120);
+  const amount = normalizePositiveAmount(payment.amount);
+  const dueDay = Math.max(1, Math.min(28, parseInt(payment.due_day, 10) || 1));
   const result = await query(
     `INSERT INTO default_payments (user_id, name, amount, due_day, interval_months, start_month, category, bank_account_id, auto_detect_bank)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
-    [userId, payment.name, payment.amount, payment.due_day || 1, 1, null, payment.category || null, payment.bank_account_id || null, !!payment.auto_detect_bank]
+    [userId, name, amount, dueDay, 1, null, normalizeOptionalText(payment.category, 80), normalizeBankAccountId(payment.bank_account_id), !!payment.auto_detect_bank]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateDefaultPayment(userId, id, payment) {
+  const name = normalizeText(payment.name, 'Payment name', 120);
+  const amount = normalizePositiveAmount(payment.amount);
+  const dueDay = Math.max(1, Math.min(28, parseInt(payment.due_day, 10) || 1));
   await query(
     `UPDATE default_payments
      SET name = $1, amount = $2, due_day = $3, interval_months = $4, start_month = $5, category = $6,
          is_active = $7, bank_account_id = $8, auto_detect_bank = $9
      WHERE id = $10 AND user_id = $11`,
-    [payment.name, payment.amount, payment.due_day || 1, 1, null, payment.category || null, payment.is_active != null ? !!payment.is_active : true, payment.bank_account_id || null, !!payment.auto_detect_bank, id, userId]
+    [name, amount, dueDay, 1, null, normalizeOptionalText(payment.category, 80), payment.is_active != null ? !!payment.is_active : true, normalizeBankAccountId(payment.bank_account_id), !!payment.auto_detect_bank, id, userId]
   );
 }
 
@@ -200,7 +354,7 @@ async function generateMonthlyPayments(userId, month) {
       await client.query(
         `INSERT INTO monthly_payments (user_id, recurring_entry_id, month, name, amount, due_date, bank_account_id, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [userId, entry.id, month, entry.description, entry.amount, `${month}-01`, null, 'Recurring entry']
+        [userId, entry.id, month, entry.description, entry.amount, `${month}-01`, normalizeBankAccountId(entry.bank_account_id), 'Recurring entry']
       );
     }
     for (const item of trackerPlannerItems) {
@@ -249,21 +403,26 @@ async function restoreMonthlyPayment(userId, id) {
 }
 
 async function addMonthlyPayment(userId, payment) {
+  const month = normalizeMonthValue(payment.month);
+  const name = normalizeText(payment.name, 'Payment name', 120);
+  const amount = normalizePositiveAmount(payment.amount);
   const result = await query(
     `INSERT INTO monthly_payments (user_id, month, name, amount, due_date, notes, bank_account_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [userId, payment.month, payment.name, payment.amount, payment.due_date || null, payment.notes || null, payment.bank_account_id || null]
+    [userId, month, name, amount, normalizeDateValue(payment.due_date, 'Due date'), normalizeOptionalText(payment.notes, 240), normalizeBankAccountId(payment.bank_account_id)]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateMonthlyPayment(userId, id, payment) {
+  const name = normalizeText(payment.name, 'Payment name', 120);
+  const amount = normalizePositiveAmount(payment.amount);
   await query(
     `UPDATE monthly_payments
      SET name = $1, amount = $2, due_date = $3, notes = $4, bank_account_id = $5
      WHERE id = $6 AND user_id = $7`,
-    [payment.name, payment.amount, payment.due_date || null, payment.notes || null, payment.bank_account_id || null, id, userId]
+    [name, amount, normalizeDateValue(payment.due_date, 'Due date'), normalizeOptionalText(payment.notes, 240), normalizeBankAccountId(payment.bank_account_id), id, userId]
   );
 }
 
@@ -286,28 +445,26 @@ async function payMonthlyPayment(userId, id, paidAmount, paidDate) {
   return withTransaction(async (client) => {
     const paymentR = await client.query('SELECT * FROM monthly_payments WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
     const payment = paymentR.rows[0];
-    if (!payment) throw new Error('Payment not found');
-    const paid = parseFloat(paidAmount) || 0;
+    if (!payment) throw validationError('Payment not found');
+    const paid = normalizeNonNegativeAmount(paidAmount || 0, 'Paid amount');
     const prevPaid = parseFloat(payment.paid_amount) || 0;
     const amount = parseFloat(payment.amount) || 0;
     const status = paid <= 0 ? 'pending' : paid >= amount - 0.01 ? 'paid' : 'partial';
+    const effectivePaidDate = paid > 0 ? (normalizeDateValue(paidDate, 'Paid date') || _localDate(new Date())) : null;
     await client.query(
       `UPDATE monthly_payments SET paid_amount = $1, paid_date = $2, status = $3 WHERE id = $4`,
-      [paid, paid > 0 ? (paidDate || new Date().toISOString().split('T')[0]) : null, status, id]
+      [paid, effectivePaidDate, status, id]
     );
-    if (payment.bank_account_id) {
-      const diff = paid - prevPaid;
-      if (diff !== 0) {
-        await client.query(
-          'UPDATE bank_accounts SET balance = balance - $1 WHERE id = $2 AND user_id = $3',
-          [diff, payment.bank_account_id, userId]
-        );
-      }
+    const diff = paid - prevPaid;
+    const targetBankId = normalizeBankAccountId(payment.bank_account_id) || await getDefaultBankAccountId(userId, client);
+    if (diff !== 0 && targetBankId) {
+      await adjustBankBalance(userId, targetBankId, -diff, client);
     }
   });
 }
 
 async function getDailyTrackers(userId) {
+  await autoAddCompletedTrackerExpenses(userId);
   const now = new Date();
   const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const result = await query(
@@ -319,7 +476,7 @@ async function getDailyTrackers(userId) {
      LEFT JOIN daily_entries e
        ON e.tracker_id = t.id
       AND e.entry_date::text LIKE $2
-     WHERE t.user_id = $1
+     WHERE t.user_id = $1 AND t.deleted_at IS NULL
      GROUP BY t.id
      ORDER BY t.name`,
     [userId, `${prefix}-%`]
@@ -330,26 +487,41 @@ async function getDailyTrackers(userId) {
     default_qty: Number(row.default_qty || 0),
     current_month_total: num(row.current_month_total),
     current_month_days: Number(row.current_month_days || 0),
+    auto_add_to_expense: !!row.auto_add_to_expense,
+    expense_bank_account_id: normalizeBankAccountId(row.expense_bank_account_id),
     is_active: !!row.is_active,
   }));
 }
 
 async function addDailyTracker(userId, data) {
+  const name = normalizeText(data.name, 'Tracker name', 80);
+  const unit = normalizeText(data.unit || 'unit', 'Unit', 30);
+  const pricePerUnit = normalizePositiveAmount(data.price_per_unit, 'Price per unit');
+  const defaultQty = Number(data.default_qty);
+  if (!Number.isFinite(defaultQty) || defaultQty < 0) throw validationError('Default quantity cannot be negative');
+  const expenseBankAccountId = normalizeBankAccountId(data.expense_bank_account_id);
   const result = await query(
-    `INSERT INTO daily_trackers (user_id, name, unit, price_per_unit, default_qty)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO daily_trackers (user_id, name, unit, price_per_unit, default_qty, auto_add_to_expense, expense_bank_account_id, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $1, $1)
      RETURNING id`,
-    [userId, data.name, data.unit || 'unit', parseFloat(data.price_per_unit), parseFloat(data.default_qty) || 1]
+    [userId, name, unit, pricePerUnit, defaultQty || 1, !!data.auto_add_to_expense, expenseBankAccountId]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateDailyTracker(userId, id, data) {
+  const name = normalizeText(data.name, 'Tracker name', 80);
+  const unit = normalizeText(data.unit || 'unit', 'Unit', 30);
+  const pricePerUnit = normalizePositiveAmount(data.price_per_unit, 'Price per unit');
+  const defaultQty = Number(data.default_qty);
+  if (!Number.isFinite(defaultQty) || defaultQty < 0) throw validationError('Default quantity cannot be negative');
+  const expenseBankAccountId = normalizeBankAccountId(data.expense_bank_account_id);
   await query(
     `UPDATE daily_trackers
-     SET name = $1, unit = $2, price_per_unit = $3, default_qty = $4, is_active = $5
-     WHERE id = $6 AND user_id = $7`,
-    [data.name, data.unit || 'unit', parseFloat(data.price_per_unit), parseFloat(data.default_qty) || 1, data.is_active != null ? !!data.is_active : true, id, userId]
+     SET name = $1, unit = $2, price_per_unit = $3, default_qty = $4, is_active = $5,
+         auto_add_to_expense = $6, expense_bank_account_id = $7, updated_at = NOW(), updated_by = $9
+     WHERE id = $8 AND user_id = $9`,
+    [name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, id, userId]
   );
 }
 
@@ -372,14 +544,17 @@ async function getDailyEntries(userId, trackerId, year, month) {
 async function upsertDailyEntry(userId, trackerId, date, qty, isAuto) {
   const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
   const tracker = trackerR.rows[0];
-  if (!tracker) throw new Error('Tracker not found');
-  const amount = Math.round(parseFloat(qty) * parseFloat(tracker.price_per_unit) * 100) / 100;
+  if (!tracker) throw validationError('Tracker not found');
+  const entryDate = normalizeDateValue(date, 'Entry date');
+  const quantity = Number(qty);
+  if (!Number.isFinite(quantity) || quantity < 0) throw validationError('Quantity cannot be negative');
+  const amount = Math.round(quantity * parseFloat(tracker.price_per_unit) * 100) / 100;
   await query(
     `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (tracker_id, entry_date)
      DO UPDATE SET quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, is_auto = EXCLUDED.is_auto`,
-    [trackerId, userId, date, parseFloat(qty), amount, !!isAuto]
+    [trackerId, userId, entryDate, quantity, amount, !!isAuto]
   );
   return { amount };
 }
@@ -441,37 +616,20 @@ async function getDailyMonthSummary(userId, trackerId, year, month) {
   };
 }
 
-async function addTrackerMonthToExpense(userId, trackerId, year, month) {
+async function addTrackerMonthToExpense(userId, trackerId, year, month, options = {}) {
   const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
   const tracker = trackerR.rows[0];
   if (!tracker) throw new Error('Tracker not found');
-  const summary = await getDailyMonthSummary(userId, trackerId, year, month);
-  if (!summary || !summary.total_amount) throw new Error('No entries for this month');
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const itemName = `${tracker.name} - ${months[month - 1]} ${year}`;
-  const date = `${year}-${String(month).padStart(2, '0')}-01`;
-  await withTransaction(async (client) => {
-    await client.query(
-      `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra)
-       VALUES ($1, $2, $3, $4, FALSE)`,
-      [userId, itemName, summary.total_amount, date]
-    );
-    await client.query(
-      `UPDATE daily_entries
-       SET added_to_expense = TRUE
-       WHERE user_id = $1 AND tracker_id = $2 AND entry_date::text LIKE $3`,
-      [userId, trackerId, `${year}-${String(month).padStart(2, '0')}-%`]
-    );
-  });
-  return summary.total_amount;
+  return withTransaction(async (client) => insertTrackerMonthExpense(userId, tracker, year, month, client, options.bank_account_id));
 }
 
 async function getRecurringEntries(userId) {
   const result = await query(
-    `SELECT r.*, c.card_name, c.bank_name, c.last4
+    `SELECT r.*, c.card_name, c.bank_name, c.last4, b.bank_name AS recurring_bank_name, b.account_name AS recurring_account_name
      FROM recurring_entries r
      LEFT JOIN credit_cards c ON r.card_id = c.id
-     WHERE r.user_id = $1
+     LEFT JOIN bank_accounts b ON r.bank_account_id = b.id
+     WHERE r.user_id = $1 AND r.deleted_at IS NULL
      ORDER BY r.created_at DESC`,
     [userId]
   );
@@ -479,11 +637,13 @@ async function getRecurringEntries(userId) {
 }
 
 async function addRecurringEntry(userId, data) {
+  const description = normalizeText(data.description, 'Recurring description', 160);
+  const amount = normalizePositiveAmount(data.amount);
   const result = await query(
-    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, card_id, discount_pct, also_expense, is_extra)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, card_id, bank_account_id, discount_pct, also_expense, is_extra, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $1, $1)
      RETURNING id`,
-    [userId, data.type, data.description, parseFloat(data.amount), Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra]
+    [userId, data.type, description, amount, Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, normalizeBankAccountId(data.bank_account_id), parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra]
   );
   return Number(result.rows[0].id);
 }
@@ -497,25 +657,55 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
   if (!entry || !entry.is_active) throw new Error('Recurring entry not found');
   if (entry.last_applied === currentMonth) return false;
   if (!recurringEntryAppliesToMonth(entry, currentMonth)) return false;
-  if (entry.type !== 'expense') throw new Error('Recurring entry type is not supported yet in Postgres mode');
   await withTransaction(async (client) => {
-    await client.query(
-      `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [userId, entry.description, entry.amount, day1, !!entry.is_extra]
-    );
+    if (entry.type === 'expense') {
+      const bankAccountId = normalizeBankAccountId(entry.bank_account_id);
+      await client.query(
+        `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $1, $1)`,
+        [userId, entry.description, entry.amount, day1, !!entry.is_extra, bankAccountId]
+      );
+      if (bankAccountId) {
+        await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
+      }
+    } else if (entry.type === 'cc_txn' && entry.card_id) {
+      const billingDb = require('./postgres-billing');
+      await billingDb.addCcTxn(userId, {
+        card_id: entry.card_id,
+        txn_date: day1,
+        description: entry.description,
+        amount: num(entry.amount),
+        discount_pct: num(entry.discount_pct),
+        source: 'recurring',
+        source_id: entry.id,
+      });
+      if (entry.also_expense) {
+        const bankAccountId = normalizeBankAccountId(entry.bank_account_id);
+        await client.query(
+          `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, FALSE, $5, $1, $1)`,
+          [userId, entry.description, entry.amount, day1, bankAccountId]
+        );
+        if (bankAccountId) await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
+      }
+    } else {
+      throw new Error('Recurring entry type is not supported');
+    }
     await client.query('UPDATE recurring_entries SET last_applied = $1 WHERE id = $2', [currentMonth, entry.id]);
   });
   return true;
 }
 
 async function updateRecurringEntry(userId, id, data) {
+  const description = normalizeText(data.description, 'Recurring description', 160);
+  const amount = normalizePositiveAmount(data.amount);
   await query(
     `UPDATE recurring_entries
      SET description = $1, amount = $2, interval_months = $3, start_month = $4, card_id = $5,
-         discount_pct = $6, also_expense = $7, is_extra = $8, is_active = $9
-     WHERE id = $10 AND user_id = $11`,
-    [data.description, parseFloat(data.amount), Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra, data.is_active != null ? !!data.is_active : true, id, userId]
+         bank_account_id = $6, discount_pct = $7, also_expense = $8, is_extra = $9, is_active = $10,
+         updated_at = NOW(), updated_by = $12
+     WHERE id = $11 AND user_id = $12`,
+    [description, amount, Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, normalizeBankAccountId(data.bank_account_id), parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra, data.is_active != null ? !!data.is_active : true, id, userId]
   );
 }
 
@@ -533,7 +723,6 @@ async function applyRecurringEntries(userId) {
     if (entry.last_applied === currentMonth) continue;
     if (!recurringEntryAppliesToMonth(entry, currentMonth)) continue;
     try {
-      if (entry.type !== 'expense') continue;
       await applyRecurringEntryForCurrentMonth(userId, entry.id);
       applied.push(entry.id);
     } catch (_) {
@@ -553,6 +742,7 @@ async function getDailyTrackerPlannerItems(userId, month) {
     `SELECT
        t.id AS daily_tracker_id,
        t.name,
+       COALESCE(t.auto_add_to_expense, FALSE) AS auto_add_to_expense,
        ROUND(COALESCE(SUM(e.amount), 0)::numeric, 2) AS total_amount,
        MAX(CASE WHEN e.added_to_expense = TRUE THEN 1 ELSE 0 END) AS added_to_expense
      FROM daily_trackers t
@@ -568,6 +758,7 @@ async function getDailyTrackerPlannerItems(userId, month) {
   return result.rows.flatMap((row) => {
     const total = num(row.total_amount);
     if (total <= 0) return [];
+    if (row.auto_add_to_expense) return [];
     if (Number(row.added_to_expense || 0) === 1) return [];
     return [{
       daily_tracker_id: Number(row.daily_tracker_id),
@@ -617,4 +808,5 @@ module.exports = {
   deleteRecurringEntry,
   applyRecurringEntries,
   getDailyTrackerPlannerItems,
+  autoAddCompletedTrackerExpenses,
 };

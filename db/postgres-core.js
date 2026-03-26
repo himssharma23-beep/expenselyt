@@ -9,6 +9,59 @@ function bool(value) {
   return !!value;
 }
 
+function validationError(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
+function normalizeBankAccountId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeDateValue(value, label = 'Date') {
+  const str = String(value || '').trim();
+  if (!str) throw validationError(`${label} is required`);
+  const normalized = str.length >= 10 ? str.slice(0, 10) : str;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw validationError(`${label} must be in YYYY-MM-DD format`);
+  return normalized;
+}
+
+function normalizeText(value, label, maxLength = 160) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) throw validationError(`${label} is required`);
+  if (normalized.length > maxLength) throw validationError(`${label} must be ${maxLength} characters or fewer`);
+  return normalized;
+}
+
+function normalizeAmount(value, label = 'Amount') {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) throw validationError(`${label} must be greater than 0`);
+  return Math.round(amount * 100) / 100;
+}
+
+function validateFriendName(name) {
+  const value = String(name || '').trim();
+  if (!value) throw validationError('Friend name is required');
+  if (value.length > 80) throw validationError('Friend name must be 80 characters or fewer');
+  if (!/^[A-Za-z0-9 ]+$/.test(value)) throw validationError('Friend name can contain only letters, numbers, and spaces');
+  return value.replace(/\s+/g, ' ');
+}
+
+async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+  const normalizedId = normalizeBankAccountId(bankAccountId);
+  const amount = Number(delta || 0);
+  if (!normalizedId || !amount) return;
+  const run = client || { query };
+  await run.query(
+    `UPDATE bank_accounts
+     SET balance = balance + $1, updated_at = NOW()
+     WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE`,
+    [amount, normalizedId, userId]
+  );
+}
+
 function yearGuardSql(alias = '') {
   const prefix = alias ? `${alias}.` : '';
   return `EXTRACT(YEAR FROM ${prefix}purchase_date)::int BETWEEN 2018 AND ${new Date().getFullYear() + 2}`;
@@ -36,49 +89,95 @@ async function getExpenses(userId, filters = {}) {
   const result = await query(
     `SELECT *
      FROM expenses
-     WHERE ${where.join(' AND ')}
+     WHERE ${where.join(' AND ')} AND deleted_at IS NULL
      ORDER BY purchase_date DESC, id DESC`,
     params
   );
   return result.rows.map((row) => ({ ...row, amount: num(row.amount) }));
 }
 
-async function addExpense(userId, data) {
+async function getExpenseById(userId, id) {
   const result = await query(
-    `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id`,
-    [userId, data.item_name, data.amount, data.purchase_date, !!data.is_extra]
+    `SELECT *
+     FROM expenses
+     WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+     LIMIT 1`,
+    [id, userId]
   );
-  return Number(result.rows[0].id);
+  const row = result.rows[0];
+  return row ? { ...row, amount: num(row.amount) } : null;
+}
+
+async function addExpense(userId, data) {
+  return withTransaction(async (client) => {
+    const itemName = normalizeText(data.item_name, 'Expense name', 160);
+    const amount = normalizeAmount(data.amount);
+    const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
+    const bankAccountId = normalizeBankAccountId(data.bank_account_id);
+    const result = await client.query(
+      `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [userId, itemName, amount, purchaseDate, !!data.is_extra, bankAccountId]
+    );
+    if (bankAccountId) {
+      await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client);
+    }
+    return Number(result.rows[0].id);
+  });
 }
 
 async function updateExpense(userId, id, data) {
-  await query(
-    `UPDATE expenses
-     SET item_name = $1,
-         amount = $2,
-         purchase_date = $3,
-         is_extra = $4,
-         updated_at = NOW()
-     WHERE id = $5 AND user_id = $6`,
-    [data.item_name, data.amount, data.purchase_date, !!data.is_extra, id, userId]
-  );
+  await withTransaction(async (client) => {
+    const current = await getExpenseById(userId, id);
+    if (!current) throw validationError('Expense not found');
+    const itemName = normalizeText(data.item_name, 'Expense name', 160);
+    const nextAmount = normalizeAmount(data.amount);
+    const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
+    const nextBankAccountId = normalizeBankAccountId(data.bank_account_id);
+    const prevBankAccountId = normalizeBankAccountId(current.bank_account_id);
+    const prevAmount = Math.abs(num(current.amount));
+    if (prevBankAccountId) await adjustBankBalance(userId, prevBankAccountId, prevAmount, client);
+    if (nextBankAccountId) await adjustBankBalance(userId, nextBankAccountId, -nextAmount, client);
+    await client.query(
+      `UPDATE expenses
+       SET item_name = $1,
+           amount = $2,
+           purchase_date = $3,
+           is_extra = $4,
+           bank_account_id = $5,
+           updated_at = NOW()
+       WHERE id = $6 AND user_id = $7`,
+      [itemName, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
+    );
+  });
 }
 
 async function deleteExpense(userId, id) {
-  await query('DELETE FROM expenses WHERE id = $1 AND user_id = $2', [id, userId]);
+  await withTransaction(async (client) => {
+    const current = await getExpenseById(userId, id);
+    if (!current) return;
+    if (normalizeBankAccountId(current.bank_account_id)) {
+      await adjustBankBalance(userId, current.bank_account_id, Math.abs(num(current.amount)), client);
+    }
+    await client.query(
+      `UPDATE expenses
+       SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW(), updated_by = $1
+       WHERE id = $2 AND user_id = $1`,
+      [userId, id]
+    );
+  });
 }
 
 async function bulkAddExpenses(userId, rows) {
   return withTransaction(async (client) => {
     let count = 0;
     for (const row of rows) {
-      if (row.item_name && row.amount > 0) {
+     if (row.item_name && row.amount > 0) {
         await client.query(
-          `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [userId, row.item_name, row.amount, row.purchase_date, !!row.is_extra]
+          `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [userId, row.item_name, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
         );
         count++;
       }
@@ -94,7 +193,7 @@ async function getFriends(userId) {
        COALESCE(SUM(lt.paid - lt.received), 0) AS balance
      FROM friends f
      LEFT JOIN loan_transactions lt ON lt.friend_id = f.id
-     WHERE f.user_id = $1
+     WHERE f.user_id = $1 AND f.deleted_at IS NULL
      GROUP BY f.id
      ORDER BY f.name`,
     [userId]
@@ -103,31 +202,35 @@ async function getFriends(userId) {
 }
 
 async function addFriend(userId, name) {
+  const safeName = validateFriendName(name);
   const result = await query(
     `INSERT INTO friends (user_id, name)
      VALUES ($1, $2)
      RETURNING id`,
-    [userId, String(name).trim()]
+    [userId, safeName]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateFriend(userId, id, name) {
-  await query('UPDATE friends SET name = $1 WHERE id = $2 AND user_id = $3', [String(name).trim(), id, userId]);
+  const safeName = validateFriendName(name);
+  await query('UPDATE friends SET name = $1, updated_at = NOW(), updated_by = $2 WHERE id = $3 AND user_id = $2 AND deleted_at IS NULL', [safeName, userId, id]);
 }
 
 async function deleteFriend(userId, id) {
-  await withTransaction(async (client) => {
-    await client.query('DELETE FROM loan_transactions WHERE friend_id = $1 AND user_id = $2', [id, userId]);
-    await client.query('DELETE FROM friends WHERE id = $1 AND user_id = $2', [id, userId]);
-  });
+  await query(
+    `UPDATE friends
+     SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW(), updated_by = $1, is_active = FALSE
+     WHERE id = $2 AND user_id = $1`,
+    [userId, id]
+  );
 }
 
 async function getLoanTransactions(userId, friendId) {
   const result = await query(
     `SELECT *
      FROM loan_transactions
-     WHERE user_id = $1 AND friend_id = $2
+     WHERE user_id = $1 AND friend_id = $2 AND deleted_at IS NULL
      ORDER BY txn_date DESC, id DESC`,
     [userId, friendId]
   );
@@ -135,26 +238,42 @@ async function getLoanTransactions(userId, friendId) {
 }
 
 async function addLoanTransaction(userId, data) {
+  const details = normalizeText(data.details, 'Transaction details', 240);
+  const txnDate = normalizeDateValue(data.txn_date, 'Transaction date');
+  const paid = Math.max(0, num(data.paid));
+  const received = Math.max(0, num(data.received));
+  if (!Number(data.friend_id)) throw validationError('Friend is required');
+  if (paid <= 0 && received <= 0) throw validationError('Enter a paid or received amount');
   const result = await query(
     `INSERT INTO loan_transactions (user_id, friend_id, txn_date, details, paid, received)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
-    [userId, data.friend_id, data.txn_date, data.details, data.paid || 0, data.received || 0]
+    [userId, data.friend_id, txnDate, details, paid, received]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateLoanTransaction(userId, id, data) {
+  const details = normalizeText(data.details, 'Transaction details', 240);
+  const txnDate = normalizeDateValue(data.txn_date, 'Transaction date');
+  const paid = Math.max(0, num(data.paid));
+  const received = Math.max(0, num(data.received));
+  if (paid <= 0 && received <= 0) throw validationError('Enter a paid or received amount');
   await query(
     `UPDATE loan_transactions
-     SET txn_date = $1, details = $2, paid = $3, received = $4
+     SET txn_date = $1, details = $2, paid = $3, received = $4, updated_at = NOW(), updated_by = $6
      WHERE id = $5 AND user_id = $6`,
-    [data.txn_date, data.details, data.paid || 0, data.received || 0, id, userId]
+    [txnDate, details, paid, received, id, userId]
   );
 }
 
 async function deleteLoanTransaction(userId, id) {
-  await query('DELETE FROM loan_transactions WHERE id = $1 AND user_id = $2', [id, userId]);
+  await query(
+    `UPDATE loan_transactions
+     SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW(), updated_by = $1
+     WHERE id = $2 AND user_id = $1`,
+    [userId, id]
+  );
 }
 
 async function getDivideGroups(userId) {
@@ -673,6 +792,7 @@ async function getPublicShareData(token) {
 
 module.exports = {
   getExpenses,
+  getExpenseById,
   addExpense,
   updateExpense,
   deleteExpense,

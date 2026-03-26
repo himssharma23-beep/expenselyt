@@ -4,6 +4,55 @@ function num(value) {
   return Number(value || 0);
 }
 
+function validationError(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
+function normalizeText(value, label, maxLength = 120) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) throw validationError(`${label} is required`);
+  if (normalized.length > maxLength) throw validationError(`${label} must be ${maxLength} characters or fewer`);
+  return normalized;
+}
+
+function normalizeCardLast4(value) {
+  const last4 = String(value || '').trim();
+  if (!/^\d{4}$/.test(last4)) throw validationError('Last 4 digits must be exactly 4 numbers');
+  return last4;
+}
+
+function normalizeBankAccountId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+  const targetBankId = normalizeBankAccountId(bankAccountId);
+  const amount = Number(delta || 0);
+  if (!targetBankId || !amount) return;
+  const run = client || { query };
+  await run.query(
+    `UPDATE bank_accounts
+     SET balance = balance + $1, updated_at = NOW(), updated_by = $3
+     WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
+    [amount, targetBankId, userId]
+  );
+}
+
+async function getDefaultBankAccountId(userId, client = null) {
+  const run = client || { query };
+  const result = await run.query(
+    `SELECT id
+     FROM bank_accounts
+     WHERE user_id = $1 AND is_default = TRUE AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] ? Number(result.rows[0].id) : null;
+}
+
 function _localDate(dt) {
   const y = dt.getFullYear();
   const m = String(dt.getMonth() + 1).padStart(2, '0');
@@ -109,22 +158,28 @@ async function autoClosePastCcCycles(userId, cardId = null) {
 }
 
 async function addCreditCard(userId, card) {
+  const bankName = normalizeText(card.bank_name, 'Bank name', 80);
+  const cardName = normalizeText(card.card_name, 'Card name', 80);
+  const last4 = normalizeCardLast4(card.last4);
   const result = await query(
     `INSERT INTO credit_cards (user_id, bank_name, card_name, last4, expiry_month, expiry_year, bill_gen_day, due_days, default_discount_pct, credit_limit)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id`,
-    [userId, card.bank_name, card.card_name, card.last4, card.expiry_month || null, card.expiry_year || null, card.bill_gen_day || 1, card.due_days || 20, card.default_discount_pct || 0, card.credit_limit || 0]
+    [userId, bankName, cardName, last4, card.expiry_month || null, card.expiry_year || null, card.bill_gen_day || 1, card.due_days || 20, card.default_discount_pct || 0, card.credit_limit || 0]
   );
   return Number(result.rows[0].id);
 }
 
 async function updateCreditCard(userId, id, card) {
+  const bankName = normalizeText(card.bank_name, 'Bank name', 80);
+  const cardName = normalizeText(card.card_name, 'Card name', 80);
+  const last4 = normalizeCardLast4(card.last4);
   await query(
     `UPDATE credit_cards
      SET bank_name = $1, card_name = $2, last4 = $3, expiry_month = $4, expiry_year = $5,
          bill_gen_day = $6, due_days = $7, default_discount_pct = $8, credit_limit = $9
      WHERE id = $10 AND user_id = $11`,
-    [card.bank_name, card.card_name, card.last4, card.expiry_month || null, card.expiry_year || null, card.bill_gen_day || 1, card.due_days || 20, card.default_discount_pct || 0, card.credit_limit || 0, id, userId]
+    [bankName, cardName, last4, card.expiry_month || null, card.expiry_year || null, card.bill_gen_day || 1, card.due_days || 20, card.default_discount_pct || 0, card.credit_limit || 0, id, userId]
   );
 }
 
@@ -398,19 +453,27 @@ async function updateCcCycle(userId, cycleId, data) {
   await query(`UPDATE cc_cycles SET ${fields.join(', ')} WHERE id = $${params.length - 1} AND user_id = $${params.length}`, params);
 }
 
-async function closeCcCycle(userId, cycleId, paidAmount, paidDate) {
-  const cycleR = await query('SELECT * FROM cc_cycles WHERE id = $1 AND user_id = $2 LIMIT 1', [cycleId, userId]);
-  const cycle = cycleR.rows[0];
-  if (!cycle) throw new Error('Cycle not found');
-  const paid = parseFloat(paidAmount) || 0;
-  const status = paid >= num(cycle.net_payable) - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
-  await query(
-    `UPDATE cc_cycles
-     SET status = $1, paid_amount = $2, paid_date = $3, closed_at = NOW()
-     WHERE id = $4`,
-    [status, paid, paidDate || null, cycleId]
-  );
-  await getOrCreateCurrentCycle(cycle.card_id, userId);
+async function closeCcCycle(userId, cycleId, paidAmount, paidDate, bankAccountId = null) {
+  await withTransaction(async (client) => {
+    const cycleR = await client.query('SELECT * FROM cc_cycles WHERE id = $1 AND user_id = $2 LIMIT 1', [cycleId, userId]);
+    const cycle = cycleR.rows[0];
+    if (!cycle) throw new Error('Cycle not found');
+    const paid = parseFloat(paidAmount) || 0;
+    const previousPaid = num(cycle.paid_amount);
+    const status = paid >= num(cycle.net_payable) - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
+    await client.query(
+      `UPDATE cc_cycles
+       SET status = $1, paid_amount = $2, paid_date = $3, closed_at = NOW()
+       WHERE id = $4`,
+      [status, paid, paidDate || null, cycleId]
+    );
+    const diff = paid - previousPaid;
+    const targetBankId = normalizeBankAccountId(bankAccountId) || await getDefaultBankAccountId(userId, client);
+    if (diff !== 0 && targetBankId) {
+      await adjustBankBalance(userId, targetBankId, -diff, client);
+    }
+    await getOrCreateCurrentCycle(cycle.card_id, userId, client);
+  });
 }
 
 async function importHistoricalCycles(userId, cardId, rows) {

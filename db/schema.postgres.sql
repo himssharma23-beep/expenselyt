@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   amount NUMERIC(14,2) NOT NULL,
   purchase_date DATE NOT NULL,
   is_extra BOOLEAN NOT NULL DEFAULT FALSE,
+  bank_account_id BIGINT,
   source TEXT,
   source_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -289,6 +290,8 @@ CREATE TABLE IF NOT EXISTS daily_trackers (
   unit TEXT NOT NULL DEFAULT 'unit',
   price_per_unit NUMERIC(14,2) NOT NULL,
   default_qty NUMERIC(14,3) NOT NULL DEFAULT 1,
+  auto_add_to_expense BOOLEAN NOT NULL DEFAULT FALSE,
+  expense_bank_account_id BIGINT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -316,6 +319,7 @@ CREATE TABLE IF NOT EXISTS recurring_entries (
   interval_months INTEGER NOT NULL DEFAULT 1,
   start_month TEXT,
   card_id BIGINT,
+  bank_account_id BIGINT,
   discount_pct NUMERIC(8,4) NOT NULL DEFAULT 0,
   also_expense BOOLEAN NOT NULL DEFAULT FALSE,
   is_extra BOOLEAN NOT NULL DEFAULT FALSE,
@@ -450,3 +454,7 @@ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS auto_add_to_expense BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_bank_account_id BIGINT;

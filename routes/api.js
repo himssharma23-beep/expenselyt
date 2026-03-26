@@ -12,6 +12,26 @@ const pgFinanceDb = require('../db/postgres-finance');
 const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth } = require('../middleware/auth');
 
+function normalizeFriendName(name) {
+  const value = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!value) {
+    const err = new Error('Friend name is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (value.length > 80) {
+    const err = new Error('Friend name must be 80 characters or fewer');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!/^[A-Za-z0-9 ]+$/.test(value)) {
+    const err = new Error('Friend name can contain only letters, numbers, and spaces');
+    err.statusCode = 400;
+    throw err;
+  }
+  return value;
+}
+
 function getCoreDb() {
   return pgCoreDb;
 }
@@ -56,10 +76,20 @@ router.get('/expenses', async (req, res) => {
 router.post('/expenses', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, amount, purchase_date, is_extra } = req.body;
+    const { item_name, amount, purchase_date, is_extra, bank_account_id } = req.body;
     if (!item_name || !amount || !purchase_date) return res.status(400).json({ error: 'Missing fields' });
-    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, amount: parseFloat(amount), purchase_date, is_extra }));
+    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true, id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/expenses/:id', async (req, res) => {
+  try {
+    const expense = await Promise.resolve(getCoreDb().getExpenseById(req.session.userId, req.params.id));
+    if (!expense) return res.status(404).json({ error: 'Expense not found' });
+    res.json({ expense });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -68,8 +98,8 @@ router.post('/expenses', async (req, res) => {
 router.put('/expenses/:id', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, amount, purchase_date, is_extra } = req.body;
-    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, amount: parseFloat(amount), purchase_date, is_extra }));
+    const { item_name, amount, purchase_date, is_extra, bank_account_id } = req.body;
+    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -345,23 +375,19 @@ router.get('/friends', async (req, res) => {
 router.post('/friends', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: 'Name required' });
-    const id = await Promise.resolve(coreDb.addFriend(req.session.userId, name));
+    const id = await Promise.resolve(coreDb.addFriend(req.session.userId, normalizeFriendName(req.body.name)));
     res.json({ success: true, id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 router.put('/friends/:id', async (req, res) => {
   try {
-    const { name } = req.body;
-    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
-    await Promise.resolve(getCoreDb().updateFriend(req.session.userId, req.params.id, name));
+    await Promise.resolve(getCoreDb().updateFriend(req.session.userId, req.params.id, normalizeFriendName(req.body.name)));
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -1617,7 +1643,7 @@ router.delete('/cc/cycles/:id', (req, res) => {
 });
 router.post('/cc/cycles/:id/close', (req, res) => {
   try {
-    Promise.resolve(getBillingDb().closeCcCycle(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date)).then(() => {
+    Promise.resolve(getBillingDb().closeCcCycle(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date, req.body.bank_account_id)).then(() => {
       res.json({ success: true });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1705,9 +1731,16 @@ router.get('/trackers', (req, res) => {
 
 router.post('/trackers', (req, res) => {
   try {
-    const { name, unit, price_per_unit, default_qty } = req.body;
+    const { name, unit, price_per_unit, default_qty, auto_add_to_expense, expense_bank_account_id } = req.body;
     if (!name || !price_per_unit) return res.status(400).json({ error: 'Missing required fields' });
-    Promise.resolve(getOpsDb().addDailyTracker(req.session.userId, { name, unit, price_per_unit, default_qty })).then((id) => {
+    Promise.resolve(getOpsDb().addDailyTracker(req.session.userId, {
+      name,
+      unit,
+      price_per_unit,
+      default_qty,
+      auto_add_to_expense,
+      expense_bank_account_id,
+    })).then((id) => {
       res.json({ success: true, id });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1764,8 +1797,8 @@ router.get('/trackers/:id/summary', (req, res) => {
 
 router.post('/trackers/:id/month-expense', (req, res) => {
   try {
-    const { year, month } = req.body;
-    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month)).then((amount) => {
+    const { year, month, bank_account_id } = req.body;
+    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id })).then((amount) => {
       res.json({ success: true, amount });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1787,6 +1820,7 @@ router.post('/recurring', (req, res) => {
       interval_months,
       start_month,
       card_id,
+      bank_account_id,
       discount_pct,
       also_expense,
       is_extra,
@@ -1800,6 +1834,7 @@ router.post('/recurring', (req, res) => {
       interval_months,
       start_month,
       card_id,
+      bank_account_id,
       discount_pct,
       also_expense,
       is_extra,

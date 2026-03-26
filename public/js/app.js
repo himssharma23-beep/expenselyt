@@ -1,6 +1,6 @@
-// ═══════════════════════════════════════════════════════════
-// EXPENSE MANAGER — Main Application Logic
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// EXPENSE MANAGER â€” Main Application Logic
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let currentTab = 'dashboard';
 let _userRole = 'user';
@@ -9,13 +9,34 @@ let _currentUserId = null;
 let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
 let expFilters = { year: new Date().getFullYear(), month: null, search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
+let _expenseCache = [];
 let friendSort = 'name';
 let selectedFriend = null;
 let divideItems = [];
 let divideSelected = new Set();
 let dividePaidBy = 'self';
 
-// ─── INIT ────────────────────────────────────────────────────
+function validateFriendNameInput(name) {
+  const value = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!value) return 'Friend name is required';
+  if (value.length > 80) return 'Friend name must be 80 characters or fewer';
+  if (!/^[A-Za-z0-9 ]+$/.test(value)) return 'Friend name can contain only letters, numbers, and spaces';
+  return '';
+}
+
+function normalizeInputDate(value) {
+  if (!value) return '';
+  const str = String(value);
+  return str.length >= 10 ? str.slice(0, 10) : str;
+}
+
+function stopEvent(event) {
+  if (!event) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+// â”€â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 window.addEventListener('DOMContentLoaded', async () => {
   const [user, access] = await Promise.all([api('/api/auth/me'), api('/api/auth/me/access')]);
   if (user && user.display_name) {
@@ -258,9 +279,9 @@ async function logout() {
   window.location.href = '/login';
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EXPENSES
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadExpenses() {
   const f = expFilters;
   let qs = f.year !== null ? `?year=${f.year}` : '?year=all';
@@ -272,6 +293,7 @@ async function loadExpenses() {
   if (!data) return;
 
   let list = data.expenses || [];
+  _expenseCache = list.slice();
   list.sort((a, b) => {
     let va, vb;
     if (f.sortField === 'date') { va = a.purchase_date; vb = b.purchase_date; }
@@ -293,7 +315,7 @@ async function loadExpenses() {
   const pageStart = (f.page - 1) * f.pageSize;
   const pageList = list.slice(pageStart, pageStart + f.pageSize);
 
-  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' â†‘' : ' â†“') : '';
 
   // Save search focus state before re-render
   const searchFocused = document.activeElement?.id === 'expSearch';
@@ -364,17 +386,17 @@ async function loadExpenses() {
 
       ${totalPages > 1 ? `
       <div class="pagination">
-        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">← Prev</button>
+        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">â† Prev</button>
         <div class="pg-info">
-          <span class="pg-range">${pageStart+1}–${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
+          <span class="pg-range">${pageStart+1}â€“${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
           <div class="pg-pages">
-            ${paginationPages(f.page, totalPages).map(p => p === '…'
-              ? `<span class="pg-ellipsis">…</span>`
+            ${paginationPages(f.page, totalPages).map(p => p === 'â€¦'
+              ? `<span class="pg-ellipsis">â€¦</span>`
               : `<button class="pg-num ${p===f.page?'active':''}" onclick="expFilters.page=${p};loadExpenses()">${p}</button>`
             ).join('')}
           </div>
         </div>
-        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next →</button>
+        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next â†’</button>
       </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
     </div>`;
 
@@ -389,11 +411,11 @@ function paginationPages(current, total) {
   if (total <= 7) return Array.from({length: total}, (_, i) => i + 1);
   const pages = [];
   if (current <= 4) {
-    pages.push(1, 2, 3, 4, 5, '…', total);
+    pages.push(1, 2, 3, 4, 5, 'â€¦', total);
   } else if (current >= total - 3) {
-    pages.push(1, '…', total-4, total-3, total-2, total-1, total);
+    pages.push(1, 'â€¦', total-4, total-3, total-2, total-1, total);
   } else {
-    pages.push(1, '…', current-1, current, current+1, '…', total);
+    pages.push(1, 'â€¦', current-1, current, current+1, 'â€¦', total);
   }
   return pages;
 }
@@ -406,37 +428,47 @@ function toggleExpSort(field) {
 }
 
 async function showExpenseForm(id) {
-  let e = { item_name: '', amount: '', purchase_date: todayStr(), is_extra: false };
+  let e = { item_name: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
-    const data = await api('/api/expenses?year=0'); // get all to find
-    const all = await api(`/api/expenses?year=${new Date().getFullYear()}`);
-    // search across recent
-    const found = [...(data?.expenses||[]), ...(all?.expenses||[])].find(x => x.id === id);
-    if (found) e = found;
+    const cached = _expenseCache.find(x => x.id === id);
+    if (cached) e = cached;
+    else {
+      const detail = await api(`/api/expenses/${id}`);
+      if (detail?.expense) e = detail.expense;
+    }
   }
   await getCcCardsForForm();
+  if (!_bankAccounts.length) {
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+  }
+  const bankOpts = `<option value="">-- Do not deduct from bank --</option>${_bankAccounts.map(a => `<option value="${a.id}" ${e.bank_account_id == a.id ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`).join('')}`;
   openModal(id ? 'Edit Expense' : 'Add Expense', `
     <div class="fg">
-      <label class="fl">Date<input class="fi" type="date" id="eDate" value="${e.purchase_date}"></label>
-      <label class="fl">Item Name<input class="fi" id="eName" value="${e.item_name}" placeholder="e.g. Groceries..." autofocus></label>
-      <label class="fl">Amount (₹)<input class="fi" type="number" step="0.01" id="eAmount" value="${e.amount}" placeholder="0.00" oninput="ccLinkPreview()"></label>
+      <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
+      <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
+      <label class="fl">Amount (â‚¹)<input class="fi" type="number" step="0.01" id="eAmount" value="${e.amount}" placeholder="0.00" oninput="ccLinkPreview()"></label>
       <label class="fc"><input type="checkbox" id="eExtra" ${e.is_extra?'checked':''}><span>Is Extra (non-essential)</span></label>
+      <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
     </div>
     ${!id ? ccFormSection() : ''}
     <div class="fa">
       <button class="btn btn-p" onclick="saveExpense(${id||'null'})">${id?'Update':'Save'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
+  bindModalSubmit(() => saveExpense(id || null));
 }
 
 async function saveExpense(id) {
+  const bankVal = document.getElementById('eBank')?.value;
   const body = {
-    item_name: document.getElementById('eName').value,
+    item_name: document.getElementById('eName').value.trim(),
     amount: document.getElementById('eAmount').value,
     purchase_date: document.getElementById('eDate').value,
     is_extra: document.getElementById('eExtra').checked,
+    bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
   };
-  if (!body.item_name || !body.amount) { toast('Please fill all fields', 'warning'); return; }
+  if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
   let r;
   if (id) { await api(`/api/expenses/${id}`, { method: 'PUT', body }); }
   else {
@@ -514,7 +546,7 @@ function showExcelImport() {
   openModal('Import from Excel', `
     <div style="background:var(--blue-l);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--t2)">
       <b style="color:var(--t1)">Expected columns:</b>
-      <span style="margin-left:10px"><b>B</b> Date &nbsp;·&nbsp; <b>D</b> Description &nbsp;·&nbsp; <b>E</b> Debit &nbsp;·&nbsp; <b>F</b> Extras (Y/N)</span>
+      <span style="margin-left:10px"><b>B</b> Date &nbsp;Â·&nbsp; <b>D</b> Description &nbsp;Â·&nbsp; <b>E</b> Debit &nbsp;Â·&nbsp; <b>F</b> Extras (Y/N)</span>
     </div>
     <div class="fg" style="margin-bottom:14px">
       <label class="fl full">File (.xlsx / .xls / .ods)
@@ -524,7 +556,7 @@ function showExcelImport() {
         <input type="password" id="xlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets →</button>
+        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets â†’</button>
       </label>
     </div>
     <div id="xlsxSheetArea"></div>
@@ -535,7 +567,7 @@ async function loadExcelSheets() {
   const file = document.getElementById('xlsxFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('xlsxPass').value;
-  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file…</div>`;
+  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('xlsxPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -568,7 +600,7 @@ async function loadExcelSheets() {
       </div>
       ${checkboxes}
     </div>
-    <button class="btn btn-s" onclick="previewExcel()">Preview →</button>`;
+    <button class="btn btn-s" onclick="previewExcel()">Preview â†’</button>`;
   if (data.sheets.length === 1) previewExcel();
 }
 
@@ -582,7 +614,7 @@ async function previewExcel() {
   const password = document.getElementById('xlsxPass')?.value || '';
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview…</div>`;
+  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading previewâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -590,7 +622,7 @@ async function previewExcel() {
   const res = await fetch('/api/expenses/import-excel/preview', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.error) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`; return; }
-  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped — zero amount or missing data).</p>`; return; }
+  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped â€” zero amount or missing data).</p>`; return; }
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('xlsxPreview').innerHTML = `
     <p style="font-size:13px;margin-bottom:10px">Found <b>${data.count}</b> valid rows from ${sheetLabel} &nbsp;<span style="color:var(--t3)">(${data.skipped} skipped)</span></p>
@@ -626,9 +658,9 @@ async function doExcelImport() {
   else toast('Import failed: ' + (data.error || 'Unknown error'), 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // FRIENDS & LOANS
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadFriends() {
   const data = await api('/api/friends');
   if (!data) return;
@@ -649,19 +681,19 @@ async function loadFriends() {
       <div class="filter-row">
         <button class="btn btn-p btn-sm" onclick="showAddFriend()">+ Add Friend</button>
         <button class="btn btn-s btn-sm" onclick="showFriendExcelImport()">Import Excel</button>
-        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">🔗 Share</button>
-        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">↓ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">ðŸ”— Share</button>
+        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">â†“ PDF</button>
         <div class="chip-group">
           ${['name','high','low'].map(s=>`<button class="chip ${friendSort===s?'active':''}" onclick="friendSort='${s}';loadFriends()">${s==='name'?'A-Z':s==='high'?'Highest':'Lowest'}</button>`).join('')}
         </div>
       </div>
       <div>${list.length===0?'<div class="empty-td">No friends yet. Add one to start tracking loans.</div>':''}
         ${list.map(f=>`<div class="friend-card" onclick="selectedFriend=${f.id};loadFriendDetail()">
-          <div class="avatar">${f.name[0].toUpperCase()}</div>
-          <div class="friend-info"><div class="friend-name">${f.name}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div></div>
+          <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
+          <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div></div>
           <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
-          <button class="btn-d" style="color:var(--em)" onclick="event.stopPropagation();showEditFriend(${f.id},'${f.name.replace(/'/g,"\\'")}')"  >Edit</button>
-          <button class="btn-d" onclick="event.stopPropagation();deleteFriend(${f.id},'${f.name}')">✕</button>
+          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, ${JSON.stringify(f.name)})">Edit</button>
+          <button class="btn-d" onclick="event.stopPropagation();deleteFriend(, )">âœ•</button>
         </div>`).join('')}
       </div>
     </div>`;
@@ -674,8 +706,9 @@ function showAddFriend() {
 }
 
 async function addFriend() {
-  const name = document.getElementById('fName').value;
-  if (!name) return;
+  const name = document.getElementById('fName').value.trim().replace(/\s+/g, ' ');
+  const validationError = validateFriendNameInput(name);
+  if (validationError) { toast(validationError, 'warning'); return; }
   await api('/api/friends', { method: 'POST', body: { name } });
   closeModal(); loadFriends();
 }
@@ -699,7 +732,8 @@ function showEditFriend(id, currentName) {
 
 async function renameFriend(id) {
   const name = document.getElementById('fEditName').value.trim();
-  if (!name) { toast('Enter a name', 'warning'); return; }
+  const validationError = validateFriendNameInput(name);
+  if (validationError) { toast(validationError, 'warning'); return; }
   await api(`/api/friends/${id}`, { method: 'PUT', body: { name } });
   closeModal(); loadFriends();
 }
@@ -718,7 +752,7 @@ function showFriendExcelImport() {
         <input type="password" id="fiPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets →</button>
+        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets â†’</button>
       </label>
     </div>
     <div id="fiSheetArea"></div>
@@ -730,7 +764,7 @@ function showFriendExcelImport() {
         <label class="fl">Paid (you gave) *<select id="fiMapPaid" class="fi"></select></label>
         <label class="fl">Received (you got) *<select id="fiMapReceived" class="fi"></select></label>
       </div>
-      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview →</button>
+      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview â†’</button>
     </div>
     <div id="fiPreview"></div>`);
 }
@@ -741,7 +775,7 @@ async function loadFriendImportSheets() {
   const file = document.getElementById('fiFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('fiPass').value;
-  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file…</div>`;
+  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('fiMapping').style.display = 'none';
   document.getElementById('fiPreview').innerHTML = '';
   const fd = new FormData();
@@ -814,7 +848,7 @@ async function previewFriendImport() {
     paid:     parseInt(document.getElementById('fiMapPaid').value),
     received: parseInt(document.getElementById('fiMapReceived').value),
   };
-  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading preview…</div>`;
+  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading previewâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheet', sheets[0]);
@@ -827,7 +861,7 @@ async function previewFriendImport() {
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('fiPreview').innerHTML = `
     <div style="margin-top:14px">
-      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> — <b>${data.count}</b> rows
+      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> â€” <b>${data.count}</b> rows
         <span style="color:var(--t3)">(${data.skipped} skipped)</span>
         ${sheets.length > 1 ? `&nbsp;+&nbsp;<span style="color:var(--em);font-weight:600">${sheets.length - 1} more sheet${sheets.length>2?'s':''}</span>` : ''}
       </p>
@@ -867,8 +901,8 @@ async function doFriendExcelImport() {
   const res = await fetch('/api/friends/import-excel', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.success) {
-    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' · ');
-    toast(`Imported ${data.totalImported} transactions across ${data.results.length} friend(s) — ${summary}`, 'success', 5000);
+    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' Â· ');
+    toast(`Imported ${data.totalImported} transactions across ${data.results.length} friend(s) â€” ${summary}`, 'success', 5000);
     closeModal();
     loadFriends();
   } else {
@@ -892,7 +926,7 @@ async function loadFriendDetail(keepFilters) {
     loanPage = 1;
   }
   const fData = await api('/api/friends');
-  const f = (fData?.friends||[]).find(x => x.id === selectedFriend);
+  const f = (fData?.friends||[]).find(x => x.id == selectedFriend);
   if (!f) { selectedFriend = null; loadFriends(); return; }
   _loanFriend = f;
 
@@ -948,14 +982,14 @@ function renderFriendDetail() {
 
   function th(col, label, align) {
     const active = loanSort.col === col;
-    const arrow = active ? (loanSort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+    const arrow = active ? (loanSort.dir === 'asc' ? ' â†‘' : ' â†“') : '';
     const style = align ? `style="text-align:${align};cursor:pointer"` : 'style="cursor:pointer"';
     return `<th ${style} onclick="loanToggleSort('${col}')">${label}${arrow}</th>`;
   }
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <button class="back-btn" onclick="selectedFriend=null;loadFriends()">← Back to Friends</button>
+      <button class="back-btn" onclick="selectedFriend=null;loadFriends()">â† Back to Friends</button>
       <div class="summary-card" style="text-align:center">
         <div style="font-size:22px;font-weight:700">${f.name}</div>
         <div class="summary-amount" style="color:${balColorLight(balance)}">${balance < 0 ? '- ' : balance > 0 ? '+ ' : ''}${fmtCur(Math.abs(balance))}</div>
@@ -970,15 +1004,15 @@ function renderFriendDetail() {
 
       <div class="filter-row" style="margin-bottom:16px">
         <button class="btn btn-p btn-sm" onclick="showLoanForm(${f.id})">+ Add Transaction</button>
-        <button class="btn btn-s btn-sm" onclick="downloadFriendDetailPdf()">↓ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="downloadFriendDetailPdf()">â†“ PDF</button>
         <select class="fi" style="width:110px;padding:6px 8px;font-size:13px" onchange="loanFilters.year=this.value;loanFilters.month='';loanFilters.date='';loanPage=1;renderFriendDetail()">${yearOpts}</select>
         <select class="fi" style="width:110px;padding:6px 8px;font-size:13px" onchange="loanFilters.month=this.value;loanFilters.date='';loanPage=1;renderFriendDetail()">${monthOpts}</select>
         <input class="fi" id="loanDate" type="date" value="${loanFilters.date}" style="width:140px;padding:6px 8px;font-size:13px" onchange="loanFilters.date=this.value;loanFilters.year='';loanFilters.month='';loanPage=1;renderFriendDetail()" placeholder="Exact date">
-        <input class="fi" id="loanSearch" type="text" value="${loanFilters.search}" style="width:160px;padding:6px 8px;font-size:13px" oninput="loanFilters.search=this.value;loanPage=1;renderFriendDetail()" placeholder="Search details…">
+        <input class="fi" id="loanSearch" type="text" value="${loanFilters.search}" style="width:160px;padding:6px 8px;font-size:13px" oninput="loanFilters.search=this.value;loanPage=1;renderFriendDetail()" placeholder="Search detailsâ€¦">
         <div class="chip-group">
           ${['','paid','received'].map(t=>`<button class="chip ${loanFilters.type===t?'active':''}" onclick="loanFilters.type='${t}';loanPage=1;renderFriendDetail()">${t===''?'All':t==='paid'?'Paid':'Received'}</button>`).join('')}
         </div>
-        ${isFiltered ? `<button class="chip" onclick="loanFilters={year:'',month:'',date:'',search:'',type:''};loanPage=1;renderFriendDetail()">✕ Clear</button>` : ''}
+        ${isFiltered ? `<button class="chip" onclick="loanFilters={year:'',month:'',date:'',search:'',type:''};loanPage=1;renderFriendDetail()">âœ• Clear</button>` : ''}
       </div>
 
       ${isFiltered ? `<div style="font-size:12px;color:var(--t3);margin-bottom:8px">Showing ${txns.length} of ${_loanAllTxns.length} transactions &nbsp;|&nbsp; Paid: <span style="color:var(--red)">${fmtCur(fPaid)}</span> &nbsp; Received: <span style="color:var(--green)">${fmtCur(fReceived)}</span></div>` : ''}
@@ -995,12 +1029,12 @@ function renderFriendDetail() {
         </tbody>
       </table></div>
       ${totalPages > 1 ? `<div class="pagination">
-        <button class="pg-btn" ${loanPage<=1?'disabled':''} onclick="loanGoPage(${loanPage-1})">← Prev</button>
+        <button class="pg-btn" ${loanPage<=1?'disabled':''} onclick="loanGoPage(${loanPage-1})">â† Prev</button>
         <div class="pg-info">
-          <span class="pg-range">${pageStart+1}–${Math.min(pageStart+loanPageSize,txns.length)} of ${txns.length}</span>
-          <div class="pg-pages">${paginationPages(loanPage,totalPages).map(p=>p==='…'?'<span class="pg-ellipsis">…</span>':`<button class="pg-num ${p===loanPage?'active':''}" onclick="loanGoPage(${p})">${p}</button>`).join('')}</div>
+          <span class="pg-range">${pageStart+1}â€“${Math.min(pageStart+loanPageSize,txns.length)} of ${txns.length}</span>
+          <div class="pg-pages">${paginationPages(loanPage,totalPages).map(p=>p==='â€¦'?'<span class="pg-ellipsis">â€¦</span>':`<button class="pg-num ${p===loanPage?'active':''}" onclick="loanGoPage(${p})">${p}</button>`).join('')}</div>
         </div>
-        <button class="pg-btn" ${loanPage>=totalPages?'disabled':''} onclick="loanGoPage(${loanPage+1})">Next →</button>
+        <button class="pg-btn" ${loanPage>=totalPages?'disabled':''} onclick="loanGoPage(${loanPage+1})">Next â†’</button>
       </div>` : ''}
     </div>`;
 
@@ -1064,21 +1098,21 @@ async function deleteLoan(id) {
   loadFriendDetail(true);
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DIVIDE EXPENSES
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _divFriends = [];       // loaded once, reused in render
 let _divEditIdx = null;     // index being edited, null = new
 let _divGroups = [];        // saved groups from DB
 let _divExpandedId = null;  // which group row is expanded
 let divideSplitMode = 'equal'; // 'equal'|'percent'|'fraction'|'amount'|'parts'
-let divideSplitValues = {};    // personKey → numeric value for non-equal modes
+let divideSplitValues = {};    // personKey â†’ numeric value for non-equal modes
 
 const SPLIT_MODES = [
   { key: 'equal',    label: 'Equal' },
   { key: 'percent',  label: '% Percent' },
   { key: 'fraction', label: 'Fraction' },
-  { key: 'amount',   label: 'Direct ₹' },
+  { key: 'amount',   label: 'Direct â‚¹' },
   { key: 'parts',    label: 'Parts/Ratio' },
 ];
 
@@ -1161,7 +1195,7 @@ async function renderDivide() {
   const friends = _divFriends;
   const editItem = _divEditIdx !== null ? divideItems[_divEditIdx] : null;
 
-  // ── Form ──────────────────────────────────────────────────
+  // â”€â”€ Form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = [
     `<button class="chip ${dividePaidBy==='self'?'active':''}" onclick="selectPaidBy(this,'self')">You</button>`,
     ...friends.map(f => `<button class="chip ${dividePaidBy==f.id?'active':''}" onclick="selectPaidBy(this,'${f.id}')">${f.name}</button>`)
@@ -1169,10 +1203,10 @@ async function renderDivide() {
 
   const friendChips = [
     `<button class="fr-chip ${divideSelected.has('self')?'sel':''}" onclick="toggleDivFriend('self')">
-      <span class="cbox ${divideSelected.has('self')?'chk':''}">${divideSelected.has('self')?'✓':''}</span>You
+      <span class="cbox ${divideSelected.has('self')?'chk':''}">${divideSelected.has('self')?'âœ“':''}</span>You
     </button>`,
     ...friends.map(f => `<button class="fr-chip ${divideSelected.has(f.id)?'sel':''}" onclick="toggleDivFriend(${f.id})">
-        <span class="cbox ${divideSelected.has(f.id)?'chk':''}">${divideSelected.has(f.id)?'✓':''}</span>${f.name}
+        <span class="cbox ${divideSelected.has(f.id)?'chk':''}">${divideSelected.has(f.id)?'âœ“':''}</span>${f.name}
       </button>`)
   ].join('');
 
@@ -1180,13 +1214,13 @@ async function renderDivide() {
     `<button class="chip split-mode-chip ${divideSplitMode===m.key?'active':''}" data-mode="${m.key}" onclick="selectSplitMode('${m.key}')">${m.label}</button>`
   ).join('');
 
-  // ── Items table ───────────────────────────────────────────
+  // â”€â”€ Items table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let itemsTable = '';
   if (divideItems.length > 0) {
     const rows = divideItems.map((item, i) => {
       const editing = _divEditIdx === i;
       const modeLabel = item.splitMode && item.splitMode !== 'equal' ? ` <span style="font-size:10px;color:var(--t3)">(${item.splitMode})</span>` : '';
-      const ccBadge = item.ccInfo ? ` <span style="font-size:10px;background:var(--blue-l);color:var(--blue);border-radius:99px;padding:1px 7px;font-weight:600">💳 ${item.ccInfo.cardName}</span>` : '';
+      const ccBadge = item.ccInfo ? ` <span style="font-size:10px;background:var(--blue-l);color:var(--blue);border-radius:99px;padding:1px 7px;font-weight:600">ðŸ’³ ${item.ccInfo.cardName}</span>` : '';
       return `<tr style="${editing ? 'background:var(--blue-l)' : ''}">
         <td>${fmtDate(item.date)}</td>
         <td>${item.details}${ccBadge}</td>
@@ -1214,11 +1248,11 @@ async function renderDivide() {
       </div>`;
   }
 
-  // ── Summary table ─────────────────────────────────────────
+  // â”€â”€ Summary table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let summaryTable = '';
   if (divideItems.length > 0) {
     // Collect all participants (each unique friendId that appears in any item)
-    const peopleMap = {}; // friendId/key → { name, totalShare, totalGave }
+    const peopleMap = {}; // friendId/key â†’ { name, totalShare, totalGave }
 
     divideItems.forEach(item => {
       // Use personShares for accurate per-person amounts (supports all split modes)
@@ -1278,7 +1312,7 @@ async function renderDivide() {
         <div style="margin-top:20px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
             <div style="font-size:14px;font-weight:700">Settlement Summary</div>
-            <button class="btn btn-p btn-sm" onclick="showSaveDivideModal()">Save to Database →</button>
+            <button class="btn btn-p btn-sm" onclick="showSaveDivideModal()">Save to Database â†’</button>
           </div>
           <div class="table-wrap"><table>
             <thead><tr><th>Name</th><th class="td-m">Total Had to Pay</th><th class="td-m">They Gave</th><th class="td-m">Pending</th></tr></thead>
@@ -1295,7 +1329,7 @@ async function renderDivide() {
         <div class="card-title">${_divEditIdx !== null ? 'Edit Item' : 'Add Item'}</div>
         <div class="fg">
           <label class="fl">Date<input class="fi" type="date" id="dDate" value="${editItem?.date || todayStr()}"></label>
-          <label class="fl">Amount (₹)<input class="fi" type="number" step="0.01" id="dAmount" value="${editItem?.amount || ''}" placeholder="0.00" oninput="updateDivSplitInputs();divCcPreview()"></label>
+          <label class="fl">Amount (â‚¹)<input class="fi" type="number" step="0.01" id="dAmount" value="${editItem?.amount || ''}" placeholder="0.00" oninput="updateDivSplitInputs();divCcPreview()"></label>
           <label class="fl full">Details *<input class="fi" id="dDetails" value="${editItem?.details || ''}" placeholder="e.g. Dinner at restaurant..."></label>
         </div>
         <div style="margin-bottom:12px">
@@ -1397,7 +1431,7 @@ function _buildDivGroupRows() {
                 ${sess.items.length > 1 ? `
                   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
                     <div style="font-size:12px;font-weight:600;color:var(--t1)">${g.details}
-                      <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">Paid by ${g.paid_by} · ${fmtDate(g.divide_date)} · ${fmtCur(g.total_amount)}</span>
+                      <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">Paid by ${g.paid_by} Â· ${fmtDate(g.divide_date)} Â· ${fmtCur(g.total_amount)}</span>
                     </div>
                     <button class="btn-d" style="color:var(--red);font-size:11px" onclick="deleteDivGroup(${g.id})">Del</button>
                   </div>` : `
@@ -1419,8 +1453,8 @@ function _buildDivGroupRows() {
         <td style="color:var(--t2);font-size:13px">${isSingle ? sess.items[0].paid_by : [...new Set(sess.items.map(g=>g.paid_by))].join(', ')}</td>
         <td class="td-m" style="font-weight:600">${fmtCur(sessionTotal)}</td>
         <td style="text-align:right;white-space:nowrap">
-          <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? '▲' : '▼'}</span>
-          <button class="btn-d" style="color:var(--t2)" onclick="event.stopPropagation();downloadSplitSessionPdf('${sess.key}')">↓ PDF</button>
+          <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? 'â–²' : 'â–¼'}</span>
+          <button class="btn-d" style="color:var(--t2)" onclick="event.stopPropagation();downloadSplitSessionPdf('${sess.key}')">â†“ PDF</button>
           ${deleteBtn}
         </td>
       </tr>${expandDetail}`;
@@ -1468,7 +1502,7 @@ function renderDivHistory() {
         <div style="font-size:14px;font-weight:700">Saved Splits History
           <span class="div-hist-count" style="font-size:12px;font-weight:400;color:var(--t3);margin-left:8px">${sessions.length} session${sessions.length !== 1 ? 's' : ''}, ${_divGroups.length} item${_divGroups.length !== 1 ? 's' : ''}</span>
         </div>
-        <button class="btn btn-s btn-sm" onclick="downloadSplitHistoryPdf()">↓ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="downloadSplitHistoryPdf()">â†“ PDF</button>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1506,7 +1540,7 @@ function toggleDivFriend(id) {
       const sel = divideSelected.has(chipId);
       btn.classList.toggle('sel', sel);
       const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? '✓' : ''; }
+      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? 'âœ“' : ''; }
     });
   }
   // Reset split values when people change
@@ -1526,11 +1560,11 @@ function updateDivSplitInputs() {
 
   if (divideSplitMode === 'equal') {
     const pp = Math.round((amt / people.length) * 100) / 100;
-    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> people · Per person: <b>${fmtCur(pp)}</b></div>`;
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> people Â· Per person: <b>${fmtCur(pp)}</b></div>`;
     return;
   }
 
-  const hints = { percent: '(%, total must be 100)', fraction: '(fraction, total must be 1.0)', amount: '(₹, total must match)', parts: '(ratio, proportional)' };
+  const hints = { percent: '(%, total must be 100)', fraction: '(fraction, total must be 1.0)', amount: '(â‚¹, total must match)', parts: '(ratio, proportional)' };
   const rows = people.map(p => {
     const val = divideSplitValues[p.key] !== undefined ? divideSplitValues[p.key] : '';
     return `<tr>
@@ -1541,7 +1575,7 @@ function updateDivSplitInputs() {
 
   const { valid, error } = computeShares(amt, divideSplitMode, people, divideSplitValues);
   const statusHtml = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 
   el.innerHTML = `
@@ -1555,7 +1589,7 @@ function updateDivSplitInputs() {
 
 function onSplitInput(input, pkey) {
   divideSplitValues[pkey] = parseFloat(input.value) || 0;
-  // Only update the status row — don't re-render inputs (would kill focus)
+  // Only update the status row â€” don't re-render inputs (would kill focus)
   const statusRow = document.getElementById('splitStatusRow');
   if (!statusRow) return;
   const amt = parseFloat(document.getElementById('dAmount')?.value || 0);
@@ -1575,7 +1609,7 @@ function onSplitInput(input, pkey) {
   }
 
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>${balanceHtml}`;
 }
 
@@ -1590,7 +1624,7 @@ function setRemaining(pkey, remaining) {
   const people = _selectedPeople();
   const { valid, error } = computeShares(amt, divideSplitMode, people, divideSplitValues);
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 }
 
@@ -1680,11 +1714,11 @@ function showSaveDivideModal() {
   const firstDate = divideItems[0]?.date || todayStr();
   const ccLinked = divideItems.filter(i => i.ccInfo).length;
   const ccNote = ccLinked > 0
-    ? `<div style="background:var(--blue-l);color:var(--blue);border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:12px">💳 ${ccLinked} item${ccLinked>1?'s':''} will be charged to credit card</div>`
+    ? `<div style="background:var(--blue-l);color:var(--blue);border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:12px">ðŸ’³ ${ccLinked} item${ccLinked>1?'s':''} will be charged to credit card</div>`
     : '';
-  openModal('Save Split — Enter Heading', `
+  openModal('Save Split â€” Enter Heading', `
     <div style="font-size:13px;color:var(--t2);margin-bottom:14px">
-      This heading will be used for all saved records — your expense entry and each friend's transaction.
+      This heading will be used for all saved records â€” your expense entry and each friend's transaction.
     </div>
     <div class="fg">
       <label class="fl full">Heading / Description *
@@ -1715,7 +1749,7 @@ async function doSaveDivide() {
 
   const friends = _divFriends;
 
-  // ── 1. Recompute summary (peopleMap) ────────────────────
+  // â”€â”€ 1. Recompute summary (peopleMap) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const peopleMap = {};
   divideItems.forEach(item => {
     if (item.personShares && item.personShares.length > 0) {
@@ -1746,7 +1780,7 @@ async function doSaveDivide() {
     }
   });
 
-  // ── 2. Save divide groups (split records) ───────────────
+  // â”€â”€ 2. Save divide groups (split records) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const sessionId = String(Date.now());
   for (const item of divideItems) {
     const splits = item.personShares
@@ -1773,7 +1807,7 @@ async function doSaveDivide() {
     }
   }
 
-  // ── 3. Save my expense entry ────────────────────────────
+  // â”€â”€ 3. Save my expense entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const isExtra = document.getElementById('divTypeExtra')?.classList.contains('active') || false;
   const selfEntry = peopleMap['self'];
   if (selfEntry && selfEntry.totalShare > 0) {
@@ -1786,7 +1820,7 @@ async function doSaveDivide() {
     void expR; // CC transactions for split items were already saved per-item above
   }
 
-  // ── 4. Save friend loan transactions ────────────────────
+  // â”€â”€ 4. Save friend loan transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   for (const [fid, p] of Object.entries(peopleMap)) {
     if (fid === 'self') continue;
     await api('/api/loans', { method: 'POST', body: {
@@ -1809,9 +1843,9 @@ async function doSaveDivide() {
   toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded.`, 'success', 4500);
 }
 
-// ═══════════════════════════════════════════════════════════
-// REPORTS — Year / Month / Expense drill-down
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// REPORTS â€” Year / Month / Expense drill-down
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _reportChart = null;
 let reportDrillYear = null;
 let reportDrillMonth = null;
@@ -1838,7 +1872,7 @@ function rptToggleSort(sortObj, field) {
   else { sortObj.field = field; sortObj.dir = field === 'year' || field === 'month' ? 'desc' : 'desc'; }
 }
 function rptArrow(sortObj, field) {
-  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' ↑' : ' ↓') : '';
+  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' â†‘' : ' â†“') : '';
 }
 
 async function loadReports() {
@@ -1866,7 +1900,7 @@ async function renderReportYears() {
           <h2 class="dash-title">Reports</h2>
           <div class="dash-subtitle">Year-wise spending overview</div>
         </div>
-        <button class="btn btn-s btn-sm" onclick="printReport('years')">⎙ Print / PDF</button>
+        <button class="btn btn-s btn-sm" onclick="printReport('years')">âŽ™ Print / PDF</button>
       </div>
 
       <div class="dash-box" style="margin-bottom:16px">
@@ -1897,7 +1931,7 @@ async function renderReportYears() {
                 <td class="td-m" style="color:var(--em)">${fmtCur(r.fair)}</td>
                 <td class="td-m" style="color:var(--amber)">${fmtCur(r.extra)}</td>
                 <td style="text-align:center"><span class="badge b-fair">${r.count}</span></td>
-                <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToMonths(${r.year})">View →</button></td>
+                <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToMonths(${r.year})">View â†’</button></td>
               </tr>`).join('')}
             </tbody>
             ${rows.length > 0 ? `<tfoot><tr>
@@ -1958,18 +1992,18 @@ async function drillToMonths(year) {
     <div class="tab-content">
       <div class="rpt-header">
         <div>
-          <h2 class="dash-title">Reports — ${year}</h2>
+          <h2 class="dash-title">Reports â€” ${year}</h2>
           <div class="dash-subtitle rpt-breadcrumb">
             <span class="rpt-bc-link" onclick="loadReports()">All Years</span>
-            <span class="rpt-bc-sep">›</span>
+            <span class="rpt-bc-sep">â€º</span>
             <span>${year}</span>
           </div>
         </div>
-        <button class="btn btn-s btn-sm" onclick="printReport('months')">⎙ Print / PDF</button>
+        <button class="btn btn-s btn-sm" onclick="printReport('months')">âŽ™ Print / PDF</button>
       </div>
 
       <div class="dash-box" style="margin-bottom:16px">
-        <div class="dash-box-title">Monthly Spending — ${year}</div>
+        <div class="dash-box-title">Monthly Spending â€” ${year}</div>
         <canvas id="rptChart" height="80"></canvas>
       </div>
 
@@ -1997,7 +2031,7 @@ async function drillToMonths(year) {
                   <td class="td-m" style="color:var(--em)">${fmtCur(r.fair)}</td>
                   <td class="td-m" style="color:var(--amber)">${fmtCur(r.extra)}</td>
                   <td style="text-align:center"><span class="badge b-fair">${r.count}</span></td>
-                  <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToExpenses(${year},${r.month})">View →</button></td>
+                  <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="event.stopPropagation();drillToExpenses(${year},${r.month})">View â†’</button></td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -2084,16 +2118,16 @@ async function renderReportExpenses() {
     <div class="tab-content">
       <div class="rpt-header">
         <div>
-          <h2 class="dash-title">Reports — ${year} › ${mName}</h2>
+          <h2 class="dash-title">Reports â€” ${year} â€º ${mName}</h2>
           <div class="dash-subtitle rpt-breadcrumb">
             <span class="rpt-bc-link" onclick="loadReports()">All Years</span>
-            <span class="rpt-bc-sep">›</span>
+            <span class="rpt-bc-sep">â€º</span>
             <span class="rpt-bc-link" onclick="drillToMonths(${year})">${year}</span>
-            <span class="rpt-bc-sep">›</span>
+            <span class="rpt-bc-sep">â€º</span>
             <span>${mName}</span>
           </div>
         </div>
-        <button class="btn btn-s btn-sm" onclick="printReport('expenses')">⎙ Print / PDF</button>
+        <button class="btn btn-s btn-sm" onclick="printReport('expenses')">âŽ™ Print / PDF</button>
       </div>
 
       <div class="dash-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
@@ -2116,7 +2150,7 @@ async function renderReportExpenses() {
 
       <div class="dash-box">
         <div class="rpt-table-top">
-          <input id="rptSearch" class="search-input" placeholder="Search items…" value="${reportSearch}"
+          <input id="rptSearch" class="search-input" placeholder="Search itemsâ€¦" value="${reportSearch}"
             oninput="reportSearch=this.value;reportPage=1;renderReportExpenses()" style="max-width:220px">
         </div>
         <div class="table-wrap">
@@ -2140,17 +2174,17 @@ async function renderReportExpenses() {
         </div>
         ${totalPages > 1 ? `
         <div class="pagination">
-          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">← Prev</button>
+          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">â† Prev</button>
           <div class="pg-info">
-            <span class="pg-range">${start+1}–${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
+            <span class="pg-range">${start+1}â€“${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
             <div class="pg-pages">
-              ${paginationPages(reportPage, totalPages).map(p => p==='…'
-                ? `<span class="pg-ellipsis">…</span>`
+              ${paginationPages(reportPage, totalPages).map(p => p==='â€¦'
+                ? `<span class="pg-ellipsis">â€¦</span>`
                 : `<button class="pg-num ${p===reportPage?'active':''}" onclick="reportPage=${p};renderReportExpenses()">${p}</button>`
               ).join('')}
             </div>
           </div>
-          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next →</button>
+          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next â†’</button>
         </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
       </div>
     </div>`;
@@ -2169,7 +2203,7 @@ function printReport(level) {
 
   if (level === 'years') {
     const rows = rptSortArr(_rptYearsData, rptYearSort.field, rptYearSort.dir);
-    title = 'Expense Report — All Years';
+    title = 'Expense Report â€” All Years';
     subtitle = `Generated on ${now}`;
     const grandTotal = rows.reduce((s,r)=>s+r.total,0);
     const grandFair  = rows.reduce((s,r)=>s+r.fair,0);
@@ -2189,8 +2223,8 @@ function printReport(level) {
   } else if (level === 'months') {
     const year = reportDrillYear;
     const rows = rptSortArr(_rptMonthsData.map(r=>({...r,month:parseInt(r.month)})), rptMonthSort.field, rptMonthSort.dir);
-    title = `Expense Report — ${year}`;
-    subtitle = `Monthly breakdown · Generated on ${now}`;
+    title = `Expense Report â€” ${year}`;
+    subtitle = `Monthly breakdown Â· Generated on ${now}`;
     const yTotal = rows.reduce((s,r)=>s+r.total,0);
     const yFair  = rows.reduce((s,r)=>s+r.fair,0);
     const yExtra = rows.reduce((s,r)=>s+r.extra,0);
@@ -2213,8 +2247,8 @@ function printReport(level) {
     const list = rptSortArr(_rptExpData.map(e=>({...e,date:e.purchase_date,name:e.item_name})),
       rptExpSort.field === 'date' ? 'date' : rptExpSort.field === 'amount' ? 'amount' : rptExpSort.field === 'name' ? 'name' : 'is_extra',
       rptExpSort.dir);
-    title = `Expense Report — ${mName} ${year}`;
-    subtitle = `${list.length} expenses · Generated on ${now}`;
+    title = `Expense Report â€” ${mName} ${year}`;
+    subtitle = `${list.length} expenses Â· Generated on ${now}`;
     const total  = list.reduce((s,e)=>s+e.amount,0);
     const fair   = list.filter(e=>!e.is_extra).reduce((s,e)=>s+e.amount,0);
     const extra  = list.filter(e=>e.is_extra).reduce((s,e)=>s+e.amount,0);
@@ -2262,20 +2296,20 @@ function printReport(level) {
   </div>
   ${summaryHTML}
   ${tableHTML}
-  <div class="pr-footer">Expense Lite AI · Printed on ${now}</div>
+  <div class="pr-footer">Expense Lite AI Â· Printed on ${now}</div>
   <script>window.onload = () => { window.print(); }<\/script>
   </body></html>`);
   win.document.close();
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EMI CALCULATOR
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadEMI() {
   const ccData = await api('/api/cc/cards');
   const cards = ccData?.cards || [];
   const ccOptions = cards.map(c =>
-    `<option value="${c.id}">${escHtml(c.bank_name)} ${escHtml(c.card_name)}${c.last4 ? ' ···' + c.last4 : ''}</option>`
+    `<option value="${c.id}">${escHtml(c.bank_name)} ${escHtml(c.card_name)}${c.last4 ? ' Â·Â·Â·' + c.last4 : ''}</option>`
   ).join('');
 
   document.getElementById('main').innerHTML = `
@@ -2287,12 +2321,12 @@ async function loadEMI() {
           <label class="fl">Tag / Group<input class="fi" type="text" id="emiTag" placeholder="e.g. Home, Car, Personal"></label>
         </div>
         <div class="fg">
-          <label class="fl">Loan Amount (₹)<input class="fi" type="number" id="emiP" placeholder="e.g. 200000"></label>
+          <label class="fl">Loan Amount (â‚¹)<input class="fi" type="number" id="emiP" placeholder="e.g. 200000"></label>
           <label class="fl">Rate of Interest (% p.a.)<input class="fi" type="number" step="0.01" id="emiR" placeholder="e.g. 11.99"></label>
           <label class="fl">Tenure (months)<input class="fi" type="number" id="emiN" placeholder="e.g. 24"></label>
         </div>
         <div class="fg">
-          <label class="fl">Processing / File Charges (₹)<input class="fi" type="number" id="emiCharges" placeholder="e.g. 5000 (optional)" min="0"></label>
+          <label class="fl">Processing / File Charges (â‚¹)<input class="fi" type="number" id="emiCharges" placeholder="e.g. 5000 (optional)" min="0"></label>
           <label class="fc" style="align-self:flex-end;padding-bottom:4px"><input type="checkbox" id="emiChargesInc" checked><span>Include charges in principal (financed)</span></label>
         </div>
         <div class="fg">
@@ -2323,14 +2357,14 @@ async function loadEMI() {
           </div>
         </div>
         <div class="fg" id="emiCcChargesRow" style="display:none">
-          <label class="fl">File Processing Charges on CC (₹)
+          <label class="fl">File Processing Charges on CC (â‚¹)
             <input class="fi" type="number" id="emiCcCharges" min="0" step="0.01" placeholder="0.00" oninput="_emiCalcProcGst()">
           </label>
           <label class="fl">Processing GST (%)
             <input class="fi" type="number" id="emiCcChargesGst" min="0" max="100" step="0.01" placeholder="e.g. 18" oninput="_emiCalcProcGst()">
           </label>
           <label class="fl">GST Amount
-            <input class="fi" type="text" id="emiCcChargesGstAmt" readonly placeholder="—" style="background:var(--bg2);color:var(--t2)">
+            <input class="fi" type="text" id="emiCcChargesGstAmt" readonly placeholder="â€”" style="background:var(--bg2);color:var(--t2)">
           </label>
         </div>` : ''}
         <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="calcEMI()">Calculate</button><button class="btn btn-g" onclick="loadEMI()">Reset</button></div>
@@ -2353,7 +2387,7 @@ function _emiCalcProcGst() {
   const gstPct  = parseFloat(document.getElementById('emiCcChargesGst')?.value) || 0;
   const gstAmt  = Math.round(charges * gstPct / 100 * 100) / 100;
   const el = document.getElementById('emiCcChargesGstAmt');
-  if (el) el.value = (charges > 0 && gstPct > 0) ? `₹ ${gstAmt.toFixed(2)}` : '—';
+  if (el) el.value = (charges > 0 && gstPct > 0) ? `â‚¹ ${gstAmt.toFixed(2)}` : 'â€”';
 }
 
 function calcEMI() {
@@ -2386,7 +2420,7 @@ function calcEMI() {
   }
   totI=Math.round(totI*100)/100; totG=Math.round(totG*100)/100;
   const totAmt=Math.round((P+totI)*100)/100;
-  // If charges NOT included in principal, they are paid upfront — add to grand total
+  // If charges NOT included in principal, they are paid upfront â€” add to grand total
   const upfrontCharges = (!chargesInc && charges>0) ? charges : 0;
   const grand=Math.round((totAmt+totG+upfrontCharges)*100)/100;
 
@@ -2397,7 +2431,7 @@ function calcEMI() {
   const chargeNote = charges > 0
     ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
         <span>Processing charges: <strong>${fmtCur(charges)}</strong></span>
-        <span style="opacity:0.7">— ${chargesInc ? 'financed (included in principal ₹'+P.toLocaleString('en-IN')+')' : 'paid upfront (one-time, not in EMI)'}</span>
+        <span style="opacity:0.7">â€” ${chargesInc ? 'financed (included in principal â‚¹'+P.toLocaleString('en-IN')+')' : 'paid upfront (one-time, not in EMI)'}</span>
        </div>`
     : '';
 
@@ -2450,7 +2484,7 @@ function buildCalcSummaryStats() {
     stat('Principal', c.P) +
     stat('Total Interest', totI, false, c.gst ? 'excl. GST' : '') +
     (c.gst ? stat('Total GST (18%)', totG) : '') +
-    stat('Grand Total', grand, false, c.charges > 0 && !c.chargesInc ? 'incl. ₹' + c.charges.toLocaleString('en-IN') + ' upfront charges' : '');
+    stat('Grand Total', grand, false, c.charges > 0 && !c.chargesInc ? 'incl. â‚¹' + c.charges.toLocaleString('en-IN') + ' upfront charges' : '');
 }
 
 function refreshCalcSummary() {
@@ -2461,7 +2495,7 @@ function refreshCalcSummary() {
   const chargeNote = c.charges > 0
     ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
         <span>Processing charges: <strong>${fmtCur(c.charges)}</strong></span>
-        <span style="opacity:0.7">— ${c.chargesInc ? 'financed (included in principal ₹' + c.P.toLocaleString('en-IN') + ')' : 'paid upfront (one-time, not in EMI)'}</span>
+        <span style="opacity:0.7">â€” ${c.chargesInc ? 'financed (included in principal â‚¹' + c.P.toLocaleString('en-IN') + ')' : 'paid upfront (one-time, not in EMI)'}</span>
        </div>`
     : '';
   banner.innerHTML = buildCalcSummaryStats() + chargeNote;
@@ -2474,7 +2508,7 @@ function renderCalcSchedRows() {
     <td style="text-align:center;font-weight:600;font-family:var(--mono)">${r.m}</td>
     <td class="td-m">${r.interest.toFixed(2)}</td>
     <td class="td-m">${r.princ.toFixed(2)}</td>
-    <td class="td-m" style="font-weight:700;color:${r._edited?'var(--amber)':'inherit'}">${(r.woGST||r.emi_amount||(r.interest+r.princ)).toFixed(2)} <button class="inst-edit-btn" title="Edit" onclick="showCalcRowEdit(${i})">✎</button></td>
+    <td class="td-m" style="font-weight:700;color:${r._edited?'var(--amber)':'inherit'}">${(r.woGST||r.emi_amount||(r.interest+r.princ)).toFixed(2)} <button class="inst-edit-btn" title="Edit" onclick="showCalcRowEdit(${i})">âœŽ</button></td>
     <td class="td-m">${r.g.toFixed(2)}</td>
     <td class="td-m" style="font-weight:600">${r.bal.toFixed(2)}</td>
     <td style="text-align:center">${r._edited?'<span style="font-size:10px;color:var(--amber);font-weight:600">edited</span>':''}</td>
@@ -2495,10 +2529,10 @@ function showCalcRowEdit(idx) {
     '<label class="fl" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:14px">' +
     '<input type="checkbox" id="calcAutoEmi" checked style="width:auto;margin:0" onchange="calcRowToggleMode()"> Auto-calculate EMI from Interest + Principal</label>' +
     '<div class="fg">' +
-    '<label class="fl">Interest (₹)<input class="fi" type="number" id="calcRowInterest" value="' + row.interest.toFixed(2) + '" step="0.01" oninput="calcRowLive()"></label>' +
-    '<label class="fl">Principal (₹)<input class="fi" type="number" id="calcRowPrinc" value="' + row.princ.toFixed(2) + '" step="0.01" oninput="calcRowLive()"></label>' +
+    '<label class="fl">Interest (â‚¹)<input class="fi" type="number" id="calcRowInterest" value="' + row.interest.toFixed(2) + '" step="0.01" oninput="calcRowLive()"></label>' +
+    '<label class="fl">Principal (â‚¹)<input class="fi" type="number" id="calcRowPrinc" value="' + row.princ.toFixed(2) + '" step="0.01" oninput="calcRowLive()"></label>' +
     '</div>' +
-    '<label class="fl" style="margin-top:8px">EMI Amount (₹)<input class="fi" type="number" id="calcRowEmi" value="' + currentEmi.toFixed(2) + '" step="0.01" oninput="calcRowEmiLive()" readonly style="background:var(--bg);color:var(--t3)"></label>' +
+    '<label class="fl" style="margin-top:8px">EMI Amount (â‚¹)<input class="fi" type="number" id="calcRowEmi" value="' + currentEmi.toFixed(2) + '" step="0.01" oninput="calcRowEmiLive()" readonly style="background:var(--bg);color:var(--t3)"></label>' +
     '<div id="calcRowPreview" style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--t2);margin-top:4px"></div>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn btn-p" onclick="applyCalcRowEdit(' + idx + ')">Apply</button>' +
@@ -2574,7 +2608,7 @@ function showCalcBulkEdit() {
   showModal(
     '<div class="modal-title">Bulk Edit EMI Amount</div>' +
     '<p style="color:var(--t2);font-size:13px;margin-bottom:4px">Set one EMI amount for <strong>all months</strong>. Interest stays fixed per row; principal is recalculated for each.</p>' +
-    '<label class="fl" style="margin-top:12px">New EMI Amount (₹)<input class="fi" type="number" id="calcBulkEmi" value="' + c.emi.toFixed(2) + '" step="0.01"></label>' +
+    '<label class="fl" style="margin-top:12px">New EMI Amount (â‚¹)<input class="fi" type="number" id="calcBulkEmi" value="' + c.emi.toFixed(2) + '" step="0.01"></label>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn btn-p" onclick="applyCalcBulkEdit()">Apply to All</button>' +
     '<button class="btn btn-g" onclick="closeModal()">Cancel</button>' +
@@ -2600,7 +2634,7 @@ function applyCalcBulkEdit() {
   closeModal();
   refreshCalcSchedTable();
   refreshCalcSummary();
-  if (anyNeg) toast('Some months have interest > new EMI — those rows were skipped', 'warning');
+  if (anyNeg) toast('Some months have interest > new EMI â€” those rows were skipped', 'warning');
   else toast('All months updated to ' + fmtCur(newEmi), 'success');
 }
 
@@ -2689,9 +2723,9 @@ async function doActivateEmi(id) {
   } else toast(res?.error || 'Activation failed', 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DASHBOARD
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _dashCharts = [];
 
 async function loadDashboard() {
@@ -2716,7 +2750,7 @@ async function loadDashboard() {
   // Fallback: if byType returned nothing but totals exist, show all as fair
   if (monthlyFair.every(v => v === 0) && monthlyExtra.every(v => v === 0) && monthly.some(v => v > 0)) {
     monthly.forEach((v, i) => { monthlyFair[i] = v; });
-    console.warn('monthlyByType empty — falling back to totals. API data:', data.monthlyByType);
+    console.warn('monthlyByType empty â€” falling back to totals. API data:', data.monthlyByType);
   }
 
   let fairTotal = 0, extraTotal = 0;
@@ -2764,7 +2798,7 @@ async function loadDashboard() {
       </div>
 
       <div class="dash-box">
-        <div class="dash-box-title">Monthly Spending — ${year}</div>
+        <div class="dash-box-title">Monthly Spending â€” ${year}</div>
         <canvas id="chartMonthly" height="80"></canvas>
       </div>
 
@@ -2802,7 +2836,7 @@ async function loadDashboard() {
 
   const palette = ['#145A3C','#1D7A52','#F0A030','#3B82F6','#7C5CDB','#C94444','#1D8A52','#F4C06E','#60A5FA','#9CA3B0'];
 
-  // Monthly bar chart — stacked Fair + Extra
+  // Monthly bar chart â€” stacked Fair + Extra
   _dashCharts.push(new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: {
@@ -2849,7 +2883,7 @@ async function loadDashboard() {
     _dashCharts.push(new Chart(document.getElementById('chartTop'), {
       type: 'bar',
       data: {
-        labels: data.topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + '…' : i.item_name),
+        labels: data.topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + 'â€¦' : i.item_name),
         datasets: [{
           label: 'Total',
           data: data.topItems.map(i => i.total),
@@ -2884,9 +2918,9 @@ async function loadDashboard() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TRIPS
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _trips = [];
 let _selectedTripId = null;
 let _tripDetail = null;
@@ -2894,7 +2928,7 @@ let tripsFilter = 'all';   // all | active | completed | i_owe | they_owe
 let tripsPage = 1;
 const TRIPS_PAGE_SIZE = 10;
 
-// ── Trip expense form state ──────────────────────────────────
+// â”€â”€ Trip expense form state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _tripExpSel = new Set();    // member_key set
 let _tripExpPaidBy = 'self';
 let _tripExpMode = 'equal';
@@ -2940,7 +2974,7 @@ function renderTripList() {
     const netColor = t.selfNet > 0.01 ? 'var(--green)' : t.selfNet < -0.01 ? 'var(--red)' : 'var(--t3)';
     const netLabel = t.selfNet > 0.01 ? `+${fmtCur(t.selfNet)} net` : t.selfNet < -0.01 ? `${fmtCur(Math.abs(t.selfNet))} owed` : 'Settled';
     const memberNames = t.members.map(m => m.member_name).join(', ');
-    const dateStr = t.end_date ? `${fmtDate(t.start_date)} → ${fmtDate(t.end_date)}` : `From ${fmtDate(t.start_date)}`;
+    const dateStr = t.end_date ? `${fmtDate(t.start_date)} â†’ ${fmtDate(t.end_date)}` : `From ${fmtDate(t.start_date)}`;
     return `<div class="card" style="cursor:pointer;margin-bottom:10px" onclick="openTripDetail(${t.id})">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
         <div style="font-size:16px;font-weight:700">${t.name} ${statusBadge}${sharedBadge}</div>
@@ -2948,8 +2982,8 @@ function renderTripList() {
       </div>
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}</div>
       <div style="font-size:12px;color:var(--t3)">
-        <span style="margin-right:12px">👥 ${t.members.length} members: ${memberNames}</span>
-        <span>₹ ${fmtCur(t.totalExpenses)} total · ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
+        <span style="margin-right:12px">ðŸ‘¥ ${t.members.length} members: ${memberNames}</span>
+        <span>â‚¹ ${fmtCur(t.totalExpenses)} total Â· ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
       </div>
     </div>`;
   }).join('') || `<div style="color:var(--t3);text-align:center;padding:40px">No trips found.</div>`;
@@ -2967,7 +3001,7 @@ function renderTripList() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:20px;font-weight:700">Trips</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTripsPdf(_tripsFiltered)">↓ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTripsPdf(_tripsFiltered)">â†“ PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCreateTripModal()">+ New Trip</button>
         </div>
       </div>
@@ -2997,7 +3031,7 @@ async function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
 
-  // ── Build member key→name map ─────────────────────────────
+  // â”€â”€ Build member keyâ†’name map â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const memberMap = {};
   trip.members.forEach(m => {
     const key = _memberKey(m);
@@ -3008,27 +3042,27 @@ async function renderTripDetail() {
   const myMemberKey = trip.isOwner ? 'self' : (myLinkedMember ? _memberKey(myLinkedMember) : 'self');
   const canEdit = trip.isOwner || trip.userPermission !== 'view';
 
-  // ── Paid-by chips ────────────────────────────────────────
+  // â”€â”€ Paid-by chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = trip.members.map(m => {
     const key = _memberKey(m);
     return `<button class="chip ${_tripExpPaidBy === key ? 'active' : ''}" onclick="tripSetPaidBy('${key}')">${m.member_name}</button>`;
   }).join('');
 
-  // ── Divide-between chips ─────────────────────────────────
+  // â”€â”€ Divide-between chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const divChips = trip.members.map(m => {
     const key = _memberKey(m);
     const sel = _tripExpSel.has(key);
     return `<button class="fr-chip ${sel ? 'sel' : ''}" onclick="tripToggleMember('${key}')">
-      <span class="cbox ${sel ? 'chk' : ''}">${sel ? '✓' : ''}</span>${m.member_name}
+      <span class="cbox ${sel ? 'chk' : ''}">${sel ? 'âœ“' : ''}</span>${m.member_name}
     </button>`;
   }).join('');
 
-  // ── Split mode chips ─────────────────────────────────────
+  // â”€â”€ Split mode chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const splitChips = SPLIT_MODES.map(m =>
     `<button class="chip split-mode-chip ${_tripExpMode === m.key ? 'active' : ''}" data-mode="${m.key}" onclick="tripSetSplitMode('${m.key}')">${m.label}</button>`
   ).join('');
 
-  // ── Expenses table ───────────────────────────────────────
+  // â”€â”€ Expenses table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let expensesHtml = '';
   if (trip.expenses.length > 0) {
     const rows = trip.expenses.map(e => {
@@ -3054,7 +3088,7 @@ async function renderTripDetail() {
     expensesHtml = `<div style="color:var(--t3);text-align:center;padding:20px">No expenses yet.</div>`;
   }
 
-  // ── Settlement summary ───────────────────────────────────
+  // â”€â”€ Settlement summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const peopleMap = {};
   trip.members.forEach(m => {
     const key = _memberKey(m);
@@ -3077,15 +3111,15 @@ async function renderTripDetail() {
     </tr>`;
   }).join('');
 
-  // ── Member management ────────────────────────────────────
+  // â”€â”€ Member management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const memberRows = trip.members.map(m => {
-    const lockIcon = m.is_locked ? '🔒' : '🔓';
+    const lockIcon = m.is_locked ? 'ðŸ”’' : 'ðŸ”“';
     const lockLabel = m.is_locked ? 'Locked' : 'Lock';
     const linkedBadge = m.linked_user_id
-      ? `<span style="font-size:10px;padding:1px 5px;background:var(--em-xl);color:var(--em);border-radius:8px;margin-left:3px" title="Linked to app user">✓ Linked</span>`
+      ? `<span style="font-size:10px;padding:1px 5px;background:var(--em-xl);color:var(--em);border-radius:8px;margin-left:3px" title="Linked to app user">âœ“ Linked</span>`
       : '';
     const linkBtn = trip.isOwner && m.friend_id !== null
-      ? `<button style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--t2);padding:0 0 0 4px" onclick="tripShowLinkModal(${m.id},'${m.member_name.replace(/'/g,"\\'")}',${m.linked_user_id||'null'})" title="Link/Invite member">🔗</button>`
+      ? `<button style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--t2);padding:0 0 0 4px" onclick="tripShowLinkModal(${m.id},'${m.member_name.replace(/'/g,"\\'")}',${m.linked_user_id||'null'})" title="Link/Invite member">ðŸ”—</button>`
       : '';
     return `<span style="display:inline-flex;align-items:center;gap:2px;background:var(--bg2);border:1px solid var(--br);border-radius:20px;padding:3px 10px;font-size:12px;margin:2px">
       ${m.member_name}${linkedBadge}
@@ -3103,11 +3137,11 @@ async function renderTripDetail() {
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-        <button class="btn btn-g btn-sm" onclick="loadTrips()">← Back</button>
+        <button class="btn btn-g btn-sm" onclick="loadTrips()">â† Back</button>
         <div style="font-size:20px;font-weight:700;flex:1">${trip.name} ${statusBadgeHtml}</div>
-        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">↓ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">â†“ PDF</button>
       </div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">${trip.end_date ? fmtDate(trip.start_date) + ' → ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">${trip.end_date ? fmtDate(trip.start_date) + ' â†’ ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
       <div style="margin-bottom:16px">${memberRows}</div>
 
       <!-- Add Expense Form (only for edit-permission users) -->
@@ -3115,7 +3149,7 @@ async function renderTripDetail() {
         <div class="card-title">${editingExp ? 'Edit Expense' : 'Add Expense'}</div>
         <div class="fg">
           <label class="fl">Date<input class="fi" type="date" id="teDate" value="${editingExp?.expense_date || todayStr()}"></label>
-          <label class="fl">Amount (₹)<input class="fi" type="number" step="0.01" id="teAmount" value="${editingExp?.amount || ''}" placeholder="0.00" oninput="tripUpdateSplitInputs()"></label>
+          <label class="fl">Amount (â‚¹)<input class="fi" type="number" step="0.01" id="teAmount" value="${editingExp?.amount || ''}" placeholder="0.00" oninput="tripUpdateSplitInputs()"></label>
           <label class="fl full">Details *<input class="fi" id="teDetails" value="${editingExp?.details || ''}" placeholder="e.g. Dinner, Hotel..."></label>
         </div>
         <div style="margin-bottom:10px">
@@ -3147,7 +3181,7 @@ async function renderTripDetail() {
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div style="font-size:14px;font-weight:700">Settlement Summary</div>
           <div style="display:flex;gap:8px">
-            ${trip.isOwner && trip.status === 'active' ? `<button class="btn btn-p btn-sm" onclick="tripFinalizeModal()">Finalize Trip →</button>` : ''}
+            ${trip.isOwner && trip.status === 'active' ? `<button class="btn btn-p btn-sm" onclick="tripFinalizeModal()">Finalize Trip â†’</button>` : ''}
             ${trip.isOwner ? (trip.status === 'active' ? `<button class="btn btn-g btn-sm" onclick="tripMarkComplete()">Mark Complete</button>` : `<button class="btn btn-g btn-sm" onclick="tripMarkActive()">Re-open</button>`) : ''}
             ${trip.isOwner ? `<button class="btn-d" style="color:var(--red);font-size:12px" onclick="tripDelete()">Delete Trip</button>` : ''}
           </div>
@@ -3162,7 +3196,7 @@ async function renderTripDetail() {
   tripUpdateSplitInputs();
 }
 
-// ── Trip form helpers ────────────────────────────────────────
+// â”€â”€ Trip form helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripSetPaidBy(key) {
   _tripExpPaidBy = key;
   // Simplest: just re-render (form state preserved in variables)
@@ -3185,7 +3219,7 @@ function tripToggleMember(key) {
       const sel = _tripExpSel.has(chipKey);
       btn.classList.toggle('sel', sel);
       const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? '✓' : ''; }
+      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? 'âœ“' : ''; }
     });
   }
   _tripExpValues = {};
@@ -3227,11 +3261,11 @@ function tripUpdateSplitInputs() {
 
   if (_tripExpMode === 'equal') {
     const pp = Math.round((amt / people.length) * 100) / 100;
-    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> · Per person: <b>${fmtCur(pp)}</b></div>`;
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> Â· Per person: <b>${fmtCur(pp)}</b></div>`;
     return;
   }
 
-  const hints = { percent: '(%, total must be 100)', fraction: '(fraction, total must be 1.0)', amount: '(₹, total must match)', parts: '(ratio, proportional)' };
+  const hints = { percent: '(%, total must be 100)', fraction: '(fraction, total must be 1.0)', amount: '(â‚¹, total must match)', parts: '(ratio, proportional)' };
   const rows = people.map(p => {
     const val = _tripExpValues[p.key] !== undefined ? _tripExpValues[p.key] : '';
     return `<tr>
@@ -3242,7 +3276,7 @@ function tripUpdateSplitInputs() {
 
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
   const statusHtml = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 
   el.innerHTML = `<div style="margin-bottom:12px">
@@ -3273,7 +3307,7 @@ function tripOnSplitInput(input, pkey) {
   }
 
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>${balanceHtml}`;
 }
 
@@ -3287,7 +3321,7 @@ function tripSetRemaining(pkey, remaining) {
   const people = _tripSelectedPeople();
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">✓ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">âœ“ Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 }
 
@@ -3377,7 +3411,7 @@ async function tripDelete() {
   loadTrips();
 }
 
-// ── Finalize Trip ────────────────────────────────────────────
+// â”€â”€ Finalize Trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripFinalizeModal() {
   const trip = _tripDetail;
   // Compute settlement for preview
@@ -3394,8 +3428,8 @@ function tripFinalizeModal() {
   const previewRows = Object.entries(peopleMap).map(([key, p]) => {
     const net = p.totalGave - p.totalShare;
     const action = key === 'self'
-      ? (p.totalShare > 0 ? `→ Add ${fmtCur(p.totalShare)} to my expenses` : 'No personal expense')
-      : (net > 0.005 ? `→ Loan: ${fmtCur(net)} (they owe me)` : net < -0.005 ? `→ Loan: ${fmtCur(Math.abs(net))} (I owe them)` : '→ Settled');
+      ? (p.totalShare > 0 ? `â†’ Add ${fmtCur(p.totalShare)} to my expenses` : 'No personal expense')
+      : (net > 0.005 ? `â†’ Loan: ${fmtCur(net)} (they owe me)` : net < -0.005 ? `â†’ Loan: ${fmtCur(Math.abs(net))} (I owe them)` : 'â†’ Settled');
     return `<tr><td style="padding:4px 8px;font-weight:600">${p.name}</td><td style="padding:4px 8px;font-size:12px;color:var(--t2)">${action}</td></tr>`;
   }).join('');
 
@@ -3468,7 +3502,7 @@ async function doFinalizeTrip() {
   await openTripDetail(_selectedTripId);
 }
 
-// ── Create Trip Modal ────────────────────────────────────────
+// â”€â”€ Create Trip Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _newTripAppUsers = []; // { id, display_name, username } selected app users
 
 async function showCreateTripModal() {
@@ -3498,8 +3532,8 @@ async function showCreateTripModal() {
       <div style="max-height:160px;overflow-y:auto;border:1px solid var(--br);border-radius:6px;padding:8px">${friendCheckboxes}</div>
     </div>
     <div style="margin-top:12px">
-      <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:6px">App Users <span style="font-weight:400;color:var(--t3);font-size:11px">— can see and edit this trip directly</span></div>
-      <input class="fi" id="newTripUserQ" placeholder="Search by name or username…" oninput="newTripSearchUsers()" style="margin-bottom:6px">
+      <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:6px">App Users <span style="font-weight:400;color:var(--t3);font-size:11px">â€” can see and edit this trip directly</span></div>
+      <input class="fi" id="newTripUserQ" placeholder="Search by name or usernameâ€¦" oninput="newTripSearchUsers()" style="margin-bottom:6px">
       <div id="newTripUserResults" style="margin-bottom:6px"></div>
       <div id="newTripUserSelected" style="display:flex;flex-wrap:wrap;gap:6px"></div>
     </div>
@@ -3549,7 +3583,7 @@ function _renderNewTripSelectedUsers() {
   box.innerHTML = _newTripAppUsers.map(u =>
     `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--em-xl);color:var(--em);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:500">
       ${escHtml(u.display_name)}
-      <button style="background:none;border:none;cursor:pointer;color:var(--em);font-size:13px;line-height:1;padding:0" onclick="newTripRemoveUser(${u.id})">×</button>
+      <button style="background:none;border:none;cursor:pointer;color:var(--em);font-size:13px;line-height:1;padding:0" onclick="newTripRemoveUser(${u.id})">Ã—</button>
     </span>`
   ).join('');
 }
@@ -3580,14 +3614,14 @@ async function doCreateTrip() {
   }
 }
 
-// ── Trip: Link member to app user / invite ────────────────────
+// â”€â”€ Trip: Link member to app user / invite â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripShowLinkModal(memberId, memberName, linkedUserId) {
   openModal(`Share: ${memberName}`, `
     <p style="font-size:13px;color:var(--t2);margin-bottom:14px">Link this member slot to an existing app user, or generate an invite link for someone without an account.</p>
-    ${linkedUserId ? `<div style="background:var(--em-xl);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--em);margin-bottom:12px">✓ Currently linked to an app user. <button class="btn-d" style="color:var(--red)" onclick="tripUnlinkMember(${memberId})">Unlink</button></div>` : ''}
+    ${linkedUserId ? `<div style="background:var(--em-xl);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--em);margin-bottom:12px">âœ“ Currently linked to an app user. <button class="btn-d" style="color:var(--red)" onclick="tripUnlinkMember(${memberId})">Unlink</button></div>` : ''}
     <div style="margin-bottom:14px">
       <label class="fl">Search app users
-        <input class="fi" id="userSearchQ" placeholder="Type username or name…" oninput="tripSearchUsers()">
+        <input class="fi" id="userSearchQ" placeholder="Type username or nameâ€¦" oninput="tripSearchUsers()">
       </label>
       <div id="userSearchResults" style="margin-top:6px"></div>
     </div>
@@ -3660,7 +3694,7 @@ async function checkTripInvite(token) {
   if (!confirmed) return;
   const r = await api(`/api/trips/invite/${token}/accept`, { method: 'POST' });
   if (r?.success) {
-    toast('Invite accepted! Opening trip…', 'success');
+    toast('Invite accepted! Opening tripâ€¦', 'success');
     switchTab('trips');
     await openTripDetail(r.tripId);
   } else {
@@ -3668,7 +3702,7 @@ async function checkTripInvite(token) {
   }
 }
 
-// ─── Friends Share Links ──────────────────────────────────────
+// â”€â”€â”€ Friends Share Links â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showFriendsShareModal() {
   const [frData, linksData] = await Promise.all([api('/api/friends'), api('/api/shares')]);
   const friends = frData?.friends || [];
@@ -3688,9 +3722,9 @@ async function showFriendsShareModal() {
         return `<div style="border:1px solid var(--br);border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px${expired ? ';opacity:0.5' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <div style="color:var(--em);word-break:break-all">${url}</div>
-            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})">✕</button>
+            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})">âœ•</button>
           </div>
-          <div style="color:var(--t3)">${expired ? '⚠ Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} · ${l.view_count} views</div>
+          <div style="color:var(--t3)">${expired ? 'âš  Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} Â· ${l.view_count} views</div>
           ${!expired ? `<button class="btn btn-g btn-sm" style="margin-top:6px" onclick="navigator.clipboard.writeText('${url}').then(()=>toast('Copied!','success'))">Copy Link</button>` : ''}
         </div>`;
       }).join('');
@@ -3703,7 +3737,7 @@ async function showFriendsShareModal() {
     </div>
     <div class="fg" style="margin-bottom:12px">
       <label class="fl">Filter Year (optional)<input class="fi" type="number" id="shareYear" placeholder="e.g. 2025" min="2020" max="2030"></label>
-      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1–12" min="1" max="12"></label>
+      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1â€“12" min="1" max="12"></label>
       <label class="fl">Expires on (optional)<input class="fi" type="date" id="shareExpiry"></label>
     </div>
     <div class="fa" style="margin-bottom:16px">
@@ -3739,9 +3773,9 @@ async function deleteShareLink(id) {
   showFriendsShareModal();
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let adminSection = 'users'; // users | plans | subscriptions
 
 const ALL_PAGES = [
@@ -3774,23 +3808,23 @@ async function loadAdmin() {
 }
 
 function renderAdminShell() {
-  const tabs = [['users','👤 Users'], ['plans','📦 Plans'], ['subscriptions','🎫 Subscriptions']];
+  const tabs = [['users','ðŸ‘¤ Users'], ['plans','ðŸ“¦ Plans'], ['subscriptions','ðŸŽ« Subscriptions']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <div style="font-size:20px;font-weight:700;margin-bottom:16px">⚙ Admin Panel</div>
+      <div style="font-size:20px;font-weight:700;margin-bottom:16px">âš™ Admin Panel</div>
       <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
 }
 
-// ── Users ────────────────────────────────────────────────────
+// â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
   const users = data?.users || [];
-  const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+  const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'â€”';
   const cards = users.map(u => {
     const subBadge = u.subscription
       ? `<span style="font-size:11px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px">${u.subscription.plan_name}</span>`
@@ -3931,7 +3965,7 @@ async function doGenOtp(userId) {
     openModal('OTP Generated', `
       <div style="text-align:center;padding:20px 0">
         <div style="font-size:48px;font-weight:700;letter-spacing:10px;color:var(--em);font-family:monospace">${r.otp}</div>
-        <div style="font-size:13px;color:var(--t2);margin-top:10px">Valid 10 minutes &nbsp;·&nbsp; Purpose: <b>${purpose}</b> &nbsp;·&nbsp; Channel: <b>${channel}</b></div>
+        <div style="font-size:13px;color:var(--t2);margin-top:10px">Valid 10 minutes &nbsp;Â·&nbsp; Purpose: <b>${purpose}</b> &nbsp;Â·&nbsp; Channel: <b>${channel}</b></div>
         <div style="font-size:12px;color:var(--t3);margin-top:4px">Share this code with the user via ${channel}</div>
       </div>
       <div class="fa"><button class="btn btn-g" onclick="closeModal()">Close</button></div>`);
@@ -3974,13 +4008,13 @@ async function adminRestoreUser(id) {
   }
 }
 
-// ── Plans ────────────────────────────────────────────────────
+// â”€â”€ Plans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAdminPlans() {
   const data = await api('/api/admin/plans');
   const plans = data?.plans || [];
 
   const cards = plans.length ? plans.map(p => {
-    const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || '—';
+    const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'â€”';
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -3989,11 +4023,11 @@ async function loadAdminPlans() {
             ${p.is_free ? '<span style="font-size:10px;padding:2px 7px;background:var(--blue-l);color:var(--blue);border-radius:10px;margin-left:6px">Free</span>' : ''}
             ${p.auto_assign_on_signup ? '<span style="font-size:10px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px;margin-left:6px">Signup Default</span>' : ''}
           </div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${p.description||'—'}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${p.description||'â€”'}</div>
           <div style="font-size:12px;color:var(--t3);margin-top:4px">Pages: ${pageLabels}</div>
           <div style="font-size:12px;margin-top:4px">
             Monthly: <b>${p.price_monthly>0?fmtCur(p.price_monthly):'Free'}</b>
-            &nbsp;·&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
+            &nbsp;Â·&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -4025,8 +4059,8 @@ async function showPlanModal(planId) {
     <div class="fg">
       <label class="fl full">Plan Name *<input class="fi" id="pName" value="${plan?.name||''}"></label>
       <label class="fl full">Description<input class="fi" id="pDesc" value="${plan?.description||''}" placeholder="Brief description..."></label>
-      <label class="fl">Monthly Price (₹)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly||0}"></label>
-      <label class="fl">Yearly Price (₹)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly||0}"></label>
+      <label class="fl">Monthly Price (â‚¹)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly||0}"></label>
+      <label class="fl">Yearly Price (â‚¹)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly||0}"></label>
     </div>
     <div style="display:flex;gap:16px;margin:12px 0">
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -4077,7 +4111,7 @@ async function adminDeletePlan(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Subscriptions ────────────────────────────────────────────
+// â”€â”€ Subscriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _adminSubUsers = [];
 let _adminSubPlans = [];
 
@@ -4098,7 +4132,7 @@ async function loadAdminSubscriptions() {
       <td>${s.plan_name}</td>
       <td style="font-size:12px">${s.billing_cycle}</td>
       <td style="font-size:12px">${fmtDate(s.start_date)}</td>
-      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : '∞ No expiry'}</td>
+      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : 'âˆž No expiry'}</td>
       <td style="color:${statusColor};font-weight:600;font-size:12px">${s.status}</td>
       <td>
         <button class="btn-d" style="color:var(--em)" onclick="showSubModal(${s.id},${s.plan_id},'${s.billing_cycle}','${s.end_date||''}','${s.status}')">Edit</button>
@@ -4201,9 +4235,9 @@ async function adminDeleteSub(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EMI TRACKER
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _emiFilter = 'all';
 let _emiTagFilter = '';
 let _emiSearch = '';
@@ -4232,7 +4266,7 @@ async function loadEmiTracker() {
   renderEmiTracker();
 }
 
-// ─── FRIEND EMI TRACKER ──────────────────────────────────────
+// â”€â”€â”€ FRIEND EMI TRACKER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadFriendEmiTracker() {
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="text-align:center;padding:40px;color:var(--t3)">Loading...</div></div>';
@@ -4299,12 +4333,12 @@ function renderFriendEmiTracker() {
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">
         <div style="font-size:20px;font-weight:700">Friend EMIs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s" onclick="showEmiImportModal(true)">↑ Import</button>
-          <button class="btn btn-s" onclick="showEmiImportModal(true, 'simple')" title="Import sheets where Excel only has the monthly paid amount">↑ Import Paid-Only EMI</button>
+          <button class="btn btn-s" onclick="showEmiImportModal(true)">â†‘ Import</button>
+          <button class="btn btn-s" onclick="showEmiImportModal(true, 'simple')" title="Import sheets where Excel only has the monthly paid amount">â†‘ Import Paid-Only EMI</button>
           <button class="btn btn-p" onclick="showAddFriendEmiModal()">+ Add Friend EMI</button>
         </div>
       </div>
-      <input type="search" class="fi" id="friendEmiSearch" placeholder="Search by name, friend, tag or description…" value="${escHtml(_friendEmiSearch)}"
+      <input type="search" class="fi" id="friendEmiSearch" placeholder="Search by name, friend, tag or descriptionâ€¦" value="${escHtml(_friendEmiSearch)}"
         oninput="_friendEmiSearch=this.value;renderFriendEmiTracker()"
         style="margin-bottom:12px;width:100%;box-sizing:border-box">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${filterChips}</div>
@@ -4329,7 +4363,7 @@ function showAddFriendEmiModal() {
       <label class="fl full">Loan Name / Label
         <input type="text" id="femi_name" class="fi" placeholder="e.g. Rahul's Bike Loan">
       </label>
-      <label class="fl">Principal (₹)
+      <label class="fl">Principal (â‚¹)
         <input type="number" id="femi_principal" class="fi" placeholder="50000" min="1" oninput="_calcFriendEmiPreview()">
       </label>
       <label class="fl">Annual Rate (%)
@@ -4367,7 +4401,7 @@ function _calcFriendEmiPreview() {
   }
   totI = Math.round(totI * 100) / 100;
   el.style.color = 'var(--t1)';
-  el.innerHTML = `Monthly EMI: <strong>${fmtCur(emi)}</strong> &nbsp;·&nbsp; Total Interest: <strong>${fmtCur(totI)}</strong> &nbsp;·&nbsp; Grand Total: <strong>${fmtCur(Math.round((P+totI)*100)/100)}</strong>`;
+  el.innerHTML = `Monthly EMI: <strong>${fmtCur(emi)}</strong> &nbsp;Â·&nbsp; Total Interest: <strong>${fmtCur(totI)}</strong> &nbsp;Â·&nbsp; Grand Total: <strong>${fmtCur(Math.round((P+totI)*100)/100)}</strong>`;
 }
 
 async function doSaveFriendEmi() {
@@ -4408,7 +4442,7 @@ async function doSaveFriendEmi() {
   await loadFriendEmiTracker();
 }
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function emiChangeMonth(delta) {
   const [y, m] = _emiMonth.split('-').map(Number);
@@ -4452,11 +4486,11 @@ function buildEmiMonthlySummaryHtml() {
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
       <div>
         <div style="font-weight:600;font-size:13px">${escHtml(i.name)}</div>
-        <div style="font-size:11px;opacity:0.65">${i.due_date}${i.tag ? ' · ' + escHtml(i.tag) : ''}</div>
+        <div style="font-size:11px;opacity:0.65">${i.due_date}${i.tag ? ' Â· ' + escHtml(i.tag) : ''}</div>
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--mono);font-size:13px;font-weight:600">${fmtCur(i.emi_amount)}</div>
-        ${isPaid ? '<div style="font-size:11px;color:var(--amber)">✓ Paid ' + fmtCur(i.paid_amount) + '</div>' : '<div style="font-size:11px;opacity:0.55">Pending</div>'}
+        ${isPaid ? '<div style="font-size:11px;color:var(--amber)">âœ“ Paid ' + fmtCur(i.paid_amount) + '</div>' : '<div style="font-size:11px;opacity:0.55">Pending</div>'}
       </div>
     </div>`;
   }).join('');
@@ -4468,7 +4502,7 @@ function buildEmiMonthlySummaryHtml() {
         <span id="emiMonthLabel" style="font-size:15px;font-weight:700">${_emiMonthLabel()}</span>
         ${isCurrentMonth ? '<span style="font-size:10px;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:10px">This Month</span>' : ''}
         <input type="month" id="emiMonthPicker" value="${_emiMonth}" onchange="emiGoToMonth(this.value)" style="opacity:0;position:absolute;width:1px;height:1px">
-        <button class="emi-month-nav" onclick="document.getElementById('emiMonthPicker').showPicker?document.getElementById('emiMonthPicker').showPicker():document.getElementById('emiMonthPicker').click()" title="Pick month" style="font-size:14px">📅</button>
+        <button class="emi-month-nav" onclick="document.getElementById('emiMonthPicker').showPicker?document.getElementById('emiMonthPicker').showPicker():document.getElementById('emiMonthPicker').click()" title="Pick month" style="font-size:14px">ðŸ“…</button>
       </div>
       <button class="emi-month-nav" onclick="emiChangeMonth(1)">&#8594;</button>
     </div>
@@ -4542,16 +4576,16 @@ function renderEmiTracker() {
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">
         <div style="font-size:20px;font-weight:700">My EMIs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s" onclick="downloadEmisPdf(_emiFiltered)">↓ PDF Overview</button>
-          <button class="btn btn-s" onclick="showEmiImportModal()">↑ Import EMI</button>
-          <button class="btn btn-s" onclick="showEmiImportModal(false, 'simple')" title="Import sheets where Excel only has the monthly paid amount">↑ Import Paid-Only EMI</button>
+          <button class="btn btn-s" onclick="downloadEmisPdf(_emiFiltered)">â†“ PDF Overview</button>
+          <button class="btn btn-s" onclick="showEmiImportModal()">â†‘ Import EMI</button>
+          <button class="btn btn-s" onclick="showEmiImportModal(false, 'simple')" title="Import sheets where Excel only has the monthly paid amount">â†‘ Import Paid-Only EMI</button>
           <button class="btn btn-p" onclick="switchTab('emi')">+ New EMI</button>
         </div>
       </div>
 
       <div class="emi-tracker-layout">
         <div class="emi-tracker-main">
-          <input type="search" class="fi" id="emiSearch" placeholder="Search by name, tag or description…" value="${escHtml(_emiSearch)}"
+          <input type="search" class="fi" id="emiSearch" placeholder="Search by name, tag or descriptionâ€¦" value="${escHtml(_emiSearch)}"
             oninput="_emiSearch=this.value;renderEmiTracker()"
             style="margin-bottom:12px;width:100%;box-sizing:border-box">
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${filterChips}</div>
@@ -4571,7 +4605,7 @@ function renderEmiTracker() {
   }
 }
 
-// ─── EMI IMPORT ──────────────────────────────────────────────
+// â”€â”€â”€ EMI IMPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function showEmiImportModal(forFriend = false, preferredMode = '') {
   openModal((forFriend ? 'Import Friend EMI' : 'Import EMI') + ' from Excel', `
@@ -4584,7 +4618,7 @@ function showEmiImportModal(forFriend = false, preferredMode = '') {
         <input type="password" id="emiXlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadEmiSheets()">Load Sheets →</button>
+        <button class="btn btn-p" onclick="loadEmiSheets()">Load Sheets â†’</button>
       </label>
     </div>
     ${forFriend ? `
@@ -4596,8 +4630,8 @@ function showEmiImportModal(forFriend = false, preferredMode = '') {
     <div style="background:var(--bg3);border-radius:10px;padding:12px 14px;margin-bottom:14px">
       <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:6px">IMPORT MODES</div>
       <div style="font-size:12px;color:var(--t3);line-height:1.5">
-        <div><strong>Detailed Import</strong> — use this when your Excel already has principal, interest, total, or EMI columns.</div>
-        <div style="margin-top:4px"><strong>Paid-Only Import</strong> — use this when your Excel only has date + amount paid each month. We calculate principal, interest, inferred rate, and total from the loan amount and the payment rows in Excel.</div>
+        <div><strong>Detailed Import</strong> â€” use this when your Excel already has principal, interest, total, or EMI columns.</div>
+        <div style="margin-top:4px"><strong>Paid-Only Import</strong> â€” use this when your Excel only has date + amount paid each month. We calculate principal, interest, inferred rate, and total from the loan amount and the payment rows in Excel.</div>
       </div>
     </div>
     <div id="emiSheetArea"></div>
@@ -4610,7 +4644,7 @@ async function loadEmiSheets() {
   const file = document.getElementById('emiXlsxFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass').value;
-  document.getElementById('emiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file…</div>`;
+  document.getElementById('emiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('emiMappingArea').innerHTML = '';
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
@@ -4639,8 +4673,8 @@ async function loadEmiSheets() {
       ${checkboxes}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-s" onclick="loadEmiColumnMapping()">Detailed Import →</button>
-      <button class="btn btn-s" onclick="loadEmiSimpleMapping()" title="You only have dates &amp; amounts paid — provide loan amount and rate, we calculate the rest">Calculate from Loan Amount →</button>
+      <button class="btn btn-s" onclick="loadEmiColumnMapping()">Detailed Import â†’</button>
+      <button class="btn btn-s" onclick="loadEmiSimpleMapping()" title="You only have dates &amp; amounts paid â€” provide loan amount and rate, we calculate the rest">Calculate from Loan Amount â†’</button>
     </div>`;
   if (window._emiImportPreferredMode === 'simple') loadEmiSimpleMapping();
 }
@@ -4655,7 +4689,7 @@ async function loadEmiColumnMapping() {
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass')?.value || '';
-  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columns…</div>`;
+  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsâ€¦</div>`;
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -4668,12 +4702,12 @@ async function loadEmiColumnMapping() {
     return;
   }
   const cols = data.columns; // [{col, letter, header, sample}]
-  const noneOpt = `<option value="0">— None / Skip —</option>`;
+  const noneOpt = `<option value="0">â€” None / Skip â€”</option>`;
   const colOpts = (selected) => cols.map(c =>
     `<option value="${c.col}" ${c.col===selected?'selected':''}>${escHtml(c.letter)}: ${escHtml(c.header)}${c.sample?' ('+escHtml(c.sample)+')':''}</option>`
   ).join('');
 
-  // default mapping — reset all to 0/unset
+  // default mapping â€” reset all to 0/unset
   const def = { srNo:0, date:0, principal:0, interest:0, gst:0, total:0, emiAmount:0, iPaid:0 };
   // auto-detect by header name (order matters: more specific checks first)
   cols.forEach(c => {
@@ -4711,14 +4745,14 @@ async function loadEmiColumnMapping() {
       ${field('srNo',      'Sr. No.',             false, def.srNo)}
       ${field('date',      'Date',                true,  def.date)}
       ${field('principal', 'Principal',           true,  def.principal)}
-      ${field('interest',  'Interest',            false, def.interest,  'skip → treated as 0')}
+      ${field('interest',  'Interest',            false, def.interest,  'skip â†’ treated as 0')}
       ${field('gst',       'GST Amount',          false, def.gst,       'rate auto-read from header')}
       ${field('total',     'Total (ex-GST)',       false, def.total,     'principal + interest')}
       ${field('emiAmount', 'Total (with GST)',     false, def.emiAmount, 'used as EMI amount')}
       ${field('iPaid',     'Amount Paid',          false, def.iPaid)}
     </div>
     <div style="font-size:11px;color:var(--t3);margin:-6px 0 12px 0">* If "Total (with GST)" is not mapped, Total (ex-GST) + GST Amount will be used.</div>
-    <button class="btn btn-s" onclick="previewEmiExcel()">Preview →</button>`;
+    <button class="btn btn-s" onclick="previewEmiExcel()">Preview â†’</button>`;
 }
 
 function _getEmiMapping() {
@@ -4731,7 +4765,7 @@ function _getEmiMapping() {
   return m;
 }
 
-// ─── SIMPLE IMPORT (loan amount + payment rows) ─────────────────
+// â”€â”€â”€ SIMPLE IMPORT (loan amount + payment rows) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadEmiSimpleMapping() {
   const file   = document.getElementById('emiXlsxFile').files[0];
@@ -4739,7 +4773,7 @@ async function loadEmiSimpleMapping() {
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass')?.value || '';
-  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columns…</div>`;
+  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsâ€¦</div>`;
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file); fd.append('sheet', sheets[0]);
@@ -4748,7 +4782,7 @@ async function loadEmiSimpleMapping() {
   const data = await res.json();
   if (data.error) { document.getElementById('emiMappingArea').innerHTML = `<p style="color:var(--red);font-size:13px">${escHtml(data.error)}</p>`; return; }
   const cols = data.columns;
-  const noneOpt = `<option value="0">— None / Skip —</option>`;
+  const noneOpt = `<option value="0">â€” None / Skip â€”</option>`;
   const colOpts = (selected) => cols.map(c =>
     `<option value="${c.col}" ${c.col===selected?'selected':''}>${escHtml(c.letter)}: ${escHtml(c.header)}${c.sample?' ('+escHtml(c.sample)+')':''}</option>`
   ).join('');
@@ -4770,7 +4804,7 @@ async function loadEmiSimpleMapping() {
           </label>`).join('')}
       </div>`
     : `<div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:12px">
-        <label style="font-size:12px;color:var(--t2)">Loan Amount (₹) <span style="color:var(--red)">*</span>
+        <label style="font-size:12px;color:var(--t2)">Loan Amount (â‚¹) <span style="color:var(--red)">*</span>
           <input type="number" id="simLoanAmt" class="fi sim-loan-amt" data-sheet="__default__" placeholder="e.g. 50000" min="1" style="margin-top:4px" oninput="_simpleEmiCalcPreview()">
         </label>
       </div>`;
@@ -4800,7 +4834,7 @@ async function loadEmiSimpleMapping() {
         <select id="simMap_paid" class="fi" style="flex:1;font-size:12px;padding:5px 8px">${noneOpt}${colOpts(defPaid)}</select>
       </div>
     </div>
-    <button class="btn btn-s" onclick="previewEmiSimpleImport()">Preview →</button>`;
+    <button class="btn btn-s" onclick="previewEmiSimpleImport()">Preview â†’</button>`;
 }
 
 function _getSimpleLoanAmounts() {
@@ -4839,7 +4873,7 @@ async function previewEmiSimpleImport() {
   if (sheets.length > 1 && sheets.some(sheet => !(parseFloat(loanAmounts[sheet]) > 0))) { toast('Enter loan amount for each selected sheet', 'warning'); return; }
   if (forFriend && !friendName) { toast('Enter friend name first', 'warning'); return; }
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Calculating…</div>`;
+  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Calculatingâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -4932,7 +4966,7 @@ async function doEmiSimpleImport() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function previewEmiExcel() {
   const file     = document.getElementById('emiXlsxFile').files[0];
@@ -4940,7 +4974,7 @@ async function previewEmiExcel() {
   const password = document.getElementById('emiXlsxPass')?.value || '';
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Loading preview…</div>`;
+  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Loading previewâ€¦</div>`;
   const mapping = _getEmiMapping();
   const fd = new FormData();
   fd.append('file', file);
@@ -5024,7 +5058,7 @@ async function doEmiImport() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function renderEmiCard(r) {
   const isExpanded = _emiExpandedId === r.id;
@@ -5050,7 +5084,7 @@ function renderEmiCard(r) {
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
             <span style="font-weight:700;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">${escHtml(r.name)}</span>
             <span style="font-size:11px;font-weight:600;color:${sm.color};background:${sm.color}22;padding:2px 8px;border-radius:20px">${sm.label}</span>
-            ${r.friend_name ? '<span style="font-size:11px;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px">♟ ' + escHtml(r.friend_name) + '</span>' : ''}
+            ${r.friend_name ? '<span style="font-size:11px;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px">â™Ÿ ' + escHtml(r.friend_name) + '</span>' : ''}
             ${r.tag ? '<span style="font-size:11px;color:var(--t3);background:var(--bg);padding:2px 8px;border-radius:20px">' + escHtml(r.tag) + '</span>' : ''}
           </div>
           ${r.description ? '<div style="font-size:12px;color:var(--t3);margin-top:2px">' + escHtml(r.description) + '</div>' : ''}
@@ -5059,18 +5093,18 @@ function renderEmiCard(r) {
           ${r.status === 'saved' ? '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
           ${(!r.for_friend && (r.status === 'active' || r.status === 'pending')) ? (
             r.expenses_added
-              ? '<span title="Expenses added — click to re-add" style="font-size:11px;font-weight:600;color:var(--green);background:var(--green)22;padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">✓ In Expenses</span>'
+              ? '<span title="Expenses added â€” click to re-add" style="font-size:11px;font-weight:600;color:var(--green);background:var(--green)22;padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">âœ“ In Expenses</span>'
               : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',0)">+ Add to Expenses</button>'
           ) : ''}
           ${(r.status === 'active' || r.status === 'pending' || r.status === 'completed') ? (
             r.credit_card_id
-              ? '<span title="Added to credit card billing — click to change card" style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">✓ In Credit Card</span>'
+              ? '<span title="Added to credit card billing â€” click to change card" style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">âœ“ In Credit Card</span>'
               : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',0,' + (r.gst_rate || 0) + ')">+ Credit Card EMI</button>'
           ) : ''}
           ${r.status === 'active' ? (() => { const next = (r.installments||[]).find(i => i.paid_amount === 0); return next ? '<button class="btn btn-p btn-sm" onclick="event.stopPropagation();showPayInstallmentModal(' + next.id + ',' + next.emi_amount + ',' + r.id + ')">Pay #' + next.installment_no + '</button>' : ''; })() : ''}
-          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">↓ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">â†“ PDF</button>
           <button class="btn-del" onclick="event.stopPropagation();deleteEmiRecord(${r.id})">Delete</button>
-          <span style="color:var(--t3);font-size:18px">${isExpanded ? '▲' : '▼'}</span>
+          <span style="color:var(--t3);font-size:18px">${isExpanded ? 'â–²' : 'â–¼'}</span>
         </div>
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:10px;line-height:1.2">
@@ -5146,16 +5180,16 @@ function renderEmiInstallments(r) {
     else if (isOverdue) rowStyle = 'background:rgba(239,68,68,0.07)';
 
     const isManual = inst.principal_component < 0 || inst.interest_component < 0;
-    const gstCell = r.gst_rate > 0 ? '<td class="td-m" style="color:var(--t3)">' + (isManual ? '—' : (inst.gst_amount || 0).toFixed(2)) + '</td>' : '';
+    const gstCell = r.gst_rate > 0 ? '<td class="td-m" style="color:var(--t3)">' + (isManual ? 'â€”' : (inst.gst_amount || 0).toFixed(2)) + '</td>' : '';
     const emiCell = isPaid
       ? '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span>'
-      : '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span> <button class="inst-edit-btn" title="Edit amount" onclick="showEditInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">✎</button>';
+      : '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span> <button class="inst-edit-btn" title="Edit amount" onclick="showEditInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">âœŽ</button>';
     const statusCell = isPaid
       ? '<span style="color:var(--green);font-size:12px;font-weight:600">&#10003; ' + fmtCur(inst.paid_amount) + '<br><span style="font-size:10px;color:var(--t3)">' + (inst.paid_date || '') + '</span></span>'
       : '<button class="btn btn-p btn-sm" onclick="showPayInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">Pay</button>';
 
-    const princCell = isManual ? '<td class="td-m" style="color:var(--t3)">—</td>' : '<td class="td-m">' + inst.principal_component.toFixed(2) + '</td>';
-    const intCell   = isManual ? '<td class="td-m" style="color:var(--t3)">—</td>' : '<td class="td-m">' + inst.interest_component.toFixed(2) + '</td>';
+    const princCell = isManual ? '<td class="td-m" style="color:var(--t3)">â€”</td>' : '<td class="td-m">' + inst.principal_component.toFixed(2) + '</td>';
+    const intCell   = isManual ? '<td class="td-m" style="color:var(--t3)">â€”</td>' : '<td class="td-m">' + inst.interest_component.toFixed(2) + '</td>';
 
     return '<tr style="' + rowStyle + '">' +
       '<td style="text-align:center;font-weight:600;font-family:var(--mono)">' + inst.installment_no + '</td>' +
@@ -5178,7 +5212,7 @@ function renderEmiInstallments(r) {
       <span style="font-size:12px;color:var(--t2)">Total: <strong>${fmtCur(r.grand_total)}</strong></span>
       <span style="font-size:12px;color:var(--green)">Paid: <strong>${fmtCur(totalPaid)}</strong></span>
       <span style="font-size:12px;color:var(--amber)">Remaining: <strong>${fmtCur(remaining)}</strong></span>
-      <span style="font-size:12px;color:var(--t2)">Start: <strong>${r.start_date || '—'}</strong></span>
+      <span style="font-size:12px;color:var(--t2)">Start: <strong>${r.start_date || 'â€”'}</strong></span>
       <div style="margin-left:auto;display:flex;gap:6px">
         ${unpaidCount > 0 ? `<button class="btn btn-s btn-sm" onclick="showBulkEditModal(${r.id},${r.monthly_emi},${unpaidCount})">Bulk Edit (${unpaidCount} unpaid)</button>` : ''}
         <button class="btn btn-s btn-sm" onclick="showEditEmiInfoModal(${r.id})">Edit Info</button>
@@ -5298,7 +5332,7 @@ function _emiExpTypeToggle() {
 
 function showAddEmiExpensesModal(id, alreadyAdded) {
   const warning = alreadyAdded
-    ? '<p style="color:var(--amber);font-size:13px;margin-bottom:12px">⚠ Expenses are already added. Adding again will replace all existing entries.</p>'
+    ? '<p style="color:var(--amber);font-size:13px;margin-bottom:12px">âš  Expenses are already added. Adding again will replace all existing entries.</p>'
     : '';
   showModal('<div class="modal-title">Add to Expenses</div>' +
     warning +
@@ -5323,7 +5357,7 @@ async function doAddEmiExpenses(id) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Individual installment amount edit ───────────────────────
+// â”€â”€ Individual installment amount edit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showEditInstallmentModal(instId, currentAmt, emiId) {
   const rec = _emiRecords.find(x => x.id === emiId);
   const inst = rec?.installments?.find(i => i.id === instId);
@@ -5334,10 +5368,10 @@ function showEditInstallmentModal(instId, currentAmt, emiId) {
     '<label class="fl" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:14px">' +
     '<input type="checkbox" id="instAutoEmi" checked style="width:auto;margin:0" onchange="instToggleMode()"> Auto-calculate EMI from Interest + Principal</label>' +
     '<div class="fg">' +
-    '<label class="fl">Interest (₹)<input class="fi" type="number" id="editInstInterest" value="' + interest.toFixed(2) + '" step="0.01" oninput="instLive()"></label>' +
-    '<label class="fl">Principal (₹)<input class="fi" type="number" id="editInstPrinc" value="' + currentPrinc.toFixed(2) + '" step="0.01" oninput="instLive()"></label>' +
+    '<label class="fl">Interest (â‚¹)<input class="fi" type="number" id="editInstInterest" value="' + interest.toFixed(2) + '" step="0.01" oninput="instLive()"></label>' +
+    '<label class="fl">Principal (â‚¹)<input class="fi" type="number" id="editInstPrinc" value="' + currentPrinc.toFixed(2) + '" step="0.01" oninput="instLive()"></label>' +
     '</div>' +
-    '<label class="fl" style="margin-top:8px">EMI Amount (₹)<input class="fi" type="number" id="editInstAmt" value="' + currentAmt.toFixed(2) + '" step="0.01" min="1" oninput="instEmiLive()" readonly style="background:var(--bg);color:var(--t3)"></label>' +
+    '<label class="fl" style="margin-top:8px">EMI Amount (â‚¹)<input class="fi" type="number" id="editInstAmt" value="' + currentAmt.toFixed(2) + '" step="0.01" min="1" oninput="instEmiLive()" readonly style="background:var(--bg);color:var(--t3)"></label>' +
     '<div id="editInstPreview" style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--t2);margin-top:4px"></div>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn btn-p" onclick="doEditInstallment(' + instId + ',' + emiId + ')">Save</button>' +
@@ -5402,13 +5436,13 @@ async function doEditInstallment(instId, emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Bulk edit all unpaid installments ────────────────────────
+// â”€â”€ Bulk edit all unpaid installments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showBulkEditModal(emiId, currentAmt, unpaidCount) {
   showModal(
     '<div class="modal-title">Bulk Edit EMI Amount</div>' +
     '<p style="color:var(--t2);font-size:13px;margin-bottom:4px">Set a single EMI amount for all <strong>' + unpaidCount + ' unpaid</strong> installments.</p>' +
     '<p style="color:var(--t3);font-size:12px;margin-bottom:16px">Already paid installments will not be affected.</p>' +
-    '<label class="fl">New EMI Amount (₹)<input class="fi" type="number" id="bulkInstAmt" value="' + currentAmt + '" step="0.01" min="1"></label>' +
+    '<label class="fl">New EMI Amount (â‚¹)<input class="fi" type="number" id="bulkInstAmt" value="' + currentAmt + '" step="0.01" min="1"></label>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn btn-p" onclick="doBulkEditInstallment(' + emiId + ')">Apply to All Unpaid</button>' +
     '<button class="btn btn-g" onclick="closeModal()">Cancel</button>' +
@@ -5428,7 +5462,7 @@ async function doBulkEditInstallment(emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Edit EMI record info (name, desc, tag) ───────────────────
+// â”€â”€ Edit EMI record info (name, desc, tag) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showEditEmiInfoModal(emiId) {
   const rec = _emiRecords.find(x => x.id === emiId);
   if (!rec) return;
@@ -5463,9 +5497,9 @@ async function doEditEmiInfo(emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // CREDIT CARDS
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _ccCards = [];
 let _ccSelectedCardId = null;
@@ -5475,7 +5509,7 @@ let _ccMonthlyYear = new Date().getFullYear();
 let _ccHistoryCycles = [];
 
 async function loadCreditCards() {
-  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading…</div></div>';
+  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
   const data = await api('/api/cc/cards');
   _ccCards = data?.cards || [];
   renderCcList();
@@ -5486,7 +5520,7 @@ function renderCcList() {
 
   const cardGrid = cards.length ? cards.map(c => renderCcCardTile(c)).join('') :
     `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border)">
-      <div style="font-size:32px;margin-bottom:12px">💳</div>
+      <div style="font-size:32px;margin-bottom:12px">ðŸ’³</div>
       <div style="font-weight:600;margin-bottom:6px">No credit cards added yet</div>
       <div style="font-size:13px">Click "Add Card" to get started</div>
     </div>`;
@@ -5513,7 +5547,7 @@ function renderCcList() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700">My Credit Cards</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadCreditCardsPdf()">↓ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadCreditCardsPdf()">â†“ PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCcCardModal()">+ Add Card</button>
         </div>
       </div>
@@ -5527,8 +5561,8 @@ function renderCcCardTile(c) {
   const spent = cycle ? cycle.net_payable : 0;
   const limit = c.credit_limit || 0;
   const usePct = limit > 0 ? Math.min(100, Math.round(spent / limit * 100)) : 0;
-  const expiry = c.expiry_month && c.expiry_year ? `${String(c.expiry_month).padStart(2,'0')}/${c.expiry_year}` : '—';
-  const dueDate = cycle?.due_date ? fmtDate(cycle.due_date) : '—';
+  const expiry = c.expiry_month && c.expiry_year ? `${String(c.expiry_month).padStart(2,'0')}/${c.expiry_year}` : 'â€”';
+  const dueDate = cycle?.due_date ? fmtDate(cycle.due_date) : 'â€”';
   const dueBadge = cycle?.status === 'billed'
     ? `<span class="cc-badge cc-badge-due">Bill Due ${dueDate}</span>`
     : cycle?.status === 'paid'
@@ -5539,7 +5573,7 @@ function renderCcCardTile(c) {
     <div class="cc-tile-header">
       <div>
         <div class="cc-tile-name">${escHtml(c.card_name)}</div>
-        <div class="cc-tile-bank">${escHtml(c.bank_name)} •••• ${escHtml(c.last4)}</div>
+        <div class="cc-tile-bank">${escHtml(c.bank_name)} â€¢â€¢â€¢â€¢ ${escHtml(c.last4)}</div>
       </div>
       <div class="cc-tile-expiry">Exp ${expiry}</div>
     </div>
@@ -5565,7 +5599,7 @@ async function openCcDetail(cardId) {
 
 async function renderCcDetail() {
   const cardId = _ccSelectedCardId;
-  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading…</div></div>';
+  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
 
   const [mainData, yearsData] = await Promise.all([
     api(`/api/cc/cards/${cardId}/current`),
@@ -5606,15 +5640,15 @@ async function renderCcDetail() {
     bodyHtml = renderCcYearly(yData?.years || []);
   }
 
-  const expiry = card.expiry_month && card.expiry_year ? `${String(card.expiry_month).padStart(2,'0')}/${card.expiry_year}` : '—';
+  const expiry = card.expiry_month && card.expiry_year ? `${String(card.expiry_month).padStart(2,'0')}/${card.expiry_year}` : 'â€”';
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-        <button class="btn btn-g btn-sm" onclick="loadCreditCards()">← Back</button>
+        <button class="btn btn-g btn-sm" onclick="loadCreditCards()">â† Back</button>
         <div style="flex:1">
           <div style="font-size:18px;font-weight:700">${escHtml(card.card_name)}</div>
-          <div style="font-size:12px;color:var(--t2)">${escHtml(card.bank_name)} •••• ${escHtml(card.last4)} &nbsp;·&nbsp; Expires ${expiry} &nbsp;·&nbsp; Bill on day ${card.bill_gen_day} &nbsp;·&nbsp; Due ${card.due_days} days after</div>
+          <div style="font-size:12px;color:var(--t2)">${escHtml(card.bank_name)} â€¢â€¢â€¢â€¢ ${escHtml(card.last4)} &nbsp;Â·&nbsp; Expires ${expiry} &nbsp;Â·&nbsp; Bill on day ${card.bill_gen_day} &nbsp;Â·&nbsp; Due ${card.due_days} days after</div>
         </div>
         <button class="btn btn-s btn-sm" onclick="showCcCardModal(${card.id})">Edit Card</button>
       </div>
@@ -5640,8 +5674,8 @@ function renderCcCurrentCycle(card, cycle, txns) {
           <td>${fmtDate(t.txn_date)}</td>
           <td>${escHtml(t.description)} ${srcBadge}</td>
           <td class="td-m">${fmtCur(t.amount)}</td>
-          <td class="td-m" style="color:var(--green)">${t.discount_pct > 0 ? t.discount_pct + '%' : '—'}</td>
-          <td class="td-m" style="color:var(--green)">${t.discount_amount > 0 ? fmtCur(t.discount_amount) : '—'}</td>
+          <td class="td-m" style="color:var(--green)">${t.discount_pct > 0 ? t.discount_pct + '%' : 'â€”'}</td>
+          <td class="td-m" style="color:var(--green)">${t.discount_amount > 0 ? fmtCur(t.discount_amount) : 'â€”'}</td>
           <td class="td-m" style="font-weight:700">${fmtCur(t.net_amount)}</td>
           <td style="text-align:right">
             <button class="btn-d" style="color:var(--em)" onclick="showCcTxnModal(${card.id},${t.id})">Edit</button>
@@ -5653,7 +5687,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
 
   return `
     <div class="cc-cycle-summary">
-      <div class="cc-cycle-stat"><div class="lbl">Cycle Period</div><div class="val">${fmtDate(cycle.cycle_start)} → ${fmtDate(cycle.cycle_end)}</div></div>
+      <div class="cc-cycle-stat"><div class="lbl">Cycle Period</div><div class="val">${fmtDate(cycle.cycle_start)} â†’ ${fmtDate(cycle.cycle_end)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Payment Due</div><div class="val" style="color:var(--amber);font-weight:700">${fmtDate(cycle.due_date)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Total Spent</div><div class="val">${fmtCur(totalAmt)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Total Discount</div><div class="val" style="color:var(--green)">- ${fmtCur(totalDisc)}</div></div>
@@ -5664,7 +5698,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <div class="card-title" style="margin:0">Transactions</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadCcCyclePdf(${card.id},${cycle.id},'${escHtml(card.bank_name)} ${escHtml(card.card_name)}')">↓ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadCcCyclePdf(${card.id},${cycle.id},'${escHtml(card.bank_name)} ${escHtml(card.card_name)}')">â†“ PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCcTxnModal(${card.id})">+ Add Transaction</button>
           <button class="btn btn-s btn-sm" onclick="showCcExcelImportModal(${cycle.id}, '${cycle.cycle_start}', '${cycle.cycle_end}', ${card.default_discount_pct || 0})">Import Excel</button>
           <button class="btn btn-s btn-sm" onclick="showCloseCycleModal(${cycle.id},${netPay})">Close Cycle / Mark Paid</button>
@@ -5681,8 +5715,8 @@ function renderCcHistory(cycles) {
   const _ccCard = _ccCards.find(c=>c.id===_ccSelectedCardId);
   const _ccLabel = _ccCard ? `${_ccCard.bank_name} ${_ccCard.card_name}` : 'Card';
   const importBtn = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
-    <button class="btn btn-s btn-sm" onclick="downloadCcHistoryPdf(${_ccSelectedCardId},'${_ccLabel.replace(/'/g,"\\'")}')">↓ PDF History</button>
-    <button class="btn btn-s btn-sm" onclick="showImportHistoryModal(${_ccSelectedCardId})">⬆ Import Historical Data</button>
+    <button class="btn btn-s btn-sm" onclick="downloadCcHistoryPdf(${_ccSelectedCardId},'${_ccLabel.replace(/'/g,"\\'")}')">â†“ PDF History</button>
+    <button class="btn btn-s btn-sm" onclick="showImportHistoryModal(${_ccSelectedCardId})">â¬† Import Historical Data</button>
   </div>`;
 
   if (!cycles.length) return importBtn + `<div style="color:var(--t3);text-align:center;padding:40px">No billing history yet.<br><span style="font-size:13px">Use the import button above to add past billing cycle totals.</span></div>`;
@@ -5699,7 +5733,7 @@ function renderCcHistory(cycles) {
       <td>${fmtDate(t.txn_date)}</td>
       <td>${escHtml(t.description)}${t.source === 'emi' ? ' <span style="font-size:10px;background:var(--bg2);color:var(--t2);padding:1px 5px;border-radius:99px">emi</span>' : ''}</td>
       <td class="td-m">${fmtCur(t.amount)}</td>
-      <td class="td-m">${t.discount_pct > 0 ? fmtCur(t.net_amount) : '—'}</td>
+      <td class="td-m">${t.discount_pct > 0 ? fmtCur(t.net_amount) : 'â€”'}</td>
       ${c.status === 'open' ? `<td class="td-m" style="white-space:nowrap">
         <button class="btn-d" style="color:var(--em)" onclick="showEditCycleTxn(${t.id})">Edit</button>
         <button class="btn-d" onclick="deleteCycleTxn(${t.id})">Del</button>
@@ -5723,16 +5757,16 @@ function renderCcHistory(cycles) {
     return `<div class="card" style="margin-bottom:12px${isFutureOpen ? ';border-color:var(--border);opacity:0.85' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
         <div>
-          <div style="font-weight:700;font-size:15px">${fmtDate(c.cycle_start)} → ${fmtDate(c.cycle_end)}
+          <div style="font-weight:700;font-size:15px">${fmtDate(c.cycle_start)} â†’ ${fmtDate(c.cycle_end)}
             ${isImported ? '<span style="font-size:10px;background:var(--bg2);color:var(--t3);padding:1px 7px;border-radius:99px;margin-left:6px;font-weight:500">historical</span>' : ''}
             ${isFutureOpen ? '<span style="font-size:10px;background:var(--bg2);color:var(--t3);padding:1px 7px;border-radius:99px;margin-left:6px;font-weight:500">future</span>' : ''}
           </div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">Due: ${c.due_date ? fmtDate(c.due_date) : '—'} &nbsp;·&nbsp; <span style="color:${statusColor};font-weight:600">${statusLabel}</span>${c.paid_date ? ' on ' + fmtDate(c.paid_date) : ''}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">Due: ${c.due_date ? fmtDate(c.due_date) : 'â€”'} &nbsp;Â·&nbsp; <span style="color:${statusColor};font-weight:600">${statusLabel}</span>${c.paid_date ? ' on ' + fmtDate(c.paid_date) : ''}</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:18px;font-weight:700">${fmtCur(c.net_payable)}</div>
-          <div style="font-size:11px;color:var(--t3)">${isImported ? 'Imported total' : `Spent ${fmtCur(c.total_amount)} · Saved ${fmtCur(c.total_discount)}`}</div>
-          <button class="btn btn-s btn-sm" style="margin-top:6px;font-size:11px" onclick="downloadCcCyclePdf(${_ccSelectedCardId},${c.id},'${_ccLabel.replace(/'/g,"\\'")}')">↓ PDF</button>
+          <div style="font-size:11px;color:var(--t3)">${isImported ? 'Imported total' : `Spent ${fmtCur(c.total_amount)} Â· Saved ${fmtCur(c.total_discount)}`}</div>
+          <button class="btn btn-s btn-sm" style="margin-top:6px;font-size:11px" onclick="downloadCcCyclePdf(${_ccSelectedCardId},${c.id},'${_ccLabel.replace(/'/g,"\\'")}')">â†“ PDF</button>
         </div>
       </div>
       ${c.txns.length || c.status === 'open' ? `<details style="margin-top:10px">
@@ -5746,13 +5780,13 @@ function renderCcHistory(cycles) {
   return importBtn + `<div>${rows}</div>`;
 }
 
-// ── Cycle CRUD (open/future cycles in billing history) ────────
+// â”€â”€ Cycle CRUD (open/future cycles in billing history) â”€â”€â”€â”€â”€â”€â”€â”€
 
 function showAddCycleTxnModal(cycleId, cycleStart, cycleEnd) {
   openModal('Add Transaction', `
     <div class="fg">
       <label class="fl full">Description *<input class="fi" id="ctDesc" placeholder="e.g. Purchase, EMI..." autofocus></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="ctAmt" placeholder="0.00"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="ctAmt" placeholder="0.00"></label>
       <label class="fl">Discount %<input class="fi" type="number" step="0.01" id="ctDisc" placeholder="0" min="0" max="100"></label>
       <label class="fl full">Date<input class="fi" type="date" id="ctDate" value="${cycleEnd < todayStr() ? cycleEnd : (cycleStart > todayStr() ? cycleStart : todayStr())}"></label>
     </div>
@@ -5775,7 +5809,7 @@ function showCcExcelImportModal(cycleId, cycleStart, cycleEnd, defaultDiscount) 
       <label class="fl">Default Txn Date<input class="fi" type="date" id="ccImportDate" value="${defaultDate}"></label>
       <label class="fl">Discount %<input class="fi" type="number" step="0.01" min="0" max="100" id="ccImportDisc" value="${defaultDiscount || 0}"></label>
     </div>
-    <div style="font-size:12px;color:var(--t3);margin:8px 0 12px">Cycle: ${fmtDate(cycleStart)} → ${fmtDate(cycleEnd)}</div>
+    <div style="font-size:12px;color:var(--t3);margin:8px 0 12px">Cycle: ${fmtDate(cycleStart)} â†’ ${fmtDate(cycleEnd)}</div>
     <div class="fa" style="justify-content:flex-start;margin-bottom:12px">
       <button class="btn btn-s" onclick="loadCcExcelSheets()">Load Sheets</button>
     </div>
@@ -5792,7 +5826,7 @@ async function loadCcExcelSheets() {
   const file = document.getElementById('ccXlsxFile')?.files?.[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('ccXlsxPass')?.value || '';
-  document.getElementById('ccXlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file…</div>`;
+  document.getElementById('ccXlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('ccXlsxPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -5821,7 +5855,7 @@ async function loadCcExcelSheets() {
       </div>
       ${checks}
     </div>
-    <button class="btn btn-s" onclick="previewCcExcelImport()">Preview →</button>`;
+    <button class="btn btn-s" onclick="previewCcExcelImport()">Preview â†’</button>`;
   if (data.sheets.length === 1) previewCcExcelImport();
 }
 
@@ -5838,7 +5872,7 @@ async function previewCcExcelImport() {
   if (!file) return;
   if (!defaultTxnDate) { toast('Select a default transaction date', 'warning'); return; }
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('ccXlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview…</div>`;
+  document.getElementById('ccXlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading previewâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -5915,7 +5949,7 @@ async function showEditCycleTxn(txnId) {
   openModal('Edit Transaction', `
     <div class="fg">
       <label class="fl full">Description *<input class="fi" id="ctDesc" value="${escHtml(txn.description)}" autofocus></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount}"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount}"></label>
       <label class="fl">Discount %<input class="fi" type="number" step="0.01" id="ctDisc" value="${txn.discount_pct || 0}" min="0" max="100"></label>
       <label class="fl full">Date<input class="fi" type="date" id="ctDate" value="${txn.txn_date}"></label>
     </div>
@@ -5955,7 +5989,7 @@ function showEditCycleModal(cycleId) {
       <label class="fl">Cycle Start<input class="fi" type="date" id="csStart" value="${cycle.cycle_start}"></label>
       <label class="fl">Cycle End<input class="fi" type="date" id="csEnd" value="${cycle.cycle_end}"></label>
       <label class="fl">Due Date<input class="fi" type="date" id="csDue" value="${cycle.due_date || ''}"></label>
-      <label class="fl">Total Amount (₹)<input class="fi" type="number" step="0.01" min="0" id="csTotal" value="${(cycle.total_amount || cycle.net_payable || 0).toFixed(2)}"></label>
+      <label class="fl">Total Amount (â‚¹)<input class="fi" type="number" step="0.01" min="0" id="csTotal" value="${(cycle.total_amount || cycle.net_payable || 0).toFixed(2)}"></label>
       <label class="fl">Status<select class="fi" id="csStatus" onchange="toggleCyclePaidDate()">
         <option value="open" ${status === 'open' ? 'selected' : ''}>Open</option>
         <option value="billed" ${status === 'billed' ? 'selected' : ''}>Billed</option>
@@ -6001,7 +6035,7 @@ async function deleteFutureCycle(cycleId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showImportHistoryModal(cardId) {
   const card = _ccCards.find(c => c.id === cardId);
   if (!card) return;
@@ -6011,7 +6045,7 @@ function showImportHistoryModal(cardId) {
   const yearOptions = years.map(y =>
     `<option value="${y}" ${y === currentYear - 1 ? 'selected' : ''}>${y}</option>`
   ).join('');
-  openModal(`Import History — ${card.card_name}`, `
+  openModal(`Import History â€” ${card.card_name}`, `
     <div style="font-size:12px;color:var(--t2);margin-bottom:14px;background:var(--bg2);border-radius:8px;padding:10px">
       Enter the <strong>total billing cycle amount</strong> for each month. Leave blank to skip that month.
       Existing cycles for the same period will be skipped (no duplicates).
@@ -6048,7 +6082,7 @@ function rebuildImportRows() {
     <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-l)">
       <div style="width:90px;font-size:13px;font-weight:600;color:var(--t2)">${name}</div>
       <label class="fl" style="flex:1;margin:0;flex-direction:row;align-items:center;gap:6px">
-        <span style="font-size:13px;color:var(--t3)">₹</span>
+        <span style="font-size:13px;color:var(--t3)">â‚¹</span>
         <input class="fi" type="number" step="0.01" min="0" placeholder="0.00" id="ihAmt_${i+1}" style="margin:0">
       </label>
       <label class="fl" style="margin:0;flex-direction:row;align-items:center;gap:6px;font-size:12px;color:var(--t2);white-space:nowrap">
@@ -6079,7 +6113,7 @@ async function doImportHistory(cardId) {
       if (r.imported > 0) {
         toast(`Imported ${r.imported} billing cycle${r.imported !== 1 ? 's' : ''}`, 'success');
       } else {
-        toast('No new cycles imported — all already exist or amounts were zero', 'info');
+        toast('No new cycles imported â€” all already exist or amounts were zero', 'info');
       }
       _ccView = 'history';
       renderCcDetail();
@@ -6127,9 +6161,9 @@ function renderCcMonthly(months, availYears) {
     return `<tr>
       <td>${MONTHS[parseInt(mo)-1]}</td>
       <td class="td-m">${fmtCur(m.total_amount)}</td>
-      <td class="td-m" style="color:var(--green)">${m.total_discount > 0 ? fmtCur(m.total_discount) : '—'}</td>
+      <td class="td-m" style="color:var(--green)">${m.total_discount > 0 ? fmtCur(m.total_discount) : 'â€”'}</td>
       <td class="td-m" style="font-weight:700">${fmtCur(m.net_payable)}</td>
-      <td class="td-m">${m.txn_count || '—'}</td>
+      <td class="td-m">${m.txn_count || 'â€”'}</td>
     </tr>`;
   }).join('');
 
@@ -6137,7 +6171,7 @@ function renderCcMonthly(months, availYears) {
   const _ccLabelM = _ccCardM ? `${_ccCardM.bank_name} ${_ccCardM.card_name}` : 'Card';
   return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcMonthlySummaryPdf(${_ccSelectedCardId},'${_ccLabelM.replace(/'/g,"\\'")}',${_ccMonthlyYear})">↓ PDF</button>
+      <button class="btn btn-s btn-sm" onclick="downloadCcMonthlySummaryPdf(${_ccSelectedCardId},'${_ccLabelM.replace(/'/g,"\\'")}',${_ccMonthlyYear})">â†“ PDF</button>
     </div>
     ${yearBar}
     <div class="cc-cycle-summary" style="margin-bottom:16px">
@@ -6147,7 +6181,7 @@ function renderCcMonthly(months, availYears) {
       <div class="cc-cycle-stat"><div class="lbl">Months Active</div><div class="val">${months.length}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px">
-      <div class="card-title">${_ccMonthlyYear} — Monthly Spend</div>
+      <div class="card-title">${_ccMonthlyYear} â€” Monthly Spend</div>
       <div class="cc-chart-wrap">${allMonthBars}</div>
     </div>
     <div class="table-wrap"><table>
@@ -6161,7 +6195,7 @@ function renderCcYearly(years) {
   const _ccLabelY = _ccCardY ? `${_ccCardY.bank_name} ${_ccCardY.card_name}` : 'Card';
   if (!years.length) return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">↓ PDF</button>
+      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">â†“ PDF</button>
     </div>
     <div style="color:var(--t3);text-align:center;padding:40px">No historical data yet.</div>`;
 
@@ -6181,15 +6215,15 @@ function renderCcYearly(years) {
   const rows = years.map(y => `<tr>
     <td style="font-weight:700;font-family:var(--mono)">${y.year}</td>
     <td class="td-m">${fmtCur(y.total_amount)}</td>
-    <td class="td-m" style="color:var(--green)">${y.total_discount > 0 ? fmtCur(y.total_discount) : '—'}</td>
+    <td class="td-m" style="color:var(--green)">${y.total_discount > 0 ? fmtCur(y.total_discount) : 'â€”'}</td>
     <td class="td-m" style="font-weight:700">${fmtCur(y.net_payable)}</td>
-    <td class="td-m">${y.txn_count || '—'}</td>
+    <td class="td-m">${y.txn_count || 'â€”'}</td>
     <td class="td-m">${y.cycle_count}</td>
   </tr>`).join('');
 
   return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">↓ PDF</button>
+      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">â†“ PDF</button>
     </div>
     <div class="cc-cycle-summary" style="margin-bottom:16px">
       <div class="cc-cycle-stat"><div class="lbl">All-time Spent</div><div class="val">${fmtCur(grandTotal)}</div></div>
@@ -6207,7 +6241,7 @@ function renderCcYearly(years) {
     </table></div>`;
 }
 
-// ── Add / Edit Card Modal ─────────────────────────────────────
+// â”€â”€ Add / Edit Card Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showCcCardModal(id) {
   let card = { bank_name: '', card_name: '', last4: '', expiry_month: '', expiry_year: '', bill_gen_day: 1, due_days: 20, default_discount_pct: 0, credit_limit: '' };
   let currentCycle = null;
@@ -6229,7 +6263,7 @@ async function showCcCardModal(id) {
       <label class="fl">Payment Due (days after bill)<input class="fi" type="number" id="ccDueDays" value="${card.due_days||20}" min="1" max="60"></label>
       ${currentCycle ? `<label class="fl">Current Cycle Due Date<input class="fi" type="date" id="ccCurrentDueDate" value="${currentCycle.due_date || ''}"></label>` : ''}
       <label class="fl">Default Discount %<input class="fi" type="number" id="ccDisc" value="${card.default_discount_pct||0}" step="0.1" min="0" max="100" placeholder="0"></label>
-      <label class="fl">Credit Limit (₹)<input class="fi" type="number" id="ccLimit" value="${card.credit_limit||''}" placeholder="optional"></label>
+      <label class="fl">Credit Limit (â‚¹)<input class="fi" type="number" id="ccLimit" value="${card.credit_limit||''}" placeholder="optional"></label>
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="saveCcCard(${id||'null'})">${id ? 'Update' : 'Add Card'}</button>
@@ -6280,7 +6314,7 @@ async function deleteCcCard(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Add / Edit Transaction Modal ──────────────────────────────
+// â”€â”€ Add / Edit Transaction Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showCcTxnModal(cardId, txnId) {
   const card = _ccCards.find(c => c.id === cardId) || { default_discount_pct: 0, card_name: '' };
   let txn = { txn_date: todayStr(), description: '', amount: '', discount_pct: card.default_discount_pct };
@@ -6293,7 +6327,7 @@ async function showCcTxnModal(cardId, txnId) {
     <div class="fg">
       <label class="fl">Date *<input class="fi" type="date" id="ctDate" value="${txn.txn_date}"></label>
       <label class="fl full">Description *<input class="fi" id="ctDesc" value="${escHtml(txn.description)}" placeholder="e.g. Amazon, Grocery..."></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount||''}" placeholder="0.00" oninput="ccTxnPreview(${card.default_discount_pct})"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount||''}" placeholder="0.00" oninput="ccTxnPreview(${card.default_discount_pct})"></label>
       <label class="fl">Discount % <span style="font-size:11px;color:var(--t3)">(default: ${card.default_discount_pct}%)</span><input class="fi" type="number" step="0.1" id="ctDisc" value="${txn.discount_pct||0}" min="0" max="100" oninput="ccTxnPreview()"></label>
     </div>
     <div id="ctPreview" style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--t2);margin:4px 0 12px">
@@ -6317,7 +6351,7 @@ function ccTxnPreview() {
   const discAmt = Math.round(amt * disc / 100 * 100) / 100;
   const net = Math.round(amt * 100) / 100;
   document.getElementById('ctPreview').innerHTML =
-    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;–&nbsp; Discount: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;–&nbsp; Net Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
+    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;â€“&nbsp; Discount: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;â€“&nbsp; Net Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
 }
 
 async function saveCcTxn(cardId, txnId) {
@@ -6355,12 +6389,12 @@ async function deleteCcTxn(txnId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Close Cycle Modal ─────────────────────────────────────────
+// â”€â”€ Close Cycle Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showCloseCycleModal(cycleId, netPayable) {
   openModal('Close Billing Cycle', `
     <p style="color:var(--t2);font-size:13px;margin-bottom:16px">Mark this billing cycle as closed. Optionally record your payment details.</p>
     <div class="fg">
-      <label class="fl">Amount Paid (₹)<input class="fi" type="number" step="0.01" id="ccPaidAmt" value="${netPayable.toFixed(2)}" placeholder="0.00"></label>
+      <label class="fl">Amount Paid (â‚¹)<input class="fi" type="number" step="0.01" id="ccPaidAmt" value="${netPayable.toFixed(2)}" placeholder="0.00"></label>
       <label class="fl">Payment Date<input class="fi" type="date" id="ccPaidDate" value="${todayStr()}"></label>
     </div>
     <div style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
@@ -6385,7 +6419,7 @@ async function doCloseCycle(cycleId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ── "Add to Credit Card" helper (called from expense/split/trip forms) ──
+// â”€â”€ "Add to Credit Card" helper (called from expense/split/trip forms) â”€â”€
 async function getCcCardsForForm() {
   if (_ccCards.length === 0) {
     const data = await api('/api/cc/cards');
@@ -6399,7 +6433,7 @@ function _buildDivCcSection(existingCcInfo) {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} ••${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = existingCcInfo?.discountPct ?? (cards[0]?.default_discount_pct || 0);
   const checked = existingCcInfo ? 'checked' : '';
@@ -6443,7 +6477,7 @@ function ccFormSection() {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} ••${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = cards[0]?.default_discount_pct || 0;
   return `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
@@ -6494,14 +6528,14 @@ async function saveCcLinkIfChecked(description, amount, txnDate, source, sourceI
   }});
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // BANK ACCOUNTS
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _bankAccounts = [];
 
 async function loadBankAccounts() {
-  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading…</div></div>';
+  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
   const data = await api('/api/banks');
   _bankAccounts = data?.accounts || [];
   renderBankAccounts();
@@ -6528,7 +6562,7 @@ function renderBankAccounts() {
         return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' — ' + escHtml(a.account_name) : ''}
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}
                 ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
               </div>
               <div class="bank-card-type">${typeLabel}</div>
@@ -6536,7 +6570,7 @@ function renderBankAccounts() {
           </div>
           <div class="bank-card-balance-wrap" id="bankBalWrap_${a.id}" onclick="startBalanceEdit(${a.id}, ${a.balance})" title="Click to edit balance">
             <div class="bank-card-balance bank-bal-display" id="bankBalDisplay_${a.id}">${fmtCur(a.balance)}</div>
-            <span class="bank-bal-edit-hint">✎</span>
+            <span class="bank-bal-edit-hint">âœŽ</span>
           </div>
           <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
@@ -6548,7 +6582,7 @@ function renderBankAccounts() {
         </div>`;
       }).join('')
     : `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
-        <div style="font-size:32px;margin-bottom:12px">🏦</div>
+        <div style="font-size:32px;margin-bottom:12px">ðŸ¦</div>
         <div style="font-weight:600;margin-bottom:6px">No bank accounts added yet</div>
         <div style="font-size:13px">Click "Add Account" to track your balances</div>
       </div>`;
@@ -6585,8 +6619,8 @@ function showBankModal(id) {
         <option value="current" ${a.account_type==='current'?'selected':''}>Current</option>
         <option value="salary" ${a.account_type==='salary'?'selected':''}>Salary</option>
       </select></label>
-      <label class="fl">Current Balance (₹) *<input class="fi" type="number" step="0.01" id="baBal" value="${a.balance || ''}" placeholder="0.00"></label>
-      <label class="fl">Minimum Balance (₹)<input class="fi" type="number" step="0.01" id="baMin" value="${a.min_balance || ''}" placeholder="0.00">
+      <label class="fl">Current Balance (â‚¹) *<input class="fi" type="number" step="0.01" id="baBal" value="${a.balance || ''}" placeholder="0.00"></label>
+      <label class="fl">Minimum Balance (â‚¹)<input class="fi" type="number" step="0.01" id="baMin" value="${a.min_balance || ''}" placeholder="0.00">
         <span style="font-size:11px;color:var(--t3);margin-top:3px;display:block">Amount you cannot spend (locked by bank)</span>
       </label>
     </div>
@@ -6614,8 +6648,8 @@ function showUpdateBalanceModal(id) {
   const a = _bankAccounts.find(x => x.id === id);
   if (!a) return;
   openModal('Update Balance', `
-    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${escHtml(a.bank_name)}${a.account_name ? ' — ' + escHtml(a.account_name) : ''}</div>
-    <label class="fl">Current Balance (₹)<input class="fi" type="number" step="0.01" id="baNewBal" value="${a.balance}" autofocus></label>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}</div>
+    <label class="fl">Current Balance (â‚¹)<input class="fi" type="number" step="0.01" id="baNewBal" value="${a.balance}" autofocus></label>
     <div class="fa" style="margin-top:14px">
       <button class="btn btn-p" onclick="doUpdateBalance(${id})">Update</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -6651,8 +6685,8 @@ function startBalanceEdit(id, currentBalance) {
   wrap.title = '';
   wrap.innerHTML = `
     <input type="number" id="bankBalInput_${id}" class="bank-bal-input" value="${currentBalance}" step="0.01" min="0" autofocus>
-    <button class="bank-bal-btn bank-bal-save" onclick="saveInlineBalance(${id})" title="Save">✓</button>
-    <button class="bank-bal-btn bank-bal-cancel" onclick="cancelBalanceEdit(${id})" title="Cancel">✗</button>`;
+    <button class="bank-bal-btn bank-bal-save" onclick="saveInlineBalance(${id})" title="Save">âœ“</button>
+    <button class="bank-bal-btn bank-bal-cancel" onclick="cancelBalanceEdit(${id})" title="Cancel">âœ—</button>`;
   const input = document.getElementById(`bankBalInput_${id}`);
   input.focus();
   input.select();
@@ -6676,9 +6710,9 @@ function cancelBalanceEdit() {
   loadBankAccounts();
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MONTHLY PLANNER
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 function _localYM(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 function _addMonths(ym, n) { const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-1+n,1); return _localYM(d); }
@@ -6692,7 +6726,7 @@ let _defaultsCount = null; // cached count of active default payments
 async function loadPlanner() {
   _previewDataCache = null;
   _previewBankBalances = {};
-  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading…</div></div>';
+  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
   await renderPlanner();
 }
 
@@ -6718,10 +6752,10 @@ async function renderPlanner() {
 
   const monthNav = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-      <button class="btn btn-g btn-sm" ${canGoPrev ? `onclick="_plannerMonth='${_todayMonth}';_previewBankBalances={};_previewDataCache=null;renderPlanner()"` : 'disabled style="opacity:0.3;cursor:default"'}>‹</button>
+      <button class="btn btn-g btn-sm" ${canGoPrev ? `onclick="_plannerMonth='${_todayMonth}';_previewBankBalances={};_previewDataCache=null;renderPlanner()"` : 'disabled style="opacity:0.3;cursor:default"'}>â€¹</button>
       <div style="font-size:18px;font-weight:700;flex:1;text-align:center">${monthLabel}${futureBadge}</div>
-      <button class="btn btn-s btn-sm" onclick="downloadPlannerPdf()">↓ PDF</button>
-      <button class="btn btn-g btn-sm" ${canGoNext ? `onclick="_plannerMonth='${nextMonth}';_previewBankBalances={};_previewDataCache=null;renderPlanner()"` : 'disabled style="opacity:0.3;cursor:default"'}>›</button>
+      <button class="btn btn-s btn-sm" onclick="downloadPlannerPdf()">â†“ PDF</button>
+      <button class="btn btn-g btn-sm" ${canGoNext ? `onclick="_plannerMonth='${nextMonth}';_previewBankBalances={};_previewDataCache=null;renderPlanner()"` : 'disabled style="opacity:0.3;cursor:default"'}>â€º</button>
     </div>`;
 
   const defaultsLabel = `Default Payments${_defaultsCount !== null ? ` (${_defaultsCount})` : ''}`;
@@ -6765,18 +6799,18 @@ async function renderPlanner() {
     </div>`;
 }
 
-// ── Live preview of new balance as user types (updates tooltip only) ──────────
+// â”€â”€ Live preview of new balance as user types (updates tooltip only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function previewAddBalance(bankId, addVal, baseBalance) {
   const add = parseFloat(addVal) || 0;
   const newBal = baseBalance + add;
   const el = document.getElementById(`prevBalPreview_${bankId}`);
   if (el) {
-    el.textContent = add !== 0 ? `→ New balance: ${fmtCur(newBal)}` : '';
+    el.textContent = add !== 0 ? `â†’ New balance: ${fmtCur(newBal)}` : '';
     el.style.color = add > 0 ? 'var(--green)' : add < 0 ? 'var(--red)' : 'var(--t3)';
   }
 }
 
-// ── Apply the added amount and re-render summary ────────────────────────────
+// â”€â”€ Apply the added amount and re-render summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function applyPreviewBalance(bankId, baseBalance) {
   const inp = document.getElementById(`addBal_${bankId}`);
   const add = parseFloat(inp?.value) || 0;
@@ -6790,7 +6824,7 @@ function applyPreviewBalance(bankId, baseBalance) {
   if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(accounts, pd.projectedDefaults || [], pd.projectedCcDues || [], pd.emiDues || []);
 }
 
-// ── Reset a bank's simulated balance back to actual ────────────────────────
+// â”€â”€ Reset a bank's simulated balance back to actual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function resetPreviewBalance(bankId) {
   delete _previewBankBalances[bankId];
   const pd = _previewDataCache || {};
@@ -6817,7 +6851,7 @@ function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
     const bankSpend = Math.round((a.balance - (a.min_balance || 0)) * 100) / 100;
     const diff = Math.round((bankSpend - due) * 100) / 100;
     const ok = diff >= 0;
-    const acctSuffix = a.account_name ? ` <span style="color:var(--t3);font-weight:400">— ${escHtml(a.account_name)}</span>` : '';
+    const acctSuffix = a.account_name ? ` <span style="color:var(--t3);font-weight:400">â€” ${escHtml(a.account_name)}</span>` : '';
     const override = _previewBankBalances[a.id] !== undefined;
     return `<div class="bank-due-row" style="flex-direction:column;align-items:flex-start;gap:6px">
       <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap">
@@ -6825,7 +6859,7 @@ function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
         <span style="color:var(--t2);font-size:13px">Balance: <strong style="font-family:var(--mono)">${fmtCur(a.balance)}</strong>${override ? ' <span style="background:rgba(99,102,241,0.12);color:#6366f1;font-size:10px;padding:1px 6px;border-radius:4px">simulated</span>' : ''}</span>
         <span style="color:var(--t2);font-size:13px">Spendable: <strong>${fmtCur(bankSpend)}</strong></span>
         <span style="color:var(--t2);font-size:13px">Dues: <strong>${fmtCur(due)}</strong></span>
-        <span style="color:${ok ? 'var(--green)' : 'var(--red)'}"><strong>${ok ? '✓ Surplus' : '⚠ Shortfall'}: ${fmtCur(Math.abs(diff))}</strong></span>
+        <span style="color:${ok ? 'var(--green)' : 'var(--red)'}"><strong>${ok ? 'âœ“ Surplus' : 'âš  Shortfall'}: ${fmtCur(Math.abs(diff))}</strong></span>
         ${override ? `<button onclick="resetPreviewBalance(${a.id})" style="font-size:11px;color:var(--red);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline">Reset</button>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -6843,8 +6877,8 @@ function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
 
   return `
     <div style="background:rgba(99,102,241,0.06);border:1.5px dashed rgba(99,102,241,0.3);border-radius:12px;padding:14px 16px;margin-bottom:16px">
-      <div style="font-size:13px;font-weight:700;color:#6366f1;margin-bottom:4px">🔮 Preview Mode</div>
-      <div style="font-size:12px;color:var(--t2)">Amounts are projected from your defaults, active EMIs, and estimated CC dues (based on latest cycle). <strong>Edit any bank balance below</strong> to simulate your future position — changes are not saved.</div>
+      <div style="font-size:13px;font-weight:700;color:#6366f1;margin-bottom:4px">ðŸ”® Preview Mode</div>
+      <div style="font-size:12px;color:var(--t2)">Amounts are projected from your defaults, active EMIs, and estimated CC dues (based on latest cycle). <strong>Edit any bank balance below</strong> to simulate your future position â€” changes are not saved.</div>
     </div>
     <div class="planner-summary">
       <div class="pl-stat"><div class="lbl">Projected Due</div><div class="val">${fmtCur(totalDue)}</div></div>
@@ -6853,9 +6887,9 @@ function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
       <div class="pl-stat"><div class="lbl">After All Dues</div><div class="val" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${fmtCur(afterPay)}</div></div>
     </div>
     <div class="pl-result ${surplus ? 'surplus' : 'deficit'}">
-      <div class="pl-result-label" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${surplus ? '✓ After paying all projected dues you will have' : '⚠ Projected shortfall — you need'}</div>
+      <div class="pl-result-label" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${surplus ? 'âœ“ After paying all projected dues you will have' : 'âš  Projected shortfall â€” you need'}</div>
       <div class="pl-result-amt" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${fmtCur(Math.abs(afterPay))}</div>
-      <div style="font-size:12px;color:var(--t2);margin-top:4px">Balance: ${fmtCur(totalBal)} &nbsp;·&nbsp; Spendable: ${fmtCur(spendable)} &nbsp;·&nbsp; Dues: ${fmtCur(totalDue)}</div>
+      <div style="font-size:12px;color:var(--t2);margin-top:4px">Balance: ${fmtCur(totalBal)} &nbsp;Â·&nbsp; Spendable: ${fmtCur(spendable)} &nbsp;Â·&nbsp; Dues: ${fmtCur(totalDue)}</div>
     </div>
     ${accounts.length ? `<div class="bank-breakdown-wrap">
       <div style="font-size:12px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Bank-wise Simulation</div>
@@ -6895,10 +6929,10 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
       <div class="pay-row-name">
         <span style="background:var(--blue-l);color:var(--blue);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">CC</span>
         ${escHtml(c.card_name)}
-        <span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(c.bank_name)} ••${escHtml(String(c.last4))}</span>
+        <span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(c.bank_name)} â€¢â€¢${escHtml(String(c.last4))}</span>
         ${c.is_projected ? '<span style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;padding:1px 5px;border-radius:4px;margin-left:4px">estimated</span>' : ''}
       </div>
-      <div class="pay-row-sub">Due ${fmtDate(c.due_date)} · Cycle ${fmtDate(c.cycle_start)}→${fmtDate(c.cycle_end)}</div>
+      <div class="pay-row-sub">Due ${fmtDate(c.due_date)} Â· Cycle ${fmtDate(c.cycle_start)}â†’${fmtDate(c.cycle_end)}</div>
     </div>
     <div class="pay-row-amt">${c.net_payable > 0 ? fmtCur(c.net_payable) : '<span style="color:var(--t3);font-size:12px">TBD</span>'}</div>
   </div>`;
@@ -6943,7 +6977,7 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
 function _bankDropdownOptions(selectedId) {
   const opts = `<option value="">-- None (Unassigned) --</option>` +
     _bankAccounts.map(a =>
-      `<option value="${a.id}" ${selectedId == a.id ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' — ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`
+      `<option value="${a.id}" ${selectedId == a.id ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`
     ).join('');
   return opts;
 }
@@ -6953,7 +6987,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
   skipped  = skipped  || [];
   emiDues  = emiDues  || [];
 
-  // Totals — include CC dues + EMI dues in remaining calculation
+  // Totals â€” include CC dues + EMI dues in remaining calculation
   const ccUnpaid    = ccDues.filter(c => c.status !== 'paid');
   const ccPaidList  = ccDues.filter(c => c.status === 'paid');
   const emiUnpaid   = emiDues.filter(i => i.paid_amount < i.emi_amount * 0.999);
@@ -6975,9 +7009,9 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
       <div class="pl-stat"><div class="lbl">Bank Spendable</div><div class="val">${fmtCur(spendable)}</div></div>
     </div>
     <div class="pl-result ${surplus ? 'surplus' : 'deficit'}">
-      <div class="pl-result-label" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${surplus ? '✓ After paying all dues you will have' : '⚠ Shortfall — you need'}</div>
+      <div class="pl-result-label" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${surplus ? 'âœ“ After paying all dues you will have' : 'âš  Shortfall â€” you need'}</div>
       <div class="pl-result-amt" style="color:${surplus ? 'var(--green)' : 'var(--red)'}">${fmtCur(Math.abs(afterPay))}</div>
-      <div style="font-size:12px;color:var(--t2);margin-top:4px">Bank balance: ${fmtCur(totalBal)} &nbsp;·&nbsp; Spendable: ${fmtCur(spendable)} &nbsp;·&nbsp; Remaining dues: ${fmtCur(remaining)}</div>
+      <div style="font-size:12px;color:var(--t2);margin-top:4px">Bank balance: ${fmtCur(totalBal)} &nbsp;Â·&nbsp; Spendable: ${fmtCur(spendable)} &nbsp;Â·&nbsp; Remaining dues: ${fmtCur(remaining)}</div>
     </div>`;
 
   // Per-bank breakdown
@@ -6991,14 +7025,14 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
       const bankSpend = Math.round((a.balance - a.min_balance) * 100) / 100;
       const diff = Math.round((bankSpend - due) * 100) / 100;
       const ok = diff >= 0;
-      const acctSuffix = a.account_name ? ` <span style="color:var(--t3);font-weight:400">— ${escHtml(a.account_name)}</span>` : '';
+      const acctSuffix = a.account_name ? ` <span style="color:var(--t3);font-weight:400">â€” ${escHtml(a.account_name)}</span>` : '';
       return `<div class="bank-due-row">
         <div class="bank-due-name">${escHtml(a.bank_name)}${acctSuffix}${a.is_default ? ' <span class="bank-default-badge" style="font-size:10px">Default</span>' : ''}</div>
         <div class="bank-due-stats">
           <span>Balance: <strong>${fmtCur(a.balance)}</strong></span>
           <span>Spendable: <strong>${fmtCur(bankSpend)}</strong></span>
           <span>Assigned dues: <strong>${fmtCur(due)}</strong></span>
-          <span style="color:${ok ? 'var(--green)' : 'var(--red)'}"><strong>${ok ? '✓ Surplus' : '⚠ Shortfall'}: ${fmtCur(Math.abs(diff))}</strong></span>
+          <span style="color:${ok ? 'var(--green)' : 'var(--red)'}"><strong>${ok ? 'âœ“ Surplus' : 'âš  Shortfall'}: ${fmtCur(Math.abs(diff))}</strong></span>
         </div>
       </div>`;
     });
@@ -7019,7 +7053,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = p.status === 'paid';
     const isPartial = p.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '✓' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? 'âœ“' : isPartial ? '~' : '';
     const dueLabel  = p.due_date ? `Due ${fmtDate(p.due_date)}` : '';
     const paidLabel = isPaid ? `Paid ${p.paid_date ? fmtDate(p.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(p.paid_amount)}` : '';
     const bankAcc   = p.bank_account_id ? accounts.find(a => a.id == p.bank_account_id) : null;
@@ -7028,7 +7062,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
       <div class="pay-row-check ${checkCls}" onclick="quickTogglePay(${p.id}, ${isPaid ? 0 : p.amount})" title="${isPaid ? 'Mark unpaid' : 'Mark paid'}">${checkIcon}</div>
       <div style="flex:1;min-width:0">
         <div class="pay-row-name">${escHtml(p.name)}${p.daily_tracker_id ? ' <span style="font-size:10px;color:var(--t3);font-weight:400">daily tracker</span>' : ((p.default_payment_id || p.recurring_entry_id) ? ' <span style="font-size:10px;color:var(--t3);font-weight:400">recurring</span>' : '')}${bankLabel}</div>
-        <div class="pay-row-sub">${dueLabel}${paidLabel ? (dueLabel ? ' · ' : '') + paidLabel : ''}</div>
+        <div class="pay-row-sub">${dueLabel}${paidLabel ? (dueLabel ? ' Â· ' : '') + paidLabel : ''}</div>
       </div>
       <div class="pay-row-amt ${isPaid ? 'paid' : ''}">${fmtCur(p.amount)}</div>
       <div class="pay-row-actions">
@@ -7044,7 +7078,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = c.status === 'paid';
     const isPartial = c.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '✓' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? 'âœ“' : isPartial ? '~' : '';
     const txnNote   = c.txn_count > 0 ? `${c.txn_count} transaction${c.txn_count > 1 ? 's' : ''}` : 'no transactions yet';
     const paidLabel = isPaid ? `Paid ${c.paid_date ? fmtDate(c.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(c.paid_amount)}` : '';
     return `<div class="pay-row ${isPaid ? 'paid' : ''}" style="border-left:3px solid var(--blue)">
@@ -7053,9 +7087,9 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
         <div class="pay-row-name">
           <span style="background:var(--blue-l);color:var(--blue);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">CC</span>
           ${escHtml(c.card_name)}
-          <span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(c.bank_name)} ••${escHtml(c.last4)}</span>
+          <span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)}</span>
         </div>
-        <div class="pay-row-sub">Due ${fmtDate(c.due_date)} · Cycle ${fmtDate(c.cycle_start)}→${fmtDate(c.cycle_end)} · ${txnNote}${paidLabel ? ' · ' + paidLabel : ''}</div>
+        <div class="pay-row-sub">Due ${fmtDate(c.due_date)} Â· Cycle ${fmtDate(c.cycle_start)}â†’${fmtDate(c.cycle_end)} Â· ${txnNote}${paidLabel ? ' Â· ' + paidLabel : ''}</div>
       </div>
       <div class="pay-row-amt ${isPaid ? 'paid' : ''}">${fmtCur(c.net_payable)}</div>
       <div class="pay-row-actions">
@@ -7074,7 +7108,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
         ${escHtml(i.emi_name)}
         <span style="font-size:11px;color:var(--t3);font-weight:400">Installment #${i.installment_no}</span>
       </div>
-      <div class="pay-row-sub">Due ${fmtDate(i.due_date)}${i.paid_amount > 0 ? ' · Partial: ' + fmtCur(i.paid_amount) : ''}</div>
+      <div class="pay-row-sub">Due ${fmtDate(i.due_date)}${i.paid_amount > 0 ? ' Â· Partial: ' + fmtCur(i.paid_amount) : ''}</div>
     </div>
     <div class="pay-row-amt">${fmtCur(i.emi_amount)}</div>
     <div class="pay-row-actions">
@@ -7097,17 +7131,17 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
         item._type === 'emi' ? emiRow(item._data) :
                                payRow(item._data)
       ).join('')
-    : `<div style="color:var(--t3);padding:16px;text-align:center;font-size:13px">All paid! 🎉</div>`;
+    : `<div style="color:var(--t3);padding:16px;text-align:center;font-size:13px">All paid! ðŸŽ‰</div>`;
 
   const emiPaidRow = (i) => `<div class="pay-row paid" style="border-left:3px solid var(--green)">
-    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)">✓</div>
+    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)">âœ“</div>
     <div style="flex:1;min-width:0">
       <div class="pay-row-name">
         <span style="background:var(--green)22;color:var(--green);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">EMI</span>
         ${escHtml(i.emi_name)}
         <span style="font-size:11px;color:var(--t3);font-weight:400">Installment #${i.installment_no}</span>
       </div>
-      <div class="pay-row-sub">Paid ${i.paid_date ? fmtDate(i.paid_date) : ''} · Due was ${fmtDate(i.due_date)}</div>
+      <div class="pay-row-sub">Paid ${i.paid_date ? fmtDate(i.paid_date) : ''} Â· Due was ${fmtDate(i.due_date)}</div>
     </div>
     <div class="pay-row-amt paid">${fmtCur(i.paid_amount)}</div>
     <div class="pay-row-actions">
@@ -7153,7 +7187,7 @@ function showPlannerEmiPayModal(instId, emiAmount) {
   const defaultBank = _bankAccounts.find(a => a.is_default);
   const bankOpts = _bankAccounts.map(a =>
     '<option value="' + a.id + '"' + (a.is_default ? ' selected' : '') + '>' +
-    escHtml(a.bank_name) + (a.account_name ? ' — ' + escHtml(a.account_name) : '') + '</option>'
+    escHtml(a.bank_name) + (a.account_name ? ' â€” ' + escHtml(a.account_name) : '') + '</option>'
   ).join('');
   const bankNote = defaultBank
     ? '<div style="font-size:12px;color:var(--t3);margin-top:2px">Paid amount will be deducted from selected bank balance</div>'
@@ -7210,7 +7244,7 @@ function renderPlannerDefaults(defaults) {
     return `<div class="def-pay-row ${d.is_active ? '' : 'inactive'}">
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600">${escHtml(d.name)} ${d.category ? `<span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(d.category)}</span>` : ''} ${bankLabel}</div>
-        <div style="font-size:11px;color:var(--t3)">Due on day ${d.due_day} each month ${d.is_active ? '' : '· <span style="color:var(--red)">Inactive</span>'}</div>
+        <div style="font-size:11px;color:var(--t3)">Due on day ${d.due_day} each month ${d.is_active ? '' : 'Â· <span style="color:var(--red)">Inactive</span>'}</div>
       </div>
       <div style="font-size:14px;font-weight:700;font-family:var(--mono);margin-right:8px">${fmtCur(d.amount)}</div>
       <button class="btn-d" style="color:var(--em)" onclick="showDefaultModal(${d.id})">Edit</button>
@@ -7226,7 +7260,7 @@ function renderPlannerDefaults(defaults) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div>
         <div style="font-size:16px;font-weight:700">Default Monthly Payments</div>
-        <div style="font-size:12px;color:var(--t2);margin-top:2px">${active.length} active · Monthly total: <strong>${fmtCur(total)}</strong></div>
+        <div style="font-size:12px;color:var(--t2);margin-top:2px">${active.length} active Â· Monthly total: <strong>${fmtCur(total)}</strong></div>
       </div>
       <button class="btn btn-p btn-sm" onclick="showDefaultModal()">+ Add Default</button>
     </div>
@@ -7234,11 +7268,11 @@ function renderPlannerDefaults(defaults) {
     <div style="font-size:12px;color:var(--t3);margin-top:10px;padding:0 4px">These payments are automatically added to each month's planner on the specified due day.</div>`;
 }
 
-// ── Pay Modal ────────────────────────────────────────────────
+// â”€â”€ Pay Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showPayModal(id, amount) {
   openModal('Mark as Paid', `
     <div class="fg">
-      <label class="fl">Amount Paid (₹)<input class="fi" type="number" step="0.01" id="pmAmt" value="${amount}" autofocus></label>
+      <label class="fl">Amount Paid (â‚¹)<input class="fi" type="number" step="0.01" id="pmAmt" value="${amount}" autofocus></label>
       <label class="fl">Payment Date<input class="fi" type="date" id="pmDate" value="${todayStr()}"></label>
     </div>
     <div class="fa">
@@ -7251,7 +7285,7 @@ function showPayModal(id, amount) {
 function showCcPayModal(cycleId, netPayable) {
   openModal('Pay Credit Card Bill', `
     <div class="fg">
-      <label class="fl">Amount Paid (₹)<input class="fi" type="number" step="0.01" id="ccpAmt" value="${netPayable.toFixed(2)}" autofocus></label>
+      <label class="fl">Amount Paid (â‚¹)<input class="fi" type="number" step="0.01" id="ccpAmt" value="${netPayable.toFixed(2)}" autofocus></label>
       <label class="fl">Payment Date<input class="fi" type="date" id="ccpDate" value="${todayStr()}"></label>
     </div>
     <div style="background:var(--blue-l);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--blue);margin-bottom:12px">
@@ -7290,13 +7324,13 @@ async function quickTogglePay(id, amount) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Add / Edit Monthly Payment Modal ────────────────────────
+// â”€â”€ Add / Edit Monthly Payment Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showAddPaymentModal() {
   const defaultDue = `${_plannerMonth}-01`;
   openModal('Add Payment', `
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="mpName" placeholder="e.g. Rent, Netflix, Electricity..." autofocus></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="mpAmt" placeholder="0.00"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="mpAmt" placeholder="0.00"></label>
       <label class="fl">Due Date<input class="fi" type="date" id="mpDue" value="${defaultDue}"></label>
       <label class="fl">Bank Account<select class="fi" id="mpBank"><option value="">-- None --</option>${_bankDropdownOptions(null)}</select></label>
       <label class="fl full">Notes<input class="fi" id="mpNotes" placeholder="optional"></label>
@@ -7314,7 +7348,7 @@ async function showEditPaymentModal(id) {
   openModal('Edit Payment', `
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="mpName" value="${escHtml(p.name)}" autofocus></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="mpAmt" value="${p.amount}"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="mpAmt" value="${p.amount}"></label>
       <label class="fl">Due Date<input class="fi" type="date" id="mpDue" value="${p.due_date || ''}"></label>
       <label class="fl">Bank Account<select class="fi" id="mpBank"><option value="">-- None --</option>${_bankDropdownOptions(p.bank_account_id)}</select></label>
       <label class="fl full">Notes<input class="fi" id="mpNotes" value="${escHtml(p.notes || '')}"></label>
@@ -7363,7 +7397,7 @@ async function permanentDeleteDefault(monthlyId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ── Default Payments Modal ───────────────────────────────────
+// â”€â”€ Default Payments Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showDefaultModal(id) {
   let d = { name: '', amount: '', due_day: 1, category: '', is_active: 1, bank_account_id: null, auto_detect_bank: 0 };
   if (id) {
@@ -7375,8 +7409,8 @@ async function showDefaultModal(id) {
   openModal(id ? 'Edit Default Payment' : 'Add Default Payment', `
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="dpName" value="${escHtml(d.name)}" placeholder="e.g. Rent, Netflix, EMI..." autofocus></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="dpAmt" value="${d.amount || ''}" placeholder="0.00"></label>
-      <label class="fl">Due Day (1–28)<input class="fi" type="number" id="dpDay" value="${d.due_day || 1}" min="1" max="28">
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="dpAmt" value="${d.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Due Day (1â€“28)<input class="fi" type="number" id="dpDay" value="${d.due_day || 1}" min="1" max="28">
         <span style="font-size:11px;color:var(--t3);margin-top:3px;display:block">Day of month when payment is due</span>
       </label>
       <label class="fl">Category<input class="fi" id="dpCat" value="${escHtml(d.category || '')}" placeholder="e.g. Rent, Utilities, Subscriptions"></label>
@@ -7428,9 +7462,9 @@ async function deleteDefault(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // AI LOOKUP
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _aiHistory = []; // { role: 'user'|'assistant', content: string }
 let _aiStatus = null;
@@ -7442,7 +7476,7 @@ async function loadAiLookup() {
   document.getElementById('main').innerHTML = `
     <div class="tab-content" style="display:flex;flex-direction:column;height:calc(100vh - 40px);max-height:900px">
       <div style="margin-bottom:16px">
-        <div style="font-size:22px;font-weight:700;color:var(--t1)">✦ AI Lookup</div>
+        <div style="font-size:22px;font-weight:700;color:var(--t1)">âœ¦ AI Lookup</div>
         <div style="font-size:13px;color:var(--t3);margin-top:2px">Ask anything about your expenses, loans, EMIs, credit cards, trips, and more.</div>
         ${_renderAiStatusBanner()}
       </div>
@@ -7450,9 +7484,9 @@ async function loadAiLookup() {
       <!-- Chat messages -->
       <div id="aiChat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 0;min-height:0">
         <div id="aiWelcome" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:16px;padding:40px 0;color:var(--t3)">
-          <div style="font-size:48px">✦</div>
+          <div style="font-size:48px">âœ¦</div>
           <div style="font-size:15px;font-weight:500;color:var(--t2)">Your personal finance AI assistant</div>
-          <div style="font-size:13px;color:var(--t3);text-align:center;max-width:420px">Ask in plain English — totals, trends, who owes what, upcoming EMIs, CC dues, anything in your data.</div>
+          <div style="font-size:13px;color:var(--t3);text-align:center;max-width:420px">Ask in plain English â€” totals, trends, who owes what, upcoming EMIs, CC dues, anything in your data.</div>
           <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:8px">
             ${[
               'What is my total expense this year?',
@@ -7469,7 +7503,7 @@ async function loadAiLookup() {
       <!-- Input bar -->
       <div style="border-top:1.5px solid var(--border);padding-top:14px;margin-top:8px">
         <div style="display:flex;gap:8px;align-items:flex-end">
-          <textarea id="aiInput" placeholder="Ask anything about your finances…"
+          <textarea id="aiInput" placeholder="Ask anything about your financesâ€¦"
             style="flex:1;padding:10px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:14px;font-family:var(--sans);resize:none;min-height:44px;max-height:120px;outline:none;transition:border-color 0.15s;line-height:1.4"
             rows="1"
             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doAiAsk();}"
@@ -7477,10 +7511,10 @@ async function loadAiLookup() {
             onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border)'"></textarea>
           <button id="aiSendBtn" onclick="doAiAsk()"
             style="padding:10px 18px;background:var(--primary);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;height:44px;transition:opacity 0.15s">
-            Ask ↑
+            Ask â†‘
           </button>
         </div>
-        <div style="font-size:11px;color:var(--t3);margin-top:6px">Enter to send · Shift+Enter for new line · Answers are based on your live data</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px">Enter to send Â· Shift+Enter for new line Â· Answers are based on your live data</div>
       </div>
     </div>`;
 }
@@ -7534,7 +7568,7 @@ async function doAiAsk() {
     const errMsg = r?.error || 'Something went wrong. Please try again.';
     if (r?.ai_status) _aiStatus = r.ai_status;
     _refreshAiStatusBanner();
-    if (thinkingEl) thinkingEl.outerHTML = _aiAssistantBubble('⚠ ' + errMsg, true);
+    if (thinkingEl) thinkingEl.outerHTML = _aiAssistantBubble('âš  ' + errMsg, true);
   }
 
   chat.scrollTop = chat.scrollHeight;
@@ -7549,7 +7583,7 @@ function _aiUserBubble(text) {
 function _renderAiStatusBanner() {
   if (!_aiStatus) return '';
   const paid = !!_aiStatus.hasPaidPlan;
-  const sub = paid ? `Plan: <b>${escHtml(_aiStatus.planName || 'Paid')}</b> · ` : '';
+  const sub = paid ? `Plan: <b>${escHtml(_aiStatus.planName || 'Paid')}</b> Â· ` : '';
   return `
     <div id="aiStatusBanner" style="margin-top:12px;background:${paid ? 'var(--green-l)' : 'var(--blue-l)'};color:${paid ? 'var(--green)' : 'var(--blue)'};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6">
       <div style="font-weight:700">${paid ? 'Unlimited AI enabled' : `${_aiStatus.remainingFreeQueries}/${_aiStatus.dailyFreeLimit} free AI queries left today`}</div>
@@ -7564,9 +7598,9 @@ function _refreshAiStatusBanner() {
   node.outerHTML = _renderAiStatusBanner();
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DAILY TRACKER
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _trackers = [];
 let _selectedTrackerId = null;
 let _trackerYear = new Date().getFullYear();
@@ -7596,19 +7630,19 @@ function renderTrackerGrid() {
       <div class="cc-tile-header">
         <div>
           <div class="cc-tile-name">${escHtml(t.name)}</div>
-          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
         </div>
         <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
-      <div class="cc-tile-label">This Month &nbsp;·&nbsp; ${t.current_month_days} days tracked</div>
+      <div class="cc-tile-label">This Month &nbsp;Â·&nbsp; ${t.current_month_days} days tracked</div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="event.stopPropagation()">
         <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
         <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
       </div>
     </div>`).join('') :
     `<div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
-      <div style="font-size:36px;margin-bottom:12px">📋</div>
+      <div style="font-size:36px;margin-bottom:12px">ðŸ“‹</div>
       <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No trackers yet</div>
       <div style="font-size:13px">Add items like Milk, Newspaper to track daily and see monthly totals</div>
     </div>`;
@@ -7620,7 +7654,7 @@ function renderTrackerGrid() {
           <div>
             <div class="summary-label">DAILY TRACKERS</div>
             <div class="summary-amount">${_trackers.length}</div>
-            <div class="summary-words">Track daily recurring items · auto-filled each day</div>
+            <div class="summary-words">Track daily recurring items Â· auto-filled each day</div>
           </div>
           <div class="count-box"><div class="num">${_trackers.filter(t => t.is_active).length}</div><div class="lbl">active</div></div>
         </div>
@@ -7628,7 +7662,7 @@ function renderTrackerGrid() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">↓ PDF Overview</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">â†“ PDF Overview</button>
           <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
         </div>
       </div>
@@ -7675,7 +7709,7 @@ async function renderTrackerDetail() {
     if (isFuture) {
       rows += `<tr style="color:var(--t3);${rowStyle}">
         <td><span style="font-weight:${isToday?600:400}">${d}</span> <span style="font-size:11px">${dayLabel}</span></td>
-        <td style="text-align:right;color:var(--t3)">—</td><td style="text-align:right">—</td><td></td><td></td></tr>`;
+        <td style="text-align:right;color:var(--t3)">â€”</td><td style="text-align:right">â€”</td><td></td><td></td></tr>`;
     } else if (e) {
       const badge = e.is_auto
         ? `<span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Auto</span>`
@@ -7690,7 +7724,7 @@ async function renderTrackerDetail() {
     } else {
       rows += `<tr id="trow-${dateStr}" style="color:var(--t3);${rowStyle}">
         <td><strong>${d}</strong> <span style="font-size:11px">${dayLabel}</span></td>
-        <td style="text-align:right">—</td><td style="text-align:right">—</td>
+        <td style="text-align:right">â€”</td><td style="text-align:right">â€”</td>
         <td><span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Missing</span></td>
         <td><button class="btn-d" onclick="editDayEntry(${tracker.id},'${dateStr}',${tracker.default_qty})">Add</button></td>
       </tr>`;
@@ -7704,10 +7738,10 @@ async function renderTrackerDetail() {
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">← Back</button>
+        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">â† Back</button>
         <div>
           <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
-          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} &nbsp;·&nbsp; Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} &nbsp;Â·&nbsp; Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
         </div>
         <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
       </div>
@@ -7717,11 +7751,11 @@ async function renderTrackerDetail() {
           <div>
             <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
             <div class="summary-amount">${fmtCur(totalAmt)}</div>
-            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} · ${summary.days || 0} days · ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} Â· ${summary.days || 0} days Â· ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
           </div>
           <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
             ${addedToExpense
-              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">✓ Added to<br>Expenses</div>`
+              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">âœ“ Added to<br>Expenses</div>`
               : `<button class="btn btn-p btn-sm" onclick="addTrackerExpense(${tracker.id},${_trackerYear},${_trackerMonth})" ${totalAmt ? '' : 'disabled'}>+ To Expenses</button>`}
           </div>
         </div>
@@ -7729,12 +7763,12 @@ async function renderTrackerDetail() {
 
       <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">←</button>
+          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">â†</button>
           <span style="font-weight:600;min-width:130px;text-align:center">${_MONTHS_LONG[_trackerMonth - 1]} ${_trackerYear}</span>
-          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>→</button>
+          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>â†’</button>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">↓ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">â†“ PDF</button>
           ${isCurrentMonth ? `<button class="btn btn-s btn-sm" onclick="autoFillTracker(${tracker.id})">Auto-fill Missing</button>` : ''}
         </div>
       </div>
@@ -7762,8 +7796,8 @@ function editDayEntry(trackerId, date, currentQty) {
   row.cells[2].innerHTML = `<span style="color:var(--t3);font-size:12px">${escHtml(tracker?.unit || '')}</span>`;
   row.cells[3].innerHTML = '';
   row.cells[4].innerHTML = `
-    <button class="btn-d" style="color:var(--green)" onclick="saveDayEntry(${trackerId},'${date}')">✓</button>
-    <button class="btn-d" onclick="renderTrackerDetail()">✕</button>`;
+    <button class="btn-d" style="color:var(--green)" onclick="saveDayEntry(${trackerId},'${date}')">âœ“</button>
+    <button class="btn-d" onclick="renderTrackerDetail()">âœ•</button>`;
   document.getElementById(`tedit-${date}`)?.focus();
 }
 
@@ -7817,7 +7851,7 @@ async function showTrackerModal(id) {
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="trName" value="${escHtml(t?.name || '')}" placeholder="e.g. Milk, Newspaper, Maid..."></label>
       <label class="fl">Unit *<input class="fi" id="trUnit" value="${escHtml(t?.unit || 'unit')}" placeholder="litre, piece, visit..."></label>
-      <label class="fl">Price per Unit (₹) *<input class="fi" type="number" step="0.01" id="trPrice" value="${t?.price_per_unit || ''}" placeholder="0.00"></label>
+      <label class="fl">Price per Unit (â‚¹) *<input class="fi" type="number" step="0.01" id="trPrice" value="${t?.price_per_unit || ''}" placeholder="0.00"></label>
       <label class="fl">Default Qty / Day<input class="fi" type="number" step="0.01" min="0" id="trDefaultQty" value="${t?.default_qty ?? 1}" placeholder="1"></label>
     </div>
     <p style="font-size:12px;color:var(--t3);margin:0 0 12px">Each day will be auto-filled with the default quantity. You can edit any day individually.</p>
@@ -7854,9 +7888,9 @@ async function deleteTracker(id) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // RECURRING ENTRIES
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _recurringEntries = [];
 
 async function loadRecurring() {
@@ -7875,16 +7909,16 @@ function renderRecurring() {
   const rows = entries.length ? entries.map(e => {
     const isCC = e.type === 'cc_txn';
     const appliedThisMonth = e.last_applied === currentMonth;
-    const cardLabel = isCC ? `<br><span style="font-size:11px;color:var(--t3)">${escHtml(e.bank_name || '')} ${escHtml(e.card_name || '')} ••${escHtml(e.last4 || '')}</span>` : '';
+    const cardLabel = isCC ? `<br><span style="font-size:11px;color:var(--t3)">${escHtml(e.bank_name || '')} ${escHtml(e.card_name || '')} â€¢â€¢${escHtml(e.last4 || '')}</span>` : '';
     const interval = parseInt(e.interval_months) || 1;
     const scheduleLabel = interval <= 1 ? 'Every month' : `Every ${interval} months${e.start_month ? ` from ${fmtMonYear(e.start_month + '-01')}` : ''}`;
     const typeBadge = `<span class="badge ${isCC ? 'b-extra' : 'b-fair'}">${isCC ? 'CC Txn' : 'Expense'}</span>`;
     const extraBadge = isCC && e.also_expense ? `<span class="badge b-fair">+Exp</span>` : (!isCC && e.is_extra ? `<span class="badge b-extra">Extra</span>` : '');
     const statusBadge = appliedThisMonth
-      ? `<span class="badge b-fair">✓ Applied</span>`
+      ? `<span class="badge b-fair">âœ“ Applied</span>`
       : (e.is_active ? `<span class="badge" style="background:var(--bg2);color:var(--t3)">Pending</span>` : `<span class="badge" style="background:var(--bg2);color:var(--t3)">Inactive</span>`);
     return `<tr>
-      <td><input type="checkbox" title="${e.is_active ? 'Active — click to disable' : 'Inactive — click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
+      <td><input type="checkbox" title="${e.is_active ? 'Active â€” click to disable' : 'Inactive â€” click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
       <td>${typeBadge}${extraBadge}</td>
       <td>${escHtml(e.description)}${cardLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span></td>
       <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
@@ -7900,7 +7934,7 @@ function renderRecurring() {
           <div>
             <div class="summary-label">RECURRING ENTRIES</div>
             <div class="summary-amount">${entries.length}</div>
-            <div class="summary-words">${activeCount} active · auto-applied on day 1 of every month</div>
+            <div class="summary-words">${activeCount} active Â· auto-applied on day 1 of every month</div>
           </div>
           <div class="count-box"><div class="num">${appliedCount}</div><div class="lbl">applied<br>this month</div></div>
         </div>
@@ -7952,7 +7986,7 @@ async function showRecurringModal(id) {
   const currentMonth = _localYM();
 
   const isCC = entry?.type === 'cc_txn';
-  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} ••${escHtml(c.last4)}</option>`).join('');
+  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
     <div class="fg">
@@ -7963,7 +7997,7 @@ async function showRecurringModal(id) {
         </select>
       </label>
       <label class="fl full">Description *<input class="fi" id="reDesc" value="${escHtml(entry?.description || '')}" placeholder="e.g. Netflix, Gym, Electricity..."></label>
-      <label class="fl">Amount (₹) *<input class="fi" type="number" step="0.01" id="reAmt" value="${entry?.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Amount (â‚¹) *<input class="fi" type="number" step="0.01" id="reAmt" value="${entry?.amount || ''}" placeholder="0.00"></label>
       <label class="fl">Repeat Every<select class="fi" id="reInterval">
         <option value="1" ${(parseInt(entry?.interval_months) || 1) === 1 ? 'selected' : ''}>Every month</option>
         <option value="2" ${(parseInt(entry?.interval_months) || 1) === 2 ? 'selected' : ''}>Every 2 months</option>
@@ -8047,6 +8081,420 @@ async function deleteRecurring(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
+function showAddFriend() {
+  openModal('Add Friend', `
+    <label class="fl">Friend's Name<input class="fi" id="fName" placeholder="Enter name" maxlength="80" autofocus></label>
+    <div class="fa" style="margin-top:16px"><button class="btn btn-p" onclick="addFriend()">Add</button><button class="btn btn-g" onclick="closeModal()">Cancel</button></div>`);
+  bindModalSubmit(addFriend);
+}
+
+function showEditFriend(id, currentName) {
+  openModal('Edit Friend', `
+    <label class="fl">Friend's Name
+      <input class="fi" id="fEditName" value="${escHtml(currentName || '')}" maxlength="80" autofocus>
+    </label>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="renameFriend(${id})">Save</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => renameFriend(id));
+}
+
+async function loadFriends() {
+  const data = await api('/api/friends');
+  if (!data) return;
+  let list = data.friends || [];
+  const nb = data.netBalance;
+
+  if (friendSort === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
+  else if (friendSort === 'high') list.sort((a, b) => b.balance - a.balance);
+  else list.sort((a, b) => a.balance - b.balance);
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="text-align:center">
+        <div class="summary-label">NET BALANCE</div>
+        <div class="summary-amount" style="color:${balColorLight(nb)}">${fmtCur(nb)}</div>
+        <div class="summary-words">${nb < 0 ? 'Overall you owe' : 'Overall you are owed'}</div>
+      </div>
+      <div class="filter-row">
+        <button class="btn btn-p btn-sm" onclick="showAddFriend()">+ Add Friend</button>
+        <button class="btn btn-s btn-sm" onclick="showFriendExcelImport()">Import Excel</button>
+        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">Share</button>
+        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">PDF</button>
+        <div class="chip-group">
+          ${['name', 'high', 'low'].map((s) => `<button class="chip ${friendSort === s ? 'active' : ''}" onclick="friendSort='${s}';loadFriends()">${s === 'name' ? 'A-Z' : s === 'high' ? 'Highest' : 'Lowest'}</button>`).join('')}
+        </div>
+      </div>
+      <div>${list.length === 0 ? '<div class="empty-td">No friends yet. Add one to start tracking loans.</div>' : ''}
+        ${list.map((f) => `<div class="friend-card" onclick="selectedFriend=${f.id};loadFriendDetail()">
+          <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
+          <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance < 0 ? 'You owe' : f.balance > 0 ? 'They owe' : 'Settled'}</div></div>
+          <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
+          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, ${JSON.stringify(f.name)})">Edit</button>
+          <button class="btn-d" onclick="stopEvent(event);deleteFriend(${f.id}, ${JSON.stringify(f.name)})">Del</button>
+        </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderBankAccounts() {
+  const accounts = _bankAccounts;
+  const totalBal = accounts.reduce((s, a) => s + a.balance, 0);
+  const totalMin = accounts.reduce((s, a) => s + a.min_balance, 0);
+  const spendable = totalBal - totalMin;
+
+  const statBar = `
+    <div class="bank-summary-bar">
+      <div class="bank-stat"><div class="lbl">Total Balance</div><div class="val">${fmtCur(totalBal)}</div></div>
+      <div class="bank-stat"><div class="lbl">Locked (Min Balance)</div><div class="val red">${fmtCur(totalMin)}</div></div>
+      <div class="bank-stat"><div class="lbl">Spendable</div><div class="val green">${fmtCur(spendable)}</div></div>
+      <div class="bank-stat"><div class="lbl">Accounts</div><div class="val">${accounts.length}</div></div>
+    </div>`;
+
+  const grid = accounts.length
+    ? accounts.map((a) => {
+        const spnd = a.balance - a.min_balance;
+        const typeLabel = { savings: 'Savings', current: 'Current', salary: 'Salary' }[a.account_type] || a.account_type;
+        return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}" onclick="showBankModal(${a.id})" style="cursor:pointer">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}
+                ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
+              </div>
+              <div class="bank-card-type">${typeLabel}</div>
+            </div>
+          </div>
+          <div class="bank-card-balance-wrap" id="bankBalWrap_${a.id}" onclick="stopEvent(event);startBalanceEdit(${a.id}, ${a.balance})" title="Click to edit balance">
+            <div class="bank-card-balance bank-bal-display" id="bankBalDisplay_${a.id}">${fmtCur(a.balance)}</div>
+            <span class="bank-bal-edit-hint">Edit</span>
+          </div>
+          <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
+          <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
+          <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
+            <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+        <div style="font-size:32px;margin-bottom:12px">Bank</div>
+        <div style="font-weight:600;margin-bottom:6px">No bank accounts added yet</div>
+        <div style="font-size:13px">Click "Add Account" to track your balances</div>
+      </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">TOTAL SPENDABLE BALANCE</div>
+            <div class="summary-amount">${fmtCur(spendable)}</div>
+            <div class="summary-words">${amountWords(spendable)}</div>
+          </div>
+          <div class="count-box"><div class="num">${accounts.length}</div><div class="lbl">accounts</div></div>
+        </div>
+      </div>
+      ${statBar}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
+        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+      </div>
+      <div class="bank-grid">${grid}</div>
+    </div>`;
+}
+
+function showBankModal(id) {
+  const found = id ? _bankAccounts.find((x) => x.id === id) : null;
+  const a = found || { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' };
+  openModal(id ? 'Edit Bank Account' : 'Add Bank Account', `
+    <div class="fg">
+      <label class="fl">Bank Name *<input class="fi" id="baBank" value="${escHtml(a.bank_name)}" placeholder="e.g. HDFC, SBI, ICICI" maxlength="80"></label>
+      <label class="fl">Account Name<input class="fi" id="baName" value="${escHtml(a.account_name || '')}" placeholder="e.g. Primary Savings" maxlength="80"></label>
+      <label class="fl">Account Type<select class="fi" id="baType">
+        <option value="savings" ${a.account_type === 'savings' ? 'selected' : ''}>Savings</option>
+        <option value="current" ${a.account_type === 'current' ? 'selected' : ''}>Current</option>
+        <option value="salary" ${a.account_type === 'salary' ? 'selected' : ''}>Salary</option>
+      </select></label>
+      <label class="fl">Current Balance (Rs) *<input class="fi" type="number" step="0.01" id="baBal" value="${a.balance || ''}" placeholder="0.00"></label>
+      <label class="fl">Minimum Balance (Rs)<input class="fi" type="number" step="0.01" id="baMin" value="${a.min_balance || ''}" placeholder="0.00">
+        <span style="font-size:11px;color:var(--t3);margin-top:3px;display:block">Amount you cannot spend (locked by bank)</span>
+      </label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveBankAccount(${id || 'null'})">${id ? 'Update' : 'Add Account'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveBankAccount(id || null));
+}
+
+function renderTrackerGrid() {
+  const cards = _trackers.length ? _trackers.map((t) => `
+    <div class="cc-tile" onclick="openTrackerDetail(${t.id})" style="cursor:pointer">
+      <div class="cc-tile-header">
+        <div>
+          <div class="cc-tile-name">${escHtml(t.name)}</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
+      </div>
+      <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
+      <div class="cc-tile-label">This Month &nbsp;Â·&nbsp; ${t.current_month_days} days tracked</div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
+        <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
+        <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
+      </div>
+    </div>`).join('') :
+    `<div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+      <div style="font-size:36px;margin-bottom:12px">Tracker</div>
+      <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No trackers yet</div>
+      <div style="font-size:13px">Add items like Milk, Newspaper to track daily and see monthly totals</div>
+    </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">DAILY TRACKERS</div>
+            <div class="summary-amount">${_trackers.length}</div>
+            <div class="summary-words">Track daily recurring items</div>
+          </div>
+          <div class="count-box"><div class="num">${_trackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
+          <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+}
+
+async function showTrackerModal(id) {
+  const t = id ? _trackers.find((tracker) => tracker.id === id) : null;
+  openModal(id ? 'Edit Tracker' : 'Add Tracker', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="trName" value="${escHtml(t?.name || '')}" placeholder="e.g. Milk, Newspaper, Maid..." maxlength="80"></label>
+      <label class="fl">Unit *<input class="fi" id="trUnit" value="${escHtml(t?.unit || 'unit')}" placeholder="litre, piece, visit..." maxlength="30"></label>
+      <label class="fl">Price per Unit (Rs) *<input class="fi" type="number" step="0.01" id="trPrice" value="${t?.price_per_unit || ''}" placeholder="0.00"></label>
+      <label class="fl">Default Qty / Day<input class="fi" type="number" step="0.01" min="0" id="trDefaultQty" value="${t?.default_qty ?? 1}" placeholder="1"></label>
+    </div>
+    <p style="font-size:12px;color:var(--t3);margin:0 0 12px">Each day will be auto-filled with the default quantity. You can edit any day individually.</p>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTracker(${id || 'null'})">${id ? 'Update' : 'Add Tracker'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveTracker(id || null));
+}
+
+async function showCcCardModal(id) {
+  let card = { bank_name: '', card_name: '', last4: '', expiry_month: '', expiry_year: '', bill_gen_day: 1, due_days: 20, default_discount_pct: 0, credit_limit: '' };
+  let currentCycle = null;
+  if (id) {
+    const c = _ccCards.find((x) => x.id === id);
+    if (c) {
+      card = c;
+      currentCycle = c.currentCycle || null;
+    }
+  }
+  openModal(id ? 'Edit Credit Card' : 'Add Credit Card', `
+    <div class="fg">
+      <label class="fl">Bank Name *<input class="fi" id="ccBank" value="${escHtml(card.bank_name)}" placeholder="e.g. HDFC, SBI, ICICI" maxlength="80"></label>
+      <label class="fl">Card Name *<input class="fi" id="ccName" value="${escHtml(card.card_name)}" placeholder="e.g. HDFC Regalia" maxlength="80"></label>
+      <label class="fl">Last 4 Digits *<input class="fi" id="ccLast4" value="${escHtml(card.last4)}" placeholder="1234" maxlength="4"></label>
+      <label class="fl">Expiry Month<input class="fi" type="number" id="ccExpM" value="${card.expiry_month || ''}" placeholder="MM" min="1" max="12"></label>
+      <label class="fl">Expiry Year<input class="fi" type="number" id="ccExpY" value="${card.expiry_year || ''}" placeholder="YYYY" min="2024" max="2040"></label>
+      <label class="fl">Bill Generation Day *<input class="fi" type="number" id="ccBillDay" value="${card.bill_gen_day || 1}" min="1" max="28" placeholder="e.g. 15"></label>
+      <label class="fl">Payment Due (days after bill)<input class="fi" type="number" id="ccDueDays" value="${card.due_days || 20}" min="1" max="60"></label>
+      ${currentCycle ? `<label class="fl">Current Cycle Due Date<input class="fi" type="date" id="ccCurrentDueDate" value="${normalizeInputDate(currentCycle.due_date) || ''}"></label>` : ''}
+      <label class="fl">Default Discount %<input class="fi" type="number" id="ccDisc" value="${card.default_discount_pct || 0}" step="0.1" min="0" max="100" placeholder="0"></label>
+      <label class="fl">Credit Limit (Rs)<input class="fi" type="number" id="ccLimit" value="${card.credit_limit || ''}" placeholder="optional"></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveCcCard(${id || 'null'})">${id ? 'Update' : 'Add Card'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveCcCard(id || null));
+}
+
+function showAddPaymentModal() {
+  const defaultDue = `${_plannerMonth}-01`;
+  openModal('Add Payment', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="mpName" placeholder="e.g. Rent, Netflix, Electricity..." maxlength="120" autofocus></label>
+      <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="mpAmt" placeholder="0.00"></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="mpDue" value="${defaultDue}"></label>
+      <label class="fl">Bank Account<select class="fi" id="mpBank"><option value="">-- None --</option>${_bankDropdownOptions(null)}</select></label>
+      <label class="fl full">Notes<input class="fi" id="mpNotes" placeholder="optional" maxlength="240"></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveMonthlyPayment(null)">Add</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveMonthlyPayment(null));
+}
+
+async function showEditPaymentModal(id) {
+  const data = await api(`/api/planner/monthly?month=${_plannerMonth}`);
+  const p = data?.payments?.find((x) => x.id === id);
+  if (!p) return;
+  openModal('Edit Payment', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="mpName" value="${escHtml(p.name)}" maxlength="120" autofocus></label>
+      <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="mpAmt" value="${p.amount}"></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="mpDue" value="${normalizeInputDate(p.due_date) || ''}"></label>
+      <label class="fl">Bank Account<select class="fi" id="mpBank"><option value="">-- None --</option>${_bankDropdownOptions(p.bank_account_id)}</select></label>
+      <label class="fl full">Notes<input class="fi" id="mpNotes" value="${escHtml(p.notes || '')}" maxlength="240"></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveMonthlyPayment(${id})">Update</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveMonthlyPayment(id));
+}
+
+async function showDefaultModal(id) {
+  let d = { name: '', amount: '', due_day: 1, category: '', is_active: 1, bank_account_id: null, auto_detect_bank: 0 };
+  if (id) {
+    const data = await api('/api/planner/defaults');
+    const found = data?.defaults?.find((x) => x.id === id);
+    if (found) d = found;
+  }
+  const autoDetectChecked = d.auto_detect_bank ? 'checked' : '';
+  openModal(id ? 'Edit Default Payment' : 'Add Default Payment', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="dpName" value="${escHtml(d.name)}" placeholder="e.g. Rent, Netflix, EMI..." maxlength="120" autofocus></label>
+      <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="dpAmt" value="${d.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Due Day (1-28)<input class="fi" type="number" id="dpDay" value="${d.due_day || 1}" min="1" max="28"></label>
+      <label class="fl">Category<input class="fi" id="dpCat" value="${escHtml(d.category || '')}" placeholder="e.g. Rent, Utilities, Subscriptions" maxlength="80"></label>
+      <label class="fl">Bank Account<select class="fi" id="dpBank"><option value="">-- None --</option>${_bankDropdownOptions(d.bank_account_id)}</select></label>
+      <label class="fl" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="dpAutoBank" ${autoDetectChecked}>
+        <span>Auto-debit from this bank account</span>
+      </label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveDefault(${id || 'null'})">${id ? 'Update' : 'Add'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveDefault(id || null));
+}
+
+function showPayModal(id, amount) {
+  openModal('Mark as Paid', `
+    <div class="fg">
+      <label class="fl">Amount Paid (Rs)<input class="fi" type="number" step="0.01" id="pmAmt" value="${amount}" autofocus></label>
+      <label class="fl">Payment Date<input class="fi" type="date" id="pmDate" value="${todayStr()}"></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="doPayMonthly(${id})">Mark Paid</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => doPayMonthly(id));
+}
+
+async function showRecurringModal(id) {
+  const entry = id ? _recurringEntries.find((e) => e.id === id) : null;
+  const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
+  if (!_ccCards || !_ccCards.length) _ccCards = cards;
+  if (!_bankAccounts.length) {
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+  }
+  const currentMonth = _localYM();
+  const isCC = entry?.type === 'cc_txn';
+  const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
+  const bankOptions = `<option value="">-- Default / none --</option>${_bankDropdownOptions(entry?.bank_account_id)}`;
+
+  openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
+    <div class="fg">
+      <label class="fl full">Type
+        <select class="fi" id="reType" onchange="recurringTypeToggle()">
+          <option value="expense" ${!isCC ? 'selected' : ''}>Expense</option>
+          <option value="cc_txn" ${isCC ? 'selected' : ''}>Credit Card Transaction</option>
+        </select>
+      </label>
+      <label class="fl full">Description *<input class="fi" id="reDesc" value="${escHtml(entry?.description || '')}" placeholder="e.g. Netflix, Gym, Electricity..." maxlength="160"></label>
+      <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="reAmt" value="${entry?.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Repeat Every<select class="fi" id="reInterval">
+        <option value="1" ${(parseInt(entry?.interval_months) || 1) === 1 ? 'selected' : ''}>Every month</option>
+        <option value="2" ${(parseInt(entry?.interval_months) || 1) === 2 ? 'selected' : ''}>Every 2 months</option>
+        <option value="3" ${(parseInt(entry?.interval_months) || 1) === 3 ? 'selected' : ''}>Every 3 months</option>
+        <option value="6" ${(parseInt(entry?.interval_months) || 1) === 6 ? 'selected' : ''}>Every 6 months</option>
+        <option value="12" ${(parseInt(entry?.interval_months) || 1) === 12 ? 'selected' : ''}>Every 12 months</option>
+      </select></label>
+      <label class="fl">Starts From Month<input class="fi" type="month" id="reStartMonth" value="${escHtml(entry?.start_month || currentMonth)}"></label>
+      <label class="fl full">Deduct From Bank<select class="fi" id="reBank">${bankOptions}</select></label>
+    </div>
+
+    <div id="reCcFields" style="${isCC ? '' : 'display:none'}">
+      <div class="fg">
+        <label class="fl full">Credit Card
+          <select class="fi" id="reCard">${cardOptions || '<option value="">No cards found</option>'}</select>
+        </label>
+        <label class="fl">Discount %<input class="fi" type="number" step="0.1" id="reDisc" value="${entry?.discount_pct || 0}" min="0" max="100"></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+        Also add as expense
+      </label>
+    </div>
+
+    <div id="reExpenseFields" style="${isCC ? 'display:none' : ''}">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="reIsExtra" ${entry?.is_extra ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+        Mark as extra spending
+      </label>
+      ${!id ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="reApplyCurrentMonth" style="width:15px;height:15px;cursor:pointer">
+        Add this recurring expense for the current month as well
+      </label>` : ''}
+    </div>
+
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveRecurring(${id || 'null'})">${id ? 'Update' : 'Add'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveRecurring(id || null));
+}
+
+async function saveRecurring(id) {
+  const type = document.getElementById('reType').value;
+  const description = document.getElementById('reDesc').value.trim();
+  const amount = parseFloat(document.getElementById('reAmt').value);
+  if (!description || !amount) { toast('Fill all required fields', 'warning'); return; }
+  const bankVal = document.getElementById('reBank')?.value;
+  const body = {
+    type,
+    description,
+    amount,
+    interval_months: parseInt(document.getElementById('reInterval').value, 10) || 1,
+    start_month: document.getElementById('reStartMonth').value || _localYM(),
+    bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
+  };
+  if (type === 'cc_txn') {
+    body.card_id = parseInt(document.getElementById('reCard').value, 10) || null;
+    body.discount_pct = parseFloat(document.getElementById('reDisc').value) || 0;
+    body.also_expense = document.getElementById('reAlsoExpense').checked ? 1 : 0;
+  } else {
+    body.is_extra = document.getElementById('reIsExtra').checked ? 1 : 0;
+    if (!id) body.apply_current_month = document.getElementById('reApplyCurrentMonth')?.checked ? 1 : 0;
+  }
+  const r = id
+    ? await api(`/api/recurring/${id}`, { method: 'PUT', body })
+    : await api('/api/recurring', { method: 'POST', body });
+  if (r?.success || r?.id) {
+    closeModal();
+    toast(id ? 'Updated' : 'Recurring entry added', 'success');
+    loadRecurring();
+  } else toast(r?.error || 'Failed', 'error');
+}
+
 function _aiAssistantBubble(text, isError = false) {
   // Convert markdown-like formatting: **bold**, `code`, newlines
   let html = escHtml(text)
@@ -8054,6 +8502,294 @@ function _aiAssistantBubble(text, isError = false) {
     .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px">$1</code>')
     .replace(/\n/g, '<br>');
   return `<div class="ai-bubble ai-bubble-assistant" style="${isError ? 'color:var(--red)' : ''}">${html}</div>`;
+}
+
+function trackerMonthKey(year, month) {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+function parseTrackerMonthKey(monthKey) {
+  const [year, month] = String(monthKey).split('-').map(Number);
+  return { year, month };
+}
+
+function getTrackerMonthSequence(count = 6) {
+  const months = [];
+  const base = new Date(_trackerYear, _trackerMonth - 1, 1);
+  for (let i = 0; i < count; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+    months.push({ year: d.getFullYear(), month: d.getMonth() + 1, key: trackerMonthKey(d.getFullYear(), d.getMonth() + 1) });
+  }
+  return months;
+}
+
+async function renderTrackerGrid() {
+  const cards = _trackers.length ? _trackers.map((t) => `
+    <div class="cc-tile" onclick="openTrackerDetail(${t.id})" style="cursor:pointer">
+      <div class="cc-tile-header">
+        <div>
+          <div class="cc-tile-name">${escHtml(t.name)}</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
+      </div>
+      <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
+      <div class="cc-tile-label">
+        This Month · ${t.current_month_days} days tracked
+        ${t.auto_add_to_expense ? '<br><span style="font-size:10px;opacity:.9">Auto-adds previous month to expenses</span>' : ''}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
+        <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
+        <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
+      </div>
+    </div>`).join('') :
+    `<div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+      <div style="font-size:36px;margin-bottom:12px">Tracker</div>
+      <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No trackers yet</div>
+      <div style="font-size:13px">Add items like Milk, Newspaper to track daily and see monthly totals</div>
+    </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">DAILY TRACKERS</div>
+            <div class="summary-amount">${_trackers.length}</div>
+            <div class="summary-words">Track daily recurring items month by month</div>
+          </div>
+          <div class="count-box"><div class="num">${_trackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
+          <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+}
+
+async function renderTrackerDetail() {
+  const tracker = _trackers.find((t) => t.id === _selectedTrackerId);
+  if (!tracker) { renderTrackerGrid(); return; }
+
+  const monthSeq = getTrackerMonthSequence(6);
+  const [entriesRes, summaryRes, tileSummaries] = await Promise.all([
+    api(`/api/trackers/${_selectedTrackerId}/entries?year=${_trackerYear}&month=${_trackerMonth}`),
+    api(`/api/trackers/${_selectedTrackerId}/summary?year=${_trackerYear}&month=${_trackerMonth}`),
+    Promise.all(monthSeq.map(({ year, month, key }) =>
+      api(`/api/trackers/${_selectedTrackerId}/summary?year=${year}&month=${month}`).then((res) => ({
+        key,
+        year,
+        month,
+        summary: res?.summary || { total_amount: 0, days: 0, added_to_expense: 0 },
+      }))
+    )),
+  ]);
+
+  const entries = entriesRes?.entries || [];
+  const summary = summaryRes?.summary || {};
+  const entryMap = {};
+  entries.forEach((e) => { entryMap[e.entry_date] = e; });
+
+  const today = new Date().toISOString().split('T')[0];
+  const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
+  const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
+  const isCurrentMonth = currentMonthKey === today.slice(0, 7);
+
+  let rows = '';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${currentMonthKey}-${String(d).padStart(2, '0')}`;
+    const e = entryMap[dateStr];
+    const dayLabel = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' });
+    const isFuture = dateStr > today;
+    const isToday = dateStr === today;
+    const rowStyle = isToday ? 'background:var(--bg2)' : '';
+
+    if (isFuture) {
+      rows += `<tr style="color:var(--t3);${rowStyle}">
+        <td><span style="font-weight:${isToday ? 600 : 400}">${d}</span> <span style="font-size:11px">${dayLabel}</span></td>
+        <td style="text-align:right;color:var(--t3)">-</td><td style="text-align:right">-</td><td></td><td></td></tr>`;
+    } else if (e) {
+      const badge = e.is_auto
+        ? `<span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Auto</span>`
+        : `<span class="badge b-fair" style="font-size:10px">Edited</span>`;
+      rows += `<tr id="trow-${dateStr}" style="${rowStyle}">
+        <td><strong>${d}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${isToday ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
+        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(tracker.unit)}</span></td>
+        <td style="text-align:right;font-weight:600">${fmtCur(e.amount)}</td>
+        <td>${badge}</td>
+        <td><button class="btn-d" style="color:var(--em)" onclick="editDayEntry(${tracker.id},'${dateStr}',${e.quantity})">Edit</button></td>
+      </tr>`;
+    } else {
+      rows += `<tr id="trow-${dateStr}" style="color:var(--t3);${rowStyle}">
+        <td><strong>${d}</strong> <span style="font-size:11px">${dayLabel}</span></td>
+        <td style="text-align:right">-</td><td style="text-align:right">-</td>
+        <td><span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Missing</span></td>
+        <td><button class="btn-d" onclick="editDayEntry(${tracker.id},'${dateStr}',${tracker.default_qty})">Add</button></td>
+      </tr>`;
+    }
+  }
+
+  const totalQty = summary.total_qty ? parseFloat(summary.total_qty).toFixed(2) : '0';
+  const totalAmt = summary.total_amount || 0;
+  const addedToExpense = summary.added_to_expense;
+  const monthTiles = tileSummaries.map(({ key, year, month, summary: tile }) => {
+    const active = key === currentMonthKey;
+    const complete = key < today.slice(0, 7);
+    const canAdd = complete && tile.total_amount > 0 && !tile.added_to_expense;
+    return `<button class="chip ${active ? 'active' : ''}" style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:120px;padding:10px 12px" onclick="_trackerYear=${year};_trackerMonth=${month};renderTrackerDetail()">
+      <span style="font-weight:700">${_MONTHS_LONG[month - 1]} ${year}</span>
+      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} · ${tile.days || 0} days</span>
+      <span style="font-size:10px;opacity:.8">${tile.added_to_expense ? 'Added to expenses' : canAdd ? 'Ready to add' : complete ? 'No amount' : 'Current month'}</span>
+    </button>`;
+  }).join('');
+
+  const trackerBank = tracker.expense_bank_account_id ? _bankAccounts.find((a) => a.id == tracker.expense_bank_account_id) : null;
+  const autoNote = tracker.auto_add_to_expense
+    ? `Auto-add enabled${trackerBank ? ` · deduct from ${trackerBank.bank_name}` : ''}`
+    : 'Auto-add disabled';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">← Back</button>
+        <div>
+          <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} · Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">${autoNote}</div>
+        </div>
+        <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
+      </div>
+
+      <div class="filter-row" style="gap:8px;overflow:auto;margin-bottom:12px">${monthTiles}</div>
+
+      <div class="summary-card" style="margin-bottom:16px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
+            <div class="summary-amount">${fmtCur(totalAmt)}</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} · ${summary.days || 0} days · ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+          </div>
+          <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
+            ${addedToExpense
+              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">Added to<br>Expenses</div>`
+              : `<button class="btn btn-p btn-sm" onclick="addTrackerExpense(${tracker.id},${_trackerYear},${_trackerMonth})" ${totalAmt && currentMonthKey < today.slice(0, 7) ? '' : 'disabled'}>+ To Expenses</button>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">←</button>
+          <span style="font-weight:600;min-width:130px;text-align:center">${_MONTHS_LONG[_trackerMonth - 1]} ${_trackerYear}</span>
+          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>→</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">PDF</button>
+          ${isCurrentMonth ? `<button class="btn btn-s btn-sm" onclick="autoFillTracker(${tracker.id})">Auto-fill Missing</button>` : ''}
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Date</th>
+            <th style="text-align:right">Quantity</th>
+            <th style="text-align:right">Amount</th>
+            <th>Status</th>
+            <th style="width:80px">Action</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function showTrackerModal(id) {
+  if (!_bankAccounts.length) {
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+  }
+  const t = id ? _trackers.find((tracker) => tracker.id === id) : null;
+  const bankOpts = `<option value="">-- Do not deduct --</option>${_bankDropdownOptions(t?.expense_bank_account_id)}`;
+  openModal(id ? 'Edit Tracker' : 'Add Tracker', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="trName" value="${escHtml(t?.name || '')}" placeholder="e.g. Milk, Newspaper, Maid..." maxlength="80"></label>
+      <label class="fl">Unit *<input class="fi" id="trUnit" value="${escHtml(t?.unit || 'unit')}" placeholder="litre, piece, visit..." maxlength="30"></label>
+      <label class="fl">Price per Unit (Rs) *<input class="fi" type="number" step="0.01" id="trPrice" value="${t?.price_per_unit || ''}" placeholder="0.00"></label>
+      <label class="fl">Default Qty / Day<input class="fi" type="number" step="0.01" min="0" id="trDefaultQty" value="${t?.default_qty ?? 1}" placeholder="1"></label>
+      <label class="fl full">Expense Bank<select class="fi" id="trExpenseBank">${bankOpts}</select></label>
+      <label class="fl full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="trAutoExpense" ${t?.auto_add_to_expense ? 'checked' : ''}>
+        <span>Automatically add the previous completed month to Expenses</span>
+      </label>
+    </div>
+    <p style="font-size:12px;color:var(--t3);margin:0 0 12px">When auto-add is enabled, the previous month is converted into an expense on the next month automatically.</p>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTracker(${id || 'null'})">${id ? 'Update' : 'Add Tracker'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveTracker(id || null));
+}
+
+async function saveTracker(id) {
+  const name = document.getElementById('trName').value.trim();
+  const unit = document.getElementById('trUnit').value.trim() || 'unit';
+  const price_per_unit = parseFloat(document.getElementById('trPrice').value);
+  const default_qty = parseFloat(document.getElementById('trDefaultQty').value) || 1;
+  const bankVal = document.getElementById('trExpenseBank')?.value;
+  if (!name || !price_per_unit) { toast('Name and price are required', 'warning'); return; }
+  const body = {
+    name,
+    unit,
+    price_per_unit,
+    default_qty,
+    auto_add_to_expense: document.getElementById('trAutoExpense')?.checked ? 1 : 0,
+    expense_bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
+  };
+  const r = id
+    ? await api(`/api/trackers/${id}`, { method: 'PUT', body })
+    : await api('/api/trackers', { method: 'POST', body });
+  if (r?.success || r?.id) {
+    closeModal();
+    toast(id ? 'Tracker updated' : 'Tracker added', 'success');
+    await loadTracker();
+  } else toast(r?.error || 'Failed', 'error');
+}
+
+function showCcPayModal(cycleId, netPayable) {
+  const defaultBank = _bankAccounts.find((a) => a.is_default);
+  const bankOptions = `<option value="">${defaultBank ? `Default: ${escHtml(defaultBank.bank_name)}` : '-- No default bank --'}</option>${_bankDropdownOptions(null)}`;
+  openModal('Pay Credit Card Bill', `
+    <div class="fg">
+      <label class="fl">Amount Paid (Rs)<input class="fi" type="number" step="0.01" id="ccpAmt" value="${netPayable.toFixed(2)}" autofocus></label>
+      <label class="fl">Payment Date<input class="fi" type="date" id="ccpDate" value="${todayStr()}"></label>
+      <label class="fl full">Deduct From Bank<select class="fi" id="ccpBank">${bankOptions}</select></label>
+    </div>
+    <div style="background:var(--blue-l);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--blue);margin-bottom:12px">
+      Net payable: <strong>${fmtCur(netPayable)}</strong>. Paying closes this billing cycle.
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="doCcPayFromPlanner(${cycleId})">Mark Paid</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => doCcPayFromPlanner(cycleId));
+}
+
+async function doCcPayFromPlanner(cycleId) {
+  const bankVal = document.getElementById('ccpBank')?.value;
+  const body = {
+    paid_amount: parseFloat(document.getElementById('ccpAmt').value) || 0,
+    paid_date: document.getElementById('ccpDate').value,
+    bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
+  };
+  const r = await api(`/api/cc/cycles/${cycleId}/close`, { method: 'POST', body });
+  if (r?.success) { closeModal(); toast('CC bill marked as paid', 'success'); renderPlanner(); }
+  else toast(r?.error || 'Failed', 'error');
 }
 
 

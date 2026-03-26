@@ -213,6 +213,18 @@ function openModal(title, bodyHTML) {
   document.getElementById('modalOverlay').style.display = 'flex';
 }
 
+function bindModalSubmit(handler) {
+  const body = document.querySelector('#modalContent .modal-body');
+  if (!body || typeof handler !== 'function') return;
+  body.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    const tag = (event.target?.tagName || '').toUpperCase();
+    if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
+    event.preventDefault();
+    handler();
+  });
+}
+
 // showModal: places raw HTML inside a padded modal wrapper
 function showModal(html) {
   document.getElementById('modalContent').innerHTML = '<div class="modal-inner">' + html + '</div>';
