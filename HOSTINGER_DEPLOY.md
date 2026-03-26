@@ -88,6 +88,9 @@ Add these GitHub Actions variables:
 - `HOSTINGER_APP_NAME`: `expense-lite-ai`
 - `HOSTINGER_SSH_PORT`: `22`
 
+If your provider uses a custom SSH port (for example `65002`), set `HOSTINGER_SSH_PORT` accordingly.
+The workflow now auto-probes `22` and `65002` if no port is configured, but explicit config is recommended.
+
 ## 5. How deploys work
 
 On every push to `main`, GitHub Actions will:

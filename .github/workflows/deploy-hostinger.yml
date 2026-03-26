@@ -26,6 +26,44 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+
+      - name: Resolve SSH port
+        id: ssh_port
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          PORT_VAR: ${{ vars.HOSTINGER_SSH_PORT }}
+          PORT_SECRET: ${{ secrets.HOSTINGER_SSH_PORT }}
+        run: |
+          set -e
+          PORT="${PORT_VAR:-}"
+          if [ -z "$PORT" ]; then PORT="${PORT_SECRET:-}"; fi
+          if [ -n "$PORT" ]; then
+            echo "Using configured SSH port: $PORT"
+            echo "port=$PORT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "No SSH port configured. Probing common ports (22, 65002)..."
+          for p in 22 65002; do
+            if timeout 5 bash -lc "cat < /dev/null > /dev/tcp/$HOST/$p" 2>/dev/null; then
+              echo "Detected reachable SSH port: $p"
+              echo "port=$p" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "Unable to detect SSH port for $HOST. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
+          exit 1
+
+      - name: SSH connectivity check
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
+        run: |
+          set -e
+          echo "Testing SSH to $USERNAME@$HOST:$PORT ..."
+          ssh -o ConnectTimeout=15 -p "$PORT" "$USERNAME@$HOST" "echo 'SSH OK'"
       - name: Pack release
         run: |
           tar \
@@ -44,7 +82,7 @@ jobs:
         env:
           HOST: ${{ secrets.HOSTINGER_HOST }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
-          PORT: ${{ vars.HOSTINGER_SSH_PORT || '22' }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
           APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
           SHA: ${{ github.sha }}
         run: |
@@ -55,7 +93,7 @@ jobs:
         env:
           HOST: ${{ secrets.HOSTINGER_HOST }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
-          PORT: ${{ vars.HOSTINGER_SSH_PORT || '22' }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
           APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
           APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
           SHA: ${{ github.sha }}
