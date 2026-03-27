@@ -268,7 +268,10 @@ async function insertEmiExpenses(userId, emiId, isExtra = 0, client = null) {
   await run.query(`DELETE FROM expenses WHERE source = 'emi' AND source_id = $1 AND user_id = $2`, [emiId, userId]);
   const installments = await loadInstallments(emiId, client);
   for (const inst of installments) {
-    const expDate = `${inst.due_date.slice(0, 7)}-01`;
+    const dueDateText = typeof inst.due_date === 'string'
+      ? inst.due_date
+      : (inst.due_date instanceof Date ? inst.due_date.toISOString().slice(0, 10) : String(inst.due_date || ''));
+    const expDate = `${dueDateText.slice(0, 7)}-01`;
     let amount = num(inst.emi_amount);
     if (Number(inst.installment_no) === 1 && num(rec.cc_processing_charge) > 0) {
       const procGst = num(rec.cc_processing_gst_pct) > 0

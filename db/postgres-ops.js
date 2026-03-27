@@ -525,10 +525,10 @@ async function addDailyTracker(userId, data) {
   if (!Number.isFinite(defaultQty) || defaultQty < 0) throw validationError('Default quantity cannot be negative');
   const expenseBankAccountId = normalizeBankAccountId(data.expense_bank_account_id);
   const result = await query(
-    `INSERT INTO daily_trackers (user_id, name, unit, price_per_unit, default_qty, auto_add_to_expense, expense_bank_account_id, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $1, $1)
+    `INSERT INTO daily_trackers (user_id, name, unit, price_per_unit, default_qty, is_active, auto_add_to_expense, expense_bank_account_id, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $1, $1)
      RETURNING id`,
-    [userId, name, unit, pricePerUnit, defaultQty || 1, !!data.auto_add_to_expense, expenseBankAccountId]
+    [userId, name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId]
   );
   return Number(result.rows[0].id);
 }

@@ -1,6 +1,6 @@
-﻿// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
-// EXPENSE MANAGER Ã¢â‚¬â€ Main Application Logic
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// EXPENSE MANAGER â€” Main Application Logic
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let currentTab = 'dashboard';
 let _userRole = 'user';
@@ -68,7 +68,7 @@ function stopEvent(event) {
   event.stopPropagation();
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ INIT Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 window.addEventListener('DOMContentLoaded', async () => {
   const [user, access] = await Promise.all([api('/api/auth/me'), api('/api/auth/me/access')]);
   if (user && user.display_name) {
@@ -311,9 +311,9 @@ async function logout() {
   window.location.href = '/login';
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EXPENSES
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadExpenses() {
   const f = expFilters;
   let qs = f.year !== null ? `?year=${f.year}` : '?year=all';
@@ -347,7 +347,7 @@ async function loadExpenses() {
   const pageStart = (f.page - 1) * f.pageSize;
   const pageList = list.slice(pageStart, pageStart + f.pageSize);
 
-  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' Ã¢â€ â€˜' : ' Ã¢â€ â€œ') : '';
+  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' â†‘' : ' â†“') : '';
 
   // Save search focus state before re-render
   const searchFocused = document.activeElement?.id === 'expSearch';
@@ -418,9 +418,9 @@ async function loadExpenses() {
 
       ${totalPages > 1 ? `
       <div class="pagination">
-        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">Ã¢â€ Â Prev</button>
+        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">â† Prev</button>
         <div class="pg-info">
-          <span class="pg-range">${pageStart+1}Ã¢â‚¬â€œ${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
+          <span class="pg-range">${pageStart+1}â€“${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
           <div class="pg-pages">
             ${paginationPages(f.page, totalPages).map(p => p === '...'
               ? `<span class="pg-ellipsis">...</span>`
@@ -428,7 +428,7 @@ async function loadExpenses() {
             ).join('')}
           </div>
         </div>
-        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next Ã¢â€ â€™</button>
+        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next â†’</button>
       </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
     </div>`;
 
@@ -578,7 +578,7 @@ function showExcelImport() {
   openModal('Import from Excel', `
     <div style="background:var(--blue-l);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--t2)">
       <b style="color:var(--t1)">Expected columns:</b>
-      <span style="margin-left:10px"><b>B</b> Date &nbsp;Ã‚Â·&nbsp; <b>D</b> Description &nbsp;Ã‚Â·&nbsp; <b>E</b> Debit &nbsp;Ã‚Â·&nbsp; <b>F</b> Extras (Y/N)</span>
+      <span style="margin-left:10px"><b>B</b> Date &nbsp;Â·&nbsp; <b>D</b> Description &nbsp;Â·&nbsp; <b>E</b> Debit &nbsp;Â·&nbsp; <b>F</b> Extras (Y/N)</span>
     </div>
     <div class="fg" style="margin-bottom:14px">
       <label class="fl full">File (.xlsx / .xls / .ods)
@@ -588,7 +588,7 @@ function showExcelImport() {
         <input type="password" id="xlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets Ã¢â€ â€™</button>
+        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets â†’</button>
       </label>
     </div>
     <div id="xlsxSheetArea"></div>
@@ -599,7 +599,7 @@ async function loadExcelSheets() {
   const file = document.getElementById('xlsxFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('xlsxPass').value;
-  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileÃ¢â‚¬Â¦</div>`;
+  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('xlsxPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -632,7 +632,7 @@ async function loadExcelSheets() {
       </div>
       ${checkboxes}
     </div>
-    <button class="btn btn-s" onclick="previewExcel()">Preview Ã¢â€ â€™</button>`;
+    <button class="btn btn-s" onclick="previewExcel()">Preview â†’</button>`;
   if (data.sheets.length === 1) previewExcel();
 }
 
@@ -646,7 +646,7 @@ async function previewExcel() {
   const password = document.getElementById('xlsxPass')?.value || '';
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading previewÃ¢â‚¬Â¦</div>`;
+  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading previewâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -654,7 +654,7 @@ async function previewExcel() {
   const res = await fetch('/api/expenses/import-excel/preview', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.error) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`; return; }
-  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped Ã¢â‚¬â€ zero amount or missing data).</p>`; return; }
+  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped â€” zero amount or missing data).</p>`; return; }
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('xlsxPreview').innerHTML = `
     <p style="font-size:13px;margin-bottom:10px">Found <b>${data.count}</b> valid rows from ${sheetLabel} &nbsp;<span style="color:var(--t3)">(${data.skipped} skipped)</span></p>
@@ -690,9 +690,9 @@ async function doExcelImport() {
   else toast('Import failed: ' + (data.error || 'Unknown error'), 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // FRIENDS & LOANS
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadFriends() {
   const data = await api('/api/friends');
   if (!data) return;
@@ -713,20 +713,26 @@ async function loadFriends() {
       <div class="filter-row">
         <button class="btn btn-p btn-sm" onclick="showAddFriend()">+ Add Friend</button>
         <button class="btn btn-s btn-sm" onclick="showFriendExcelImport()">Import Excel</button>
-        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">Ã°Å¸â€â€” Share</button>
-        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">Ã¢â€ â€œ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">ðŸ”— Share</button>
+        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">â†“ PDF</button>
         <div class="chip-group">
           ${['name','high','low'].map(s=>`<button class="chip ${friendSort===s?'active':''}" onclick="friendSort='${s}';loadFriends()">${s==='name'?'A-Z':s==='high'?'Highest':'Lowest'}</button>`).join('')}
         </div>
       </div>
       <div>${list.length===0?'<div class="empty-td">No friends yet. Add one to start tracking loans.</div>':''}
-        ${list.map(f=>`<div class="friend-card" onclick="selectedFriend=${f.id};loadFriendDetail()">
-          <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
-          <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div></div>
-          <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
-          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, ${JSON.stringify(f.name)})">Edit</button>
-          <button class="btn-d" onclick="event.stopPropagation();deleteFriend(, )">Ã¢Å“â€¢</button>
-        </div>`).join('')}
+        ${list.map(f => {
+          const safeName = String(f.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+          const safeDeleteName = safeName || 'this friend';
+          return `<div class="friend-card">
+          <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer" onclick="selectedFriend=${f.id};loadFriendDetail()">
+            <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
+            <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div></div>
+            <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
+          </div>
+          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, '${safeName}')">Edit</button>
+          <button class="btn-d" style="color:var(--red)" onclick="stopEvent(event);deleteFriend(${f.id}, '${safeDeleteName}')">Del</button>
+        </div>`;
+        }).join('')}
       </div>
     </div>`;
 }
@@ -784,7 +790,7 @@ function showFriendExcelImport() {
         <input type="password" id="fiPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets Ã¢â€ â€™</button>
+        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets â†’</button>
       </label>
     </div>
     <div id="fiSheetArea"></div>
@@ -796,7 +802,7 @@ function showFriendExcelImport() {
         <label class="fl">Paid (you gave) *<select id="fiMapPaid" class="fi"></select></label>
         <label class="fl">Received (you got) *<select id="fiMapReceived" class="fi"></select></label>
       </div>
-      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview Ã¢â€ â€™</button>
+      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview â†’</button>
     </div>
     <div id="fiPreview"></div>`);
 }
@@ -807,7 +813,7 @@ async function loadFriendImportSheets() {
   const file = document.getElementById('fiFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('fiPass').value;
-  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileÃ¢â‚¬Â¦</div>`;
+  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('fiMapping').style.display = 'none';
   document.getElementById('fiPreview').innerHTML = '';
   const fd = new FormData();
@@ -880,7 +886,7 @@ async function previewFriendImport() {
     paid:     parseInt(document.getElementById('fiMapPaid').value),
     received: parseInt(document.getElementById('fiMapReceived').value),
   };
-  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading previewÃ¢â‚¬Â¦</div>`;
+  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading previewâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheet', sheets[0]);
@@ -893,7 +899,7 @@ async function previewFriendImport() {
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('fiPreview').innerHTML = `
     <div style="margin-top:14px">
-      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> Ã¢â‚¬â€ <b>${data.count}</b> rows
+      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> â€” <b>${data.count}</b> rows
         <span style="color:var(--t3)">(${data.skipped} skipped)</span>
         ${sheets.length > 1 ? `&nbsp;+&nbsp;<span style="color:var(--em);font-weight:600">${sheets.length - 1} more sheet${sheets.length>2?'s':''}</span>` : ''}
       </p>
@@ -933,7 +939,7 @@ async function doFriendExcelImport() {
   const res = await fetch('/api/friends/import-excel', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.success) {
-    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' · ');
+    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' � ');
     toast(`Imported ${data.totalImported} transactions across ${data.results.length} friend(s) - ${summary}`, 'success', 5000);
     closeModal();
     loadFriends();
@@ -1014,7 +1020,7 @@ function renderFriendDetail() {
 
   function th(col, label, align) {
     const active = loanSort.col === col;
-    const arrow = active ? (loanSort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+    const arrow = active ? (loanSort.dir === 'asc' ? ' ?' : ' ?') : '';
     const style = align ? `style="text-align:${align};cursor:pointer"` : 'style="cursor:pointer"';
     return `<th ${style} onclick="loanToggleSort('${col}')">${label}${arrow}</th>`;
   }
@@ -1138,15 +1144,15 @@ async function deleteLoan(id) {
   loadFriendDetail(true);
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DIVIDE EXPENSES
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _divFriends = [];       // loaded once, reused in render
 let _divEditIdx = null;     // index being edited, null = new
 let _divGroups = [];        // saved groups from DB
 let _divExpandedId = null;  // which group row is expanded
 let divideSplitMode = 'equal'; // 'equal'|'percent'|'fraction'|'amount'|'parts'
-let divideSplitValues = {};    // personKey Ã¢â€ â€™ numeric value for non-equal modes
+let divideSplitValues = {};    // personKey â†’ numeric value for non-equal modes
 
 const SPLIT_MODES = [
   { key: 'equal',    label: 'Equal' },
@@ -1235,7 +1241,7 @@ async function renderDivide() {
   const friends = _divFriends;
   const editItem = _divEditIdx !== null ? divideItems[_divEditIdx] : null;
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Form Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = [
     `<button class="chip ${dividePaidBy==='self'?'active':''}" onclick="selectPaidBy(this,'self')">You</button>`,
     ...friends.map(f => `<button class="chip ${dividePaidBy==f.id?'active':''}" onclick="selectPaidBy(this,'${f.id}')">${f.name}</button>`)
@@ -1243,10 +1249,10 @@ async function renderDivide() {
 
   const friendChips = [
     `<button class="fr-chip ${divideSelected.has('self')?'sel':''}" onclick="toggleDivFriend('self')">
-      <span class="cbox ${divideSelected.has('self')?'chk':''}">${divideSelected.has('self')?'Ã¢Å“â€œ':''}</span>You
+      <span class="cbox ${divideSelected.has('self')?'chk':''}">${divideSelected.has('self')?'&#10003;':''}</span>You
     </button>`,
     ...friends.map(f => `<button class="fr-chip ${divideSelected.has(f.id)?'sel':''}" onclick="toggleDivFriend(${f.id})">
-        <span class="cbox ${divideSelected.has(f.id)?'chk':''}">${divideSelected.has(f.id)?'Ã¢Å“â€œ':''}</span>${f.name}
+        <span class="cbox ${divideSelected.has(f.id)?'chk':''}">${divideSelected.has(f.id)?'&#10003;':''}</span>${f.name}
       </button>`)
   ].join('');
 
@@ -1254,13 +1260,13 @@ async function renderDivide() {
     `<button class="chip split-mode-chip ${divideSplitMode===m.key?'active':''}" data-mode="${m.key}" onclick="selectSplitMode('${m.key}')">${m.label}</button>`
   ).join('');
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Items table Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Items table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let itemsTable = '';
   if (divideItems.length > 0) {
     const rows = divideItems.map((item, i) => {
       const editing = _divEditIdx === i;
       const modeLabel = item.splitMode && item.splitMode !== 'equal' ? ` <span style="font-size:10px;color:var(--t3)">(${item.splitMode})</span>` : '';
-      const ccBadge = item.ccInfo ? ` <span style="font-size:10px;background:var(--blue-l);color:var(--blue);border-radius:99px;padding:1px 7px;font-weight:600">Ã°Å¸â€™Â³ ${item.ccInfo.cardName}</span>` : '';
+      const ccBadge = item.ccInfo ? ` <span style="font-size:10px;background:var(--blue-l);color:var(--blue);border-radius:99px;padding:1px 7px;font-weight:600">CC ${item.ccInfo.cardName}</span>` : '';
       return `<tr style="${editing ? 'background:var(--blue-l)' : ''}">
         <td>${fmtDate(item.date)}</td>
         <td>${item.details}${ccBadge}</td>
@@ -1288,11 +1294,11 @@ async function renderDivide() {
       </div>`;
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Summary table Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Summary table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let summaryTable = '';
   if (divideItems.length > 0) {
     // Collect all participants (each unique friendId that appears in any item)
-    const peopleMap = {}; // friendId/key Ã¢â€ â€™ { name, totalShare, totalGave }
+    const peopleMap = {}; // friendId/key â†’ { name, totalShare, totalGave }
 
     divideItems.forEach(item => {
       // Use personShares for accurate per-person amounts (supports all split modes)
@@ -1352,7 +1358,7 @@ async function renderDivide() {
         <div style="margin-top:20px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
             <div style="font-size:14px;font-weight:700">Settlement Summary</div>
-            <button class="btn btn-p btn-sm" onclick="showSaveDivideModal()">Save to Database Ã¢â€ â€™</button>
+            <button class="btn btn-p btn-sm" onclick="showSaveDivideModal()">Save to Database</button>
           </div>
           <div class="table-wrap"><table>
             <thead><tr><th>Name</th><th class="td-m">Total Had to Pay</th><th class="td-m">They Gave</th><th class="td-m">Pending</th></tr></thead>
@@ -1471,7 +1477,7 @@ function _buildDivGroupRows() {
                 ${sess.items.length > 1 ? `
                   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
                     <div style="font-size:12px;font-weight:600;color:var(--t1)">${g.details}
-                      <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">Paid by ${g.paid_by} Ã‚Â· ${fmtDate(g.divide_date)} Ã‚Â· ${fmtCur(g.total_amount)}</span>
+                      <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">Paid by ${g.paid_by} &middot; ${fmtDate(g.divide_date)} &middot; ${fmtCur(g.total_amount)}</span>
                     </div>
                     <button class="btn-d" style="color:var(--red);font-size:11px" onclick="deleteDivGroup(${g.id})">Del</button>
                   </div>` : `
@@ -1493,8 +1499,8 @@ function _buildDivGroupRows() {
         <td style="color:var(--t2);font-size:13px">${isSingle ? sess.items[0].paid_by : [...new Set(sess.items.map(g=>g.paid_by))].join(', ')}</td>
         <td class="td-m" style="font-weight:600">${fmtCur(sessionTotal)}</td>
         <td style="text-align:right;white-space:nowrap">
-          <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'}</span>
-          <button class="btn-d" style="color:var(--t2)" onclick="event.stopPropagation();downloadSplitSessionPdf('${sess.key}')">Ã¢â€ â€œ PDF</button>
+          <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? '-' : '+'}</span>
+          <button class="btn-d" style="color:var(--t2)" onclick="event.stopPropagation();downloadSplitSessionPdf('${sess.key}')">PDF</button>
           ${deleteBtn}
         </td>
       </tr>${expandDetail}`;
@@ -1542,7 +1548,7 @@ function renderDivHistory() {
         <div style="font-size:14px;font-weight:700">Saved Splits History
           <span class="div-hist-count" style="font-size:12px;font-weight:400;color:var(--t3);margin-left:8px">${sessions.length} session${sessions.length !== 1 ? 's' : ''}, ${_divGroups.length} item${_divGroups.length !== 1 ? 's' : ''}</span>
         </div>
-        <button class="btn btn-s btn-sm" onclick="downloadSplitHistoryPdf()">Ã¢â€ â€œ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="downloadSplitHistoryPdf()">PDF</button>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1580,7 +1586,7 @@ function toggleDivFriend(id) {
       const sel = divideSelected.has(chipId);
       btn.classList.toggle('sel', sel);
       const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? 'Ã¢Å“â€œ' : ''; }
+      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? '?' : ''; }
     });
   }
   // Reset split values when people change
@@ -1600,7 +1606,7 @@ function updateDivSplitInputs() {
 
   if (divideSplitMode === 'equal') {
     const pp = Math.round((amt / people.length) * 100) / 100;
-    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> people Ã‚Â· Per person: <b>${fmtCur(pp)}</b></div>`;
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> people &middot; Per person: <b>${fmtCur(pp)}</b></div>`;
     return;
   }
 
@@ -1615,7 +1621,7 @@ function updateDivSplitInputs() {
 
   const { valid, error } = computeShares(amt, divideSplitMode, people, divideSplitValues);
   const statusHtml = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">&#10003; Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 
   el.innerHTML = `
@@ -1629,7 +1635,7 @@ function updateDivSplitInputs() {
 
 function onSplitInput(input, pkey) {
   divideSplitValues[pkey] = parseFloat(input.value) || 0;
-  // Only update the status row Ã¢â‚¬â€ don't re-render inputs (would kill focus)
+  // Only update the status row â€” don't re-render inputs (would kill focus)
   const statusRow = document.getElementById('splitStatusRow');
   if (!statusRow) return;
   const amt = parseFloat(document.getElementById('dAmount')?.value || 0);
@@ -1649,7 +1655,7 @@ function onSplitInput(input, pkey) {
   }
 
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">&#10003; Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>${balanceHtml}`;
 }
 
@@ -1664,7 +1670,7 @@ function setRemaining(pkey, remaining) {
   const people = _selectedPeople();
   const { valid, error } = computeShares(amt, divideSplitMode, people, divideSplitValues);
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">&#10003; Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 }
 
@@ -1754,11 +1760,11 @@ function showSaveDivideModal() {
   const firstDate = divideItems[0]?.date || todayStr();
   const ccLinked = divideItems.filter(i => i.ccInfo).length;
   const ccNote = ccLinked > 0
-    ? `<div style="background:var(--blue-l);color:var(--blue);border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:12px">Ã°Å¸â€™Â³ ${ccLinked} item${ccLinked>1?'s':''} will be charged to credit card</div>`
+    ? `<div style="background:var(--blue-l);color:var(--blue);border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:12px">CC ${ccLinked} item${ccLinked>1?'s':''} will be charged to credit card</div>`
     : '';
-  openModal('Save Split Ã¢â‚¬â€ Enter Heading', `
+  openModal('Save Split - Enter Heading', `
     <div style="font-size:13px;color:var(--t2);margin-bottom:14px">
-      This heading will be used for all saved records Ã¢â‚¬â€ your expense entry and each friend's transaction.
+      This heading will be used for all saved records - your expense entry and each friend's transaction.
     </div>
     <div class="fg">
       <label class="fl full">Heading / Description *
@@ -1789,7 +1795,7 @@ async function doSaveDivide() {
 
   const friends = _divFriends;
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ 1. Recompute summary (peopleMap) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ 1. Recompute summary (peopleMap) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const peopleMap = {};
   divideItems.forEach(item => {
     if (item.personShares && item.personShares.length > 0) {
@@ -1820,7 +1826,7 @@ async function doSaveDivide() {
     }
   });
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ 2. Save divide groups (split records) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ 2. Save divide groups (split records) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const sessionId = String(Date.now());
   for (const item of divideItems) {
     const splits = item.personShares
@@ -1847,7 +1853,7 @@ async function doSaveDivide() {
     }
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ 3. Save my expense entry Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ 3. Save my expense entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const isExtra = document.getElementById('divTypeExtra')?.classList.contains('active') || false;
   const selfEntry = peopleMap['self'];
   if (selfEntry && selfEntry.totalShare > 0) {
@@ -1860,7 +1866,7 @@ async function doSaveDivide() {
     void expR; // CC transactions for split items were already saved per-item above
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ 4. Save friend loan transactions Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ 4. Save friend loan transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   for (const [fid, p] of Object.entries(peopleMap)) {
     if (fid === 'self') continue;
     await api('/api/loans', { method: 'POST', body: {
@@ -1883,9 +1889,9 @@ async function doSaveDivide() {
   toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded.`, 'success', 4500);
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
-// REPORTS Ã¢â‚¬â€ Year / Month / Expense drill-down
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// REPORTS â€” Year / Month / Expense drill-down
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _reportChart = null;
 let reportDrillYear = null;
 let reportDrillMonth = null;
@@ -1912,7 +1918,7 @@ function rptToggleSort(sortObj, field) {
   else { sortObj.field = field; sortObj.dir = field === 'year' || field === 'month' ? 'desc' : 'desc'; }
 }
 function rptArrow(sortObj, field) {
-  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' ↑' : ' ↓') : '';
+  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' ?' : ' ?') : '';
 }
 
 async function loadReports() {
@@ -2214,9 +2220,9 @@ async function renderReportExpenses() {
         </div>
         ${totalPages > 1 ? `
         <div class="pagination">
-          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">Ã¢â€ Â Prev</button>
+          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">â† Prev</button>
           <div class="pg-info">
-            <span class="pg-range">${start+1}Ã¢â‚¬â€œ${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
+            <span class="pg-range">${start+1}â€“${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
             <div class="pg-pages">
               ${paginationPages(reportPage, totalPages).map(p => p==='...'
                 ? `<span class="pg-ellipsis">...</span>`
@@ -2224,7 +2230,7 @@ async function renderReportExpenses() {
               ).join('')}
             </div>
           </div>
-          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next Ã¢â€ â€™</button>
+          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next â†’</button>
         </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
       </div>
     </div>`;
@@ -2264,7 +2270,7 @@ function printReport(level) {
     const year = reportDrillYear;
     const rows = rptSortArr(_rptMonthsData.map(r=>({...r,month:parseInt(r.month)})), rptMonthSort.field, rptMonthSort.dir);
     title = `Expense Report - ${year}`;
-    subtitle = `Monthly breakdown · Generated on ${now}`;
+    subtitle = `Monthly breakdown � Generated on ${now}`;
     const yTotal = rows.reduce((s,r)=>s+r.total,0);
     const yFair  = rows.reduce((s,r)=>s+r.fair,0);
     const yExtra = rows.reduce((s,r)=>s+r.extra,0);
@@ -2288,7 +2294,7 @@ function printReport(level) {
       rptExpSort.field === 'date' ? 'date' : rptExpSort.field === 'amount' ? 'amount' : rptExpSort.field === 'name' ? 'name' : 'is_extra',
       rptExpSort.dir);
     title = `Expense Report - ${mName} ${year}`;
-    subtitle = `${list.length} expenses · Generated on ${now}`;
+    subtitle = `${list.length} expenses � Generated on ${now}`;
     const total  = list.reduce((s,e)=>s+e.amount,0);
     const fair   = list.filter(e=>!e.is_extra).reduce((s,e)=>s+e.amount,0);
     const extra  = list.filter(e=>e.is_extra).reduce((s,e)=>s+e.amount,0);
@@ -2336,20 +2342,20 @@ function printReport(level) {
   </div>
   ${summaryHTML}
   ${tableHTML}
-  <div class="pr-footer">Expense Lite AI · Printed on ${now}</div>
+  <div class="pr-footer">Expense Lite AI � Printed on ${now}</div>
   <script>window.onload = () => { window.print(); }<\/script>
   </body></html>`);
   win.document.close();
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EMI CALCULATOR
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadEMI() {
   const ccData = await api('/api/cc/cards');
   const cards = ccData?.cards || [];
-  const ccOptions = cards.map(c =>
-    `<option value="${c.id}">${escHtml(c.bank_name)} ${escHtml(c.card_name)}${c.last4 ? ' Ã‚Â·Ã‚Â·Ã‚Â·' + c.last4 : ''}</option>`
+  const ccChips = cards.map(c =>
+    `<button type="button" class="chip" id="emiCcChip_${c.id}" onclick="emiSetCard(${c.id})">${escHtml(c.bank_name)} ${escHtml(c.card_name)}${c.last4 ? ' --' + escHtml(c.last4) : ''}</button>`
   ).join('');
 
   document.getElementById('main').innerHTML = `
@@ -2379,14 +2385,19 @@ async function loadEMI() {
             <span>Show next month's EMI one month earlier in Planner</span>
           </label>
         </div>
-        ${cards.length ? `
-        <div class="fg" id="emiCcRow">
-          <label class="fl">Charged to Credit Card (optional)
-            <select class="fi" id="emiCcId" onchange="_emiGstToggle()">
-              <option value="">-- None --</option>${ccOptions}
-            </select>
-          </label>
-          <div id="emiGstOffsetWrap" style="display:none">
+        <div class="card" style="margin-top:12px;background:var(--bg2);border:1px solid var(--br)">
+          <div style="font-size:18px;font-weight:700;color:var(--t1)">Credit Card Link (Optional)</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">Use this when the EMI or charges are billed to a credit card.</div>
+          <input type="hidden" id="emiCcId" value="">
+          <div style="margin-top:10px">
+            <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:8px">Charged to Credit Card</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <button type="button" class="chip active" id="emiCcChip_none" onclick="emiSetCard('')">None</button>
+              ${ccChips}
+            </div>
+            ${cards.length ? '' : '<div style="font-size:12px;color:var(--t3);margin-top:8px">No credit cards found. Add one in Credit Cards to link EMI billing.</div>'}
+          </div>
+          <div class="fg" id="emiGstOffsetWrap" style="display:none;margin-top:10px">
             <label class="fl">EMI GST appears on
               <select class="fi" id="emiGstOffset">
                 <option value="-1">Previous month's bill</option>
@@ -2395,22 +2406,33 @@ async function loadEMI() {
               </select>
             </label>
           </div>
+          <div class="fg" id="emiCcChargesRow" style="display:none;margin-top:2px">
+            <label class="fl">File Processing Charges on CC (&#8377;)
+              <input class="fi" type="number" id="emiCcCharges" min="0" step="0.01" placeholder="0.00" oninput="_emiCalcProcGst()">
+            </label>
+            <label class="fl">Processing GST (%)
+              <input class="fi" type="number" id="emiCcChargesGst" min="0" max="100" step="0.01" placeholder="e.g. 18" oninput="_emiCalcProcGst()">
+            </label>
+            <label class="fl">GST Amount
+              <input class="fi" type="text" id="emiCcChargesGstAmt" readonly placeholder="-" style="background:var(--bg2);color:var(--t2)">
+            </label>
+          </div>
         </div>
-        <div class="fg" id="emiCcChargesRow" style="display:none">
-          <label class="fl">File Processing Charges on CC (&#8377;)
-            <input class="fi" type="number" id="emiCcCharges" min="0" step="0.01" placeholder="0.00" oninput="_emiCalcProcGst()">
-          </label>
-          <label class="fl">Processing GST (%)
-            <input class="fi" type="number" id="emiCcChargesGst" min="0" max="100" step="0.01" placeholder="e.g. 18" oninput="_emiCalcProcGst()">
-          </label>
-          <label class="fl">GST Amount
-            <input class="fi" type="text" id="emiCcChargesGstAmt" readonly placeholder="Ã¢â‚¬â€" style="background:var(--bg2);color:var(--t2)">
-          </label>
-        </div>` : ''}
         <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="calcEMI()">Calculate</button><button class="btn btn-g" onclick="loadEMI()">Reset</button></div>
       </div>
       <div id="emiResult"></div>
     </div>`;
+  _emiGstToggle();
+}
+
+function emiSetCard(cardId) {
+  const value = cardId === '' ? '' : String(cardId);
+  const input = document.getElementById('emiCcId');
+  if (input) input.value = value;
+  document.querySelectorAll('[id^="emiCcChip_"]').forEach(el => el.classList.remove('active'));
+  const targetId = value ? `emiCcChip_${value}` : 'emiCcChip_none';
+  document.getElementById(targetId)?.classList.add('active');
+  _emiGstToggle();
 }
 
 function _emiGstToggle() {
@@ -2427,7 +2449,7 @@ function _emiCalcProcGst() {
   const gstPct  = parseFloat(document.getElementById('emiCcChargesGst')?.value) || 0;
   const gstAmt  = Math.round(charges * gstPct / 100 * 100) / 100;
   const el = document.getElementById('emiCcChargesGstAmt');
-  if (el) el.value = (charges > 0 && gstPct > 0) ? `&#8377; ${gstAmt.toFixed(2)}` : 'Ã¢â‚¬â€';
+  if (el) el.value = (charges > 0 && gstPct > 0) ? `Rs ${gstAmt.toFixed(2)}` : '-';
 }
 
 function calcEMI() {
@@ -2460,7 +2482,7 @@ function calcEMI() {
   }
   totI=Math.round(totI*100)/100; totG=Math.round(totG*100)/100;
   const totAmt=Math.round((P+totI)*100)/100;
-  // If charges NOT included in principal, they are paid upfront Ã¢â‚¬â€ add to grand total
+  // If charges NOT included in principal, they are paid upfront â€” add to grand total
   const upfrontCharges = (!chargesInc && charges>0) ? charges : 0;
   const grand=Math.round((totAmt+totG+upfrontCharges)*100)/100;
 
@@ -2471,7 +2493,7 @@ function calcEMI() {
   const chargeNote = charges > 0
     ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
         <span>Processing charges: <strong>${fmtCur(charges)}</strong></span>
-        <span style="opacity:0.7">Ã¢â‚¬â€ ${chargesInc ? 'financed (included in principal &#8377;'+P.toLocaleString('en-IN')+')' : 'paid upfront (one-time, not in EMI)'}</span>
+        <span style="opacity:0.7"> - ${chargesInc ? 'financed (included in principal &#8377;'+P.toLocaleString('en-IN')+')' : 'paid upfront (one-time, not in EMI)'}</span>
        </div>`
     : '';
 
@@ -2535,7 +2557,7 @@ function refreshCalcSummary() {
   const chargeNote = c.charges > 0
     ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
         <span>Processing charges: <strong>${fmtCur(c.charges)}</strong></span>
-        <span style="opacity:0.7">Ã¢â‚¬â€ ${c.chargesInc ? 'financed (included in principal &#8377;' + c.P.toLocaleString('en-IN') + ')' : 'paid upfront (one-time, not in EMI)'}</span>
+        <span style="opacity:0.7"> - ${c.chargesInc ? 'financed (included in principal &#8377;' + c.P.toLocaleString('en-IN') + ')' : 'paid upfront (one-time, not in EMI)'}</span>
        </div>`
     : '';
   banner.innerHTML = buildCalcSummaryStats() + chargeNote;
@@ -2548,7 +2570,7 @@ function renderCalcSchedRows() {
     <td style="text-align:center;font-weight:600;font-family:var(--mono)">${r.m}</td>
     <td class="td-m">${r.interest.toFixed(2)}</td>
     <td class="td-m">${r.princ.toFixed(2)}</td>
-    <td class="td-m" style="font-weight:700;color:${r._edited?'var(--amber)':'inherit'}">${(r.woGST||r.emi_amount||(r.interest+r.princ)).toFixed(2)} <button class="inst-edit-btn" title="Edit" onclick="showCalcRowEdit(${i})">Ã¢Å“Å½</button></td>
+    <td class="td-m" style="font-weight:700;color:${r._edited?'var(--amber)':'inherit'}">${(r.woGST||r.emi_amount||(r.interest+r.princ)).toFixed(2)} <button class="inst-edit-btn" title="Edit" onclick="showCalcRowEdit(${i})">Edit</button></td>
     <td class="td-m">${r.g.toFixed(2)}</td>
     <td class="td-m" style="font-weight:600">${r.bal.toFixed(2)}</td>
     <td style="text-align:center">${r._edited?'<span style="font-size:10px;color:var(--amber);font-weight:600">edited</span>':''}</td>
@@ -2674,7 +2696,7 @@ function applyCalcBulkEdit() {
   closeModal();
   refreshCalcSchedTable();
   refreshCalcSummary();
-  if (anyNeg) toast('Some months have interest > new EMI Ã¢â‚¬â€ those rows were skipped', 'warning');
+  if (anyNeg) toast('Some months have interest > new EMI - those rows were skipped', 'warning');
   else toast('All months updated to ' + fmtCur(newEmi), 'success');
 }
 
@@ -2763,9 +2785,9 @@ async function doActivateEmi(id) {
   } else toast(res?.error || 'Activation failed', 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DASHBOARD
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _dashCharts = [];
 
 async function loadDashboard() {
@@ -2790,7 +2812,7 @@ async function loadDashboard() {
   // Fallback: if byType returned nothing but totals exist, show all as fair
   if (monthlyFair.every(v => v === 0) && monthlyExtra.every(v => v === 0) && monthly.some(v => v > 0)) {
     monthly.forEach((v, i) => { monthlyFair[i] = v; });
-    console.warn('monthlyByType empty Ã¢â‚¬â€ falling back to totals. API data:', data.monthlyByType);
+    console.warn('monthlyByType empty â€” falling back to totals. API data:', data.monthlyByType);
   }
 
   let fairTotal = 0, extraTotal = 0;
@@ -2838,7 +2860,7 @@ async function loadDashboard() {
       </div>
 
       <div class="dash-box">
-        <div class="dash-box-title">Monthly Spending Ã¢â‚¬â€ ${year}</div>
+        <div class="dash-box-title">Monthly Spending â€” ${year}</div>
         <canvas id="chartMonthly" height="80"></canvas>
       </div>
 
@@ -2876,7 +2898,7 @@ async function loadDashboard() {
 
   const palette = ['#145A3C','#1D7A52','#F0A030','#3B82F6','#7C5CDB','#C94444','#1D8A52','#F4C06E','#60A5FA','#9CA3B0'];
 
-  // Monthly bar chart Ã¢â‚¬â€ stacked Fair + Extra
+  // Monthly bar chart â€” stacked Fair + Extra
   _dashCharts.push(new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: {
@@ -2923,7 +2945,7 @@ async function loadDashboard() {
     _dashCharts.push(new Chart(document.getElementById('chartTop'), {
       type: 'bar',
       data: {
-        labels: data.topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + 'Ã¢â‚¬Â¦' : i.item_name),
+        labels: data.topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + 'â€¦' : i.item_name),
         datasets: [{
           label: 'Total',
           data: data.topItems.map(i => i.total),
@@ -2958,9 +2980,9 @@ async function loadDashboard() {
   }
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TRIPS
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _trips = [];
 let _selectedTripId = null;
 let _tripDetail = null;
@@ -2968,7 +2990,7 @@ let tripsFilter = 'all';   // all | active | completed | i_owe | they_owe
 let tripsPage = 1;
 const TRIPS_PAGE_SIZE = 10;
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Trip expense form state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Trip expense form state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _tripExpSel = new Set();    // member_key set
 let _tripExpPaidBy = 'self';
 let _tripExpMode = 'equal';
@@ -3023,7 +3045,7 @@ function renderTripList() {
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}</div>
       <div style="font-size:12px;color:var(--t3)">
         <span style="margin-right:12px">${t.members.length} members: ${memberNames}</span>
-        <span>${fmtCur(t.totalExpenses)} total · ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
+        <span>${fmtCur(t.totalExpenses)} total � ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
       </div>
     </div>`;
   }).join('') || `<div style="color:var(--t3);text-align:center;padding:40px">No trips found.</div>`;
@@ -3071,7 +3093,7 @@ async function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Build member keyÃ¢â€ â€™name map Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Build member keyâ†’name map â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const memberMap = {};
   trip.members.forEach(m => {
     const key = _memberKey(m);
@@ -3082,27 +3104,27 @@ async function renderTripDetail() {
   const myMemberKey = trip.isOwner ? 'self' : (myLinkedMember ? _memberKey(myLinkedMember) : 'self');
   const canEdit = trip.isOwner || trip.userPermission !== 'view';
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Paid-by chips Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Paid-by chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = trip.members.map(m => {
     const key = _memberKey(m);
     return `<button class="chip ${_tripExpPaidBy === key ? 'active' : ''}" onclick="tripSetPaidBy('${key}')">${m.member_name}</button>`;
   }).join('');
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Divide-between chips Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Divide-between chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const divChips = trip.members.map(m => {
     const key = _memberKey(m);
     const sel = _tripExpSel.has(key);
     return `<button class="fr-chip ${sel ? 'sel' : ''}" onclick="tripToggleMember('${key}')">
-      <span class="cbox ${sel ? 'chk' : ''}">${sel ? 'Ã¢Å“â€œ' : ''}</span>${m.member_name}
+      <span class="cbox ${sel ? 'chk' : ''}">${sel ? '&#10003;' : ''}</span>${m.member_name}
     </button>`;
   }).join('');
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Split mode chips Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Split mode chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const splitChips = SPLIT_MODES.map(m =>
     `<button class="chip split-mode-chip ${_tripExpMode === m.key ? 'active' : ''}" data-mode="${m.key}" onclick="tripSetSplitMode('${m.key}')">${m.label}</button>`
   ).join('');
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Expenses table Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Expenses table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let expensesHtml = '';
   if (trip.expenses.length > 0) {
     const rows = trip.expenses.map(e => {
@@ -3128,7 +3150,7 @@ async function renderTripDetail() {
     expensesHtml = `<div style="color:var(--t3);text-align:center;padding:20px">No expenses yet.</div>`;
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Settlement summary Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Settlement summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const peopleMap = {};
   trip.members.forEach(m => {
     const key = _memberKey(m);
@@ -3151,15 +3173,15 @@ async function renderTripDetail() {
     </tr>`;
   }).join('');
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Member management Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // â”€â”€ Member management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const memberRows = trip.members.map(m => {
-    const lockIcon = m.is_locked ? 'Ã°Å¸â€â€™' : 'Ã°Å¸â€â€œ';
+    const lockIcon = m.is_locked ? 'Locked' : 'Lock';
     const lockLabel = m.is_locked ? 'Locked' : 'Lock';
     const linkedBadge = m.linked_user_id
-      ? `<span style="font-size:10px;padding:1px 5px;background:var(--em-xl);color:var(--em);border-radius:8px;margin-left:3px" title="Linked to app user">Ã¢Å“â€œ Linked</span>`
+      ? `<span style="font-size:10px;padding:1px 5px;background:var(--em-xl);color:var(--em);border-radius:8px;margin-left:3px" title="Linked to app user">Linked</span>`
       : '';
     const linkBtn = trip.isOwner && m.friend_id !== null
-      ? `<button style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--t2);padding:0 0 0 4px" onclick="tripShowLinkModal(${m.id},'${m.member_name.replace(/'/g,"\\'")}',${m.linked_user_id||'null'})" title="Link/Invite member">Ã°Å¸â€â€”</button>`
+      ? `<button style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--t2);padding:0 0 0 4px" onclick="tripShowLinkModal(${m.id},'${m.member_name.replace(/'/g,"\\'")}',${m.linked_user_id||'null'})" title="Link/Invite member">Link</button>`
       : '';
     return `<span style="display:inline-flex;align-items:center;gap:2px;background:var(--bg2);border:1px solid var(--br);border-radius:20px;padding:3px 10px;font-size:12px;margin:2px">
       ${m.member_name}${linkedBadge}
@@ -3177,11 +3199,11 @@ async function renderTripDetail() {
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-        <button class="btn btn-g btn-sm" onclick="loadTrips()">Ã¢â€ Â Back</button>
+        <button class="btn btn-g btn-sm" onclick="loadTrips()">Back</button>
         <div style="font-size:20px;font-weight:700;flex:1">${trip.name} ${statusBadgeHtml}</div>
-        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">Ã¢â€ â€œ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
       </div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">${trip.end_date ? fmtDate(trip.start_date) + ' Ã¢â€ â€™ ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">${trip.end_date ? fmtDate(trip.start_date) + ' -> ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
       <div style="margin-bottom:16px">${memberRows}</div>
 
       <!-- Add Expense Form (only for edit-permission users) -->
@@ -3221,7 +3243,7 @@ async function renderTripDetail() {
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div style="font-size:14px;font-weight:700">Settlement Summary</div>
           <div style="display:flex;gap:8px">
-            ${trip.isOwner && trip.status === 'active' ? `<button class="btn btn-p btn-sm" onclick="tripFinalizeModal()">Finalize Trip Ã¢â€ â€™</button>` : ''}
+            ${trip.isOwner && trip.status === 'active' ? `<button class="btn btn-p btn-sm" onclick="tripFinalizeModal()">Finalize Trip</button>` : ''}
             ${trip.isOwner ? (trip.status === 'active' ? `<button class="btn btn-g btn-sm" onclick="tripMarkComplete()">Mark Complete</button>` : `<button class="btn btn-g btn-sm" onclick="tripMarkActive()">Re-open</button>`) : ''}
             ${trip.isOwner ? `<button class="btn-d" style="color:var(--red);font-size:12px" onclick="tripDelete()">Delete Trip</button>` : ''}
           </div>
@@ -3236,7 +3258,7 @@ async function renderTripDetail() {
   tripUpdateSplitInputs();
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Trip form helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Trip form helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripSetPaidBy(key) {
   _tripExpPaidBy = key;
   // Simplest: just re-render (form state preserved in variables)
@@ -3259,7 +3281,7 @@ function tripToggleMember(key) {
       const sel = _tripExpSel.has(chipKey);
       btn.classList.toggle('sel', sel);
       const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? 'Ã¢Å“â€œ' : ''; }
+      if (cbox) { cbox.classList.toggle('chk', sel); cbox.innerHTML = sel ? '&#10003;' : ''; }
     });
   }
   _tripExpValues = {};
@@ -3301,7 +3323,7 @@ function tripUpdateSplitInputs() {
 
   if (_tripExpMode === 'equal') {
     const pp = Math.round((amt / people.length) * 100) / 100;
-    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> Ã‚Â· Per person: <b>${fmtCur(pp)}</b></div>`;
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Split equally among <b>${people.length}</b> - Per person: <b>${fmtCur(pp)}</b></div>`;
     return;
   }
 
@@ -3316,7 +3338,7 @@ function tripUpdateSplitInputs() {
 
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
   const statusHtml = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 
   el.innerHTML = `<div style="margin-bottom:12px">
@@ -3347,7 +3369,7 @@ function tripOnSplitInput(input, pkey) {
   }
 
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>${balanceHtml}`;
 }
 
@@ -3361,7 +3383,7 @@ function tripSetRemaining(pkey, remaining) {
   const people = _tripSelectedPeople();
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
   statusRow.querySelector('td').innerHTML = valid
-    ? `<span style="color:var(--green);font-weight:600">Ã¢Å“â€œ Valid split</span>`
+    ? `<span style="color:var(--green);font-weight:600">Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
 }
 
@@ -3451,7 +3473,7 @@ async function tripDelete() {
   loadTrips();
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Finalize Trip Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Finalize Trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripFinalizeModal() {
   const trip = _tripDetail;
   // Compute settlement for preview
@@ -3468,16 +3490,29 @@ function tripFinalizeModal() {
   const previewRows = Object.entries(peopleMap).map(([key, p]) => {
     const net = p.totalGave - p.totalShare;
     const action = key === 'self'
-      ? (p.totalShare > 0 ? `Ã¢â€ â€™ Add ${fmtCur(p.totalShare)} to my expenses` : 'No personal expense')
-      : (net > 0.005 ? `Ã¢â€ â€™ Loan: ${fmtCur(net)} (they owe me)` : net < -0.005 ? `Ã¢â€ â€™ Loan: ${fmtCur(Math.abs(net))} (I owe them)` : 'Ã¢â€ â€™ Settled');
-    return `<tr><td style="padding:4px 8px;font-weight:600">${p.name}</td><td style="padding:4px 8px;font-size:12px;color:var(--t2)">${action}</td></tr>`;
+      ? (p.totalShare > 0 ? `Add ${fmtCur(p.totalShare)} to my expenses` : 'No personal expense')
+      : (net > 0.005 ? `Loan: ${fmtCur(net)} (they owe me)` : net < -0.005 ? `Loan: ${fmtCur(Math.abs(net))} (I owe them)` : 'Settled');
+    return `<tr>
+      <td style="padding:4px 8px;font-weight:600">${p.name}</td>
+      <td style="padding:4px 8px;font-size:12px;color:var(--t2);font-family:var(--mono)">${fmtCur(p.totalShare)}</td>
+      <td style="padding:4px 8px;font-size:12px;color:var(--t2)">${action}</td>
+    </tr>`;
   }).join('');
 
   openModal('Finalize Trip', `
     <div style="font-size:13px;color:var(--t2);margin-bottom:12px">
       This will add your expense and create loan transactions for all friends.
     </div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:14px">${previewRows}</table>
+    <table style="border-collapse:collapse;width:100%;margin-bottom:14px">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Member</th>
+          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Share</th>
+          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Action</th>
+        </tr>
+      </thead>
+      <tbody>${previewRows}</tbody>
+    </table>
     <div style="margin-bottom:14px">
       <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">MY EXPENSE TYPE</div>
       <div style="display:flex;gap:8px">
@@ -3491,9 +3526,47 @@ function tripFinalizeModal() {
     </div>`);
 }
 
+async function ensureTripMembersAsFriends(trip) {
+  const missingLinkedMembers = (trip.members || []).filter(
+    (member) => member.linked_user_id && (member.friend_id === null || member.friend_id === undefined)
+  );
+  if (!missingLinkedMembers.length) return {};
+
+  const normalizeName = (value) => String(value || '').trim().toLowerCase();
+  let friends = (await api('/api/friends'))?.friends || [];
+  const friendIdByName = new Map(friends.map((friend) => [normalizeName(friend.name), Number(friend.id)]));
+  const ensured = {};
+
+  for (const member of missingLinkedMembers) {
+    const key = _memberKey(member);
+    const memberName = String(member.member_name || '').trim();
+    if (!memberName) continue;
+    const normalized = normalizeName(memberName);
+    let friendId = friendIdByName.get(normalized);
+    if (!friendId) {
+      const created = await api('/api/friends', { method: 'POST', body: { name: memberName } });
+      if (created?.id) {
+        friendId = Number(created.id);
+        friendIdByName.set(normalized, friendId);
+      } else {
+        friends = (await api('/api/friends'))?.friends || [];
+        const found = friends.find((friend) => normalizeName(friend.name) === normalized);
+        if (found) {
+          friendId = Number(found.id);
+          friendIdByName.set(normalized, friendId);
+        }
+      }
+    }
+    if (friendId) ensured[key] = friendId;
+  }
+
+  return ensured;
+}
+
 async function doFinalizeTrip() {
   const trip = _tripDetail;
   const isExtra = document.getElementById('tfTypeExtra')?.classList.contains('active') || false;
+  const ensuredFriendIds = await ensureTripMembersAsFriends(trip);
 
   // Recompute settlement
   const peopleMap = {};
@@ -3521,13 +3594,15 @@ async function doFinalizeTrip() {
 
   // Save friend loan transactions
   for (const [key, p] of Object.entries(peopleMap)) {
-    if (key === 'self' || !p.friendId) continue;
+    if (key === 'self') continue;
+    const friendId = p.friendId || ensuredFriendIds[key];
+    if (!friendId) continue;
     const net = p.totalGave - p.totalShare; // positive = they overpaid (we owe them), negative = they owe us
     const paid = net < -0.005 ? Math.round(Math.abs(net) * 100) / 100 : 0;
     const received = net > 0.005 ? Math.round(net * 100) / 100 : 0;
     if (paid === 0 && received === 0) continue;
     await api('/api/loans', { method: 'POST', body: {
-      friend_id: p.friendId,
+      friend_id: friendId,
       txn_date: today,
       details: `Trip: ${trip.name}`,
       paid, received,
@@ -3542,7 +3617,7 @@ async function doFinalizeTrip() {
   await openTripDetail(_selectedTripId);
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Create Trip Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Create Trip Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _newTripAppUsers = []; // { id, display_name, username } selected app users
 
 async function showCreateTripModal() {
@@ -3572,8 +3647,8 @@ async function showCreateTripModal() {
       <div style="max-height:160px;overflow-y:auto;border:1px solid var(--br);border-radius:6px;padding:8px">${friendCheckboxes}</div>
     </div>
     <div style="margin-top:12px">
-      <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:6px">App Users <span style="font-weight:400;color:var(--t3);font-size:11px">Ã¢â‚¬â€ can see and edit this trip directly</span></div>
-      <input class="fi" id="newTripUserQ" placeholder="Search by name or usernameÃ¢â‚¬Â¦" oninput="newTripSearchUsers()" style="margin-bottom:6px">
+      <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:6px">App Users <span style="font-weight:400;color:var(--t3);font-size:11px">- can see and edit this trip directly</span></div>
+      <input class="fi" id="newTripUserQ" placeholder="Search by name or username..." oninput="newTripSearchUsers()" style="margin-bottom:6px">
       <div id="newTripUserResults" style="margin-bottom:6px"></div>
       <div id="newTripUserSelected" style="display:flex;flex-wrap:wrap;gap:6px"></div>
     </div>
@@ -3623,7 +3698,7 @@ function _renderNewTripSelectedUsers() {
   box.innerHTML = _newTripAppUsers.map(u =>
     `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--em-xl);color:var(--em);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:500">
       ${escHtml(u.display_name)}
-      <button style="background:none;border:none;cursor:pointer;color:var(--em);font-size:13px;line-height:1;padding:0" onclick="newTripRemoveUser(${u.id})">Ãƒâ€”</button>
+      <button style="background:none;border:none;cursor:pointer;color:var(--em);font-size:13px;line-height:1;padding:0" onclick="newTripRemoveUser(${u.id})">x</button>
     </span>`
   ).join('');
 }
@@ -3654,14 +3729,14 @@ async function doCreateTrip() {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Trip: Link member to app user / invite Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Trip: Link member to app user / invite â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function tripShowLinkModal(memberId, memberName, linkedUserId) {
   openModal(`Share: ${memberName}`, `
     <p style="font-size:13px;color:var(--t2);margin-bottom:14px">Link this member slot to an existing app user, or generate an invite link for someone without an account.</p>
-    ${linkedUserId ? `<div style="background:var(--em-xl);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--em);margin-bottom:12px">Ã¢Å“â€œ Currently linked to an app user. <button class="btn-d" style="color:var(--red)" onclick="tripUnlinkMember(${memberId})">Unlink</button></div>` : ''}
+    ${linkedUserId ? `<div style="background:var(--em-xl);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--em);margin-bottom:12px">Currently linked to an app user. <button class="btn-d" style="color:var(--red)" onclick="tripUnlinkMember(${memberId})">Unlink</button></div>` : ''}
     <div style="margin-bottom:14px">
       <label class="fl">Search app users
-        <input class="fi" id="userSearchQ" placeholder="Type username or nameÃ¢â‚¬Â¦" oninput="tripSearchUsers()">
+        <input class="fi" id="userSearchQ" placeholder="Type username or name..." oninput="tripSearchUsers()">
       </label>
       <div id="userSearchResults" style="margin-top:6px"></div>
     </div>
@@ -3734,7 +3809,7 @@ async function checkTripInvite(token) {
   if (!confirmed) return;
   const r = await api(`/api/trips/invite/${token}/accept`, { method: 'POST' });
   if (r?.success) {
-    toast('Invite accepted! Opening tripÃ¢â‚¬Â¦', 'success');
+    toast('Invite accepted! Opening trip...', 'success');
     switchTab('trips');
     await openTripDetail(r.tripId);
   } else {
@@ -3742,7 +3817,7 @@ async function checkTripInvite(token) {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Friends Share Links Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€ Friends Share Links â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showFriendsShareModal() {
   const [frData, linksData] = await Promise.all([api('/api/friends'), api('/api/shares')]);
   const friends = frData?.friends || [];
@@ -3762,9 +3837,9 @@ async function showFriendsShareModal() {
         return `<div style="border:1px solid var(--br);border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px${expired ? ';opacity:0.5' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <div style="color:var(--em);word-break:break-all">${url}</div>
-            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})">Ã¢Å“â€¢</button>
+            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})">âœ•</button>
           </div>
-          <div style="color:var(--t3)">${expired ? 'Ã¢Å¡Â  Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} Ã‚Â· ${l.view_count} views</div>
+          <div style="color:var(--t3)">${expired ? 'âš  Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} Â· ${l.view_count} views</div>
           ${!expired ? `<button class="btn btn-g btn-sm" style="margin-top:6px" onclick="navigator.clipboard.writeText('${url}').then(()=>toast('Copied!','success'))">Copy Link</button>` : ''}
         </div>`;
       }).join('');
@@ -3777,7 +3852,7 @@ async function showFriendsShareModal() {
     </div>
     <div class="fg" style="margin-bottom:12px">
       <label class="fl">Filter Year (optional)<input class="fi" type="number" id="shareYear" placeholder="e.g. 2025" min="2020" max="2030"></label>
-      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1Ã¢â‚¬â€œ12" min="1" max="12"></label>
+      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1â€“12" min="1" max="12"></label>
       <label class="fl">Expires on (optional)<input class="fi" type="date" id="shareExpiry"></label>
     </div>
     <div class="fa" style="margin-bottom:16px">
@@ -3813,9 +3888,9 @@ async function deleteShareLink(id) {
   showFriendsShareModal();
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let adminSection = 'users'; // users | plans | subscriptions
 
 const ALL_PAGES = [
@@ -3860,7 +3935,7 @@ function renderAdminShell() {
     </div>`;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Users Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
   const users = data?.users || [];
@@ -4048,13 +4123,13 @@ async function adminRestoreUser(id) {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Plans Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Plans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAdminPlans() {
   const data = await api('/api/admin/plans');
   const plans = data?.plans || [];
 
   const cards = plans.length ? plans.map(p => {
-    const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'Ã¢â‚¬â€';
+    const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'â€”';
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -4063,11 +4138,11 @@ async function loadAdminPlans() {
             ${p.is_free ? '<span style="font-size:10px;padding:2px 7px;background:var(--blue-l);color:var(--blue);border-radius:10px;margin-left:6px">Free</span>' : ''}
             ${p.auto_assign_on_signup ? '<span style="font-size:10px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px;margin-left:6px">Signup Default</span>' : ''}
           </div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${p.description||'Ã¢â‚¬â€'}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${p.description||'â€”'}</div>
           <div style="font-size:12px;color:var(--t3);margin-top:4px">Pages: ${pageLabels}</div>
           <div style="font-size:12px;margin-top:4px">
             Monthly: <b>${p.price_monthly>0?fmtCur(p.price_monthly):'Free'}</b>
-            &nbsp;Ã‚Â·&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
+            &nbsp;Â·&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -4151,7 +4226,7 @@ async function adminDeletePlan(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Subscriptions Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Subscriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _adminSubUsers = [];
 let _adminSubPlans = [];
 
@@ -4172,7 +4247,7 @@ async function loadAdminSubscriptions() {
       <td>${s.plan_name}</td>
       <td style="font-size:12px">${s.billing_cycle}</td>
       <td style="font-size:12px">${fmtDate(s.start_date)}</td>
-      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : 'Ã¢Ë†Å¾ No expiry'}</td>
+      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : 'âˆž No expiry'}</td>
       <td style="color:${statusColor};font-weight:600;font-size:12px">${s.status}</td>
       <td>
         <button class="btn-d" style="color:var(--em)" onclick="showSubModal(${s.id},${s.plan_id},'${s.billing_cycle}','${s.end_date||''}','${s.status}')">Edit</button>
@@ -4275,9 +4350,9 @@ async function adminDeleteSub(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EMI TRACKER
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _emiFilter = 'all';
 let _emiTagFilter = '';
 let _emiSearch = '';
@@ -4306,7 +4381,7 @@ async function loadEmiTracker() {
   renderEmiTracker();
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ FRIEND EMI TRACKER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€ FRIEND EMI TRACKER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadFriendEmiTracker() {
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="text-align:center;padding:40px;color:var(--t3)">Loading...</div></div>';
@@ -4394,6 +4469,11 @@ function renderFriendEmiTracker() {
 }
 
 function showAddFriendEmiModal() {
+  const shortDate = (val) => {
+    if (!val) return '-';
+    const s = String(val);
+    return s.slice(0, 10);
+  };
   const today = new Date().toISOString().slice(0, 10);
   openModal('Add Friend EMI', `
     <div class="fg">
@@ -4482,7 +4562,7 @@ async function doSaveFriendEmi() {
   await loadFriendEmiTracker();
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function emiChangeMonth(delta) {
   const [y, m] = _emiMonth.split('-').map(Number);
@@ -4645,7 +4725,7 @@ function renderEmiTracker() {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ EMI IMPORT Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€ EMI IMPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function showEmiImportModal(forFriend = false, preferredMode = '') {
   openModal((forFriend ? 'Import Friend EMI' : 'Import EMI') + ' from Excel', `
@@ -4658,7 +4738,7 @@ function showEmiImportModal(forFriend = false, preferredMode = '') {
         <input type="password" id="emiXlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadEmiSheets()">Load Sheets Ã¢â€ â€™</button>
+        <button class="btn btn-p" onclick="loadEmiSheets()">Load Sheets â†’</button>
       </label>
     </div>
     ${forFriend ? `
@@ -4670,8 +4750,8 @@ function showEmiImportModal(forFriend = false, preferredMode = '') {
     <div style="background:var(--bg3);border-radius:10px;padding:12px 14px;margin-bottom:14px">
       <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:6px">IMPORT MODES</div>
       <div style="font-size:12px;color:var(--t3);line-height:1.5">
-        <div><strong>Detailed Import</strong> Ã¢â‚¬â€ use this when your Excel already has principal, interest, total, or EMI columns.</div>
-        <div style="margin-top:4px"><strong>Paid-Only Import</strong> Ã¢â‚¬â€ use this when your Excel only has date + amount paid each month. We calculate principal, interest, inferred rate, and total from the loan amount and the payment rows in Excel.</div>
+        <div><strong>Detailed Import</strong> â€” use this when your Excel already has principal, interest, total, or EMI columns.</div>
+        <div style="margin-top:4px"><strong>Paid-Only Import</strong> â€” use this when your Excel only has date + amount paid each month. We calculate principal, interest, inferred rate, and total from the loan amount and the payment rows in Excel.</div>
       </div>
     </div>
     <div id="emiSheetArea"></div>
@@ -4684,7 +4764,7 @@ async function loadEmiSheets() {
   const file = document.getElementById('emiXlsxFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass').value;
-  document.getElementById('emiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileÃ¢â‚¬Â¦</div>`;
+  document.getElementById('emiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
   document.getElementById('emiMappingArea').innerHTML = '';
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
@@ -4713,8 +4793,8 @@ async function loadEmiSheets() {
       ${checkboxes}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-s" onclick="loadEmiColumnMapping()">Detailed Import Ã¢â€ â€™</button>
-      <button class="btn btn-s" onclick="loadEmiSimpleMapping()" title="You only have dates &amp; amounts paid Ã¢â‚¬â€ provide loan amount and rate, we calculate the rest">Calculate from Loan Amount Ã¢â€ â€™</button>
+      <button class="btn btn-s" onclick="loadEmiColumnMapping()">Detailed Import â†’</button>
+      <button class="btn btn-s" onclick="loadEmiSimpleMapping()" title="You only have dates &amp; amounts paid â€” provide loan amount and rate, we calculate the rest">Calculate from Loan Amount â†’</button>
     </div>`;
   if (window._emiImportPreferredMode === 'simple') loadEmiSimpleMapping();
 }
@@ -4729,7 +4809,7 @@ async function loadEmiColumnMapping() {
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass')?.value || '';
-  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsÃ¢â‚¬Â¦</div>`;
+  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsâ€¦</div>`;
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -4742,12 +4822,12 @@ async function loadEmiColumnMapping() {
     return;
   }
   const cols = data.columns; // [{col, letter, header, sample}]
-  const noneOpt = `<option value="0">Ã¢â‚¬â€ None / Skip Ã¢â‚¬â€</option>`;
+  const noneOpt = `<option value="0">â€” None / Skip â€”</option>`;
   const colOpts = (selected) => cols.map(c =>
     `<option value="${c.col}" ${c.col===selected?'selected':''}>${escHtml(c.letter)}: ${escHtml(c.header)}${c.sample?' ('+escHtml(c.sample)+')':''}</option>`
   ).join('');
 
-  // default mapping Ã¢â‚¬â€ reset all to 0/unset
+  // default mapping â€” reset all to 0/unset
   const def = { srNo:0, date:0, principal:0, interest:0, gst:0, total:0, emiAmount:0, iPaid:0 };
   // auto-detect by header name (order matters: more specific checks first)
   cols.forEach(c => {
@@ -4785,14 +4865,14 @@ async function loadEmiColumnMapping() {
       ${field('srNo',      'Sr. No.',             false, def.srNo)}
       ${field('date',      'Date',                true,  def.date)}
       ${field('principal', 'Principal',           true,  def.principal)}
-      ${field('interest',  'Interest',            false, def.interest,  'skip Ã¢â€ â€™ treated as 0')}
+      ${field('interest',  'Interest',            false, def.interest,  'skip â†’ treated as 0')}
       ${field('gst',       'GST Amount',          false, def.gst,       'rate auto-read from header')}
       ${field('total',     'Total (ex-GST)',       false, def.total,     'principal + interest')}
       ${field('emiAmount', 'Total (with GST)',     false, def.emiAmount, 'used as EMI amount')}
       ${field('iPaid',     'Amount Paid',          false, def.iPaid)}
     </div>
     <div style="font-size:11px;color:var(--t3);margin:-6px 0 12px 0">* If "Total (with GST)" is not mapped, Total (ex-GST) + GST Amount will be used.</div>
-    <button class="btn btn-s" onclick="previewEmiExcel()">Preview Ã¢â€ â€™</button>`;
+    <button class="btn btn-s" onclick="previewEmiExcel()">Preview â†’</button>`;
 }
 
 function _getEmiMapping() {
@@ -4805,7 +4885,7 @@ function _getEmiMapping() {
   return m;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ SIMPLE IMPORT (loan amount + payment rows) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€ SIMPLE IMPORT (loan amount + payment rows) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadEmiSimpleMapping() {
   const file   = document.getElementById('emiXlsxFile').files[0];
@@ -4813,7 +4893,7 @@ async function loadEmiSimpleMapping() {
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
   const password = document.getElementById('emiXlsxPass')?.value || '';
-  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsÃ¢â‚¬Â¦</div>`;
+  document.getElementById('emiMappingArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Reading columnsâ€¦</div>`;
   document.getElementById('emiImportPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file); fd.append('sheet', sheets[0]);
@@ -4822,7 +4902,7 @@ async function loadEmiSimpleMapping() {
   const data = await res.json();
   if (data.error) { document.getElementById('emiMappingArea').innerHTML = `<p style="color:var(--red);font-size:13px">${escHtml(data.error)}</p>`; return; }
   const cols = data.columns;
-  const noneOpt = `<option value="0">Ã¢â‚¬â€ None / Skip Ã¢â‚¬â€</option>`;
+  const noneOpt = `<option value="0">â€” None / Skip â€”</option>`;
   const colOpts = (selected) => cols.map(c =>
     `<option value="${c.col}" ${c.col===selected?'selected':''}>${escHtml(c.letter)}: ${escHtml(c.header)}${c.sample?' ('+escHtml(c.sample)+')':''}</option>`
   ).join('');
@@ -4874,7 +4954,7 @@ async function loadEmiSimpleMapping() {
         <select id="simMap_paid" class="fi" style="flex:1;font-size:12px;padding:5px 8px">${noneOpt}${colOpts(defPaid)}</select>
       </div>
     </div>
-    <button class="btn btn-s" onclick="previewEmiSimpleImport()">Preview Ã¢â€ â€™</button>`;
+    <button class="btn btn-s" onclick="previewEmiSimpleImport()">Preview â†’</button>`;
 }
 
 function _getSimpleLoanAmounts() {
@@ -4913,7 +4993,7 @@ async function previewEmiSimpleImport() {
   if (sheets.length > 1 && sheets.some(sheet => !(parseFloat(loanAmounts[sheet]) > 0))) { toast('Enter loan amount for each selected sheet', 'warning'); return; }
   if (forFriend && !friendName) { toast('Enter friend name first', 'warning'); return; }
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">CalculatingÃ¢â‚¬Â¦</div>`;
+  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Calculatingâ€¦</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -5006,7 +5086,7 @@ async function doEmiSimpleImport() {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function previewEmiExcel() {
   const file     = document.getElementById('emiXlsxFile').files[0];
@@ -5014,7 +5094,7 @@ async function previewEmiExcel() {
   const password = document.getElementById('emiXlsxPass')?.value || '';
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Loading previewÃ¢â‚¬Â¦</div>`;
+  document.getElementById('emiImportPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin:10px 0">Loading previewâ€¦</div>`;
   const mapping = _getEmiMapping();
   const fd = new FormData();
   fd.append('file', file);
@@ -5098,10 +5178,10 @@ async function doEmiImport() {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function renderEmiCard(r) {
-  const isExpanded = _emiExpandedId === r.id;
+  const isExpanded = String(_emiExpandedId) === String(r.id);
   const statusMeta = {
     active:    { color: 'var(--green)',   label: 'Active',      barColor: 'var(--green)',   bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.25)' },
     pending:   { color: '#6c8ebf',        label: 'Not Started', barColor: '#6c8ebf',        bg: 'rgba(108,142,191,0.07)', border: 'rgba(108,142,191,0.3)' },
@@ -5118,33 +5198,39 @@ function renderEmiCard(r) {
   }
 
   return `<div class="emi-card" id="emiCard${r.id}" style="background:${sm.bg};border-color:${sm.border}">
-    <div class="emi-card-header" onclick="_emiExpandedId=(_emiExpandedId===${r.id}?null:${r.id});reRenderEmiCard(${r.id})" style="display:block">
+    <div class="emi-card-header" onclick="_emiExpandedId=(String(_emiExpandedId)===String(${r.id})?null:${r.id});reRenderEmiCard(${r.id})" style="display:block">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
             <span style="font-weight:700;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">${escHtml(r.name)}</span>
             <span style="font-size:11px;font-weight:600;color:${sm.color};background:${sm.color}22;padding:2px 8px;border-radius:20px">${sm.label}</span>
-            ${r.friend_name ? '<span style="font-size:11px;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px">Ã¢â„¢Å¸ ' + escHtml(r.friend_name) + '</span>' : ''}
+            ${r.friend_name ? '<span style="font-size:11px;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px">Friend: ' + escHtml(r.friend_name) + '</span>' : ''}
             ${r.tag ? '<span style="font-size:11px;color:var(--t3);background:var(--bg);padding:2px 8px;border-radius:20px">' + escHtml(r.tag) + '</span>' : ''}
           </div>
           ${r.description ? '<div style="font-size:12px;color:var(--t3);margin-top:2px">' + escHtml(r.description) + '</div>' : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
           ${r.status === 'saved' ? '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
+          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();showEditEmiInfoModal(${r.id})">Edit Info</button>
           ${(!r.for_friend && (r.status === 'active' || r.status === 'pending')) ? (
             r.expenses_added
-              ? '<span title="Expenses added Ã¢â‚¬â€ click to re-add" style="font-size:11px;font-weight:600;color:var(--green);background:var(--green)22;padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">Ã¢Å“â€œ In Expenses</span>'
+              ? '<span title="Expenses added - click to re-add" style="font-size:11px;font-weight:600;color:var(--green);background:var(--green)22;padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">In Expenses</span>'
               : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',0)">+ Add to Expenses</button>'
           ) : ''}
           ${(r.status === 'active' || r.status === 'pending' || r.status === 'completed') ? (
             r.credit_card_id
-              ? '<span title="Added to credit card billing Ã¢â‚¬â€ click to change card" style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">Ã¢Å“â€œ In Credit Card</span>'
+              ? '<span title="Added to credit card billing - click to change card" style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">In Credit Card</span>'
               : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',0,' + (r.gst_rate || 0) + ')">+ Credit Card EMI</button>'
           ) : ''}
           ${r.status === 'active' ? (() => { const next = (r.installments||[]).find(i => i.paid_amount === 0); return next ? '<button class="btn btn-p btn-sm" onclick="event.stopPropagation();showPayInstallmentModal(' + next.id + ',' + next.emi_amount + ',' + r.id + ')">Pay #' + next.installment_no + '</button>' : ''; })() : ''}
-          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">Ã¢â€ â€œ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">PDF</button>
           <button class="btn-del" onclick="event.stopPropagation();deleteEmiRecord(${r.id})">Delete</button>
-          <span style="color:var(--t3);font-size:18px">${isExpanded ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'}</span>
+          <button
+            class="btn btn-g btn-sm"
+            title="${isExpanded ? 'Collapse details' : 'Expand details'}"
+            onclick="event.stopPropagation();_emiExpandedId=(String(_emiExpandedId)===String(${r.id})?null:${r.id});reRenderEmiCard(${r.id})"
+            style="min-width:68px;padding:4px 10px;font-weight:700"
+          >${isExpanded ? 'Hide' : 'Details'}</button>
         </div>
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:10px;line-height:1.2">
@@ -5211,33 +5297,38 @@ function renderEmiInstallments(r) {
   if (!r.installments || r.installments.length === 0) {
     return '<div style="text-align:center;padding:24px;color:var(--t3);font-size:13px">No installments found</div>';
   }
+  const shortDate = (val) => {
+    if (!val) return '-';
+    return String(val).slice(0, 10);
+  };
   const today = new Date().toISOString().slice(0, 10);
   const rows = r.installments.map(inst => {
+    const dueDate = shortDate(inst.due_date);
     const isPaid = inst.paid_amount > 0;
-    const isOverdue = !isPaid && inst.due_date < today;
+    const isOverdue = !isPaid && dueDate < today;
     let rowStyle = '';
     if (isPaid) rowStyle = 'background:rgba(34,197,94,0.07)';
     else if (isOverdue) rowStyle = 'background:rgba(239,68,68,0.07)';
 
     const isManual = inst.principal_component < 0 || inst.interest_component < 0;
-    const gstCell = r.gst_rate > 0 ? '<td class="td-m" style="color:var(--t3)">' + (isManual ? 'Ã¢â‚¬â€' : (inst.gst_amount || 0).toFixed(2)) + '</td>' : '';
+    const gstCell = r.gst_rate > 0 ? '<td class="td-m" style="color:var(--t3)">' + (isManual ? 'â€”' : (inst.gst_amount || 0).toFixed(2)) + '</td>' : '';
     const emiCell = isPaid
       ? '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span>'
-      : '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span> <button class="inst-edit-btn" title="Edit amount" onclick="showEditInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">Ã¢Å“Å½</button>';
+      : '<span style="font-weight:700">' + inst.emi_amount.toFixed(2) + '</span> <button class="inst-edit-btn" title="Edit amount" onclick="showEditInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">Edit</button>';
     const statusCell = isPaid
       ? '<span style="color:var(--green);font-size:12px;font-weight:600">&#10003; ' + fmtCur(inst.paid_amount) + '<br><span style="font-size:10px;color:var(--t3)">' + (inst.paid_date || '') + '</span></span>'
       : '<button class="btn btn-p btn-sm" onclick="showPayInstallmentModal(' + inst.id + ',' + inst.emi_amount + ',' + r.id + ')">Pay</button>';
 
-    const princCell = isManual ? '<td class="td-m" style="color:var(--t3)">Ã¢â‚¬â€</td>' : '<td class="td-m">' + inst.principal_component.toFixed(2) + '</td>';
-    const intCell   = isManual ? '<td class="td-m" style="color:var(--t3)">Ã¢â‚¬â€</td>' : '<td class="td-m">' + inst.interest_component.toFixed(2) + '</td>';
+    const princCell = isManual ? '<td class="td-m" style="color:var(--t3)">â€”</td>' : '<td class="td-m">' + inst.principal_component.toFixed(2) + '</td>';
+    const intCell   = isManual ? '<td class="td-m" style="color:var(--t3)">â€”</td>' : '<td class="td-m">' + inst.interest_component.toFixed(2) + '</td>';
 
     return '<tr style="' + rowStyle + '">' +
+      '<td style="text-align:center;white-space:nowrap">' + statusCell + '</td>' +
       '<td style="text-align:center;font-weight:600;font-family:var(--mono)">' + inst.installment_no + '</td>' +
-      '<td style="text-align:center;font-size:12px">' + inst.due_date + '</td>' +
+      '<td style="text-align:center;font-size:12px">' + dueDate + '</td>' +
       princCell + intCell +
       gstCell +
       '<td class="td-m">' + emiCell + '</td>' +
-      '<td style="text-align:center">' + statusCell + '</td>' +
       '</tr>';
   }).join('');
 
@@ -5252,17 +5343,17 @@ function renderEmiInstallments(r) {
       <span style="font-size:12px;color:var(--t2)">Total: <strong>${fmtCur(r.grand_total)}</strong></span>
       <span style="font-size:12px;color:var(--green)">Paid: <strong>${fmtCur(totalPaid)}</strong></span>
       <span style="font-size:12px;color:var(--amber)">Remaining: <strong>${fmtCur(remaining)}</strong></span>
-      <span style="font-size:12px;color:var(--t2)">Start: <strong>${r.start_date || 'Ã¢â‚¬â€'}</strong></span>
+      <span style="font-size:12px;color:var(--t2)">Start: <strong>${shortDate(r.start_date)}</strong></span>
       <div style="margin-left:auto;display:flex;gap:6px">
         ${unpaidCount > 0 ? `<button class="btn btn-s btn-sm" onclick="showBulkEditModal(${r.id},${r.monthly_emi},${unpaidCount})">Bulk Edit (${unpaidCount} unpaid)</button>` : ''}
         <button class="btn btn-s btn-sm" onclick="showEditEmiInfoModal(${r.id})">Edit Info</button>
       </div>
     </div>
-    <div style="overflow-x:auto"><table>
+    <div style="overflow-x:auto"><table style="min-width:900px">
       <thead><tr>
-        <th>#</th><th>Due Date</th><th style="text-align:right">Principal</th><th style="text-align:right">Interest</th>
+        <th>Pay</th><th>#</th><th>Due Date</th><th style="text-align:right">Principal</th><th style="text-align:right">Interest</th>
         ${gstHeader}
-        <th style="text-align:right">EMI</th><th>Status</th>
+        <th style="text-align:right">EMI</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -5272,16 +5363,17 @@ async function reRenderEmiCard(id) {
   const isFriend = currentTab === 'friendemis';
   const store    = isFriend ? _friendEmiRecords : _emiRecords;
   const expId    = isFriend ? _friendEmiExpandedId : _emiExpandedId;
-  if (expId === id) {
+  const sameId = (a, b) => String(a) === String(b);
+  if (sameId(expId, id)) {
     const data = await api('/api/emi/records/' + id);
     if (!data) return;
     const r = data.record || data;
-    const idx = store.findIndex(x => x.id === id);
+    const idx = store.findIndex(x => sameId(x.id, id));
     if (idx >= 0) store[idx] = r;
   }
-  const r = store.find(x => x.id === id);
+  const r = store.find(x => sameId(x.id, id));
   if (!r) return;
-  const el = document.getElementById('emiCard' + id);
+  const el = document.getElementById('emiCard' + r.id) || document.getElementById('emiCard' + id);
   if (el) el.outerHTML = renderEmiCard(r);
 }
 
@@ -5372,7 +5464,7 @@ function _emiExpTypeToggle() {
 
 function showAddEmiExpensesModal(id, alreadyAdded) {
   const warning = alreadyAdded
-    ? '<p style="color:var(--amber);font-size:13px;margin-bottom:12px">Ã¢Å¡Â  Expenses are already added. Adding again will replace all existing entries.</p>'
+    ? '<p style="color:var(--amber);font-size:13px;margin-bottom:12px">âš  Expenses are already added. Adding again will replace all existing entries.</p>'
     : '';
   showModal('<div class="modal-title">Add to Expenses</div>' +
     warning +
@@ -5390,14 +5482,14 @@ async function doAddEmiExpenses(id) {
   const r = await api('/api/emi/records/' + id + '/add-expenses', { method: 'POST', body: { expense_type } });
   if (r?.success) {
     closeModal();
-    const rec = _emiRecords.find(x => x.id === id);
+    const rec = _emiRecords.find(x => String(x.id) === String(id));
     if (rec) rec.expenses_added = 1;
     reRenderEmiCard(id);
     toast('Expenses added successfully', 'success');
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Individual installment amount edit Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Individual installment amount edit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showEditInstallmentModal(instId, currentAmt, emiId) {
   const rec = _emiRecords.find(x => x.id === emiId);
   const inst = rec?.installments?.find(i => i.id === instId);
@@ -5476,7 +5568,7 @@ async function doEditInstallment(instId, emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Bulk edit all unpaid installments Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Bulk edit all unpaid installments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showBulkEditModal(emiId, currentAmt, unpaidCount) {
   showModal(
     '<div class="modal-title">Bulk Edit EMI Amount</div>' +
@@ -5502,9 +5594,10 @@ async function doBulkEditInstallment(emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Edit EMI record info (name, desc, tag) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Edit EMI record info (name, desc, tag) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showEditEmiInfoModal(emiId) {
-  const rec = _emiRecords.find(x => x.id === emiId);
+  const rec = (_emiRecords || []).find(x => String(x.id) === String(emiId))
+    || (_friendEmiRecords || []).find(x => String(x.id) === String(emiId));
   if (!rec) return;
   showModal(
     '<div class="modal-title">Edit EMI Info</div>' +
@@ -5537,9 +5630,9 @@ async function doEditEmiInfo(emiId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // CREDIT CARDS
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _ccCards = [];
 let _ccSelectedCardId = null;
@@ -5820,7 +5913,7 @@ function renderCcHistory(cycles) {
   return importBtn + `<div>${rows}</div>`;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Cycle CRUD (open/future cycles in billing history) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Cycle CRUD (open/future cycles in billing history) â”€â”€â”€â”€â”€â”€â”€â”€
 
 function showAddCycleTxnModal(cycleId, cycleStart, cycleEnd) {
   openModal('Add Transaction', `
@@ -5829,6 +5922,18 @@ function showAddCycleTxnModal(cycleId, cycleStart, cycleEnd) {
       <label class="fl">Amount (&#8377;) *<input class="fi" type="number" step="0.01" id="ctAmt" placeholder="0.00"></label>
       <label class="fl">Discount %<input class="fi" type="number" step="0.01" id="ctDisc" placeholder="0" min="0" max="100"></label>
       <label class="fl full">Date<input class="fi" type="date" id="ctDate" value="${cycleEnd < todayStr() ? cycleEnd : (cycleStart > todayStr() ? cycleStart : todayStr())}"></label>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin:6px 0 10px;cursor:pointer">
+      <input type="checkbox" id="ctAddExpense" style="width:15px;height:15px;cursor:pointer" onchange="document.getElementById('ctExpTypeWrap').style.display=this.checked?'':'none'">
+      Also add as expense
+    </label>
+    <div id="ctExpTypeWrap" style="display:none;margin-bottom:12px">
+      <label class="fl" style="max-width:260px">Expense Type
+        <select class="fi" id="ctExpType">
+          <option value="0">Fair / Regular</option>
+          <option value="1">Extra / Non-essential</option>
+        </select>
+      </label>
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doAddCycleTxn(${cycleId})">Add</button>
@@ -5974,7 +6079,21 @@ async function doAddCycleTxn(cycleId) {
   };
   if (!body.description || !body.amount) { toast('Description and amount required', 'warning'); return; }
   const r = await api(`/api/cc/cycles/${cycleId}/txns`, { method: 'POST', body });
-  if (r?.success) { closeModal(); toast('Transaction added', 'success'); renderCcDetail(); }
+  const addAsExpense = document.getElementById('ctAddExpense')?.checked;
+  const expenseType = parseInt(document.getElementById('ctExpType')?.value || '0', 10) || 0;
+  if (r?.success) {
+    if (addAsExpense) {
+      await api('/api/expenses', { method: 'POST', body: {
+        item_name: body.description,
+        amount: body.amount,
+        purchase_date: body.txn_date,
+        is_extra: expenseType ? 1 : 0,
+      }});
+    }
+    closeModal();
+    toast('Transaction added' + (addAsExpense ? ' & added to expenses' : ''), 'success');
+    renderCcDetail();
+  }
   else toast(r?.error || 'Failed', 'error');
 }
 
@@ -6075,7 +6194,7 @@ async function deleteFutureCycle(cycleId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showImportHistoryModal(cardId) {
   const card = _ccCards.find(c => c.id === cardId);
   if (!card) return;
@@ -6085,7 +6204,7 @@ function showImportHistoryModal(cardId) {
   const yearOptions = years.map(y =>
     `<option value="${y}" ${y === currentYear - 1 ? 'selected' : ''}>${y}</option>`
   ).join('');
-  openModal(`Import History Ã¢â‚¬â€ ${card.card_name}`, `
+  openModal(`Import History â€” ${card.card_name}`, `
     <div style="font-size:12px;color:var(--t2);margin-bottom:14px;background:var(--bg2);border-radius:8px;padding:10px">
       Enter the <strong>total billing cycle amount</strong> for each month. Leave blank to skip that month.
       Existing cycles for the same period will be skipped (no duplicates).
@@ -6255,15 +6374,15 @@ function renderCcYearly(years) {
   const rows = years.map(y => `<tr>
     <td style="font-weight:700;font-family:var(--mono)">${y.year}</td>
     <td class="td-m">${fmtCur(y.total_amount)}</td>
-    <td class="td-m" style="color:var(--green)">${y.total_discount > 0 ? fmtCur(y.total_discount) : 'Ã¢â‚¬â€'}</td>
+    <td class="td-m" style="color:var(--green)">${y.total_discount > 0 ? fmtCur(y.total_discount) : 'â€”'}</td>
     <td class="td-m" style="font-weight:700">${fmtCur(y.net_payable)}</td>
-    <td class="td-m">${y.txn_count || 'Ã¢â‚¬â€'}</td>
+    <td class="td-m">${y.txn_count || 'â€”'}</td>
     <td class="td-m">${y.cycle_count}</td>
   </tr>`).join('');
 
   return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">Ã¢â€ â€œ PDF</button>
+      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">â†“ PDF</button>
     </div>
     <div class="cc-cycle-summary" style="margin-bottom:16px">
       <div class="cc-cycle-stat"><div class="lbl">All-time Spent</div><div class="val">${fmtCur(grandTotal)}</div></div>
@@ -6281,7 +6400,7 @@ function renderCcYearly(years) {
     </table></div>`;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Add / Edit Card Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Add / Edit Card Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showCcCardModal(id) {
   let card = { bank_name: '', card_name: '', last4: '', expiry_month: '', expiry_year: '', bill_gen_day: 1, due_days: 20, default_discount_pct: 0, credit_limit: '' };
   let currentCycle = null;
@@ -6392,7 +6511,7 @@ async function deleteCcCard(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Add / Edit Transaction Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Add / Edit Transaction Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showCcTxnModal(cardId, txnId) {
   const card = _ccCards.find(c => c.id === cardId) || { default_discount_pct: 0, card_name: '' };
   let txn = { txn_date: todayStr(), description: '', amount: '', discount_pct: card.default_discount_pct };
@@ -6411,10 +6530,18 @@ async function showCcTxnModal(cardId, txnId) {
     <div id="ctPreview" style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--t2);margin:4px 0 12px">
       Enter amount to see net payable
     </div>
-    ${!txnId ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
-      <input type="checkbox" id="ctAddExpense" style="width:15px;height:15px;cursor:pointer">
+    ${!txnId ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:8px;cursor:pointer">
+      <input type="checkbox" id="ctAddExpense" style="width:15px;height:15px;cursor:pointer" onchange="document.getElementById('ctExpTypeWrap').style.display=this.checked?'':'none'">
       Also add as expense
-    </label>` : ''}
+    </label>
+    <div id="ctExpTypeWrap" style="display:none;margin-bottom:12px">
+      <label class="fl" style="max-width:260px">Expense Type
+        <select class="fi" id="ctExpType">
+          <option value="0">Fair / Regular</option>
+          <option value="1">Extra / Non-essential</option>
+        </select>
+      </label>
+    </div>` : ''}
     <div class="fa">
       <button class="btn btn-p" onclick="saveCcTxn(${cardId},${txnId||'null'})">${txnId ? 'Update' : 'Add'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -6429,7 +6556,7 @@ function ccTxnPreview() {
   const discAmt = Math.round(amt * disc / 100 * 100) / 100;
   const net = Math.round(amt * 100) / 100;
   document.getElementById('ctPreview').innerHTML =
-    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;Ã¢â‚¬â€œ&nbsp; Discount: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;Ã¢â‚¬â€œ&nbsp; Net Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
+    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;â€“&nbsp; Discount: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;â€“&nbsp; Net Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
 }
 
 async function saveCcTxn(cardId, txnId) {
@@ -6444,6 +6571,7 @@ async function saveCcTxn(cardId, txnId) {
   if (!Number.isFinite(body.amount) || body.amount <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
   if (!Number.isFinite(body.discount_pct) || body.discount_pct < 0 || body.discount_pct > 100) { toast('Discount % must be between 0 and 100', 'warning'); return; }
   const addAsExpense = !txnId && document.getElementById('ctAddExpense')?.checked;
+  const expenseType = parseInt(document.getElementById('ctExpType')?.value || '0', 10) || 0;
   const r = txnId
     ? await api(`/api/cc/txns/${txnId}`, { method: 'PUT', body })
     : await api('/api/cc/txns', { method: 'POST', body });
@@ -6453,7 +6581,7 @@ async function saveCcTxn(cardId, txnId) {
         item_name: body.description,
         amount: body.amount,
         purchase_date: body.txn_date,
-        is_extra: 0,
+        is_extra: expenseType ? 1 : 0,
       }});
     }
     closeModal();
@@ -6469,7 +6597,7 @@ async function deleteCcTxn(txnId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Close Cycle Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Close Cycle Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showCloseCycleModal(cycleId, netPayable) {
   openModal('Close Billing Cycle', `
     <p style="color:var(--t2);font-size:13px;margin-bottom:16px">Mark this billing cycle as closed. Optionally record your payment details.</p>
@@ -6499,7 +6627,7 @@ async function doCloseCycle(cycleId) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ "Add to Credit Card" helper (called from expense/split/trip forms) Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ "Add to Credit Card" helper (called from expense/split/trip forms) â”€â”€
 async function getCcCardsForForm() {
   if (_ccCards.length === 0) {
     const data = await api('/api/cc/cards');
@@ -6513,7 +6641,7 @@ function _buildDivCcSection(existingCcInfo) {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} Ã¢â‚¬Â¢Ã¢â‚¬Â¢${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = existingCcInfo?.discountPct ?? (cards[0]?.default_discount_pct || 0);
   const checked = existingCcInfo ? 'checked' : '';
@@ -6557,7 +6685,7 @@ function ccFormSection() {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} Ã¢â‚¬Â¢Ã¢â‚¬Â¢${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = cards[0]?.default_discount_pct || 0;
   return `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
@@ -6608,14 +6736,14 @@ async function saveCcLinkIfChecked(description, amount, txnDate, source, sourceI
   }});
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // BANK ACCOUNTS
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _bankAccounts = [];
 
 async function loadBankAccounts() {
-  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">LoadingÃ¢â‚¬Â¦</div></div>';
+  document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
   const data = await api('/api/banks');
   _bankAccounts = data?.accounts || [];
   renderBankAccounts();
@@ -6642,7 +6770,7 @@ function renderBankAccounts() {
         return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' Ã¢â‚¬â€ ' + escHtml(a.account_name) : ''}
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}
                 ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
               </div>
               <div class="bank-card-type">${typeLabel}</div>
@@ -6733,7 +6861,7 @@ function showUpdateBalanceModal(id) {
   const a = _bankAccounts.find(x => x.id === id);
   if (!a) return;
   openModal('Update Balance', `
-    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${escHtml(a.bank_name)}${a.account_name ? ' Ã¢â‚¬â€ ' + escHtml(a.account_name) : ''}</div>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}</div>
     <label class="fl">Current Balance (&#8377;)<input class="fi" type="number" step="0.01" id="baNewBal" value="${a.balance}" autofocus></label>
     <div class="fa" style="margin-top:14px">
       <button class="btn btn-p" onclick="doUpdateBalance(${id})">Update</button>
@@ -6795,9 +6923,9 @@ function cancelBalanceEdit() {
   loadBankAccounts();
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MONTHLY PLANNER
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 function _localYM(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 function _addMonths(ym, n) { const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-1+n,1); return _localYM(d); }
@@ -6884,7 +7012,7 @@ async function renderPlanner() {
     </div>`;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Live preview of new balance as user types (updates tooltip only) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Live preview of new balance as user types (updates tooltip only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function previewAddBalance(bankId, addVal, baseBalance) {
   const add = parseFloat(addVal) || 0;
   const newBal = baseBalance + add;
@@ -6895,7 +7023,7 @@ function previewAddBalance(bankId, addVal, baseBalance) {
   }
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Apply the added amount and re-render summary Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Apply the added amount and re-render summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function applyPreviewBalance(bankId, baseBalance) {
   const inp = document.getElementById(`addBal_${bankId}`);
   const add = parseFloat(inp?.value) || 0;
@@ -6909,7 +7037,7 @@ function applyPreviewBalance(bankId, baseBalance) {
   if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(accounts, pd.projectedDefaults || [], pd.projectedCcDues || [], pd.emiDues || []);
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Reset a bank's simulated balance back to actual Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Reset a bank's simulated balance back to actual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function resetPreviewBalance(bankId) {
   delete _previewBankBalances[bankId];
   const pd = _previewDataCache || {};
@@ -7072,7 +7200,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
   skipped  = skipped  || [];
   emiDues  = emiDues  || [];
 
-  // Totals Ã¢â‚¬â€ include CC dues + EMI dues in remaining calculation
+  // Totals â€” include CC dues + EMI dues in remaining calculation
   const ccUnpaid    = ccDues.filter(c => c.status !== 'paid');
   const ccPaidList  = ccDues.filter(c => c.status === 'paid');
   const emiUnpaid   = emiDues.filter(i => i.paid_amount < i.emi_amount * 0.999);
@@ -7138,7 +7266,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = p.status === 'paid';
     const isPartial = p.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '✓' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? '?' : isPartial ? '~' : '';
     const dueLabel  = p.due_date ? `Due ${fmtDate(p.due_date)}` : '';
     const paidLabel = isPaid ? `Paid ${p.paid_date ? fmtDate(p.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(p.paid_amount)}` : '';
     const bankAcc   = p.bank_account_id ? accounts.find(a => a.id == p.bank_account_id) : null;
@@ -7163,7 +7291,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = c.status === 'paid';
     const isPartial = c.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '✓' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? '?' : isPartial ? '~' : '';
     const txnNote   = c.txn_count > 0 ? `${c.txn_count} transaction${c.txn_count > 1 ? 's' : ''}` : 'no transactions yet';
     const paidLabel = isPaid ? `Paid ${c.paid_date ? fmtDate(c.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(c.paid_amount)}` : '';
     return `<div class="pay-row ${isPaid ? 'paid' : ''}" style="border-left:3px solid var(--blue)">
@@ -7219,7 +7347,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     : `<div style="color:var(--t3);padding:16px;text-align:center;font-size:13px">All paid!</div>`;
 
   const emiPaidRow = (i) => `<div class="pay-row paid" style="border-left:3px solid var(--green)">
-    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)">✓</div>
+    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)">?</div>
     <div style="flex:1;min-width:0">
       <div class="pay-row-name">
         <span style="background:var(--green)22;color:var(--green);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">EMI</span>
@@ -7329,7 +7457,7 @@ function renderPlannerDefaults(defaults) {
     return `<div class="def-pay-row ${d.is_active ? '' : 'inactive'}">
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600">${escHtml(d.name)} ${d.category ? `<span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(d.category)}</span>` : ''} ${bankLabel}</div>
-        <div style="font-size:11px;color:var(--t3)">Due on day ${d.due_day} each month ${d.is_active ? '' : 'Ã‚Â· <span style="color:var(--red)">Inactive</span>'}</div>
+        <div style="font-size:11px;color:var(--t3)">Due on day ${d.due_day} each month ${d.is_active ? '' : 'Â· <span style="color:var(--red)">Inactive</span>'}</div>
       </div>
       <div style="font-size:14px;font-weight:700;font-family:var(--mono);margin-right:8px">${fmtCur(d.amount)}</div>
       <button class="btn-d" style="color:var(--em)" onclick="showDefaultModal(${d.id})">Edit</button>
@@ -7345,7 +7473,7 @@ function renderPlannerDefaults(defaults) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div>
         <div style="font-size:16px;font-weight:700">Default Monthly Payments</div>
-        <div style="font-size:12px;color:var(--t2);margin-top:2px">${active.length} active Ã‚Â· Monthly total: <strong>${fmtCur(total)}</strong></div>
+        <div style="font-size:12px;color:var(--t2);margin-top:2px">${active.length} active Â· Monthly total: <strong>${fmtCur(total)}</strong></div>
       </div>
       <button class="btn btn-p btn-sm" onclick="showDefaultModal()">+ Add Default</button>
     </div>
@@ -7353,7 +7481,7 @@ function renderPlannerDefaults(defaults) {
     <div style="font-size:12px;color:var(--t3);margin-top:10px;padding:0 4px">These payments are automatically added to each month's planner on the specified due day.</div>`;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Pay Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Pay Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showPayModal(id, amount) {
   openModal('Mark as Paid', `
     <div class="fg">
@@ -7409,7 +7537,7 @@ async function quickTogglePay(id, amount) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Add / Edit Monthly Payment Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Add / Edit Monthly Payment Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showAddPaymentModal() {
   const defaultDue = `${_plannerMonth}-01`;
   openModal('Add Payment', `
@@ -7485,7 +7613,7 @@ async function permanentDeleteDefault(monthlyId) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Default Payments Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// â”€â”€ Default Payments Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showDefaultModal(id) {
   let d = { name: '', amount: '', due_day: 1, category: '', is_active: 1, bank_account_id: null, auto_detect_bank: 0 };
   if (id) {
@@ -7554,9 +7682,9 @@ async function deleteDefault(id) {
   else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // AI LOOKUP
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let _aiHistory = []; // { role: 'user'|'assistant', content: string }
 let _aiStatus = null;
@@ -7690,9 +7818,9 @@ function _refreshAiStatusBanner() {
   node.outerHTML = _renderAiStatusBanner();
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DAILY TRACKER
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _trackers = [];
 let _selectedTrackerId = null;
 let _trackerYear = new Date().getFullYear();
@@ -7722,19 +7850,19 @@ function renderTrackerGrid() {
       <div class="cc-tile-header">
         <div>
           <div class="cc-tile-name">${escHtml(t.name)}</div>
-          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Ã‚Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
         </div>
         <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
-      <div class="cc-tile-label">This Month &nbsp;Ã‚Â·&nbsp; ${t.current_month_days} days tracked</div>
+      <div class="cc-tile-label">This Month &nbsp;Â·&nbsp; ${t.current_month_days} days tracked</div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="event.stopPropagation()">
         <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
         <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
       </div>
     </div>`).join('') :
     `<div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
-      <div style="font-size:36px;margin-bottom:12px">Ã°Å¸â€œâ€¹</div>
+      <div style="font-size:36px;margin-bottom:12px">ðŸ“‹</div>
       <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No trackers yet</div>
       <div style="font-size:13px">Add items like Milk, Newspaper to track daily and see monthly totals</div>
     </div>`;
@@ -7746,7 +7874,7 @@ function renderTrackerGrid() {
           <div>
             <div class="summary-label">DAILY TRACKERS</div>
             <div class="summary-amount">${_trackers.length}</div>
-            <div class="summary-words">Track daily recurring items Ã‚Â· auto-filled each day</div>
+            <div class="summary-words">Track daily recurring items Â· auto-filled each day</div>
           </div>
           <div class="count-box"><div class="num">${_trackers.filter(t => t.is_active).length}</div><div class="lbl">active</div></div>
         </div>
@@ -7754,7 +7882,7 @@ function renderTrackerGrid() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">Ã¢â€ â€œ PDF Overview</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">â†“ PDF Overview</button>
           <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
         </div>
       </div>
@@ -7801,7 +7929,7 @@ async function renderTrackerDetail() {
     if (isFuture) {
       rows += `<tr style="color:var(--t3);${rowStyle}">
         <td><span style="font-weight:${isToday?600:400}">${d}</span> <span style="font-size:11px">${dayLabel}</span></td>
-        <td style="text-align:right;color:var(--t3)">Ã¢â‚¬â€</td><td style="text-align:right">Ã¢â‚¬â€</td><td></td><td></td></tr>`;
+        <td style="text-align:right;color:var(--t3)">â€”</td><td style="text-align:right">â€”</td><td></td><td></td></tr>`;
     } else if (e) {
       const badge = e.is_auto
         ? `<span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Auto</span>`
@@ -7816,7 +7944,7 @@ async function renderTrackerDetail() {
     } else {
       rows += `<tr id="trow-${dateStr}" style="color:var(--t3);${rowStyle}">
         <td><strong>${d}</strong> <span style="font-size:11px">${dayLabel}</span></td>
-        <td style="text-align:right">Ã¢â‚¬â€</td><td style="text-align:right">Ã¢â‚¬â€</td>
+        <td style="text-align:right">â€”</td><td style="text-align:right">â€”</td>
         <td><span class="badge" style="background:var(--bg2);color:var(--t3);font-size:10px">Missing</span></td>
         <td><button class="btn-d" onclick="editDayEntry(${tracker.id},'${dateStr}',${tracker.default_qty})">Add</button></td>
       </tr>`;
@@ -7830,10 +7958,10 @@ async function renderTrackerDetail() {
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">Ã¢â€ Â Back</button>
+        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">â† Back</button>
         <div>
           <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
-          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} &nbsp;Ã‚Â·&nbsp; Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} &nbsp;Â·&nbsp; Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
         </div>
         <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
       </div>
@@ -7843,11 +7971,11 @@ async function renderTrackerDetail() {
           <div>
             <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
             <div class="summary-amount">${fmtCur(totalAmt)}</div>
-            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} Ã‚Â· ${summary.days || 0} days Ã‚Â· ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} Â· ${summary.days || 0} days Â· ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
           </div>
           <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
             ${addedToExpense
-              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">Ã¢Å“â€œ Added to<br>Expenses</div>`
+              ? `<div style="font-size:11px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center">âœ“ Added to<br>Expenses</div>`
               : `<button class="btn btn-p btn-sm" onclick="addTrackerExpense(${tracker.id},${_trackerYear},${_trackerMonth})" ${totalAmt ? '' : 'disabled'}>+ To Expenses</button>`}
           </div>
         </div>
@@ -7855,12 +7983,12 @@ async function renderTrackerDetail() {
 
       <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">Ã¢â€ Â</button>
+          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">â†</button>
           <span style="font-weight:600;min-width:130px;text-align:center">${_MONTHS_LONG[_trackerMonth - 1]} ${_trackerYear}</span>
-          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>Ã¢â€ â€™</button>
+          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>â†’</button>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">Ã¢â€ â€œ PDF</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">â†“ PDF</button>
           ${isCurrentMonth ? `<button class="btn btn-s btn-sm" onclick="autoFillTracker(${tracker.id})">Auto-fill Missing</button>` : ''}
         </div>
       </div>
@@ -7980,9 +8108,9 @@ async function deleteTracker(id) {
   } else toast(r?.error || 'Failed', 'error');
 }
 
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // RECURRING ENTRIES
-// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _recurringEntries = [];
 
 async function loadRecurring() {
@@ -8026,7 +8154,7 @@ function renderRecurring() {
           <div>
             <div class="summary-label">RECURRING ENTRIES</div>
             <div class="summary-amount">${entries.length}</div>
-            <div class="summary-words">${activeCount} active · auto-applied on day 1 of every month</div>
+            <div class="summary-words">${activeCount} active � auto-applied on day 1 of every month</div>
           </div>
           <div class="count-box"><div class="num">${appliedCount}</div><div class="lbl">applied<br>this month</div></div>
         </div>
@@ -8078,7 +8206,7 @@ async function showRecurringModal(id) {
   const currentMonth = _localYM();
 
   const isCC = entry?.type === 'cc_txn';
-  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} Ã¢â‚¬Â¢Ã¢â‚¬Â¢${escHtml(c.last4)}</option>`).join('');
+  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
     <div class="fg">
@@ -8134,6 +8262,12 @@ function recurringTypeToggle() {
   const isCC = document.getElementById('reType').value === 'cc_txn';
   document.getElementById('reCcFields').style.display = isCC ? '' : 'none';
   document.getElementById('reExpenseFields').style.display = isCC ? 'none' : '';
+  const bankRow = document.getElementById('reBankRow');
+  if (bankRow) bankRow.style.display = isCC ? 'none' : '';
+  if (isCC) {
+    const bankEl = document.getElementById('reBank');
+    if (bankEl) bankEl.value = '';
+  }
 }
 
 async function saveRecurring(id) {
@@ -8219,13 +8353,19 @@ async function loadFriends() {
         </div>
       </div>
       <div>${list.length === 0 ? '<div class="empty-td">No friends yet. Add one to start tracking loans.</div>' : ''}
-        ${list.map((f) => `<div class="friend-card" onclick="selectedFriend=${f.id};loadFriendDetail()">
-          <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
-          <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance < 0 ? 'You owe' : f.balance > 0 ? 'They owe' : 'Settled'}</div></div>
-          <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
-          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, ${JSON.stringify(f.name)})">Edit</button>
-          <button class="btn-d" onclick="stopEvent(event);deleteFriend(${f.id}, ${JSON.stringify(f.name)})">Del</button>
-        </div>`).join('')}
+        ${list.map((f) => {
+          const safeName = String(f.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+          const safeDeleteName = safeName || 'this friend';
+          return `<div class="friend-card">
+          <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer" onclick="selectedFriend=${f.id};loadFriendDetail()">
+            <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
+            <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance < 0 ? 'You owe' : f.balance > 0 ? 'They owe' : 'Settled'}</div></div>
+            <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
+          </div>
+          <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, '${safeName}')">Edit</button>
+          <button class="btn-d" style="color:var(--red)" onclick="stopEvent(event);deleteFriend(${f.id}, '${safeDeleteName}')">Del</button>
+        </div>`;
+        }).join('')}
       </div>
     </div>`;
 }
@@ -8251,7 +8391,7 @@ function renderBankAccounts() {
         return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}" onclick="showBankModal(${a.id})" style="cursor:pointer">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' Ã¢â‚¬â€ ' + escHtml(a.account_name) : ''}
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}
                 ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
               </div>
               <div class="bank-card-type">${typeLabel}</div>
@@ -8327,12 +8467,12 @@ function renderTrackerGrid() {
       <div class="cc-tile-header">
         <div>
           <div class="cc-tile-name">${escHtml(t.name)}</div>
-          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Ã‚Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
         </div>
         <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
-      <div class="cc-tile-label">This Month &nbsp;Ã‚Â·&nbsp; ${t.current_month_days} days tracked</div>
+      <div class="cc-tile-label">This Month &nbsp;Â·&nbsp; ${t.current_month_days} days tracked</div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
         <button class="cc-action-btn" onclick="showTrackerModal(${t.id})">Edit</button>
         <button class="cc-action-btn cc-action-del" onclick="deleteTracker(${t.id})">Delete</button>
@@ -8500,7 +8640,7 @@ async function showRecurringModal(id) {
   }
   const currentMonth = _localYM();
   const isCC = entry?.type === 'cc_txn';
-  const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} Ã¢â‚¬Â¢Ã¢â‚¬Â¢${escHtml(c.last4)}</option>`).join('');
+  const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
   const bankOptions = `<option value="">-- Default / none --</option>${_bankDropdownOptions(entry?.bank_account_id)}`;
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
@@ -8521,7 +8661,7 @@ async function showRecurringModal(id) {
         <option value="12" ${(parseInt(entry?.interval_months) || 1) === 12 ? 'selected' : ''}>Every 12 months</option>
       </select></label>
       <label class="fl">Starts From Month<input class="fi" type="month" id="reStartMonth" value="${escHtml(entry?.start_month || currentMonth)}"></label>
-      <label class="fl full">Deduct From Bank<select class="fi" id="reBank">${bankOptions}</select></label>
+      <label class="fl full" id="reBankRow" style="${isCC ? 'display:none' : ''}">Deduct From Bank<select class="fi" id="reBank">${bankOptions}</select></label>
     </div>
 
     <div id="reCcFields" style="${isCC ? '' : 'display:none'}">
@@ -8573,7 +8713,7 @@ async function saveRecurring(id) {
     amount,
     interval_months: intervalMonths,
     start_month: startMonth,
-    bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
+    bank_account_id: type === 'expense' ? (bankVal ? parseInt(bankVal, 10) : null) : null,
   };
   if (type === 'cc_txn') {
     body.card_id = parseInt(document.getElementById('reCard').value, 10) || null;
@@ -8632,13 +8772,13 @@ async function renderTrackerGrid() {
       <div class="cc-tile-header">
         <div>
           <div class="cc-tile-name">${escHtml(t.name)}</div>
-          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
         </div>
         <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
       <div class="cc-tile-label">
-        This Month Â· ${t.current_month_days} days tracked
+        This Month · ${t.current_month_days} days tracked
         ${t.auto_add_to_expense ? '<br><span style="font-size:10px;opacity:.9">Auto-adds previous month to expenses</span>' : ''}
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
@@ -8746,23 +8886,23 @@ async function renderTrackerDetail() {
     const canAdd = complete && tile.total_amount > 0 && !tile.added_to_expense;
     return `<button class="chip ${active ? 'active' : ''}" style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:120px;padding:10px 12px" onclick="_trackerYear=${year};_trackerMonth=${month};renderTrackerDetail()">
       <span style="font-weight:700">${_MONTHS_LONG[month - 1]} ${year}</span>
-      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} Â· ${tile.days || 0} days</span>
+      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} · ${tile.days || 0} days</span>
       <span style="font-size:10px;opacity:.8">${tile.added_to_expense ? 'Added to expenses' : canAdd ? 'Ready to add' : complete ? 'No amount' : 'Current month'}</span>
     </button>`;
   }).join('');
 
   const trackerBank = tracker.expense_bank_account_id ? _bankAccounts.find((a) => a.id == tracker.expense_bank_account_id) : null;
   const autoNote = tracker.auto_add_to_expense
-    ? `Auto-add enabled${trackerBank ? ` Â· deduct from ${trackerBank.bank_name}` : ''}`
+    ? `Auto-add enabled${trackerBank ? ` · deduct from ${trackerBank.bank_name}` : ''}`
     : 'Auto-add disabled';
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">â† Back</button>
+        <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()">← Back</button>
         <div>
           <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
-          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} Â· Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} · Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
           <div style="font-size:11px;color:var(--t3);margin-top:2px">${autoNote}</div>
         </div>
         <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
@@ -8775,7 +8915,7 @@ async function renderTrackerDetail() {
           <div>
             <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
             <div class="summary-amount">${fmtCur(totalAmt)}</div>
-            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} Â· ${summary.days || 0} days Â· ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} · ${summary.days || 0} days · ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
           </div>
           <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
             ${addedToExpense
@@ -8787,9 +8927,9 @@ async function renderTrackerDetail() {
 
       <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">â†</button>
+          <button class="btn btn-g btn-sm" onclick="trackerPrevMonth()">←</button>
           <span style="font-weight:600;min-width:130px;text-align:center">${_MONTHS_LONG[_trackerMonth - 1]} ${_trackerYear}</span>
-          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>â†’</button>
+          <button class="btn btn-g btn-sm" onclick="trackerNextMonth()" ${isCurrentMonth ? 'disabled' : ''}>→</button>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-s btn-sm" onclick="downloadTrackerMonthPdf(${tracker.id},'${escHtml(tracker.name)}',${_trackerYear},${_trackerMonth})">PDF</button>
@@ -8830,6 +8970,10 @@ async function showTrackerModal(id) {
         <input type="checkbox" id="trAutoExpense" ${t?.auto_add_to_expense ? 'checked' : ''}>
         <span>Automatically add the previous completed month to Expenses</span>
       </label>
+      <label class="fl full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="trIsActive" ${(t?.is_active ?? true) ? 'checked' : ''}>
+        <span>Active tracker</span>
+      </label>
     </div>
     <p style="font-size:12px;color:var(--t3);margin:0 0 12px">When auto-add is enabled, the previous month is converted into an expense on the next month automatically.</p>
     <div class="fa">
@@ -8856,6 +9000,7 @@ async function saveTracker(id) {
     unit,
     price_per_unit,
     default_qty,
+    is_active: document.getElementById('trIsActive')?.checked ? 1 : 0,
     auto_add_to_expense: document.getElementById('trAutoExpense')?.checked ? 1 : 0,
     expense_bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
   };
@@ -8978,13 +9123,13 @@ async function renderTrackerGrid() {
       <div class="cc-tile-header">
         <div>
           <div class="cc-tile-name">${escHtml(t.name)}</div>
-          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;Â·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
+          <div class="cc-tile-bank">${fmtCur(t.price_per_unit)} / ${escHtml(t.unit)} &nbsp;·&nbsp; Default: ${t.default_qty} ${escHtml(t.unit)}/day</div>
         </div>
         <div style="font-size:11px;color:rgba(255,255,255,0.65)">${t.is_active ? 'Active' : 'Inactive'}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(t.current_month_total)}</div>
       <div class="cc-tile-label">
-        This Month Â· ${t.current_month_days} days tracked
+        This Month · ${t.current_month_days} days tracked
         ${t.auto_add_to_expense ? '<br><span style="font-size:10px;opacity:.9">Auto-adds previous month to expenses</span>' : ''}
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;gap:6px" onclick="stopEvent(event)">
@@ -9117,14 +9262,14 @@ async function renderTrackerDetail() {
     const canAdd = complete && tile.total_amount > 0 && !tile.added_to_expense;
     return `<button class="chip ${active ? 'active' : ''}" style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:120px;padding:10px 12px" onclick="_trackerYear=${year};_trackerMonth=${month};renderTrackerDetail()">
       <span style="font-weight:700">${_MONTHS_LONG[month - 1]} ${year}</span>
-      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} Â· ${tile.days || 0} days</span>
+      <span style="font-size:11px;opacity:.8">${fmtCur(tile.total_amount || 0)} · ${tile.days || 0} days</span>
       <span style="font-size:10px;opacity:.8">${tile.added_to_expense ? 'Added to expenses' : canAdd ? 'Ready to add' : complete ? 'No amount' : 'Current month'}</span>
     </button>`;
   }).join('');
 
   const trackerBank = tracker.expense_bank_account_id ? _bankAccounts.find((a) => a.id == tracker.expense_bank_account_id) : null;
   const autoNote = tracker.auto_add_to_expense
-    ? `Auto-add enabled${trackerBank ? ` Â· deduct from ${trackerBank.bank_name}` : ''}`
+    ? `Auto-add enabled${trackerBank ? ` · deduct from ${trackerBank.bank_name}` : ''}`
     : 'Auto-add disabled';
 
   document.getElementById('main').innerHTML = `
@@ -9133,7 +9278,7 @@ async function renderTrackerDetail() {
         <button class="btn btn-g btn-sm" onclick="_selectedTrackerId=null;renderTrackerGrid()"><- Back</button>
         <div>
           <span style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</span>
-          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} Â· Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
+          <span style="color:var(--t2);font-size:13px;margin-left:10px">${fmtCur(tracker.price_per_unit)}/${escHtml(tracker.unit)} · Default: ${tracker.default_qty} ${escHtml(tracker.unit)}/day</span>
           <div style="font-size:11px;color:var(--t3);margin-top:2px">${autoNote}</div>
         </div>
         <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
@@ -9146,7 +9291,7 @@ async function renderTrackerDetail() {
           <div>
             <div class="summary-label">${_MONTHS_LONG[_trackerMonth - 1].toUpperCase()} ${_trackerYear}</div>
             <div class="summary-amount">${fmtCur(totalAmt)}</div>
-            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} Â· ${summary.days || 0} days Â· ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
+            <div class="summary-words">${totalQty} ${escHtml(tracker.unit)} · ${summary.days || 0} days · ${summary.auto_days || 0} auto, ${summary.edited_days || 0} edited</div>
           </div>
           <div class="count-box" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
             ${addedToExpense
@@ -9183,6 +9328,7 @@ async function renderTrackerDetail() {
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
 }
+
 
 
 

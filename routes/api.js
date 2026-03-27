@@ -1731,13 +1731,14 @@ router.get('/trackers', (req, res) => {
 
 router.post('/trackers', (req, res) => {
   try {
-    const { name, unit, price_per_unit, default_qty, auto_add_to_expense, expense_bank_account_id } = req.body;
+    const { name, unit, price_per_unit, default_qty, is_active, auto_add_to_expense, expense_bank_account_id } = req.body;
     if (!name || !price_per_unit) return res.status(400).json({ error: 'Missing required fields' });
     Promise.resolve(getOpsDb().addDailyTracker(req.session.userId, {
       name,
       unit,
       price_per_unit,
       default_qty,
+      is_active,
       auto_add_to_expense,
       expense_bank_account_id,
     })).then((id) => {
