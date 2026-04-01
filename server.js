@@ -68,6 +68,7 @@ app.get('/runtime-config.js', (_req, res) => {
   res.send(
     `window.__appRuntimeConfig = ${JSON.stringify({
       gaMeasurementId: process.env.GA_MEASUREMENT_ID || '',
+      googleWebClientId: process.env.GOOGLE_WEB_CLIENT_ID || '',
     })};`
   );
 });

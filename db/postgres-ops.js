@@ -11,6 +11,14 @@ function _localDate(dt) {
   return `${y}-${m}-${d}`;
 }
 
+function addMonthToParts(year, month, diff = 0) {
+  const date = new Date(year, month - 1 + diff, 1);
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+  };
+}
+
 function recurringEntryAppliesToMonth(entry, month) {
   const interval = Math.max(1, parseInt(entry.interval_months, 10) || 1);
   if (interval <= 1) return true;
@@ -120,12 +128,13 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
   );
 }
 
-async function insertTrackerMonthExpense(userId, tracker, year, month, client, bankAccountId = null) {
+async function insertTrackerMonthExpense(userId, tracker, year, month, client, bankAccountId = null, expenseMonth = null) {
   const summary = await getDailyMonthSummary(userId, tracker.id, year, month);
   if (!summary || !summary.total_amount) return 0;
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const itemName = `${tracker.name} - ${months[month - 1]} ${year}`;
-  const expenseDate = `${year}-${String(month).padStart(2, '0')}-01`;
+  const targetExpenseMonth = String(expenseMonth || `${year}-${String(month).padStart(2, '0')}`).trim();
+  const expenseDate = `${targetExpenseMonth}-01`;
   const targetBankId = normalizeBankAccountId(bankAccountId != null ? bankAccountId : tracker.expense_bank_account_id);
 
   await client.query(
@@ -176,7 +185,16 @@ async function autoAddCompletedTrackerExpenses(userId) {
       const stats = statsR.rows[0];
       if (!stats || Number(stats.day_count || 0) === 0) continue;
       if (Number(stats.already_added || 0) === 1) continue;
-      const amount = await insertTrackerMonthExpense(userId, tracker, year, month, client, tracker.expense_bank_account_id);
+      const nextExpenseMonth = addMonthToParts(year, month, 1);
+      const amount = await insertTrackerMonthExpense(
+        userId,
+        tracker,
+        year,
+        month,
+        client,
+        tracker.expense_bank_account_id,
+        `${nextExpenseMonth.year}-${String(nextExpenseMonth.month).padStart(2, '0')}`
+      );
       if (amount > 0) applied.push({ tracker_id: Number(tracker.id), year, month, amount });
     }
     return applied;
@@ -465,7 +483,7 @@ async function hardDeleteMonthlyPayment(userId, id) {
   await query('DELETE FROM monthly_payments WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
-async function payMonthlyPayment(userId, id, paidAmount, paidDate) {
+async function payMonthlyPayment(userId, id, paidAmount, paidDate, bankAccountId = undefined) {
   return withTransaction(async (client) => {
     const paymentR = await client.query('SELECT * FROM monthly_payments WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
     const payment = paymentR.rows[0];
@@ -475,14 +493,21 @@ async function payMonthlyPayment(userId, id, paidAmount, paidDate) {
     const amount = parseFloat(payment.amount) || 0;
     const status = paid <= 0 ? 'pending' : paid >= amount - 0.01 ? 'paid' : 'partial';
     const effectivePaidDate = paid > 0 ? (normalizeDateValue(paidDate, 'Paid date') || _localDate(new Date())) : null;
+    const prevBankId = normalizeBankAccountId(payment.bank_account_id) || await getDefaultBankAccountId(userId, client);
+    const requestedBankId = bankAccountId !== undefined ? normalizeBankAccountId(bankAccountId) : normalizeBankAccountId(payment.bank_account_id);
+    const nextBankId = paid > 0 ? (requestedBankId || await getDefaultBankAccountId(userId, client)) : null;
     await client.query(
-      `UPDATE monthly_payments SET paid_amount = $1, paid_date = $2, status = $3 WHERE id = $4`,
-      [paid, effectivePaidDate, status, id]
+      `UPDATE monthly_payments
+       SET paid_amount = $1, paid_date = $2, status = $3, bank_account_id = $4
+       WHERE id = $5`,
+      [paid, effectivePaidDate, status, nextBankId, id]
     );
-    const diff = paid - prevPaid;
-    const targetBankId = normalizeBankAccountId(payment.bank_account_id) || await getDefaultBankAccountId(userId, client);
-    if (diff !== 0 && targetBankId) {
-      await adjustBankBalance(userId, targetBankId, -diff, client);
+    if (prevBankId && nextBankId && prevBankId === nextBankId) {
+      const diff = paid - prevPaid;
+      if (diff !== 0) await adjustBankBalance(userId, nextBankId, -diff, client);
+    } else {
+      if (prevBankId && prevPaid > 0) await adjustBankBalance(userId, prevBankId, prevPaid, client);
+      if (nextBankId && paid > 0) await adjustBankBalance(userId, nextBankId, -paid, client);
     }
   });
 }
@@ -649,7 +674,7 @@ async function addTrackerMonthToExpense(userId, trackerId, year, month, options 
   const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
   const tracker = trackerR.rows[0];
   if (!tracker) throw new Error('Tracker not found');
-  return withTransaction(async (client) => insertTrackerMonthExpense(userId, tracker, year, month, client, options.bank_account_id));
+  return withTransaction(async (client) => insertTrackerMonthExpense(userId, tracker, year, month, client, options.bank_account_id, options.expense_month));
 }
 
 async function getRecurringEntries(userId) {

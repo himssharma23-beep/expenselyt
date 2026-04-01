@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS loan_transactions (
   details TEXT NOT NULL,
   paid NUMERIC(14,2) NOT NULL DEFAULT 0,
   received NUMERIC(14,2) NOT NULL DEFAULT 0,
+  source TEXT,
+  source_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_loan_friend ON loan_transactions(friend_id);
@@ -173,7 +175,8 @@ CREATE TABLE IF NOT EXISTS emi_installments (
   emi_amount NUMERIC(14,2) NOT NULL,
   paid_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   paid_date DATE,
-  notes TEXT
+  notes TEXT,
+  bank_account_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_emi_inst ON emi_installments(emi_id);
 
@@ -455,6 +458,15 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source_id BIGINT;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_loan_source ON loan_transactions(user_id, source, source_id);
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS auto_add_to_expense BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_bank_account_id BIGINT;
+ALTER TABLE emi_installments ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;

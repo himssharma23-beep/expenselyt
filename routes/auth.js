@@ -9,6 +9,7 @@ const { guestOnly, requireAuth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -39,6 +40,14 @@ function normalizeCurrencyCode(code) {
   return /^[A-Z]{3}$/.test(cleaned) ? cleaned : null;
 }
 
+function normalizePhone(phone) {
+  const cleaned = String(phone || '').trim();
+  if (!cleaned) return null;
+  const normalized = cleaned.replace(/[^\d+]/g, '');
+  if (!/^\+?\d{7,15}$/.test(normalized)) return null;
+  return normalized;
+}
+
 function inferPreferences(req) {
   const explicitLocale = normalizeLocaleCode(req.body?.locale_code);
   const acceptLanguage = String(req.headers['accept-language'] || '').split(',')[0];
@@ -49,6 +58,77 @@ function inferPreferences(req) {
     currency_code: currencyCode,
     locale_code: DEFAULT_LOCALE_BY_CURRENCY[currencyCode] || localeCode,
   };
+}
+
+function getAllowedGoogleAudiences() {
+  const explicit = String(process.env.GOOGLE_OAUTH_CLIENT_IDS || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const specific = [
+    process.env.GOOGLE_WEB_CLIENT_ID,
+    process.env.GOOGLE_ANDROID_CLIENT_ID,
+    process.env.GOOGLE_IOS_CLIENT_ID,
+  ].map((v) => String(v || '').trim()).filter(Boolean);
+  return new Set([...explicit, ...specific]);
+}
+
+async function verifyGoogleIdToken(idToken) {
+  const token = String(idToken || '').trim();
+  if (!token) throw new Error('Missing Google ID token');
+
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+  if (!response.ok) throw new Error('Invalid Google token');
+  const payload = await response.json();
+
+  const issuer = String(payload.iss || '');
+  if (issuer !== 'accounts.google.com' && issuer !== 'https://accounts.google.com') {
+    throw new Error('Invalid Google token issuer');
+  }
+  const exp = Number(payload.exp || 0);
+  if (!exp || exp * 1000 <= Date.now()) throw new Error('Google token expired');
+
+  const audience = String(payload.aud || '').trim();
+  const allowedAudiences = getAllowedGoogleAudiences();
+  if (allowedAudiences.size > 0 && !allowedAudiences.has(audience)) {
+    throw new Error('Google token audience is not allowed');
+  }
+
+  const email = String(payload.email || '').trim().toLowerCase();
+  const verified = String(payload.email_verified || '').toLowerCase() === 'true';
+  if (!email || !verified) throw new Error('Google account email is not verified');
+
+  return {
+    provider: 'google',
+    providerUserId: String(payload.sub || '').trim(),
+    email,
+    displayName: String(payload.name || payload.given_name || email.split('@')[0] || 'Google User').trim(),
+    avatarUrl: String(payload.picture || '').trim() || null,
+  };
+}
+
+function normalizeUsernameSeed(seed) {
+  const cleaned = String(seed || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  if (cleaned.length >= 3) return cleaned.slice(0, 24);
+  return `user${Date.now().toString().slice(-6)}`;
+}
+
+async function createUniqueUsername(base) {
+  const root = normalizeUsernameSeed(base);
+  let candidate = root;
+  let tries = 0;
+  while (await pgDb.findUserByUsername(candidate)) {
+    tries += 1;
+    candidate = `${root.slice(0, 18)}${Math.floor(1000 + Math.random() * 9000)}`;
+    if (tries > 20) {
+      candidate = `user${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`;
+      if (!(await pgDb.findUserByUsername(candidate))) break;
+    }
+  }
+  return candidate;
 }
 
 const uploadDir = path.join(__dirname, '..', 'public', 'uploads', 'profile');
@@ -89,7 +169,8 @@ router.get('/forgot-password', guestOnly, (req, res) => {
 router.post('/api/auth/register', async (req, res) => {
   try {
     const authDb = pgDb;
-    const { username, email, password, display_name } = req.body;
+    const { username, email, password, display_name, mobile } = req.body;
+    const normalizedMobile = normalizePhone(mobile);
 
     if (!username || !email || !password || !display_name) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -97,12 +178,16 @@ router.post('/api/auth/register', async (req, res) => {
     if (username.length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' });
+    if (mobile && !normalizedMobile) return res.status(400).json({ error: 'Invalid phone number' });
 
     if (await authDb.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
     if (await authDb.findUserByEmail(email)) return res.status(400).json({ error: 'Email already registered' });
+    if (normalizedMobile && await authDb.findUserByMobile(normalizedMobile)) {
+      return res.status(400).json({ error: 'Phone number already registered' });
+    }
 
     const prefs = inferPreferences(req);
-    const userId = await authDb.createUser(username, email, password, display_name, prefs);
+    const userId = await authDb.createUser(username, email, password, display_name, prefs, normalizedMobile);
     await authDb.assignSignupPlanToUser(userId);
     await Promise.allSettled([
       sendAdminNewUserEmail({ user: { display_name, username, email } }),
@@ -112,7 +197,7 @@ router.post('/api/auth/register', async (req, res) => {
     req.session.displayName = display_name;
 
     const token = jwt.sign({ userId, displayName: display_name }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email, mobile: null, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
+    res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email, mobile: normalizedMobile, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
   } catch (err) {
     console.error('Register error:', err);
     if (err?.code === '23505') {
@@ -229,6 +314,77 @@ router.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+router.post('/api/auth/social', async (req, res) => {
+  try {
+    const provider = String(req.body?.provider || '').trim().toLowerCase();
+    const idToken = String(req.body?.id_token || '').trim();
+    if (!provider || !idToken) {
+      return res.status(400).json({ error: 'Provider and ID token are required' });
+    }
+    if (provider !== 'google') {
+      return res.status(400).json({ error: 'Unsupported social provider' });
+    }
+
+    const profile = await verifyGoogleIdToken(idToken);
+    let user = await pgDb.findUserByEmail(profile.email);
+    let isNewUser = false;
+
+    if (!user) {
+      isNewUser = true;
+      const usernameSeed = profile.email.split('@')[0] || profile.displayName || 'user';
+      const username = await createUniqueUsername(usernameSeed);
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const prefs = inferPreferences(req);
+      const userId = await pgDb.createUser(username, profile.email, randomPassword, profile.displayName, prefs, null);
+      await pgDb.assignSignupPlanToUser(userId);
+
+      await Promise.allSettled([
+        sendAdminNewUserEmail({ user: { display_name: profile.displayName, username, email: profile.email } }),
+        sendWelcomeEmail({ to: profile.email, name: profile.displayName }),
+      ]);
+
+      if (profile.avatarUrl) {
+        await pgDb.updateUserProfile(userId, { avatar_url: profile.avatarUrl });
+      }
+      user = await pgDb.findUserById(userId);
+    } else if (!user.avatar_url && profile.avatarUrl) {
+      user = await pgDb.updateUserProfile(user.id, { avatar_url: profile.avatarUrl });
+    }
+
+    if (!user) return res.status(500).json({ error: 'Failed to create social account' });
+
+    if (!user.currency_code || !user.locale_code) {
+      const prefs = inferPreferences(req);
+      user = await pgDb.updateUserProfile(user.id, prefs);
+    }
+
+    req.session.userId = user.id;
+    req.session.displayName = user.display_name;
+
+    const token = jwt.sign({ userId: user.id, displayName: user.display_name }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({
+      success: true,
+      redirect: '/',
+      token,
+      provider,
+      is_new_user: isNewUser,
+      user: {
+        id: user.id,
+        display_name: user.display_name,
+        username: user.username,
+        email: user.email,
+        mobile: user.mobile || null,
+        avatar_url: user.avatar_url || null,
+        currency_code: user.currency_code,
+        locale_code: user.locale_code,
+      },
+    });
+  } catch (err) {
+    console.error('Social auth error:', err);
+    res.status(401).json({ error: err.message || 'Social login failed' });
   }
 });
 

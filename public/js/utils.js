@@ -61,12 +61,22 @@ function repairMojibakeText(value) {
   for (const [from, to] of MOJIBAKE_REPLACEMENTS) text = text.split(from).join(to);
   // Additional fallback fixes for patterns that frequently survive replacement tables.
   text = text
-    .replace(/Â·/g, ' · ')
-    .replace(/â†/g, '<-')
-    .replace(/â†’/g, '->')
-    .replace(/Ã°Å¸â€â€”/g, 'Share')
-    .replace(/Ã°Å¸â€™Â³/g, 'Card')
-    .replace(/Ã°Å¸â€œâ€¹/g, 'Tracker');
+    .replace(/\u00c2\u00b7/g, ' \u00b7 ')
+    .replace(/\u00e2\u2020\u2018/g, '\u2191')
+    .replace(/\u00e2\u2020\u201c/g, '\u2193')
+    .replace(/\u00e2\u2020\u2019/g, '\u2192')
+    .replace(/\u00e2\u2020\u0090/g, '\u2190')
+    .replace(/\u00e2\u20ac\u201d/g, '-')
+    .replace(/\u00e2\u20ac\u201c/g, '-')
+    .replace(/\u00e2\u20ac\u00a2/g, ' \u00b7 ')
+    .replace(/\u00e2\u20ac\u00a6/g, '...')
+    .replace(/\u00e2\u0153\u201c/g, 'OK')
+    .replace(/\u00e2\u0153\u2022/g, 'x')
+    .replace(/\u00e2\u0161\u00a0/g, '!')
+    .replace(/\u00e2\u02c6\u017e/g, 'infinity')
+    .replace(/\u00c3\u00b0\u00c5\u00b8\u00e2\u20ac\u009d\u00e2\u20ac\u201d/g, 'Share')
+    .replace(/\u00c3\u00b0\u00c5\u00b8\u00e2\u20ac\u2122\u00c2\u00b3/g, 'Card')
+    .replace(/\u00c3\u00b0\u00c5\u00b8\u00e2\u20ac\u0153\u00e2\u20ac\u00b9/g, 'Tracker');
   return text.replace(/\s{2,}/g, ' ');
 }
 
@@ -180,7 +190,15 @@ function _memberKey(m) {
 
 function fmtDate(d) {
   if (!d) return "";
-  const dt = new Date(d);
+  const raw = String(d).trim();
+  let dt;
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  } else {
+    dt = new Date(raw);
+  }
+  if (Number.isNaN(dt.getTime())) return raw;
   return dt.toLocaleDateString(window.__currencyPrefs.localeCode || "en-IN", { day:"2-digit", month:"short", year:"numeric" });
 }
 

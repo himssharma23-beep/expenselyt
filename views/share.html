@@ -16,7 +16,7 @@
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Shared Friends List - Expense Lite AI">
 <meta name="twitter:description" content="Read-only shared friends and balance summary from Expense Lite AI.">
-<title>Shared Friends List — Expense Lite AI</title>
+<title>Shared Friends List - Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
 <script src="/js/analytics.js"></script>
@@ -36,7 +36,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
 .badge-exp{display:inline-block;background:#FEF2F2;color:var(--red);border:1px solid #FECACA;border-radius:6px;font-size:11px;font-weight:600;padding:2px 8px;margin-left:8px}
 .friend-card{background:var(--white);border-radius:14px;border:1px solid var(--border);margin-bottom:20px;overflow:hidden}
 .friend-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer;user-select:none}
-.friend-name{font-size:16px;font-weight:600;color:var(--t1)}
+.friend-main{display:flex;align-items:center;gap:10px;min-width:0}
+.friend-meta{min-width:0}
+.friend-name{font-size:16px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.friend-label{font-size:12px;color:var(--t3);margin-top:4px}
 .balance{font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace}
 .balance.pos{color:var(--green)}
 .balance.neg{color:var(--red)}
@@ -45,10 +48,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
 .friend-card.open .chevron{transform:rotate(180deg)}
 .txn-list{border-top:1px solid var(--border);display:none}
 .friend-card.open .txn-list{display:block}
-.txn-row{display:grid;grid-template-columns:90px 1fr 1fr;gap:8px;padding:10px 20px;border-bottom:1px solid #f0f0f0;font-size:13.5px;align-items:center}
+.txn-row{display:grid;grid-template-columns:150px minmax(0,1fr) 120px;gap:14px;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13.5px;align-items:center}
 .txn-row:last-child{border-bottom:none}
-.txn-date{color:var(--t3);font-size:12.5px}
-.txn-detail{color:var(--t1)}
+.txn-date{color:var(--t3);font-size:12.5px;line-height:1.35;word-break:break-word}
+.txn-detail{color:var(--t1);line-height:1.45;word-break:break-word}
 .txn-amt{text-align:right;font-weight:600;font-family:'JetBrains Mono',monospace;font-size:13px}
 .txn-amt.gave{color:var(--red)}
 .txn-amt.got{color:var(--green)}
@@ -65,7 +68,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
 .sum-val.neg{color:var(--red)}
 .footer{text-align:center;padding:32px 20px;font-size:12px;color:var(--t3)}
 .footer a{color:var(--em);text-decoration:none;font-weight:600}
-@media(max-width:600px){.txn-row{grid-template-columns:80px 1fr;}.txn-amt{grid-column:2;text-align:left;}.summary-row{flex-direction:column}}
+@media(max-width:600px){.page{padding:20px 14px}.friend-header{padding:14px 16px;align-items:flex-start}.friend-main{align-items:flex-start}.txn-row{grid-template-columns:1fr;gap:6px;padding:12px 16px}.txn-amt{text-align:left}.summary-row{flex-direction:column}}
 </style>
 </head>
 <body>
@@ -74,16 +77,16 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
     <img src="/favicon.svg" alt="Expense Lite AI logo" width="36" height="36">
     <div>
       <div class="topbar-title">Expense Lite AI</div>
-      <div class="topbar-sub">SHARED VIEW · READ ONLY</div>
+      <div class="topbar-sub">SHARED VIEW - READ ONLY</div>
     </div>
   </div>
 </div>
 <div class="page">
   <div id="content"><div class="loading-state">Loading shared data…</div></div>
 </div>
-<div class="footer">Shared via <a href="/">Expense Lite AI</a> · Read-only view</div>
+<div class="footer">Shared via <a href="/">Expense Lite AI</a> - Read-only view</div>
 <script>
-const fmt = n => '₹' + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmt = n => '\u20B9' + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 const token = location.pathname.split('/s/')[1]?.split('/')[0];
 
 async function load() {
@@ -105,12 +108,12 @@ function render(data) {
   let subtitle = '';
   if (filters.year && filters.month) subtitle = `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][filters.month-1]} ${filters.year}`;
   else if (filters.year) subtitle = `Year ${filters.year}`;
-  if (data.expires_at) subtitle += (subtitle ? ' · ' : '') + `Expires ${data.expires_at}`;
+  if (data.expires_at) subtitle += (subtitle ? ' - ' : '') + `Expires ${data.expires_at}`;
 
   let html = `
     <div class="page-header">
       <h1>${esc(data.owner_name || 'Shared')}'s Friends &amp; Loans</h1>
-      <p>${subtitle || 'All time · ' + friends.length + ' friend' + (friends.length !== 1 ? 's' : '')}</p>
+      <p>${subtitle || 'All time - ' + friends.length + ' friend' + (friends.length !== 1 ? 's' : '')}</p>
     </div>
     <div class="summary-row">
       <div class="sum-card"><div class="sum-label">Others owe me</div><div class="sum-val pos">${fmt(totalOwed)}</div></div>
@@ -123,17 +126,14 @@ function render(data) {
     friends.forEach((f, i) => {
       const bal = f.balance;
       const balClass = bal > 0.005 ? 'pos' : bal < -0.005 ? 'neg' : 'zero';
-      const balText = bal > 0.005 ? `+${fmt(bal)}` : bal < -0.005 ? `-${fmt(bal)}` : '₹0';
+      const balText = bal > 0.005 ? `+${fmt(bal)}` : bal < -0.005 ? `-${fmt(Math.abs(bal))}` : '\u20B90.00';
       const balLabel = bal > 0.005 ? 'owes me' : bal < -0.005 ? 'I owe' : 'settled';
       html += `<div class="friend-card" id="fc${i}">
         <div class="friend-header" onclick="toggle(${i})">
-          <div>
-            <span class="friend-name">${esc(f.name)}</span>
-            <span style="font-size:12px;color:var(--t3);margin-left:8px">${balLabel}</span>
-          </div>
+          <div class="friend-main"><div class="friend-meta"><div class="friend-name">${esc(f.name)}</div><div class="friend-label">${balLabel}</div></div></div>
           <div style="display:flex;align-items:center;gap:12px">
             <span class="balance ${balClass}">${balText}</span>
-            <span class="chevron">⌄</span>
+            <span class="chevron">^</span>
           </div>
         </div>
         <div class="txn-list">`;
@@ -145,7 +145,7 @@ function render(data) {
           html += `<div class="txn-row">
             <span class="txn-date">${t.txn_date}</span>
             <span class="txn-detail">${esc(t.details)}</span>
-            <span class="txn-amt ${gave ? 'gave' : 'got'}">${gave ? '−' : '+'}${fmt(gave ? t.paid : t.received)}</span>
+            <span class="txn-amt ${gave ? 'gave' : 'got'}">${gave ? '-' : '+'}${fmt(gave ? t.paid : t.received)}</span>
           </div>`;
         });
       }

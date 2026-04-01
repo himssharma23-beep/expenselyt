@@ -32,6 +32,16 @@ function normalizeFriendName(name) {
   return value;
 }
 
+function parseBooleanFlag(value, defaultValue = false) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
 function getCoreDb() {
   return pgCoreDb;
 }
@@ -640,7 +650,7 @@ router.post('/trips/:id/expenses', async (req, res) => {
     if (!details || !amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
     res.json({ success: true, id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
 router.put('/trips/:id/expenses/:eid', async (req, res) => {
@@ -648,14 +658,27 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
     const { paid_by_key, paid_by_name, details, amount, expense_date, split_mode, splits } = req.body;
     await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
 router.delete('/trips/:id/expenses/:eid', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().deleteTripExpense(req.session.userId, req.params.eid));
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.post('/trips/:id/finalize', async (req, res) => {
+  try {
+    const result = await Promise.resolve(getCoreDb().finalizeTrip(req.session.userId, req.params.id, {
+      is_extra: !!req.body?.is_extra,
+      txn_date: req.body?.txn_date,
+      friend_ids: req.body?.friend_ids || {},
+    }));
+    res.json(result || { success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
 });
 
 router.put('/trips/:id/members/:mid/lock', async (req, res) => {
@@ -759,7 +782,13 @@ router.post('/emi/records/:id/activate', async (req, res) => {
   try {
     const { start_date, add_expenses, expense_type } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
-    await Promise.resolve(getFinanceDb().activateEmi(req.session.userId, req.params.id, start_date, !!add_expenses, parseInt(expense_type) || 0));
+    await Promise.resolve(getFinanceDb().activateEmi(
+      req.session.userId,
+      req.params.id,
+      start_date,
+      parseBooleanFlag(add_expenses, false),
+      parseInt(expense_type) || 0
+    ));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -808,7 +837,14 @@ router.post('/emi/records/:id/activate-with-schedule', async (req, res) => {
     const { start_date, schedule, add_expenses, expense_type } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
     if (!Array.isArray(schedule) || schedule.length === 0) return res.status(400).json({ error: 'schedule required' });
-    await Promise.resolve(getFinanceDb().activateEmiWithSchedule(req.session.userId, req.params.id, start_date, schedule, !!add_expenses, parseInt(expense_type) || 0));
+    await Promise.resolve(getFinanceDb().activateEmiWithSchedule(
+      req.session.userId,
+      req.params.id,
+      start_date,
+      schedule,
+      parseBooleanFlag(add_expenses, false),
+      parseInt(expense_type) || 0
+    ));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1486,7 +1522,7 @@ router.delete('/planner/monthly/:id/hard', (req, res) => {
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 router.put('/planner/monthly/:id/pay', (req, res) => {
-  Promise.resolve(getOpsDb().payMonthlyPayment(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date)).then(() => {
+  Promise.resolve(getOpsDb().payMonthlyPayment(req.session.userId, req.params.id, req.body.paid_amount, req.body.paid_date, req.body.bank_account_id)).then(() => {
     res.json({ success: true });
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
@@ -1798,8 +1834,8 @@ router.get('/trackers/:id/summary', (req, res) => {
 
 router.post('/trackers/:id/month-expense', (req, res) => {
   try {
-    const { year, month, bank_account_id } = req.body;
-    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id })).then((amount) => {
+    const { year, month, bank_account_id, expense_month } = req.body;
+    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id, expense_month })).then((amount) => {
       res.json({ success: true, amount });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }

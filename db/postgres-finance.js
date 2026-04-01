@@ -12,6 +12,11 @@ function _localDate(dt) {
   return `${y}-${m}-${d}`;
 }
 
+function normalizeBankAccountId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   const run = client || { query };
   const existing = await run.query(
@@ -546,21 +551,43 @@ async function payInstallment(userId, instId, paidAmount, paidDate, notes, bankA
     );
     const inst = instR.rows[0];
     if (!inst) throw new Error('Installment not found');
+    const nextPaid = Math.max(0, num(paidAmount));
     const prevPaid = num(inst.paid_amount);
+    const prevBankId = normalizeBankAccountId(inst.bank_account_id);
+    const nextBankId = nextPaid > 0
+      ? normalizeBankAccountId(bankAccountId != null ? bankAccountId : inst.bank_account_id)
+      : null;
     await client.query(
       `UPDATE emi_installments
-       SET paid_amount = $1, paid_date = $2, notes = $3
-       WHERE id = $4`,
-      [paidAmount, paidDate || _localDate(new Date()), notes || null, instId]
+       SET paid_amount = $1, paid_date = $2, notes = $3, bank_account_id = $4
+       WHERE id = $5`,
+      [nextPaid, nextPaid > 0 ? (paidDate || _localDate(new Date())) : null, notes || null, nextBankId, instId]
     );
-    if (bankAccountId) {
-      const diff = num(paidAmount) - prevPaid;
+    if (prevBankId && nextBankId && prevBankId === nextBankId) {
+      const diff = nextPaid - prevPaid;
       if (diff !== 0) {
         await client.query(
           `UPDATE bank_accounts
            SET balance = balance - $1
            WHERE id = $2 AND user_id = $3`,
-          [diff, bankAccountId, userId]
+          [diff, nextBankId, userId]
+        );
+      }
+    } else {
+      if (prevBankId && prevPaid > 0) {
+        await client.query(
+          `UPDATE bank_accounts
+           SET balance = balance + $1
+           WHERE id = $2 AND user_id = $3`,
+          [prevPaid, prevBankId, userId]
+        );
+      }
+      if (nextBankId && nextPaid > 0) {
+        await client.query(
+          `UPDATE bank_accounts
+           SET balance = balance - $1
+           WHERE id = $2 AND user_id = $3`,
+          [nextPaid, nextBankId, userId]
         );
       }
     }
@@ -571,10 +598,10 @@ async function payInstallment(userId, instId, paidAmount, paidDate, notes, bankA
       [inst.emi_id]
     );
     const allPaid = allR.rows.every((row) => {
-      const paid = Number(row.id) === Number(instId) ? num(paidAmount) : num(row.paid_amount);
+      const paid = Number(row.id) === Number(instId) ? nextPaid : num(row.paid_amount);
       return paid >= num(row.emi_amount) * 0.999;
     });
-    if (allPaid) await client.query(`UPDATE emi_records SET status = 'completed' WHERE id = $1`, [inst.emi_id]);
+    await client.query(`UPDATE emi_records SET status = $1 WHERE id = $2`, [allPaid ? 'completed' : 'active', inst.emi_id]);
   });
 }
 

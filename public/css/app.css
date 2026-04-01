@@ -160,9 +160,9 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .bal-split { display:flex; justify-content:space-around; margin-top:16px; text-align:center; color:#fff; gap:20px; }
 
 /* Divide */
-.fr-chip { display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border-radius:8px; border:1px solid var(--border); background:var(--white); font-size:13px; font-weight:500; cursor:pointer; transition:all 0.12s; margin:0 4px 4px 0; }
+.fr-chip { display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border-radius:8px; border:1px solid var(--border); background:var(--white); font-size:13px; font-weight:500; cursor:pointer; transition:all 0.12s; margin:0 4px 4px 0; vertical-align:top; }
 .fr-chip.sel { border-color:var(--em); background:var(--em-xl); }
-.cbox { width:17px; height:17px; border-radius:4px; border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; }
+.cbox { width:17px; height:17px; border-radius:4px; border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:11px; font-weight:700; line-height:1; color:#fff; }
 .cbox.chk { background:var(--em); border-color:var(--em); }
 .preview-box { background:var(--blue-l); padding:10px 16px; border-radius:8px; font-size:14px; margin:12px 0; color:var(--blue); }
 .total-bar { display:flex; justify-content:space-between; align-items:center; background:linear-gradient(135deg, var(--em-d), var(--em-l)); color:#fff; padding:14px 22px; border-radius:12px; margin-bottom:16px; }
@@ -201,6 +201,30 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .emi-card-header { display:flex; align-items:flex-start; gap:12px; padding:16px 20px; cursor:pointer; user-select:none; }
 .emi-card-header:hover { background:var(--bg); }
 .emi-card-body { padding:0 20px 16px; border-top:1px solid var(--border); }
+.emi-card-top { display:flex; flex-direction:column; gap:12px; }
+.emi-card-main { min-width:0; width:100%; }
+.emi-card-title-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.emi-card-title { font-weight:700; font-size:18px; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--t1); }
+.emi-card-badge { display:inline-flex; align-items:center; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; }
+.emi-card-badge-blue { color:var(--blue); background:rgba(59,130,246,0.12); }
+.emi-card-badge-muted { color:var(--t3); background:var(--bg); }
+.emi-card-desc { font-size:12px; color:var(--t3); margin-top:4px; line-height:1.4; }
+.emi-card-actions { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:nowrap; width:100%; }
+.emi-card-actions .btn,
+.emi-card-actions .btn-del,
+.emi-card-actions .emi-action-pill { min-height:32px; flex:0 0 auto; }
+.emi-card-actions .btn { padding:5px 11px; font-size:12px; }
+.emi-card-delete,
+.emi-card-toggle { min-width:78px; justify-content:center; }
+.emi-action-pill { background:transparent; border:1px solid transparent; border-radius:999px; padding:6px 10px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+.emi-action-pill-green { color:var(--green); background:var(--green)22; }
+.emi-action-pill-blue { color:var(--blue); background:rgba(59,130,246,0.12); }
+.emi-card-meta { display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:12px; line-height:1.35; color:var(--t2); font-size:12px; }
+.emi-card-meta strong { color:var(--t1); font-weight:700; }
+.emi-card-meta-highlight { color:var(--em); }
+.emi-card-progress { margin-top:10px; max-width:420px; }
+.emi-card-progress-track { height:4px; background:var(--bg); border-radius:2px; overflow:hidden; }
+.emi-card-progress-fill { height:100%; border-radius:2px; transition:width 0.3s; }
 .btn-del { background:transparent; border:1px solid var(--red); color:var(--red); border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer; font-weight:500; transition:background 0.15s,color 0.15s; }
 .btn-del:hover { background:var(--red); color:#fff; }
 .inst-edit-btn { background:none; border:none; color:var(--t3); cursor:pointer; font-size:13px; padding:0 3px; opacity:0.6; transition:opacity 0.15s; }
@@ -211,6 +235,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .emi-tracker-side { position:static; }
   .emi-portfolio-bar { flex-wrap:wrap; }
   .emi-p-stat { flex:1 1 40%; }
+  .emi-card-title { white-space:normal; }
 }
 
 /* ─── Credit Cards ───────────────────────────────────────────── */

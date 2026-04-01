@@ -144,7 +144,13 @@ const _P = (() => {
   function dt(d) {
     if (!d) return '—';
     const localeCode = (window.__currencyPrefs && window.__currencyPrefs.localeCode) || 'en-IN';
-    return new Date(d+'T00:00:00').toLocaleDateString(localeCode,{day:'2-digit',month:'short',year:'numeric'});
+    const raw = String(d).trim();
+    let dtValue;
+    const onlyDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (onlyDate) dtValue = new Date(Number(onlyDate[1]), Number(onlyDate[2]) - 1, Number(onlyDate[3]));
+    else dtValue = new Date(raw);
+    if (Number.isNaN(dtValue.getTime())) return raw;
+    return dtValue.toLocaleDateString(localeCode,{day:'2-digit',month:'short',year:'numeric'});
   }
 
   function curSafe(n) {
@@ -166,7 +172,13 @@ const _P = (() => {
   function dtSafe(d) {
     if (!d) return '-';
     const localeCode = (window.__currencyPrefs && window.__currencyPrefs.localeCode) || 'en-IN';
-    return cleanText(new Date(d + 'T00:00:00').toLocaleDateString(localeCode, { day:'2-digit', month:'short', year:'numeric' }));
+    const raw = String(d).trim();
+    let dtValue;
+    const onlyDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (onlyDate) dtValue = new Date(Number(onlyDate[1]), Number(onlyDate[2]) - 1, Number(onlyDate[3]));
+    else dtValue = new Date(raw);
+    if (Number.isNaN(dtValue.getTime())) return cleanText(raw);
+    return cleanText(dtValue.toLocaleDateString(localeCode, { day:'2-digit', month:'short', year:'numeric' }));
   }
 
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -208,7 +220,23 @@ async function downloadFriendsPdf() {
 function downloadFriendDetailPdf() {
   const f = _loanFriend;
   if (!f) return;
-  const allTxns = _loanAllTxns || [];
+  const normalizeLoanPdfDate = (value) => {
+    if (typeof normalizeTxnDateValue === 'function') return normalizeTxnDateValue(value);
+    if (!value) return '';
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    const raw = String(value).trim();
+    if (!raw) return '';
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+    const dmy = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+    return raw.length >= 10 ? raw.slice(0, 10) : raw;
+  };
+  const allTxns = (_loanAllTxns || []).map((txn) => ({
+    ...txn,
+    txn_date: normalizeLoanPdfDate(txn?.txn_date),
+  }));
   const { balance, totalPaid, totalReceived } = _loanBalance || {};
 
   // Apply current loanFilters

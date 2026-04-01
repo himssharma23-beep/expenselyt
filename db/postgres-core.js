@@ -67,6 +67,45 @@ function yearGuardSql(alias = '') {
   return `EXTRACT(YEAR FROM ${prefix}purchase_date)::int BETWEEN 2018 AND ${new Date().getFullYear() + 2}`;
 }
 
+function normalizeTripMemberKeyValue(value) {
+  const key = String(value || '').trim();
+  if (!key) return key;
+  const friendMatch = key.match(/^friend_(.+)$/);
+  if (friendMatch) return String(friendMatch[1]);
+  const userMatch = key.match(/^user_(.+)$/);
+  if (userMatch) return `u${userMatch[1]}`;
+  return key;
+}
+
+function normalizeTripSplitModeValue(value) {
+  const mode = String(value || 'equal').trim().toLowerCase();
+  if (!mode) return 'equal';
+  if (mode === 'direct' || mode === 'direct_rs' || mode === 'direct_rupee' || mode === 'direct_inr') return 'amount';
+  if (mode === 'parts_ratio' || mode === 'ratio' || mode === 'partsratio') return 'parts';
+  if (mode === 'percentage') return 'percent';
+  return mode;
+}
+
+async function _loadNormalizedTripExpenses(client, tripId) {
+  const expensesR = await client.query('SELECT * FROM trip_expenses WHERE trip_id = $1 ORDER BY expense_date DESC, id DESC', [tripId]);
+  const expenses = [];
+  for (const expense of expensesR.rows) {
+    const splitsR = await client.query('SELECT * FROM trip_expense_splits WHERE expense_id = $1', [expense.id]);
+    expenses.push({
+      ...expense,
+      amount: num(expense.amount),
+      paid_by_key: normalizeTripMemberKeyValue(expense.paid_by_key),
+      split_mode: normalizeTripSplitModeValue(expense.split_mode),
+      splits: splitsR.rows.map((split) => ({
+        ...split,
+        member_key: normalizeTripMemberKeyValue(split.member_key),
+        share_amount: num(split.share_amount),
+      })),
+    });
+  }
+  return expenses;
+}
+
 async function getExpenses(userId, filters = {}) {
   const params = [userId];
   let where = [`user_id = $1`, yearGuardSql()];
@@ -476,6 +515,60 @@ async function _checkTripEdit(userId, tripId) {
   return !!(member.rows[0] && member.rows[0].permission !== 'view');
 }
 
+async function _getTripStatus(tripId, client = null) {
+  const run = client || { query };
+  const tripR = await run.query('SELECT status FROM trips WHERE id = $1 LIMIT 1', [tripId]);
+  return tripR.rows[0]?.status || null;
+}
+
+async function _assertTripExpenseEditable(userId, tripId, client = null) {
+  if (!(await _checkTripEdit(userId, tripId))) throw new Error('Trip not found');
+  const status = await _getTripStatus(tripId, client);
+  if (status === 'completed') throw validationError('Re-open the trip before changing expenses');
+}
+
+async function _loadTripFinalizeData(userId, tripId, client) {
+  const tripR = await client.query(
+    `SELECT id, user_id, name, status
+     FROM trips
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [tripId, userId]
+  );
+  const trip = tripR.rows[0];
+  if (!trip) throw new Error('Trip not found');
+
+  const [membersR, expenses] = await Promise.all([
+    client.query('SELECT * FROM trip_members WHERE trip_id = $1', [tripId]),
+    _loadNormalizedTripExpenses(client, tripId),
+  ]);
+
+  return { ...trip, members: membersR.rows, expenses };
+}
+
+function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}) {
+  const peopleMap = {};
+  for (const member of (trip.members || [])) {
+    const key = member.friend_id != null ? String(member.friend_id) : member.linked_user_id != null ? `u${member.linked_user_id}` : 'self';
+    peopleMap[key] = {
+      key,
+      name: member.member_name,
+      friendId: member.friend_id || friendIdOverrides[key] || null,
+      totalShare: 0,
+      totalGave: 0,
+    };
+  }
+
+  for (const expense of (trip.expenses || [])) {
+    for (const split of (expense.splits || [])) {
+      if (peopleMap[split.member_key]) peopleMap[split.member_key].totalShare += num(split.share_amount);
+    }
+    if (peopleMap[expense.paid_by_key]) peopleMap[expense.paid_by_key].totalGave += num(expense.amount);
+  }
+
+  return peopleMap;
+}
+
 async function createTrip(userId, data) {
   return withTransaction(async (client) => {
     const tripResult = await client.query(
@@ -511,18 +604,9 @@ async function getTrips(userId) {
 
   const trips = [];
   for (const row of tripsResult.rows) {
-    const [membersR, totalsR, sharesR, paidR] = await Promise.all([
+    const [membersR, expenses] = await Promise.all([
       query('SELECT * FROM trip_members WHERE trip_id = $1', [row.id]),
-      query('SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS cnt FROM trip_expenses WHERE trip_id = $1', [row.id]),
-      query(
-        `SELECT tes.member_key, COALESCE(SUM(tes.share_amount),0) AS total_share
-         FROM trip_expense_splits tes
-         JOIN trip_expenses te ON te.id = tes.expense_id
-         WHERE te.trip_id = $1
-         GROUP BY tes.member_key`,
-        [row.id]
-      ),
-      query('SELECT paid_by_key, COALESCE(SUM(amount),0) AS total_paid FROM trip_expenses WHERE trip_id = $1 GROUP BY paid_by_key', [row.id]),
+      _loadNormalizedTripExpenses({ query }, row.id),
     ]);
     const members = membersR.rows;
     let myKey = 'self';
@@ -532,14 +616,22 @@ async function getTrips(userId) {
         myKey = myMember.friend_id != null ? String(myMember.friend_id) : myMember.linked_user_id != null ? `u${myMember.linked_user_id}` : 'self';
       }
     }
-    const selfShare = num(sharesR.rows.find((share) => share.member_key === myKey)?.total_share);
-    const selfPaid = num(paidR.rows.find((paid) => paid.paid_by_key === myKey)?.total_paid);
+    let totalExpenses = 0;
+    let selfShare = 0;
+    let selfPaid = 0;
+    for (const expense of expenses) {
+      totalExpenses += num(expense.amount);
+      if (expense.paid_by_key === myKey) selfPaid += num(expense.amount);
+      for (const split of (expense.splits || [])) {
+        if (split.member_key === myKey) selfShare += num(split.share_amount);
+      }
+    }
     trips.push({
       ...row,
       is_owner: bool(row.is_owner),
       members,
-      totalExpenses: Math.round(num(totalsR.rows[0]?.total) * 100) / 100,
-      expenseCount: Number(totalsR.rows[0]?.cnt || 0),
+      totalExpenses: Math.round(totalExpenses * 100) / 100,
+      expenseCount: expenses.length,
       selfNet: Math.round((selfPaid - selfShare) * 100) / 100,
     });
   }
@@ -555,17 +647,12 @@ async function getTripById(userId, tripId) {
   const myMember = memberR.rows[0] || null;
   if (!isOwner && !myMember) return null;
 
-  const [tripR, membersR, expensesR] = await Promise.all([
+  const [tripR, membersR, expenses] = await Promise.all([
     query('SELECT * FROM trips WHERE id = $1 LIMIT 1', [tripId]),
     query('SELECT * FROM trip_members WHERE trip_id = $1', [tripId]),
-    query('SELECT * FROM trip_expenses WHERE trip_id = $1 ORDER BY expense_date DESC, id DESC', [tripId]),
+    _loadNormalizedTripExpenses({ query }, tripId),
   ]);
   const trip = tripR.rows[0];
-  const expenses = [];
-  for (const expense of expensesR.rows) {
-    const splitsR = await query('SELECT * FROM trip_expense_splits WHERE expense_id = $1', [expense.id]);
-    expenses.push({ ...expense, amount: num(expense.amount), splits: splitsR.rows.map((split) => ({ ...split, share_amount: num(split.share_amount) })) });
-  }
   return { ...trip, members: membersR.rows, expenses, isOwner, userPermission: isOwner ? 'owner' : (myMember?.permission || 'edit') };
 }
 
@@ -591,7 +678,7 @@ async function deleteTrip(userId, id) {
 }
 
 async function addTripExpense(userId, tripId, data) {
-  if (!(await _checkTripEdit(userId, tripId))) throw new Error('Trip not found');
+  await _assertTripExpenseEditable(userId, tripId);
   return withTransaction(async (client) => {
     const expR = await client.query(
       `INSERT INTO trip_expenses (trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode)
@@ -614,7 +701,8 @@ async function addTripExpense(userId, tripId, data) {
 async function updateTripExpense(userId, expenseId, data) {
   const expR = await query('SELECT id, trip_id FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
   const exp = expR.rows[0];
-  if (!exp || !(await _checkTripEdit(userId, exp.trip_id))) throw new Error('Not found');
+  if (!exp) throw new Error('Not found');
+  await _assertTripExpenseEditable(userId, exp.trip_id);
   await withTransaction(async (client) => {
     await client.query(
       `UPDATE trip_expenses
@@ -636,10 +724,65 @@ async function updateTripExpense(userId, expenseId, data) {
 async function deleteTripExpense(userId, expenseId) {
   const expR = await query('SELECT id, trip_id FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
   const exp = expR.rows[0];
-  if (!exp || !(await _checkTripEdit(userId, exp.trip_id))) throw new Error('Not found');
+  if (!exp) throw new Error('Not found');
+  await _assertTripExpenseEditable(userId, exp.trip_id);
   await withTransaction(async (client) => {
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
     await client.query('DELETE FROM trip_expenses WHERE id = $1', [expenseId]);
+  });
+}
+
+async function finalizeTrip(userId, tripId, data = {}) {
+  return withTransaction(async (client) => {
+    const trip = await _loadTripFinalizeData(userId, tripId, client);
+    const today = normalizeDateValue(data.txn_date || new Date().toISOString().slice(0, 10), 'Trip finalization date');
+    const peopleMap = _buildTripSettlementSnapshot(trip, data.friend_ids || {});
+
+    await client.query(
+      `UPDATE expenses
+       SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW(), updated_by = $1
+       WHERE user_id = $1 AND source = 'trip' AND source_id = $2 AND deleted_at IS NULL`,
+      [userId, tripId]
+    );
+    await client.query(
+      `UPDATE loan_transactions
+       SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW(), updated_by = $1
+       WHERE user_id = $1 AND source = 'trip' AND source_id = $2 AND deleted_at IS NULL`,
+      [userId, tripId]
+    );
+
+    const self = peopleMap.self;
+    if (self && self.totalShare > 0) {
+      await client.query(
+        `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, 'trip', $6, $1, $1)`,
+        [userId, trip.name, Math.round(self.totalShare * 100) / 100, today, !!data.is_extra, tripId]
+      );
+    }
+
+    for (const [key, person] of Object.entries(peopleMap)) {
+      if (key === 'self') continue;
+      const friendId = Number(person.friendId || 0);
+      if (!friendId) continue;
+      const net = person.totalGave - person.totalShare;
+      const paid = net < -0.005 ? Math.round(Math.abs(net) * 100) / 100 : 0;
+      const received = net > 0.005 ? Math.round(net * 100) / 100 : 0;
+      if (paid === 0 && received === 0) continue;
+      await client.query(
+        `INSERT INTO loan_transactions (user_id, friend_id, txn_date, details, paid, received, source, source_id, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'trip', $7, $1, $1)`,
+        [userId, friendId, today, `Trip: ${trip.name}`, paid, received, tripId]
+      );
+    }
+
+    await client.query(
+      `UPDATE trips
+       SET status = 'completed', updated_at = NOW(), updated_by = $1
+       WHERE id = $2 AND user_id = $1`,
+      [userId, tripId]
+    );
+
+    return { success: true };
   });
 }
 
@@ -822,6 +965,7 @@ module.exports = {
   addTripExpense,
   updateTripExpense,
   deleteTripExpense,
+  finalizeTrip,
   toggleMemberLock,
   linkTripMember,
   createTripInvite,

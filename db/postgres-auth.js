@@ -56,13 +56,20 @@ function normalizeSubscription(row) {
   };
 }
 
-async function createUser(username, email, password, displayName, preferences = {}) {
+function normalizeMobile(mobile) {
+  const cleaned = String(mobile || '').trim();
+  if (!cleaned) return null;
+  return cleaned;
+}
+
+async function createUser(username, email, password, displayName, preferences = {}, mobile = null) {
   const hash = bcrypt.hashSync(password, 10);
   const currencyCode = normalizeCurrencyCode(preferences.currency_code) || 'INR';
   const localeCode = normalizeLocaleCode(preferences.locale_code, currencyCode);
+  const normalizedMobile = normalizeMobile(mobile);
   const result = await query(
-    `INSERT INTO users (username, email, password_hash, display_name, currency_code, locale_code)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO users (username, email, password_hash, display_name, currency_code, locale_code, mobile)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       String(username).toLowerCase().trim(),
@@ -71,6 +78,7 @@ async function createUser(username, email, password, displayName, preferences = 
       String(displayName).trim(),
       currencyCode,
       localeCode,
+      normalizedMobile,
     ]
   );
   return Number(result.rows[0].id);

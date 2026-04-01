@@ -8,7 +8,7 @@ let _accessiblePages = ['dashboard', 'expenses'];
 let _currentUserId = null;
 let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
-let expFilters = { year: new Date().getFullYear(), month: null, search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
+let expFilters = { year: new Date().getFullYear(), month: new Date().getMonth(), search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
 let _expenseCache = [];
 let friendSort = 'name';
 let selectedFriend = null;
@@ -34,6 +34,26 @@ function normalizeInputDate(value) {
   const parsed = new Date(str);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return str.length >= 10 ? str.slice(0, 10) : str;
+}
+
+function normalizeTxnDateValue(value) {
+  if (!value) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
+  if (typeof value === 'object') {
+    const year = Number(value.year ?? value.y);
+    const month = Number(value.month ?? value.m);
+    const day = Number(value.day ?? value.d);
+    if (year && month && day) {
+      return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    if (value.date != null) return normalizeTxnDateValue(value.date);
+    if (value.value != null) return normalizeTxnDateValue(value.value);
+  }
+  return normalizeInputDate(value);
 }
 
 function parseIntegerField(raw, fieldLabel, { min = null, max = null, required = false } = {}) {
@@ -331,6 +351,10 @@ async function loadExpenses() {
     if (f.sortField === 'date') { va = a.purchase_date; vb = b.purchase_date; }
     else if (f.sortField === 'amount') { va = a.amount; vb = b.amount; }
     else { va = a.item_name.toLowerCase(); vb = b.item_name.toLowerCase(); }
+    if (va === vb) {
+      if (f.sortField === 'date') return (Number(b.id) || 0) - (Number(a.id) || 0);
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    }
     return f.sortDir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
   });
 
@@ -347,7 +371,7 @@ async function loadExpenses() {
   const pageStart = (f.page - 1) * f.pageSize;
   const pageList = list.slice(pageStart, pageStart + f.pageSize);
 
-  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' â†‘' : ' â†“') : '';
+  const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' &uarr;' : ' &darr;') : '';
 
   // Save search focus state before re-render
   const searchFocused = document.activeElement?.id === 'expSearch';
@@ -418,9 +442,9 @@ async function loadExpenses() {
 
       ${totalPages > 1 ? `
       <div class="pagination">
-        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">â† Prev</button>
+        <button class="pg-btn" ${f.page <= 1 ? 'disabled' : ''} onclick="expFilters.page=${f.page-1};loadExpenses()">&larr; Prev</button>
         <div class="pg-info">
-          <span class="pg-range">${pageStart+1}â€“${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
+          <span class="pg-range">${pageStart+1}&ndash;${Math.min(pageStart+f.pageSize, total)} of ${total}</span>
           <div class="pg-pages">
             ${paginationPages(f.page, totalPages).map(p => p === '...'
               ? `<span class="pg-ellipsis">...</span>`
@@ -428,7 +452,7 @@ async function loadExpenses() {
             ).join('')}
           </div>
         </div>
-        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next â†’</button>
+        <button class="pg-btn" ${f.page >= totalPages ? 'disabled' : ''} onclick="expFilters.page=${f.page+1};loadExpenses()">Next &rarr;</button>
       </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
     </div>`;
 
@@ -969,7 +993,10 @@ async function loadFriendDetail(keepFilters) {
   _loanFriend = f;
 
   const data = await api(`/api/loans/${f.id}`);
-  _loanAllTxns = data?.transactions || [];
+  _loanAllTxns = (data?.transactions || []).map((txn) => ({
+    ...txn,
+    txn_date: normalizeTxnDateValue(txn?.txn_date),
+  }));
   _loanBalance = { balance: data?.balance || 0, totalPaid: data?.totalPaid || 0, totalReceived: data?.totalReceived || 0 };
 
   renderFriendDetail();
@@ -1020,14 +1047,14 @@ function renderFriendDetail() {
 
   function th(col, label, align) {
     const active = loanSort.col === col;
-    const arrow = active ? (loanSort.dir === 'asc' ? ' ?' : ' ?') : '';
+    const arrow = active ? (loanSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
     const style = align ? `style="text-align:${align};cursor:pointer"` : 'style="cursor:pointer"';
     return `<th ${style} onclick="loanToggleSort('${col}')">${label}${arrow}</th>`;
   }
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <button class="back-btn" onclick="selectedFriend=null;loadFriends()"><- Back to Friends</button>
+      <button class="back-btn" onclick="selectedFriend=null;loadFriends()">&larr; Back to Friends</button>
       <div class="summary-card" style="text-align:center">
         <div style="font-size:22px;font-weight:700">${f.name}</div>
         <div class="summary-amount" style="color:${balColorLight(balance)}">${balance < 0 ? '- ' : balance > 0 ? '+ ' : ''}${fmtCur(Math.abs(balance))}</div>
@@ -1067,12 +1094,12 @@ function renderFriendDetail() {
         </tbody>
       </table></div>
       ${totalPages > 1 ? `<div class="pagination">
-        <button class="pg-btn" ${loanPage<=1?'disabled':''} onclick="loanGoPage(${loanPage-1})"><- Prev</button>
+        <button class="pg-btn" ${loanPage<=1?'disabled':''} onclick="loanGoPage(${loanPage-1})">&larr; Prev</button>
         <div class="pg-info">
-          <span class="pg-range">${pageStart+1}-${Math.min(pageStart+loanPageSize,txns.length)} of ${txns.length}</span>
+          <span class="pg-range">${pageStart+1}&ndash;${Math.min(pageStart+loanPageSize,txns.length)} of ${txns.length}</span>
           <div class="pg-pages">${paginationPages(loanPage,totalPages).map(p=>p==='...'?'<span class="pg-ellipsis">...</span>':`<button class="pg-num ${p===loanPage?'active':''}" onclick="loanGoPage(${p})">${p}</button>`).join('')}</div>
         </div>
-        <button class="pg-btn" ${loanPage>=totalPages?'disabled':''} onclick="loanGoPage(${loanPage+1})">Next -></button>
+        <button class="pg-btn" ${loanPage>=totalPages?'disabled':''} onclick="loanGoPage(${loanPage+1})">Next &rarr;</button>
       </div>` : ''}
     </div>`;
 
@@ -1171,21 +1198,37 @@ function _selectedPeople() {
 }
 
 function _autoFillSplitValues(mode, people, amt) {
+  const values = {};
   const n = people.length;
-  if (n === 0) return;
+  if (n === 0) return values;
   if (mode === 'percent') {
     const share = Math.floor(100 / n);
     const rem = 100 - share * n;
-    people.forEach((p, i) => { divideSplitValues[p.key] = i === 0 ? share + rem : share; });
+    people.forEach((p, i) => { values[p.key] = i === 0 ? share + rem : share; });
   } else if (mode === 'fraction') {
-    people.forEach(p => { divideSplitValues[p.key] = parseFloat((1 / n).toFixed(4)); });
+    people.forEach(p => { values[p.key] = parseFloat((1 / n).toFixed(4)); });
   } else if (mode === 'amount') {
     const share = Math.floor((amt / n) * 100) / 100;
     const rem = Math.round((amt - share * n) * 100) / 100;
-    people.forEach((p, i) => { divideSplitValues[p.key] = i === 0 ? Math.round((share + rem) * 100) / 100 : share; });
+    people.forEach((p, i) => { values[p.key] = i === 0 ? Math.round((share + rem) * 100) / 100 : share; });
   } else if (mode === 'parts') {
-    people.forEach(p => { divideSplitValues[p.key] = 1; });
+    people.forEach(p => { values[p.key] = 1; });
   }
+  return values;
+}
+
+function _restoreSplitValues(mode, personShares, amt) {
+  const values = {};
+  if (!Array.isArray(personShares) || !personShares.length || !amt || mode === 'equal') return values;
+  personShares.forEach((ps) => {
+    const key = String(ps.key);
+    const share = parseFloat(ps.share) || 0;
+    if (mode === 'percent') values[key] = Math.round((share / amt) * 10000) / 100;
+    else if (mode === 'fraction') values[key] = Math.round((share / amt) * 10000) / 10000;
+    else if (mode === 'amount') values[key] = share;
+    else if (mode === 'parts') values[key] = share;
+  });
+  return values;
 }
 
 function computeShares(amt, mode, people, values) {
@@ -1223,7 +1266,7 @@ function selectSplitMode(mode) {
   divideSplitValues = {};
   const amt = parseFloat(document.getElementById('dAmount')?.value || 0);
   const people = _selectedPeople();
-  if (people.length > 0 && amt > 0) _autoFillSplitValues(mode, people, amt);
+  if (people.length > 0 && amt > 0) divideSplitValues = _autoFillSplitValues(mode, people, amt);
   // Update chip styles
   document.querySelectorAll('.split-mode-chip').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
   updateDivSplitInputs();
@@ -1251,8 +1294,8 @@ async function renderDivide() {
     `<button class="fr-chip ${divideSelected.has('self')?'sel':''}" onclick="toggleDivFriend('self')">
       <span class="cbox ${divideSelected.has('self')?'chk':''}">${divideSelected.has('self')?'&#10003;':''}</span>You
     </button>`,
-    ...friends.map(f => `<button class="fr-chip ${divideSelected.has(f.id)?'sel':''}" onclick="toggleDivFriend(${f.id})">
-        <span class="cbox ${divideSelected.has(f.id)?'chk':''}">${divideSelected.has(f.id)?'&#10003;':''}</span>${f.name}
+    ...friends.map(f => `<button class="fr-chip ${divideSelected.has(String(f.id))?'sel':''}" onclick="toggleDivFriend(${f.id})">
+        <span class="cbox ${divideSelected.has(String(f.id))?'chk':''}">${divideSelected.has(String(f.id))?'&#10003;':''}</span>${f.name}
       </button>`)
   ].join('');
 
@@ -1571,9 +1614,10 @@ function selectPaidBy(btn, id) {
 }
 
 function toggleDivFriend(id) {
+  const key = String(id);
   // Toggle selection
-  if (divideSelected.has(id)) divideSelected.delete(id);
-  else divideSelected.add(id);
+  if (divideSelected.has(key)) divideSelected.delete(key);
+  else divideSelected.add(key);
   // Update chip DOM
   const container = document.getElementById('divideFriends');
   if (container) {
@@ -1582,18 +1626,18 @@ function toggleDivFriend(id) {
       const match = btn.getAttribute('onclick')?.match(/toggleDivFriend\((.+?)\)/);
       if (!match) return;
       const rawId = match[1].trim();
-      const chipId = rawId === "'self'" ? 'self' : parseInt(rawId);
+      const chipId = rawId === "'self'" ? 'self' : String(parseInt(rawId, 10));
       const sel = divideSelected.has(chipId);
       btn.classList.toggle('sel', sel);
       const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.textContent = sel ? '?' : ''; }
+      if (cbox) { cbox.classList.toggle('chk', sel); cbox.innerHTML = sel ? '&#10003;' : ''; }
     });
   }
   // Reset split values when people change
   divideSplitValues = {};
   const amt = parseFloat(document.getElementById('dAmount')?.value || 0);
   const people = _selectedPeople();
-  if (people.length > 0 && amt > 0 && divideSplitMode !== 'equal') _autoFillSplitValues(divideSplitMode, people, amt);
+  if (people.length > 0 && amt > 0 && divideSplitMode !== 'equal') divideSplitValues = _autoFillSplitValues(divideSplitMode, people, amt);
   updateDivSplitInputs();
 }
 
@@ -1731,9 +1775,17 @@ async function addDivItem() {
 function editDivItem(i) {
   const item = divideItems[i];
   _divEditIdx = i;
-  divideSelected = new Set(item.friendIds);
-  if (item.selfIncluded) divideSelected.add('self');
-  dividePaidBy = item.paidById;
+  divideSelected = new Set(
+    item.personShares?.length
+      ? item.personShares.map(ps => String(ps.key))
+      : [
+          ...((item.friendIds || []).map(id => String(id))),
+          ...(item.selfIncluded ? ['self'] : []),
+        ]
+  );
+  dividePaidBy = String(item.paidById);
+  divideSplitMode = item.splitMode || 'equal';
+  divideSplitValues = _restoreSplitValues(divideSplitMode, item.personShares || [], parseFloat(item.amount) || 0);
   renderDivide();
   // Scroll to top of form
   document.getElementById('main').scrollTop = 0;
@@ -1918,7 +1970,7 @@ function rptToggleSort(sortObj, field) {
   else { sortObj.field = field; sortObj.dir = field === 'year' || field === 'month' ? 'desc' : 'desc'; }
 }
 function rptArrow(sortObj, field) {
-  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' ?' : ' ?') : '';
+  return sortObj.field === field ? (sortObj.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
 }
 
 async function loadReports() {
@@ -2220,9 +2272,9 @@ async function renderReportExpenses() {
         </div>
         ${totalPages > 1 ? `
         <div class="pagination">
-          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">â† Prev</button>
+          <button class="pg-btn" ${reportPage<=1?'disabled':''} onclick="reportPage=${reportPage-1};renderReportExpenses()">&larr; Prev</button>
           <div class="pg-info">
-            <span class="pg-range">${start+1}â€“${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
+          <span class="pg-range">${start+1}&ndash;${Math.min(start+REPORT_PAGE_SIZE,total)} of ${total}</span>
             <div class="pg-pages">
               ${paginationPages(reportPage, totalPages).map(p => p==='...'
                 ? `<span class="pg-ellipsis">...</span>`
@@ -2230,7 +2282,7 @@ async function renderReportExpenses() {
               ).join('')}
             </div>
           </div>
-          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next â†’</button>
+          <button class="pg-btn" ${reportPage>=totalPages?'disabled':''} onclick="reportPage=${reportPage+1};renderReportExpenses()">Next &rarr;</button>
         </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px 0">${total} item${total!==1?'s':''}</div>`}
       </div>
     </div>`;
@@ -2794,6 +2846,15 @@ async function loadDashboard() {
   const year = dashFilters.year;
   const data = await api(`/api/dashboard?year=${year}`);
   if (!data) return;
+  const fixDashboardText = (value) => repairMojibakeText(String(value ?? '').trim());
+  const topItems = (data.topItems || []).map((item) => ({
+    ...item,
+    item_name: fixDashboardText(item.item_name),
+  }));
+  const recentExpenses = (data.recentExpenses || []).map((expense) => ({
+    ...expense,
+    item_name: fixDashboardText(expense.item_name),
+  }));
 
   // Destroy previous chart instances
   _dashCharts.forEach(c => c.destroy());
@@ -2812,7 +2873,7 @@ async function loadDashboard() {
   // Fallback: if byType returned nothing but totals exist, show all as fair
   if (monthlyFair.every(v => v === 0) && monthlyExtra.every(v => v === 0) && monthly.some(v => v > 0)) {
     monthly.forEach((v, i) => { monthlyFair[i] = v; });
-    console.warn('monthlyByType empty â€” falling back to totals. API data:', data.monthlyByType);
+    console.warn('monthlyByType empty - falling back to totals. API data:', data.monthlyByType);
   }
 
   let fairTotal = 0, extraTotal = 0;
@@ -2860,14 +2921,14 @@ async function loadDashboard() {
       </div>
 
       <div class="dash-box">
-        <div class="dash-box-title">Monthly Spending â€” ${year}</div>
+        <div class="dash-box-title">Monthly Spending - ${year}</div>
         <canvas id="chartMonthly" height="80"></canvas>
       </div>
 
       <div class="dash-two-col">
         <div class="dash-box">
           <div class="dash-box-title">Top Expenses</div>
-          ${data.topItems.length ? `<canvas id="chartTop" height="220"></canvas>` : `<div class="empty-td">No data for ${year}</div>`}
+          ${topItems.length ? `<canvas id="chartTop" height="220"></canvas>` : `<div class="empty-td">No data for ${year}</div>`}
         </div>
         <div class="dash-box">
           <div class="dash-box-title">Spending Breakdown</div>
@@ -2881,8 +2942,8 @@ async function loadDashboard() {
           <table>
             <thead><tr><th>Date</th><th>Item</th><th>Type</th><th class="td-m">Amount</th></tr></thead>
             <tbody>
-              ${data.recentExpenses.length
-                ? data.recentExpenses.map(e => `
+              ${recentExpenses.length
+                ? recentExpenses.map(e => `
                   <tr>
                     <td>${fmtDate(e.purchase_date)}</td>
                     <td>${e.item_name}</td>
@@ -2898,7 +2959,7 @@ async function loadDashboard() {
 
   const palette = ['#145A3C','#1D7A52','#F0A030','#3B82F6','#7C5CDB','#C94444','#1D8A52','#F4C06E','#60A5FA','#9CA3B0'];
 
-  // Monthly bar chart â€” stacked Fair + Extra
+  // Monthly bar chart - stacked Regular + Extra
   _dashCharts.push(new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: {
@@ -2941,14 +3002,14 @@ async function loadDashboard() {
   }));
 
   // Top items horizontal bar
-  if (data.topItems.length) {
+  if (topItems.length) {
     _dashCharts.push(new Chart(document.getElementById('chartTop'), {
       type: 'bar',
       data: {
-        labels: data.topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + 'â€¦' : i.item_name),
+        labels: topItems.map(i => i.item_name.length > 22 ? i.item_name.slice(0,22) + '...' : i.item_name),
         datasets: [{
           label: 'Total',
-          data: data.topItems.map(i => i.total),
+          data: topItems.map(i => i.total),
           backgroundColor: palette,
           borderRadius: 4,
         }]
@@ -2996,6 +3057,11 @@ let _tripExpPaidBy = 'self';
 let _tripExpMode = 'equal';
 let _tripExpValues = {};
 let _tripExpEditId = null;
+
+function _findTripExpenseById(expenseId) {
+  if (!_tripDetail?.expenses?.length || expenseId == null) return null;
+  return _tripDetail.expenses.find((expense) => String(expense.id) === String(expenseId)) || null;
+}
 
 async function loadTrips() {
   const data = await api('/api/trips');
@@ -3045,7 +3111,7 @@ function renderTripList() {
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}</div>
       <div style="font-size:12px;color:var(--t3)">
         <span style="margin-right:12px">${t.members.length} members: ${memberNames}</span>
-        <span>${fmtCur(t.totalExpenses)} total � ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
+        <span>${fmtCur(t.totalExpenses)} total &middot; ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
       </div>
     </div>`;
   }).join('') || `<div style="color:var(--t3);text-align:center;padding:40px">No trips found.</div>`;
@@ -3103,6 +3169,7 @@ async function renderTripDetail() {
   const myLinkedMember = !trip.isOwner ? trip.members.find(m => m.linked_user_id === _currentUserId) : null;
   const myMemberKey = trip.isOwner ? 'self' : (myLinkedMember ? _memberKey(myLinkedMember) : 'self');
   const canEdit = trip.isOwner || trip.userPermission !== 'view';
+  const canMutateExpenses = canEdit && trip.status === 'active';
 
   // â”€â”€ Paid-by chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = trip.members.map(m => {
@@ -3128,7 +3195,7 @@ async function renderTripDetail() {
   let expensesHtml = '';
   if (trip.expenses.length > 0) {
     const rows = trip.expenses.map(e => {
-      const editing = _tripExpEditId === e.id;
+      const editing = _tripExpEditId != null && String(_tripExpEditId) === String(e.id);
       const splitSummary = e.splits.map(s => `${s.member_name}: ${fmtCur(s.share_amount)}`).join(', ');
       return `<tr style="${editing ? 'background:var(--blue-l)' : ''}">
         <td>${fmtDate(e.expense_date)}</td>
@@ -3137,7 +3204,7 @@ async function renderTripDetail() {
         <td class="td-m">${fmtCur(e.amount)}<span style="font-size:10px;color:var(--t3);margin-left:4px">${e.split_mode !== 'equal' ? '(' + e.split_mode + ')' : ''}</span></td>
         <td style="font-size:11px;color:var(--t2)">${splitSummary}</td>
         <td>
-          ${canEdit ? `<button class="btn-d" style="color:var(--em)" onclick="tripEditExpense(${e.id})">Edit</button>
+          ${canMutateExpenses ? `<button class="btn-d" style="color:var(--em)" onclick="tripEditExpense(${e.id})">Edit</button>
           <button class="btn-d" onclick="tripDeleteExpense(${e.id})">Del</button>` : ''}
         </td>
       </tr>`;
@@ -3194,7 +3261,7 @@ async function renderTripDetail() {
     ? `<span style="font-size:11px;padding:3px 8px;background:var(--green-l);color:var(--green);border-radius:20px;font-weight:600">Completed</span>`
     : `<span style="font-size:11px;padding:3px 8px;background:var(--blue-l);color:var(--blue);border-radius:20px;font-weight:600">Active</span>`;
 
-  const editingExp = _tripExpEditId ? trip.expenses.find(e => e.id === _tripExpEditId) : null;
+  const editingExp = _findTripExpenseById(_tripExpEditId);
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
@@ -3207,11 +3274,11 @@ async function renderTripDetail() {
       <div style="margin-bottom:16px">${memberRows}</div>
 
       <!-- Add Expense Form (only for edit-permission users) -->
-      ${canEdit ? `<div class="card" style="margin-bottom:16px">
+      ${canMutateExpenses ? `<div class="card" style="margin-bottom:16px">
         <div class="card-title">${editingExp ? 'Edit Expense' : 'Add Expense'}</div>
         <div class="fg">
           <label class="fl">Date<input class="fi" type="date" id="teDate" value="${editingExp?.expense_date || todayStr()}"></label>
-          <label class="fl">Amount (&#8377;)<input class="fi" type="number" step="0.01" id="teAmount" value="${editingExp?.amount || ''}" placeholder="0.00" oninput="tripUpdateSplitInputs()"></label>
+          <label class="fl">Amount (&#8377;)<input class="fi" type="number" step="0.01" id="teAmount" value="${editingExp?.amount || ''}" placeholder="0.00" oninput="tripHandleAmountChange()"></label>
           <label class="fl full">Details *<input class="fi" id="teDetails" value="${editingExp?.details || ''}" placeholder="e.g. Dinner, Hotel..."></label>
         </div>
         <div style="margin-bottom:10px">
@@ -3287,7 +3354,7 @@ function tripToggleMember(key) {
   _tripExpValues = {};
   const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
   const people = _tripSelectedPeople();
-  if (people.length > 0 && amt > 0 && _tripExpMode !== 'equal') _autoFillSplitValues(_tripExpMode, people, amt);
+  if (people.length > 0 && amt > 0 && _tripExpMode !== 'equal') _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
   tripUpdateSplitInputs();
 }
 
@@ -3296,8 +3363,18 @@ function tripSetSplitMode(mode) {
   _tripExpValues = {};
   const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
   const people = _tripSelectedPeople();
-  if (people.length > 0 && amt > 0) _autoFillSplitValues(mode, people, amt);
+  if (people.length > 0 && amt > 0) _tripExpValues = _autoFillSplitValues(mode, people, amt);
   document.querySelectorAll('.split-mode-chip').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
+  tripUpdateSplitInputs();
+}
+
+function tripHandleAmountChange() {
+  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const people = _tripSelectedPeople();
+  if (_tripExpMode !== 'equal') {
+    _tripExpValues = {};
+    if (people.length > 0 && amt > 0) _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
+  }
   tripUpdateSplitInputs();
 }
 
@@ -3394,6 +3471,7 @@ async function tripSaveExpense() {
   if (!details) { toast('Enter details', 'warning'); return; }
   if (!amt || amt <= 0) { toast('Enter a valid amount', 'warning'); return; }
   if (_tripExpSel.size === 0) { toast('Select at least one person', 'warning'); return; }
+  if (!_tripExpSel.has(_tripExpPaidBy)) { toast('Paid by must also be selected in Divide Between', 'warning'); return; }
 
   const people = _tripSelectedPeople();
   const { valid, error, shares } = computeShares(amt, _tripExpMode, people, _tripExpValues);
@@ -3428,16 +3506,17 @@ async function tripSaveExpense() {
 }
 
 function tripEditExpense(expId) {
-  const exp = _tripDetail.expenses.find(e => e.id === expId);
+  const exp = _findTripExpenseById(expId);
   if (!exp) return;
-  _tripExpEditId = expId;
+  _tripExpEditId = exp.id;
   _tripExpPaidBy = exp.paid_by_key;
   _tripExpMode = exp.split_mode || 'equal';
   _tripExpSel = new Set(exp.splits.map(s => s.member_key));
-  _tripExpValues = {};
-  if (_tripExpMode !== 'equal') {
-    exp.splits.forEach(s => { _tripExpValues[s.member_key] = s.share_amount; });
-  }
+  _tripExpValues = _restoreSplitValues(
+    _tripExpMode,
+    (exp.splits || []).map(s => ({ key: s.member_key, share: s.share_amount })),
+    parseFloat(exp.amount) || 0
+  );
   renderTripDetail();
   document.getElementById('main').scrollTop = 0;
 }
@@ -3567,53 +3646,17 @@ async function doFinalizeTrip() {
   const trip = _tripDetail;
   const isExtra = document.getElementById('tfTypeExtra')?.classList.contains('active') || false;
   const ensuredFriendIds = await ensureTripMembersAsFriends(trip);
-
-  // Recompute settlement
-  const peopleMap = {};
-  trip.members.forEach(m => {
-    const key = _memberKey(m);
-    peopleMap[key] = { name: m.member_name, friendId: m.friend_id, totalShare: 0, totalGave: 0 };
-  });
-  trip.expenses.forEach(e => {
-    e.splits.forEach(s => { if (peopleMap[s.member_key]) peopleMap[s.member_key].totalShare += s.share_amount; });
-    if (peopleMap[e.paid_by_key]) peopleMap[e.paid_by_key].totalGave += e.amount;
-  });
-
-  const today = todayStr();
-
-  // Save self expense
-  const self = peopleMap['self'];
-  if (self && self.totalShare > 0) {
-    await api('/api/expenses', { method: 'POST', body: {
-      item_name: trip.name,
-      amount: Math.round(self.totalShare * 100) / 100,
-      purchase_date: today,
+  await api(`/api/trips/${_selectedTripId}/finalize`, {
+    method: 'POST',
+    body: {
       is_extra: isExtra,
-    }});
-  }
-
-  // Save friend loan transactions
-  for (const [key, p] of Object.entries(peopleMap)) {
-    if (key === 'self') continue;
-    const friendId = p.friendId || ensuredFriendIds[key];
-    if (!friendId) continue;
-    const net = p.totalGave - p.totalShare; // positive = they overpaid (we owe them), negative = they owe us
-    const paid = net < -0.005 ? Math.round(Math.abs(net) * 100) / 100 : 0;
-    const received = net > 0.005 ? Math.round(net * 100) / 100 : 0;
-    if (paid === 0 && received === 0) continue;
-    await api('/api/loans', { method: 'POST', body: {
-      friend_id: friendId,
-      txn_date: today,
-      details: `Trip: ${trip.name}`,
-      paid, received,
-    }});
-  }
-
-  // Mark trip as completed
-  await api(`/api/trips/${_selectedTripId}`, { method: 'PUT', body: { status: 'completed' } });
+      txn_date: todayStr(),
+      friend_ids: ensuredFriendIds,
+    },
+  });
 
   closeModal();
-  toast('Trip finalized! Expenses and loan transactions saved.', 'success', 5000);
+  toast('Trip finalized and synced with expenses and friends.', 'success', 5000);
   await openTripDetail(_selectedTripId);
 }
 
@@ -3834,12 +3877,12 @@ async function showFriendsShareModal() {
     : links.map(l => {
         const url = `${location.origin}/s/${l.token}`;
         const expired = l.expires_at && l.expires_at < new Date().toISOString().split('T')[0];
-        return `<div style="border:1px solid var(--br);border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px${expired ? ';opacity:0.5' : ''}">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <div style="color:var(--em);word-break:break-all">${url}</div>
-            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})">âœ•</button>
+        return `<div style="border:1px solid var(--br);border-radius:10px;padding:12px;margin-bottom:10px;font-size:12px${expired ? ';opacity:0.5' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+            <div style="color:var(--em);word-break:break-all;line-height:1.5">${url}</div>
+            <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})" title="Delete link">x</button>
           </div>
-          <div style="color:var(--t3)">${expired ? 'âš  Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} Â· ${l.view_count} views</div>
+          <div style="color:var(--t3);line-height:1.5">${expired ? '! Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} - ${l.view_count} views</div>
           ${!expired ? `<button class="btn btn-g btn-sm" style="margin-top:6px" onclick="navigator.clipboard.writeText('${url}').then(()=>toast('Copied!','success'))">Copy Link</button>` : ''}
         </div>`;
       }).join('');
@@ -3852,7 +3895,7 @@ async function showFriendsShareModal() {
     </div>
     <div class="fg" style="margin-bottom:12px">
       <label class="fl">Filter Year (optional)<input class="fi" type="number" id="shareYear" placeholder="e.g. 2025" min="2020" max="2030"></label>
-      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1â€“12" min="1" max="12"></label>
+      <label class="fl">Filter Month (optional)<input class="fi" type="number" id="shareMonth" placeholder="1-12" min="1" max="12"></label>
       <label class="fl">Expires on (optional)<input class="fi" type="date" id="shareExpiry"></label>
     </div>
     <div class="fa" style="margin-bottom:16px">
@@ -5199,48 +5242,47 @@ function renderEmiCard(r) {
 
   return `<div class="emi-card" id="emiCard${r.id}" style="background:${sm.bg};border-color:${sm.border}">
     <div class="emi-card-header" onclick="_emiExpandedId=(String(_emiExpandedId)===String(${r.id})?null:${r.id});reRenderEmiCard(${r.id})" style="display:block">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:220px">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
-            <span style="font-weight:700;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">${escHtml(r.name)}</span>
-            <span style="font-size:11px;font-weight:600;color:${sm.color};background:${sm.color}22;padding:2px 8px;border-radius:20px">${sm.label}</span>
-            ${r.friend_name ? '<span style="font-size:11px;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px">Friend: ' + escHtml(r.friend_name) + '</span>' : ''}
-            ${r.tag ? '<span style="font-size:11px;color:var(--t3);background:var(--bg);padding:2px 8px;border-radius:20px">' + escHtml(r.tag) + '</span>' : ''}
+      <div class="emi-card-top">
+        <div class="emi-card-main">
+          <div class="emi-card-title-row">
+            <span class="emi-card-title">${escHtml(r.name)}</span>
+            <span class="emi-card-badge" style="color:${sm.color};background:${sm.color}22">${sm.label}</span>
+            ${r.friend_name ? '<span class="emi-card-badge emi-card-badge-blue">Friend: ' + escHtml(r.friend_name) + '</span>' : ''}
+            ${r.tag ? '<span class="emi-card-badge emi-card-badge-muted">' + escHtml(r.tag) + '</span>' : ''}
           </div>
-          ${r.description ? '<div style="font-size:12px;color:var(--t3);margin-top:2px">' + escHtml(r.description) + '</div>' : ''}
+          ${r.description ? '<div class="emi-card-desc">' + escHtml(r.description) + '</div>' : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
+        <div class="emi-card-actions">
           ${r.status === 'saved' ? '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
-          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();showEditEmiInfoModal(${r.id})">Edit Info</button>
+          <button class="btn btn-s btn-sm" title="Edit EMI info" onclick="event.stopPropagation();showEditEmiInfoModal(${r.id})">Edit</button>
           ${(!r.for_friend && (r.status === 'active' || r.status === 'pending')) ? (
             r.expenses_added
-              ? '<span title="Expenses added - click to re-add" style="font-size:11px;font-weight:600;color:var(--green);background:var(--green)22;padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">In Expenses</span>'
-              : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',0)">+ Add to Expenses</button>'
+              ? '<button class="emi-action-pill emi-action-pill-green" title="Expenses added - click to re-add" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">In Expenses</button>'
+              : '<button class="btn btn-s btn-sm" title="Add installments to expenses" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',0)">Expenses</button>'
           ) : ''}
           ${(r.status === 'active' || r.status === 'pending' || r.status === 'completed') ? (
             r.credit_card_id
-              ? '<span title="Added to credit card billing - click to change card" style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(59,130,246,0.12);padding:2px 8px;border-radius:20px;cursor:pointer" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">In Credit Card</span>'
-              : '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',0,' + (r.gst_rate || 0) + ')">+ Credit Card EMI</button>'
+              ? '<button class="emi-action-pill emi-action-pill-blue" title="Added to credit card billing - click to change card" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">In Credit Card</button>'
+              : '<button class="btn btn-s btn-sm" title="Add to credit card EMI billing" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',0,' + (r.gst_rate || 0) + ')">Card EMI</button>'
           ) : ''}
           ${r.status === 'active' ? (() => { const next = (r.installments||[]).find(i => i.paid_amount === 0); return next ? '<button class="btn btn-p btn-sm" onclick="event.stopPropagation();showPayInstallmentModal(' + next.id + ',' + next.emi_amount + ',' + r.id + ')">Pay #' + next.installment_no + '</button>' : ''; })() : ''}
           <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">PDF</button>
-          <button class="btn-del" onclick="event.stopPropagation();deleteEmiRecord(${r.id})">Delete</button>
+          <button class="btn-del emi-card-delete" onclick="event.stopPropagation();deleteEmiRecord(${r.id})">Delete</button>
           <button
-            class="btn btn-g btn-sm"
+            class="btn btn-g btn-sm emi-card-toggle"
             title="${isExpanded ? 'Collapse details' : 'Expand details'}"
             onclick="event.stopPropagation();_emiExpandedId=(String(_emiExpandedId)===String(${r.id})?null:${r.id});reRenderEmiCard(${r.id})"
-            style="min-width:68px;padding:4px 10px;font-weight:700"
           >${isExpanded ? 'Hide' : 'Details'}</button>
         </div>
       </div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:10px;line-height:1.2">
-        <span style="font-size:12px;color:var(--t2)">Principal: <strong>${fmtCur(r.principal)}</strong></span>
-        <span style="font-size:12px;color:var(--t2)">Rate: <strong>${r.annual_rate}% p.a.</strong></span>
-        <span style="font-size:12px;color:var(--t2)">Tenure: <strong>${r.tenure_months} months</strong></span>
-        <span style="font-size:12px;color:var(--t2)">EMI: <strong style="color:var(--primary)">${fmtCur(r.monthly_emi)}/mo</strong></span>
-        ${(r.status === 'active' || r.status === 'pending') ? '<span style="font-size:12px;color:var(--t2)">Paid: <strong>' + (r.paidCount || 0) + '/' + r.tenure_months + '</strong></span>' : ''}
+      <div class="emi-card-meta">
+        <span>Principal: <strong>${fmtCur(r.principal)}</strong></span>
+        <span>Rate: <strong>${r.annual_rate}% p.a.</strong></span>
+        <span>Tenure: <strong>${r.tenure_months} months</strong></span>
+        <span>EMI: <strong class="emi-card-meta-highlight">${fmtCur(r.monthly_emi)}/mo</strong></span>
+        ${(r.status === 'active' || r.status === 'pending') ? '<span>Paid: <strong>' + (r.paidCount || 0) + '/' + r.tenure_months + '</strong></span>' : ''}
       </div>
-      ${progress !== null ? '<div style="margin-top:8px;max-width:420px"><div style="height:4px;background:var(--bg);border-radius:2px;overflow:hidden"><div style="height:100%;width:' + progress + '%;background:' + sm.barColor + ';border-radius:2px;transition:width 0.3s"></div></div></div>' : ''}
+      ${progress !== null ? '<div class="emi-card-progress"><div class="emi-card-progress-track"><div class="emi-card-progress-fill" style="width:' + progress + '%;background:' + sm.barColor + ';"></div></div></div>' : ''}
     </div>
     ${isExpanded ? '<div class="emi-card-body">' + installmentsHtml + '</div>' : ''}
   </div>`;
@@ -5641,6 +5683,22 @@ let _ccYearFilter = new Date().getFullYear();
 let _ccMonthlyYear = new Date().getFullYear();
 let _ccHistoryCycles = [];
 
+function _sameId(a, b) {
+  return a != null && b != null && String(a) === String(b);
+}
+
+function _findCcCardById(cardId) {
+  return (_ccCards || []).find((card) => _sameId(card.id, cardId)) || null;
+}
+
+function _findCcTxnInCycles(cycles, txnId) {
+  for (const cycle of (cycles || [])) {
+    const txn = (cycle.txns || []).find((item) => _sameId(item.id, txnId));
+    if (txn) return { cycle, txn };
+  }
+  return null;
+}
+
 async function loadCreditCards() {
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading...</div></div>';
   const data = await api('/api/cc/cards');
@@ -5845,7 +5903,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
 }
 
 function renderCcHistory(cycles) {
-  const _ccCard = _ccCards.find(c=>c.id===_ccSelectedCardId);
+  const _ccCard = _findCcCardById(_ccSelectedCardId);
   const _ccLabel = _ccCard ? `${_ccCard.bank_name} ${_ccCard.card_name}` : 'Card';
   const importBtn = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
     <button class="btn btn-s btn-sm" onclick="downloadCcHistoryPdf(${_ccSelectedCardId},'${_ccLabel.replace(/'/g,"\\'")}')">PDF History</button>
@@ -6099,18 +6157,15 @@ async function doAddCycleTxn(cycleId) {
 
 async function showEditCycleTxn(txnId) {
   const cardData = await api(`/api/cc/cards/${_ccSelectedCardId}/cycles`);
-  let txn = null;
-  for (const c of (cardData?.cycles || [])) {
-    txn = c.txns?.find(t => t.id === txnId);
-    if (txn) break;
-  }
+  const found = _findCcTxnInCycles(cardData?.cycles || [], txnId);
+  const txn = found?.txn || null;
   if (!txn) { toast('Transaction not found', 'error'); return; }
   openModal('Edit Transaction', `
     <div class="fg">
       <label class="fl full">Description *<input class="fi" id="ctDesc" value="${escHtml(txn.description)}" autofocus></label>
       <label class="fl">Amount (&#8377;) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount}"></label>
       <label class="fl">Discount %<input class="fi" type="number" step="0.01" id="ctDisc" value="${txn.discount_pct || 0}" min="0" max="100"></label>
-      <label class="fl full">Date<input class="fi" type="date" id="ctDate" value="${txn.txn_date}"></label>
+      <label class="fl full">Date<input class="fi" type="date" id="ctDate" value="${normalizeInputDate(txn.txn_date) || ''}"></label>
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doEditCycleTxn(${txnId})">Update</button>
@@ -6139,22 +6194,22 @@ async function deleteCycleTxn(txnId) {
 }
 
 function showEditCycleModal(cycleId) {
-  const cycle = _ccHistoryCycles.find(c => c.id === cycleId);
+  const cycle = (_ccHistoryCycles || []).find(c => _sameId(c.id, cycleId));
   if (!cycle) { toast('Cycle not found', 'warning'); return; }
   const status = cycle.status === 'closed' ? 'paid' : cycle.status === 'partial' ? 'billed' : cycle.status;
   const paidDate = cycle.paid_date || cycle.due_date || todayStr();
   openModal('Edit Billing Cycle', `
     <div class="fg">
-      <label class="fl">Cycle Start<input class="fi" type="date" id="csStart" value="${cycle.cycle_start}"></label>
-      <label class="fl">Cycle End<input class="fi" type="date" id="csEnd" value="${cycle.cycle_end}"></label>
-      <label class="fl">Due Date<input class="fi" type="date" id="csDue" value="${cycle.due_date || ''}"></label>
+      <label class="fl">Cycle Start<input class="fi" type="date" id="csStart" value="${normalizeInputDate(cycle.cycle_start) || ''}"></label>
+      <label class="fl">Cycle End<input class="fi" type="date" id="csEnd" value="${normalizeInputDate(cycle.cycle_end) || ''}"></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="csDue" value="${normalizeInputDate(cycle.due_date) || ''}"></label>
       <label class="fl">Total Amount (&#8377;)<input class="fi" type="number" step="0.01" min="0" id="csTotal" value="${(cycle.total_amount || cycle.net_payable || 0).toFixed(2)}"></label>
       <label class="fl">Status<select class="fi" id="csStatus" onchange="toggleCyclePaidDate()">
         <option value="open" ${status === 'open' ? 'selected' : ''}>Open</option>
         <option value="billed" ${status === 'billed' ? 'selected' : ''}>Billed</option>
         <option value="paid" ${status === 'paid' ? 'selected' : ''}>Paid</option>
       </select></label>
-      <label class="fl" id="csPaidWrap" style="${status === 'paid' ? '' : 'display:none'}">Paid Date<input class="fi" type="date" id="csPaidDate" value="${paidDate}"></label>
+      <label class="fl" id="csPaidWrap" style="${status === 'paid' ? '' : 'display:none'}">Paid Date<input class="fi" type="date" id="csPaidDate" value="${normalizeInputDate(paidDate) || ''}"></label>
     </div>
     <div style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
       Saved discount stays at <strong>${fmtCur(cycle.total_discount || 0)}</strong>. Updating total amount recalculates net payable.
@@ -6196,7 +6251,7 @@ async function deleteFutureCycle(cycleId) {
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function showImportHistoryModal(cardId) {
-  const card = _ccCards.find(c => c.id === cardId);
+  const card = _findCcCardById(cardId);
   if (!card) return;
   const currentYear = new Date().getFullYear();
   const years = [];
@@ -6225,7 +6280,7 @@ function showImportHistoryModal(cardId) {
 }
 
 function getImportHistoryPaidDate(cardId, year, month) {
-  const card = _ccCards.find(c => c.id === cardId);
+  const card = _findCcCardById(cardId);
   if (!card || !year || !month) return '';
   const dueDate = new Date(year, month - 1, (card.bill_gen_day || 1) + (card.due_days || 20));
   return `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}-${String(dueDate.getDate()).padStart(2, '0')}`;
@@ -6326,7 +6381,7 @@ function renderCcMonthly(months, availYears) {
     </tr>`;
   }).join('');
 
-  const _ccCardM = _ccCards.find(c=>c.id===_ccSelectedCardId);
+  const _ccCardM = _findCcCardById(_ccSelectedCardId);
   const _ccLabelM = _ccCardM ? `${_ccCardM.bank_name} ${_ccCardM.card_name}` : 'Card';
   return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
@@ -6350,7 +6405,7 @@ function renderCcMonthly(months, availYears) {
 }
 
 function renderCcYearly(years) {
-  const _ccCardY = _ccCards.find(c=>c.id===_ccSelectedCardId);
+  const _ccCardY = _findCcCardById(_ccSelectedCardId);
   const _ccLabelY = _ccCardY ? `${_ccCardY.bank_name} ${_ccCardY.card_name}` : 'Card';
   if (!years.length) return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
@@ -6405,10 +6460,16 @@ async function showCcCardModal(id) {
   let card = { bank_name: '', card_name: '', last4: '', expiry_month: '', expiry_year: '', bill_gen_day: 1, due_days: 20, default_discount_pct: 0, credit_limit: '' };
   let currentCycle = null;
   if (id) {
-    const c = _ccCards.find(x => x.id === id);
+    const c = _findCcCardById(id);
     if (c) {
       card = c;
       currentCycle = c.currentCycle || null;
+    } else {
+      const data = await api(`/api/cc/cards/${id}/current`);
+      if (data?.card) {
+        card = data.card;
+        currentCycle = data.cycle || null;
+      }
     }
   }
   openModal(id ? 'Edit Credit Card' : 'Add Credit Card', `
@@ -6431,7 +6492,7 @@ async function showCcCardModal(id) {
 }
 
 async function saveCcCard(id) {
-  const existingCard = id ? _ccCards.find((x) => x.id === id) : null;
+  const existingCard = id ? _findCcCardById(id) : null;
   const currentCycle = existingCard?.currentCycle || null;
   const thisYear = new Date().getFullYear();
   const maxYear = thisYear + 30;
@@ -6513,16 +6574,21 @@ async function deleteCcCard(id) {
 
 // â”€â”€ Add / Edit Transaction Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function showCcTxnModal(cardId, txnId) {
-  const card = _ccCards.find(c => c.id === cardId) || { default_discount_pct: 0, card_name: '' };
+  const card = _findCcCardById(cardId) || { default_discount_pct: 0, card_name: '' };
   let txn = { txn_date: todayStr(), description: '', amount: '', discount_pct: card.default_discount_pct };
   if (txnId) {
     const data = await api(`/api/cc/cards/${cardId}/current`);
-    const found = data?.txns?.find(t => t.id === txnId);
+    const found = data?.txns?.find(t => _sameId(t.id, txnId));
     if (found) txn = found;
+    else {
+      const history = await api(`/api/cc/cards/${cardId}/cycles`);
+      const historyTxn = _findCcTxnInCycles(history?.cycles || [], txnId)?.txn;
+      if (historyTxn) txn = historyTxn;
+    }
   }
   openModal(txnId ? 'Edit Transaction' : 'Add Transaction', `
     <div class="fg">
-      <label class="fl">Date *<input class="fi" type="date" id="ctDate" value="${txn.txn_date}"></label>
+      <label class="fl">Date *<input class="fi" type="date" id="ctDate" value="${normalizeInputDate(txn.txn_date) || todayStr()}"></label>
       <label class="fl full">Description *<input class="fi" id="ctDesc" value="${escHtml(txn.description)}" placeholder="e.g. Amazon, Grocery..."></label>
       <label class="fl">Amount (&#8377;) *<input class="fi" type="number" step="0.01" id="ctAmt" value="${txn.amount||''}" placeholder="0.00" oninput="ccTxnPreview(${card.default_discount_pct})"></label>
       <label class="fl">Discount % <span style="font-size:11px;color:var(--t3)">(default: ${card.default_discount_pct}%)</span><input class="fi" type="number" step="0.1" id="ctDisc" value="${txn.discount_pct||0}" min="0" max="100" oninput="ccTxnPreview()"></label>
@@ -6742,6 +6808,18 @@ async function saveCcLinkIfChecked(description, amount, txnDate, source, sourceI
 
 let _bankAccounts = [];
 
+function _findBankAccountById(id) {
+  return (_bankAccounts || []).find((account) => account?.id != null && id != null && String(account.id) === String(id)) || null;
+}
+
+function _findTrackerById(id) {
+  return (_trackers || []).find((tracker) => tracker?.id != null && id != null && String(tracker.id) === String(id)) || null;
+}
+
+function _findRecurringEntryById(id) {
+  return (_recurringEntries || []).find((entry) => entry?.id != null && id != null && String(entry.id) === String(id)) || null;
+}
+
 async function loadBankAccounts() {
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
   const data = await api('/api/banks');
@@ -6817,7 +6895,7 @@ function renderBankAccounts() {
 }
 
 function showBankModal(id) {
-  const a = id ? _bankAccounts.find(x => x.id === id) : { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' };
+  const a = id ? (_findBankAccountById(id) || { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' }) : { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' };
   openModal(id ? 'Edit Bank Account' : 'Add Bank Account', `
     <div class="fg">
       <label class="fl">Bank Name *<input class="fi" id="baBank" value="${escHtml(a.bank_name)}" placeholder="e.g. HDFC, SBI, ICICI"></label>
@@ -6858,7 +6936,7 @@ async function saveBankAccount(id) {
 }
 
 function showUpdateBalanceModal(id) {
-  const a = _bankAccounts.find(x => x.id === id);
+  const a = _findBankAccountById(id);
   if (!a) return;
   openModal('Update Balance', `
     <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${escHtml(a.bank_name)}${a.account_name ? ' â€” ' + escHtml(a.account_name) : ''}</div>
@@ -6872,7 +6950,7 @@ function showUpdateBalanceModal(id) {
 async function doUpdateBalance(id) {
   const balance = parseFloat(document.getElementById('baNewBal').value);
   if (isNaN(balance) || balance < 0) { toast('Enter a valid balance (0 or more)', 'warning'); return; }
-  const a = _bankAccounts.find(x => x.id === id);
+  const a = _findBankAccountById(id);
   const r = await api(`/api/banks/${id}`, { method: 'PUT', body: { ...a, balance } });
   if (r?.success) { closeModal(); toast('Balance updated', 'success'); loadBankAccounts(); }
   else toast(r?.error || 'Failed', 'error');
@@ -7266,7 +7344,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = p.status === 'paid';
     const isPartial = p.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '?' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? '&#10003;' : isPartial ? '~' : '';
     const dueLabel  = p.due_date ? `Due ${fmtDate(p.due_date)}` : '';
     const paidLabel = isPaid ? `Paid ${p.paid_date ? fmtDate(p.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(p.paid_amount)}` : '';
     const bankAcc   = p.bank_account_id ? accounts.find(a => a.id == p.bank_account_id) : null;
@@ -7279,7 +7357,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
       </div>
       <div class="pay-row-amt ${isPaid ? 'paid' : ''}">${fmtCur(p.amount)}</div>
       <div class="pay-row-actions">
-        <button class="btn-d" style="color:var(--em)" onclick="showPayModal(${p.id},${p.amount})">Pay</button>
+        <button class="btn-d" style="color:var(--em)" onclick="${isPaid ? `quickTogglePay(${p.id}, 0)` : `showPayModal(${p.id},${p.amount})`}">${isPaid ? 'Pending' : 'Pay'}</button>
         <button class="btn-d" style="color:var(--em)" onclick="showEditPaymentModal(${p.id})">Edit</button>
         <button class="btn-d" onclick="deleteMonthlyPayment(${p.id})">Del</button>
       </div>
@@ -7291,7 +7369,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     const isPaid    = c.status === 'paid';
     const isPartial = c.status === 'partial';
     const checkCls  = isPaid ? 'done' : isPartial ? 'partial' : '';
-    const checkIcon = isPaid ? '?' : isPartial ? '~' : '';
+    const checkIcon = isPaid ? '&#10003;' : isPartial ? '~' : '';
     const txnNote   = c.txn_count > 0 ? `${c.txn_count} transaction${c.txn_count > 1 ? 's' : ''}` : 'no transactions yet';
     const paidLabel = isPaid ? `Paid ${c.paid_date ? fmtDate(c.paid_date) : ''}` : isPartial ? `Partial: ${fmtCur(c.paid_amount)}` : '';
     return `<div class="pay-row ${isPaid ? 'paid' : ''}" style="border-left:3px solid var(--blue)">
@@ -7347,7 +7425,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     : `<div style="color:var(--t3);padding:16px;text-align:center;font-size:13px">All paid!</div>`;
 
   const emiPaidRow = (i) => `<div class="pay-row paid" style="border-left:3px solid var(--green)">
-    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)">?</div>
+    <div class="pay-row-check done" style="background:var(--green)22;color:var(--green)" onclick="doPlannerEmiUnpay(${i.id})" title="Move back to pending">&#10003;</div>
     <div style="flex:1;min-width:0">
       <div class="pay-row-name">
         <span style="background:var(--green)22;color:var(--green);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">EMI</span>
@@ -7358,6 +7436,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
     </div>
     <div class="pay-row-amt paid">${fmtCur(i.paid_amount)}</div>
     <div class="pay-row-actions">
+      <button class="btn-d" style="color:var(--em)" onclick="doPlannerEmiUnpay(${i.id})">Pending</button>
       <button class="btn-d" style="color:var(--green)" onclick="switchTab('emitracker')">View</button>
     </div>
   </div>`;
@@ -7436,6 +7515,17 @@ async function doPlannerEmiPay(instId) {
   if (r?.success) {
     closeModal();
     toast('EMI installment marked paid', 'success');
+    await renderPlanner();
+  } else toast(r?.error || 'Failed', 'error');
+}
+
+async function doPlannerEmiUnpay(instId) {
+  const r = await api('/api/emi/installments/' + instId + '/pay', {
+    method: 'PUT',
+    body: { paid_amount: 0, paid_date: null, notes: '' }
+  });
+  if (r?.success) {
+    toast('Moved back to pending', 'success');
     await renderPlanner();
   } else toast(r?.error || 'Failed', 'error');
 }
@@ -8055,9 +8145,43 @@ async function autoFillTracker(trackerId) {
 }
 
 async function addTrackerExpense(trackerId, year, month) {
-  if (!await confirmDialog(`Add ${_MONTHS_LONG[month - 1]} total to expenses?`)) return;
-  const r = await api(`/api/trackers/${trackerId}/month-expense`, { method: 'POST', body: { year, month } });
+  const sourceMonth = `${year}-${String(month).padStart(2, '0')}`;
+  const nextMonth = _addMonths(sourceMonth, 1);
+  const [nextYear, nextMonthNum] = nextMonth.split('-').map(Number);
+  openModal('Add Tracker Month to Expenses', `
+    <div class="fg">
+      <div style="font-size:13px;color:var(--t2)">Choose which expense month should receive the total for <strong>${escHtml(_MONTHS_LONG[month - 1])} ${year}</strong>.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+        <label class="chip active" id="trackerExpMonth_same" style="cursor:pointer" onclick="setTrackerExpenseMonthChoice('same')">
+          <input type="radio" name="trackerExpMonthChoice" value="same" checked style="display:none">
+          Same month (${escHtml(_MONTHS_LONG[month - 1])} ${year})
+        </label>
+        <label class="chip" id="trackerExpMonth_next" style="cursor:pointer" onclick="setTrackerExpenseMonthChoice('next')">
+          <input type="radio" name="trackerExpMonthChoice" value="next" style="display:none">
+          Next month (${escHtml(_MONTHS_LONG[nextMonthNum - 1])} ${nextYear})
+        </label>
+      </div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="confirmAddTrackerExpense(${trackerId}, ${year}, ${month})">Add</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  window._trackerExpenseMonthChoice = 'same';
+  repairMojibakeInNode(document.getElementById('modalContent'));
+}
+
+function setTrackerExpenseMonthChoice(choice) {
+  window._trackerExpenseMonthChoice = choice === 'next' ? 'next' : 'same';
+  document.getElementById('trackerExpMonth_same')?.classList.toggle('active', window._trackerExpenseMonthChoice === 'same');
+  document.getElementById('trackerExpMonth_next')?.classList.toggle('active', window._trackerExpenseMonthChoice === 'next');
+}
+
+async function confirmAddTrackerExpense(trackerId, year, month) {
+  const sourceMonth = `${year}-${String(month).padStart(2, '0')}`;
+  const expenseMonth = window._trackerExpenseMonthChoice === 'next' ? _addMonths(sourceMonth, 1) : sourceMonth;
+  const r = await api(`/api/trackers/${trackerId}/month-expense`, { method: 'POST', body: { year, month, expense_month: expenseMonth } });
   if (r?.success) {
+    closeModal();
     toast(`${fmtCur(r.amount)} added to expenses`, 'success');
     const data = await api('/api/trackers');
     _trackers = data?.trackers || [];
@@ -8066,7 +8190,7 @@ async function addTrackerExpense(trackerId, year, month) {
 }
 
 async function showTrackerModal(id) {
-  const t = id ? _trackers.find(t => t.id === id) : null;
+  const t = id ? _findTrackerById(id) : null;
   openModal(id ? 'Edit Tracker' : 'Add Tracker', `
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="trName" value="${escHtml(t?.name || '')}" placeholder="e.g. Milk, Newspaper, Maid..."></label>
@@ -8200,7 +8324,7 @@ async function toggleRecurringActive(id, active) {
 }
 
 async function showRecurringModal(id) {
-  const entry = id ? _recurringEntries.find(e => e.id === id) : null;
+  const entry = id ? _findRecurringEntryById(id) : null;
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
   const currentMonth = _localYM();
@@ -8438,7 +8562,7 @@ function renderBankAccounts() {
 }
 
 function showBankModal(id) {
-  const found = id ? _bankAccounts.find((x) => x.id === id) : null;
+  const found = id ? _findBankAccountById(id) : null;
   const a = found || { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' };
   openModal(id ? 'Edit Bank Account' : 'Add Bank Account', `
     <div class="fg">
@@ -8508,7 +8632,7 @@ function renderTrackerGrid() {
 }
 
 async function showTrackerModal(id) {
-  const t = id ? _trackers.find((tracker) => tracker.id === id) : null;
+  const t = id ? _findTrackerById(id) : null;
   openModal(id ? 'Edit Tracker' : 'Add Tracker', `
     <div class="fg">
       <label class="fl full">Name *<input class="fi" id="trName" value="${escHtml(t?.name || '')}" placeholder="e.g. Milk, Newspaper, Maid..." maxlength="80"></label>
@@ -8528,10 +8652,16 @@ async function showCcCardModal(id) {
   let card = { bank_name: '', card_name: '', last4: '', expiry_month: '', expiry_year: '', bill_gen_day: 1, due_days: 20, default_discount_pct: 0, credit_limit: '' };
   let currentCycle = null;
   if (id) {
-    const c = _ccCards.find((x) => x.id === id);
+    const c = _findCcCardById(id);
     if (c) {
       card = c;
       currentCycle = c.currentCycle || null;
+    } else {
+      const data = await api(`/api/cc/cards/${id}/current`);
+      if (data?.card) {
+        card = data.card;
+        currentCycle = data.cycle || null;
+      }
     }
   }
   openModal(id ? 'Edit Credit Card' : 'Add Credit Card', `
@@ -8631,7 +8761,7 @@ function showPayModal(id, amount) {
 }
 
 async function showRecurringModal(id) {
-  const entry = id ? _recurringEntries.find((e) => e.id === id) : null;
+  const entry = id ? _findRecurringEntryById(id) : null;
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
   if (!_bankAccounts.length) {
@@ -8957,7 +9087,7 @@ async function showTrackerModal(id) {
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
   }
-  const t = id ? _trackers.find((tracker) => tracker.id === id) : null;
+  const t = id ? _findTrackerById(id) : null;
   const bankOpts = `<option value="">-- Do not deduct --</option>${_bankDropdownOptions(t?.expense_bank_account_id)}`;
   openModal(id ? 'Edit Tracker' : 'Add Tracker', `
     <div class="fg">
@@ -9328,9 +9458,3 @@ async function renderTrackerDetail() {
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
 }
-
-
-
-
-
-

@@ -21,6 +21,7 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
 <script src="/js/analytics.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -48,6 +49,11 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
 .switch-link{text-align:center;margin-top:22px;font-size:13.5px;color:var(--t3)}
 .switch-link a{color:var(--em);font-weight:600;text-decoration:none}
 .switch-link a:hover{text-decoration:underline}
+.social-wrap{margin-top:12px}
+.social-divider{display:flex;align-items:center;gap:10px;color:var(--t3);font-size:12px;margin:14px 0}
+.social-divider::before,.social-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+#googleButton{display:flex;justify-content:center}
+.social-error{display:none;font-size:12px;color:var(--red);text-align:center;margin-top:8px}
 .loading{display:none;align-items:center;justify-content:center;gap:8px}
 .loading .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -88,6 +94,11 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
           <input type="email" id="email" placeholder="you@example.com" required>
         </div>
       </div>
+      <div class="form-group">
+        <label>Phone Number (Optional)</label>
+        <input type="tel" id="mobile" placeholder="+91 9876543210">
+        <div class="hint">Add phone to sign in using phone + password</div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label>Password</label>
@@ -103,6 +114,11 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
         <span class="loading" id="loading"><span class="spinner"></span>Creating...</span>
       </button>
     </form>
+    <div class="social-wrap">
+      <div class="social-divider">or continue with</div>
+      <div id="googleButton"></div>
+      <div class="social-error" id="socialError"></div>
+    </div>
     <div class="switch-link">Already have an account? <a href="/login">Sign in</a></div>
     <div class="switch-link" style="margin-top:12px;font-size:12px">
       <a href="/privacy-policy">Privacy Policy</a> &nbsp;·&nbsp;
@@ -136,7 +152,13 @@ async function handleRegister(e) {
 
   const pw = document.getElementById('password').value;
   const pw2 = document.getElementById('password2').value;
+  const mobile = document.getElementById('mobile').value.trim();
   if (pw !== pw2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
+  if (mobile && !/^\+?\d[\d\s-]{6,20}$/.test(mobile)) {
+    errEl.textContent = 'Please enter a valid phone number';
+    errEl.style.display = 'block';
+    return;
+  }
 
   btn.querySelector('.btn-text').style.display = 'none';
   btn.querySelector('.loading').style.display = 'flex';
@@ -151,6 +173,7 @@ async function handleRegister(e) {
         display_name: document.getElementById('display_name').value,
         username: document.getElementById('username').value,
         email: document.getElementById('email').value,
+        mobile,
         password: pw,
         ...prefs,
       }),
@@ -170,6 +193,52 @@ async function handleRegister(e) {
   btn.querySelector('.loading').style.display = 'none';
   btn.disabled = false;
 }
+
+async function handleGoogleCredentialResponse(response) {
+  const errEl = document.getElementById('socialError');
+  errEl.style.display = 'none';
+  try {
+    const prefs = detectCurrencyPrefs();
+    const res = await fetch('/api/auth/social', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'google',
+        id_token: response.credential,
+        ...prefs,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Google signup failed');
+    }
+    window.location.href = data.redirect || '/';
+  } catch (err) {
+    errEl.textContent = err.message || 'Google signup failed';
+    errEl.style.display = 'block';
+  }
+}
+
+function initGoogleSignIn() {
+  const clientId = window.__appRuntimeConfig?.googleWebClientId || '';
+  if (!clientId || !window.google?.accounts?.id) return;
+  window.google.accounts.id.initialize({
+    client_id: clientId,
+    callback: handleGoogleCredentialResponse,
+    auto_select: false,
+    cancel_on_tap_outside: true,
+  });
+  window.google.accounts.id.renderButton(document.getElementById('googleButton'), {
+    type: 'standard',
+    theme: 'outline',
+    size: 'large',
+    text: 'continue_with',
+    shape: 'pill',
+    width: 320,
+  });
+}
+
+window.addEventListener('load', initGoogleSignIn);
 </script>
 </body>
 </html>
