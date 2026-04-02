@@ -44,6 +44,29 @@ JWT_SECRET=replace-me
 ANTHROPIC_API_KEY=replace-me
 ```
 
+For Google login, keep mobile and browser audiences separate:
+
+```env
+GOOGLE_ANDROID_CLIENT_ID=replace-me
+GOOGLE_IOS_CLIENT_ID=replace-me
+
+# Fallback browser client ID
+GOOGLE_WEB_CLIENT_ID=replace-me
+
+# Optional: use different browser IDs for localhost and production
+GOOGLE_WEB_CLIENT_ID_LOCAL=replace-me
+GOOGLE_WEB_CLIENT_ID_PROD=replace-me
+
+# Optional: accept extra Google/Firebase token audiences on the backend
+GOOGLE_OAUTH_CLIENT_IDS=id1.apps.googleusercontent.com,id2.apps.googleusercontent.com
+```
+
+Browser sign-in still requires the active site origin to be allowed in Google Cloud / Firebase:
+
+- `http://localhost:3000` for local development
+- `https://expenselyt.com` for production
+- `https://www.expenselyt.com` if that hostname is used anywhere
+
 ## Setup
 
 ```bash

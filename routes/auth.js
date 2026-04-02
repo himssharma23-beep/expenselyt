@@ -65,12 +65,17 @@ function getAllowedGoogleAudiences() {
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
+  const dynamicWebIds = Object.entries(process.env)
+    .filter(([key, value]) => key.startsWith('GOOGLE_WEB_CLIENT_ID') && String(value || '').trim())
+    .map(([, value]) => String(value).trim());
   const specific = [
     process.env.GOOGLE_WEB_CLIENT_ID,
+    process.env.GOOGLE_WEB_CLIENT_ID_LOCAL,
+    process.env.GOOGLE_WEB_CLIENT_ID_PROD,
     process.env.GOOGLE_ANDROID_CLIENT_ID,
     process.env.GOOGLE_IOS_CLIENT_ID,
   ].map((v) => String(v || '').trim()).filter(Boolean);
-  return new Set([...explicit, ...specific]);
+  return new Set([...explicit, ...specific, ...dynamicWebIds]);
 }
 
 async function verifyGoogleIdToken(idToken) {

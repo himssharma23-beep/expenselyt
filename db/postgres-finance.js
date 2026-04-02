@@ -17,6 +17,17 @@ function normalizeBankAccountId(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizeOptionalText(value, maxLength = 80) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+  if (normalized.length > maxLength) {
+    const err = new Error(`Value must be ${maxLength} characters or fewer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return normalized;
+}
+
 async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   const run = client || { query };
   const existing = await run.query(
@@ -265,11 +276,12 @@ async function insertEmiCcTxns(userId, emiId, client = null) {
   for (const cycleId of updatedCycles) await updateCycleTotals(cycleId, client);
 }
 
-async function insertEmiExpenses(userId, emiId, isExtra = 0, client = null) {
+async function insertEmiExpenses(userId, emiId, isExtra = 0, expenseCategory = null, client = null) {
   const run = client || { query };
   const recR = await run.query('SELECT * FROM emi_records WHERE id = $1 AND user_id = $2 LIMIT 1', [emiId, userId]);
   const rec = recR.rows[0];
   if (!rec) return;
+  const category = normalizeOptionalText(expenseCategory, 80);
   await run.query(`DELETE FROM expenses WHERE source = 'emi' AND source_id = $1 AND user_id = $2`, [emiId, userId]);
   const installments = await loadInstallments(emiId, client);
   for (const inst of installments) {
@@ -285,9 +297,9 @@ async function insertEmiExpenses(userId, emiId, isExtra = 0, client = null) {
       amount = Math.round((amount + num(rec.cc_processing_charge) + procGst) * 100) / 100;
     }
     await run.query(
-      `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, source, source_id)
-       VALUES ($1, $2, $3, $4, $5, 'emi', $6)`,
-      [userId, `${rec.name} - Installment ${inst.installment_no}`, amount, expDate, !!isExtra, emiId]
+      `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, source, source_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'emi', $7)`,
+      [userId, `${rec.name} - Installment ${inst.installment_no}`, category, amount, expDate, !!isExtra, emiId]
     );
   }
   await run.query('UPDATE emi_records SET expenses_added = TRUE WHERE id = $1', [emiId]);
@@ -464,7 +476,7 @@ async function bulkUpdateInstallmentAmount(userId, emiId, emiAmount) {
   });
 }
 
-async function activateEmiWithSchedule(userId, emiId, startDate, schedule, addExpenses = false, expenseType = 0) {
+async function activateEmiWithSchedule(userId, emiId, startDate, schedule, addExpenses = false, expenseType = 0, expenseCategory = null) {
   await withTransaction(async (client) => {
     const recR = await client.query('SELECT * FROM emi_records WHERE id = $1 AND user_id = $2 LIMIT 1', [emiId, userId]);
     const rec = recR.rows[0];
@@ -498,7 +510,7 @@ async function activateEmiWithSchedule(userId, emiId, startDate, schedule, addEx
     );
     await autoMarkPastInstallmentsPaid(emiId, client);
     await insertEmiCcTxns(userId, emiId, client);
-    if (addExpenses) await insertEmiExpenses(userId, emiId, expenseType, client);
+    if (addExpenses) await insertEmiExpenses(userId, emiId, expenseType, expenseCategory, client);
     else {
       await client.query(`DELETE FROM expenses WHERE source = 'emi' AND source_id = $1 AND user_id = $2`, [emiId, userId]);
       await client.query('UPDATE emi_records SET expenses_added = FALSE WHERE id = $1', [emiId]);
@@ -506,7 +518,7 @@ async function activateEmiWithSchedule(userId, emiId, startDate, schedule, addEx
   });
 }
 
-async function activateEmi(userId, emiId, startDate, addExpenses = false, expenseType = 0) {
+async function activateEmi(userId, emiId, startDate, addExpenses = false, expenseType = 0, expenseCategory = null) {
   await withTransaction(async (client) => {
     const recR = await client.query('SELECT * FROM emi_records WHERE id = $1 AND user_id = $2 LIMIT 1', [emiId, userId]);
     const rec = recR.rows[0];
@@ -531,7 +543,7 @@ async function activateEmi(userId, emiId, startDate, addExpenses = false, expens
     await client.query(`UPDATE emi_records SET status = 'active', start_date = $1 WHERE id = $2`, [startDate, emiId]);
     await autoMarkPastInstallmentsPaid(emiId, client);
     await insertEmiCcTxns(userId, emiId, client);
-    if (addExpenses) await insertEmiExpenses(userId, emiId, expenseType, client);
+    if (addExpenses) await insertEmiExpenses(userId, emiId, expenseType, expenseCategory, client);
     else {
       await client.query(`DELETE FROM expenses WHERE source = 'emi' AND source_id = $1 AND user_id = $2`, [emiId, userId]);
       await client.query('UPDATE emi_records SET expenses_added = FALSE WHERE id = $1', [emiId]);
@@ -629,13 +641,13 @@ async function getEmiMonthSummary(userId, yearMonth) {
   };
 }
 
-async function addEmiExpensesManual(userId, emiId, expenseType = 0) {
+async function addEmiExpensesManual(userId, emiId, expenseType = 0, expenseCategory = null) {
   const recR = await query('SELECT * FROM emi_records WHERE id = $1 AND user_id = $2 LIMIT 1', [emiId, userId]);
   const rec = recR.rows[0];
   if (!rec) throw new Error('EMI not found');
   if (!['active', 'completed'].includes(rec.status)) throw new Error('EMI must be active to add expenses');
   await withTransaction(async (client) => {
-    await insertEmiExpenses(userId, emiId, expenseType, client);
+    await insertEmiExpenses(userId, emiId, expenseType, expenseCategory, client);
   });
 }
 

@@ -83,12 +83,21 @@ router.get('/expenses', async (req, res) => {
   }
 });
 
+router.get('/expenses/categories', async (req, res) => {
+  try {
+    const categories = await Promise.resolve(getCoreDb().getExpenseCategories(req.session.userId));
+    res.json({ categories });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/expenses', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, amount, purchase_date, is_extra, bank_account_id } = req.body;
+    const { item_name, category, amount, purchase_date, is_extra, bank_account_id } = req.body;
     if (!item_name || !amount || !purchase_date) return res.status(400).json({ error: 'Missing fields' });
-    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
+    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, category, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -108,8 +117,8 @@ router.get('/expenses/:id', async (req, res) => {
 router.put('/expenses/:id', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, amount, purchase_date, is_extra, bank_account_id } = req.body;
-    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
+    const { item_name, category, amount, purchase_date, is_extra, bank_account_id } = req.body;
+    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, category, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -673,6 +682,7 @@ router.post('/trips/:id/finalize', async (req, res) => {
     const result = await Promise.resolve(getCoreDb().finalizeTrip(req.session.userId, req.params.id, {
       is_extra: !!req.body?.is_extra,
       txn_date: req.body?.txn_date,
+      category: req.body?.category,
       friend_ids: req.body?.friend_ids || {},
     }));
     res.json(result || { success: true });
@@ -780,14 +790,15 @@ router.delete('/emi/records/:id', async (req, res) => {
 
 router.post('/emi/records/:id/activate', async (req, res) => {
   try {
-    const { start_date, add_expenses, expense_type } = req.body;
+    const { start_date, add_expenses, expense_type, expense_category } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
     await Promise.resolve(getFinanceDb().activateEmi(
       req.session.userId,
       req.params.id,
       start_date,
       parseBooleanFlag(add_expenses, false),
-      parseInt(expense_type) || 0
+      parseInt(expense_type) || 0,
+      expense_category
     ));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -834,7 +845,7 @@ router.put('/emi/records/:id/bulk-amount', async (req, res) => {
 
 router.post('/emi/records/:id/activate-with-schedule', async (req, res) => {
   try {
-    const { start_date, schedule, add_expenses, expense_type } = req.body;
+    const { start_date, schedule, add_expenses, expense_type, expense_category } = req.body;
     if (!start_date) return res.status(400).json({ error: 'start_date required' });
     if (!Array.isArray(schedule) || schedule.length === 0) return res.status(400).json({ error: 'schedule required' });
     await Promise.resolve(getFinanceDb().activateEmiWithSchedule(
@@ -843,7 +854,8 @@ router.post('/emi/records/:id/activate-with-schedule', async (req, res) => {
       start_date,
       schedule,
       parseBooleanFlag(add_expenses, false),
-      parseInt(expense_type) || 0
+      parseInt(expense_type) || 0,
+      expense_category
     ));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -852,7 +864,7 @@ router.post('/emi/records/:id/activate-with-schedule', async (req, res) => {
 router.post('/emi/records/:id/add-expenses', async (req, res) => {
   try {
     const expense_type = parseInt(req.body?.expense_type) || 0;
-    await Promise.resolve(getFinanceDb().addEmiExpensesManual(req.session.userId, req.params.id, expense_type));
+    await Promise.resolve(getFinanceDb().addEmiExpensesManual(req.session.userId, req.params.id, expense_type, req.body?.expense_category));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1767,7 +1779,7 @@ router.get('/trackers', (req, res) => {
 
 router.post('/trackers', (req, res) => {
   try {
-    const { name, unit, price_per_unit, default_qty, is_active, auto_add_to_expense, expense_bank_account_id } = req.body;
+    const { name, unit, price_per_unit, default_qty, is_active, auto_add_to_expense, expense_bank_account_id, expense_category } = req.body;
     if (!name || !price_per_unit) return res.status(400).json({ error: 'Missing required fields' });
     Promise.resolve(getOpsDb().addDailyTracker(req.session.userId, {
       name,
@@ -1777,6 +1789,7 @@ router.post('/trackers', (req, res) => {
       is_active,
       auto_add_to_expense,
       expense_bank_account_id,
+      expense_category,
     })).then((id) => {
       res.json({ success: true, id });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
@@ -1834,8 +1847,8 @@ router.get('/trackers/:id/summary', (req, res) => {
 
 router.post('/trackers/:id/month-expense', (req, res) => {
   try {
-    const { year, month, bank_account_id, expense_month } = req.body;
-    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id, expense_month })).then((amount) => {
+    const { year, month, bank_account_id, expense_month, expense_category } = req.body;
+    Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id, expense_month, expense_category })).then((amount) => {
       res.json({ success: true, amount });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1858,6 +1871,7 @@ router.post('/recurring', (req, res) => {
       start_month,
       card_id,
       bank_account_id,
+      expense_category,
       discount_pct,
       also_expense,
       is_extra,
@@ -1872,6 +1886,7 @@ router.post('/recurring', (req, res) => {
       start_month,
       card_id,
       bank_account_id,
+      expense_category,
       discount_pct,
       also_expense,
       is_extra,

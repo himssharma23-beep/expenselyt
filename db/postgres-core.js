@@ -35,6 +35,13 @@ function normalizeText(value, label, maxLength = 160) {
   return normalized;
 }
 
+function normalizeOptionalText(value, maxLength = 80) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+  if (normalized.length > maxLength) throw validationError(`Text must be ${maxLength} characters or fewer`);
+  return normalized;
+}
+
 function normalizeAmount(value, label = 'Amount') {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) throw validationError(`${label} must be greater than 0`);
@@ -120,7 +127,7 @@ async function getExpenses(userId, filters = {}) {
   }
   if (filters.search) {
     params.push(`%${filters.search}%`);
-    where.push(`item_name ILIKE $${params.length}`);
+    where.push(`(item_name ILIKE $${params.length} OR COALESCE(category, '') ILIKE $${params.length})`);
   }
   if (filters.spendType === 'extra') where.push('is_extra = TRUE');
   if (filters.spendType === 'fair') where.push('is_extra = FALSE');
@@ -147,17 +154,29 @@ async function getExpenseById(userId, id) {
   return row ? { ...row, amount: num(row.amount) } : null;
 }
 
+async function getExpenseCategories(userId) {
+  const result = await query(
+    `SELECT DISTINCT category
+     FROM expenses
+     WHERE user_id = $1 AND category IS NOT NULL AND btrim(category) <> '' AND deleted_at IS NULL
+     ORDER BY category`,
+    [userId]
+  );
+  return result.rows.map((row) => String(row.category || '').trim()).filter(Boolean);
+}
+
 async function addExpense(userId, data) {
   return withTransaction(async (client) => {
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
+    const category = normalizeOptionalText(data.category, 80);
     const amount = normalizeAmount(data.amount);
     const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
     const bankAccountId = normalizeBankAccountId(data.bank_account_id);
     const result = await client.query(
-      `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [userId, itemName, amount, purchaseDate, !!data.is_extra, bankAccountId]
+      [userId, itemName, category, amount, purchaseDate, !!data.is_extra, bankAccountId]
     );
     if (bankAccountId) {
       await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client);
@@ -171,6 +190,7 @@ async function updateExpense(userId, id, data) {
     const current = await getExpenseById(userId, id);
     if (!current) throw validationError('Expense not found');
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
+    const category = normalizeOptionalText(data.category, 80);
     const nextAmount = normalizeAmount(data.amount);
     const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
     const nextBankAccountId = normalizeBankAccountId(data.bank_account_id);
@@ -181,13 +201,14 @@ async function updateExpense(userId, id, data) {
     await client.query(
       `UPDATE expenses
        SET item_name = $1,
-           amount = $2,
-           purchase_date = $3,
-           is_extra = $4,
-           bank_account_id = $5,
+           category = $2,
+           amount = $3,
+           purchase_date = $4,
+           is_extra = $5,
+           bank_account_id = $6,
            updated_at = NOW()
-       WHERE id = $6 AND user_id = $7`,
-      [itemName, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
+       WHERE id = $7 AND user_id = $8`,
+      [itemName, category, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
     );
   });
 }
@@ -213,10 +234,11 @@ async function bulkAddExpenses(userId, rows) {
     let count = 0;
     for (const row of rows) {
      if (row.item_name && row.amount > 0) {
+        const category = normalizeOptionalText(row.category, 80);
         await client.query(
-          `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, bank_account_id)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [userId, row.item_name, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
+          `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [userId, row.item_name, category, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
         );
         count++;
       }
@@ -736,6 +758,7 @@ async function finalizeTrip(userId, tripId, data = {}) {
   return withTransaction(async (client) => {
     const trip = await _loadTripFinalizeData(userId, tripId, client);
     const today = normalizeDateValue(data.txn_date || new Date().toISOString().slice(0, 10), 'Trip finalization date');
+    const expenseCategory = normalizeOptionalText(data.category, 80);
     const peopleMap = _buildTripSettlementSnapshot(trip, data.friend_ids || {});
 
     await client.query(
@@ -754,9 +777,9 @@ async function finalizeTrip(userId, tripId, data = {}) {
     const self = peopleMap.self;
     if (self && self.totalShare > 0) {
       await client.query(
-        `INSERT INTO expenses (user_id, item_name, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, 'trip', $6, $1, $1)`,
-        [userId, trip.name, Math.round(self.totalShare * 100) / 100, today, !!data.is_extra, tripId]
+        `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'trip', $7, $1, $1)`,
+        [userId, trip.name, expenseCategory, Math.round(self.totalShare * 100) / 100, today, !!data.is_extra, tripId]
       );
     }
 
@@ -938,6 +961,7 @@ async function getPublicShareData(token) {
 
 module.exports = {
   getExpenses,
+  getExpenseCategories,
   getExpenseById,
   addExpense,
   updateExpense,

@@ -10,6 +10,108 @@ let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
 let expFilters = { year: new Date().getFullYear(), month: new Date().getMonth(), search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
 let _expenseCache = [];
+let _expenseCategories = [];
+let _activeExpenseForm = null;
+let _expenseCategoryHideTimer = null;
+
+async function loadExpenseCategories() {
+  const data = await api('/api/expenses/categories');
+  _expenseCategories = (data?.categories || []).filter(Boolean);
+  return _expenseCategories;
+}
+
+function expenseCategoryDatalistHtml(selected = '') {
+  const unique = [...new Set((_expenseCategories || []).map((value) => String(value || '').trim()).filter(Boolean))];
+  if (selected && !unique.includes(selected)) unique.unshift(selected);
+  const selectedValue = String(selected || '').trim();
+  const toJsArg = (value) => JSON.stringify(String(value ?? ''));
+  return `
+    <div class="combo-wrap" style="position:relative">
+      <input
+        class="fi"
+        id="eCategory"
+        value="${escHtml(selectedValue)}"
+        placeholder="Type category"
+        maxlength="80"
+        autocomplete="off"
+        onfocus="showExpenseCategoryAutocomplete()"
+        oninput="filterExpenseCategoryAutocomplete()"
+        onblur="scheduleHideExpenseCategoryAutocomplete()"
+        onkeydown="handleExpenseCategoryAutocompleteKeydown(event)"
+      >
+      <div
+        id="eCategoryMenu"
+        style="display:none;position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 30px rgba(16,24,40,.12);padding:6px;z-index:9999;max-height:180px;overflow:auto"
+        onmousedown="cancelHideExpenseCategoryAutocomplete()"
+      >
+        ${unique.map((value) => `<button type="button" data-category="${escHtml(value)}" style="display:block;width:100%;text-align:left;padding:9px 10px;border:none;border-radius:10px;background:#fff;color:var(--t1);font-size:14px;cursor:pointer" onmouseenter="this.style.background='var(--bg2)'" onmouseleave="this.style.background='#fff'" onclick='selectExpenseCategoryAutocomplete(${toJsArg(value)})'>${escHtml(value)}</button>`).join('')}
+        <div id="eCategoryEmpty" style="display:none;padding:9px 10px;color:var(--t3);font-size:13px">No matching categories</div>
+      </div>
+    </div>`;
+}
+
+function _expenseCategoryAutocompleteItems() {
+  return Array.from(document.querySelectorAll('#eCategoryMenu [data-category]'));
+}
+
+function showExpenseCategoryAutocomplete() {
+  cancelHideExpenseCategoryAutocomplete();
+  filterExpenseCategoryAutocomplete();
+}
+
+function hideExpenseCategoryAutocomplete() {
+  cancelHideExpenseCategoryAutocomplete();
+  const menu = document.getElementById('eCategoryMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+function scheduleHideExpenseCategoryAutocomplete() {
+  cancelHideExpenseCategoryAutocomplete();
+  _expenseCategoryHideTimer = setTimeout(() => hideExpenseCategoryAutocomplete(), 120);
+}
+
+function cancelHideExpenseCategoryAutocomplete() {
+  if (_expenseCategoryHideTimer) {
+    clearTimeout(_expenseCategoryHideTimer);
+    _expenseCategoryHideTimer = null;
+  }
+}
+
+function filterExpenseCategoryAutocomplete() {
+  const input = document.getElementById('eCategory');
+  const menu = document.getElementById('eCategoryMenu');
+  const empty = document.getElementById('eCategoryEmpty');
+  if (!input || !menu) return;
+  const query = String(input.value || '').trim().toLowerCase();
+  let visibleCount = 0;
+  _expenseCategoryAutocompleteItems().forEach((item) => {
+    const value = String(item.dataset.category || '').toLowerCase();
+    const visible = !query || value.includes(query);
+    item.style.display = visible ? 'block' : 'none';
+    if (visible) visibleCount++;
+  });
+  if (empty) empty.style.display = visibleCount ? 'none' : 'block';
+  menu.style.display = visibleCount || query ? 'block' : 'none';
+}
+
+function selectExpenseCategoryAutocomplete(value) {
+  const input = document.getElementById('eCategory');
+  if (input) input.value = value || '';
+  hideExpenseCategoryAutocomplete();
+}
+
+function handleExpenseCategoryAutocompleteKeydown(event) {
+  if (event?.key === 'Escape') {
+    stopEvent(event);
+    hideExpenseCategoryAutocomplete();
+    event.target?.blur?.();
+  }
+}
+
+document.addEventListener('pointerdown', (event) => {
+  const wrap = event.target?.closest?.('.combo-wrap');
+  if (!wrap) hideExpenseCategoryAutocomplete();
+}, true);
 let friendSort = 'name';
 let selectedFriend = null;
 let divideItems = [];
@@ -28,7 +130,16 @@ function normalizeInputDate(value) {
   if (!value) return '';
   const str = String(value).trim();
   if (!str) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    const parsedIso = new Date(str);
+    if (!Number.isNaN(parsedIso.getTime())) {
+      const y = parsedIso.getFullYear();
+      const m = String(parsedIso.getMonth() + 1).padStart(2, '0');
+      const d = String(parsedIso.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  }
   const dmy = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
   if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
   const parsed = new Date(str);
@@ -343,6 +454,9 @@ async function loadExpenses() {
 
   const data = await api('/api/expenses' + qs);
   if (!data) return;
+  if (!_expenseCategories.length) {
+    try { await loadExpenseCategories(); } catch (_) {}
+  }
 
   let list = data.expenses || [];
   _expenseCache = list.slice();
@@ -409,7 +523,7 @@ async function loadExpenses() {
         </div>
       </div>
       <div class="filter-row">
-        <input id="expSearch" class="search-input" placeholder="Search items..." value="${f.search}" oninput="expFilters.search=this.value;expFilters.page=1;loadExpenses()">
+        <input id="expSearch" class="search-input" placeholder="Search item or category..." value="${f.search}" oninput="expFilters.search=this.value;expFilters.page=1;loadExpenses()">
         <div class="chip-group">
           ${['all','fair','extra'].map(t => `<button class="chip ${f.spendType===t?'active':''}" onclick="expFilters.spendType='${t}';expFilters.page=1;loadExpenses()">${t==='all'?'All':t==='fair'?'Fair':'Extra'}</button>`).join('')}
         </div>
@@ -423,15 +537,17 @@ async function loadExpenses() {
           <thead><tr>
             <th onclick="toggleExpSort('date')">Date${sortArrow('date')}</th>
             <th onclick="toggleExpSort('name')">Item${sortArrow('name')}</th>
+            <th>Category</th>
             <th style="text-align:right" onclick="toggleExpSort('amount')">Amount${sortArrow('amount')}</th>
             <th>Type</th>
             <th style="width:100px">Actions</th>
           </tr></thead>
           <tbody>
-            ${pageList.length === 0 ? '<tr><td colspan="5" class="empty-td">No expenses found.</td></tr>' : ''}
+            ${pageList.length === 0 ? '<tr><td colspan="6" class="empty-td">No expenses found.</td></tr>' : ''}
             ${pageList.map(e => `<tr>
               <td>${fmtDate(e.purchase_date)}</td>
               <td>${e.item_name}</td>
+              <td>${e.category ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(e.category)}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
               <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
               <td><span class="badge ${e.is_extra?'b-extra':'b-fair'}">${e.is_extra?'Extra':'Fair'}</span></td>
               <td><button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button></td>
@@ -483,17 +599,23 @@ function toggleExpSort(field) {
   loadExpenses();
 }
 
+function _findExpenseById(id) {
+  return _expenseCache.find((expense) => String(expense.id) === String(id)) || null;
+}
+
 async function showExpenseForm(id) {
-  let e = { item_name: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
+  let e = { item_name: '', category: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
-    const cached = _expenseCache.find(x => x.id === id);
-    if (cached) e = cached;
-    else {
-      const detail = await api(`/api/expenses/${id}`);
-      if (detail?.expense) e = detail.expense;
-    }
+    const cached = _findExpenseById(id);
+    if (cached) e = { ...e, ...cached };
+    const detail = await api(`/api/expenses/${id}`);
+    if (detail?.expense) e = { ...e, ...detail.expense };
   }
+  _activeExpenseForm = { ...e, id: id || null };
   await getCcCardsForForm();
+  if (!_expenseCategories.length) {
+    try { await loadExpenseCategories(); } catch (_) {}
+  }
   if (!_bankAccounts.length) {
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
@@ -503,6 +625,7 @@ async function showExpenseForm(id) {
     <div class="fg">
       <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
       <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
+      <label class="fl">Category${expenseCategoryDatalistHtml(e.category || '')}</label>
       <label class="fl">Amount (&#8377;)<input class="fi" type="number" step="0.01" id="eAmount" value="${e.amount}" placeholder="0.00" oninput="ccLinkPreview()"></label>
       <label class="fc"><input type="checkbox" id="eExtra" ${e.is_extra?'checked':''}><span>Is Extra (non-essential)</span></label>
       <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
@@ -516,21 +639,40 @@ async function showExpenseForm(id) {
 }
 
 async function saveExpense(id) {
+  const original = id ? (_activeExpenseForm && String(_activeExpenseForm.id) === String(id) ? _activeExpenseForm : _findExpenseById(id)) : null;
   const bankVal = document.getElementById('eBank')?.value;
   const body = {
-    item_name: document.getElementById('eName').value.trim(),
-    amount: document.getElementById('eAmount').value,
-    purchase_date: document.getElementById('eDate').value,
+    item_name: document.getElementById('eName').value.trim() || original?.item_name || '',
+    category: document.getElementById('eCategory')?.value.trim() || null,
+    amount: document.getElementById('eAmount').value || String(original?.amount ?? ''),
+    purchase_date: document.getElementById('eDate').value || normalizeInputDate(original?.purchase_date) || '',
     is_extra: document.getElementById('eExtra').checked,
     bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
   };
+  if (body.category && body.category.length > 80) { toast('Category must be 80 characters or fewer', 'warning'); return; }
   if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
+  const amountValue = parseFloat(body.amount);
+  if (!Number.isFinite(amountValue) || amountValue <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
   let r;
-  if (id) { await api(`/api/expenses/${id}`, { method: 'PUT', body }); }
+  if (id) {
+    r = await api(`/api/expenses/${id}`, { method: 'PUT', body });
+    if (!r?.success) { toast(r?.error || 'Update failed', 'error'); return; }
+    const refreshed = await api(`/api/expenses/${id}`);
+    if (refreshed?.expense) _activeExpenseForm = refreshed.expense;
+  }
   else {
     r = await api('/api/expenses', { method: 'POST', body });
-    await saveCcLinkIfChecked(body.item_name, parseFloat(body.amount), body.purchase_date, 'expense', r?.id);
+    if (!r?.id) { toast(r?.error || 'Save failed', 'error'); return; }
+    await saveCcLinkIfChecked(body.item_name, amountValue, body.purchase_date, 'expense', r?.id);
   }
+  const nextId = id || r?.id;
+  if (nextId) {
+    _expenseCache = _expenseCache.map((expense) => String(expense.id) === String(nextId)
+      ? { ...expense, ...body, amount: amountValue, id: expense.id }
+      : expense
+    );
+  }
+  _activeExpenseForm = null;
   closeModal(); loadExpenses();
 }
 
@@ -1825,6 +1967,7 @@ function showSaveDivideModal() {
       <label class="fl">Date
         <input class="fi" type="date" id="divSaveDate" value="${firstDate}">
       </label>
+      <label class="fl">My Expense Category${expenseCategoryDatalistHtml('')}</label>
     </div>
     <div style="margin:14px 0 12px">
       <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">MY EXPENSE TYPE</div>
@@ -1907,10 +2050,12 @@ async function doSaveDivide() {
 
   // â”€â”€ 3. Save my expense entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const isExtra = document.getElementById('divTypeExtra')?.classList.contains('active') || false;
+  const expenseCategory = document.getElementById('eCategory')?.value.trim() || null;
   const selfEntry = peopleMap['self'];
   if (selfEntry && selfEntry.totalShare > 0) {
     const expR = await api('/api/expenses', { method: 'POST', body: {
       item_name: heading,
+      category: expenseCategory,
       amount: Math.round(selfEntry.totalShare * 100) / 100,
       purchase_date: date,
       is_extra: isExtra,
@@ -2785,6 +2930,7 @@ async function saveEmiCalc(andActivate) {
   if (!r?.id) { toast(r?.error || 'Save failed', 'error'); return; }
 
   if (andActivate) {
+    if (!_expenseCategories.length) await loadExpenseCategories();
     showModal(`<div class="modal-title">Activate EMI</div>
       <p style="color:var(--t2);font-size:14px;margin-bottom:16px">Choose the EMI start date. Installment schedule will be generated from this date.</p>
       <label class="fl">Start Date<input class="fi" type="date" id="emiStartDate" value="${new Date().toISOString().slice(0,10)}"></label>
@@ -2797,6 +2943,7 @@ async function saveEmiCalc(andActivate) {
             <option value="1">Extra (Discretionary)</option>
           </select>
         </label>
+        <label class="fl">Expense Category${expenseCategoryDatalistHtml('')}</label>
       </div>
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn btn-p" onclick="doActivateEmi(${r.id})">Activate</button>
@@ -2812,6 +2959,7 @@ async function doActivateEmi(id) {
   if (!start_date) { toast('Pick a start date', 'warning'); return; }
   const add_expenses = document.getElementById('emiAddExpenses').checked;
   const expense_type = add_expenses ? parseInt(document.getElementById('emiExpType').value) : 0;
+  const expense_category = add_expenses ? (document.getElementById('eCategory')?.value.trim() || null) : null;
 
   // Use custom schedule if any rows were edited in the calculator
   const sched = window._emiCalcSchedule;
@@ -2825,9 +2973,9 @@ async function doActivateEmi(id) {
       gst_amount: r.g || 0,
       emi_amount: r.woGST || (r.princ + r.interest)
     }));
-    res = await api(`/api/emi/records/${id}/activate-with-schedule`, { method: 'POST', body: { start_date, schedule, add_expenses, expense_type } });
+    res = await api(`/api/emi/records/${id}/activate-with-schedule`, { method: 'POST', body: { start_date, schedule, add_expenses, expense_type, expense_category } });
   } else {
-    res = await api(`/api/emi/records/${id}/activate`, { method: 'POST', body: { start_date, add_expenses, expense_type } });
+    res = await api(`/api/emi/records/${id}/activate`, { method: 'POST', body: { start_date, add_expenses, expense_type, expense_category } });
   }
 
   if (res?.success) {
@@ -3553,7 +3701,8 @@ async function tripDelete() {
 }
 
 // â”€â”€ Finalize Trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function tripFinalizeModal() {
+async function tripFinalizeModal() {
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const trip = _tripDetail;
   // Compute settlement for preview
   const peopleMap = {};
@@ -3599,6 +3748,10 @@ function tripFinalizeModal() {
         <button id="tfTypeExtra" class="chip" onclick="document.getElementById('tfTypeExtra').classList.add('active');document.getElementById('tfTypeFair').classList.remove('active')">Extra / Non-essential</button>
       </div>
     </div>
+    <label class="fl full" style="margin-bottom:14px">My Expense Category
+      <input class="fi" id="tfCategory" list="expenseCategoryList" placeholder="e.g. Travel, Hotel, Food">
+      <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+    </label>
     <div class="fa">
       <button class="btn btn-p" onclick="doFinalizeTrip()">Finalize & Save</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -3645,11 +3798,13 @@ async function ensureTripMembersAsFriends(trip) {
 async function doFinalizeTrip() {
   const trip = _tripDetail;
   const isExtra = document.getElementById('tfTypeExtra')?.classList.contains('active') || false;
+  const category = document.getElementById('tfCategory')?.value.trim() || null;
   const ensuredFriendIds = await ensureTripMembersAsFriends(trip);
   await api(`/api/trips/${_selectedTripId}/finalize`, {
     method: 'POST',
     body: {
       is_extra: isExtra,
+      category,
       txn_date: todayStr(),
       friend_ids: ensuredFriendIds,
     },
@@ -5419,16 +5574,18 @@ async function reRenderEmiCard(id) {
   if (el) el.outerHTML = renderEmiCard(r);
 }
 
-function showActivateModal(id) {
+async function showActivateModal(id) {
   const today = new Date().toISOString().slice(0, 10);
   const isFriend = currentTab === 'friendemis';
+  if (!isFriend && !_expenseCategories.length) await loadExpenseCategories();
   const expensesSection = isFriend ? '' :
     '<label class="fl" style="flex-direction:row;align-items:center;gap:8px;margin-top:12px">' +
     '<input type="checkbox" id="emiAddExpenses" checked style="width:auto;margin:0" onchange="_emiExpTypeToggle()"> Add installments to Expenses</label>' +
     '<div id="emiExpTypeWrap" style="margin-top:10px">' +
     '<label class="fl">Expense Type<select class="fi" id="emiExpType">' +
     '<option value="0">Fair (Essential)</option><option value="1">Extra (Discretionary)</option>' +
-    '</select></label></div>';
+    '</select></label>' +
+    '<label class="fl">Expense Category' + expenseCategoryDatalistHtml('') + '</label></div>';
   showModal('<div class="modal-title">Activate EMI</div>' +
     '<p style="color:var(--t2);font-size:14px;margin-bottom:16px">Choose start date to generate the installment schedule.</p>' +
     '<label class="fl">Start Date<input class="fi" type="date" id="emiStartDate" value="' + today + '"></label>' +
@@ -5445,7 +5602,8 @@ async function doActivateEmiTracker(id) {
   const isFriend = currentTab === 'friendemis';
   const add_expenses = !isFriend && document.getElementById('emiAddExpenses')?.checked;
   const expense_type = add_expenses ? parseInt(document.getElementById('emiExpType').value) : 0;
-  const r = await api('/api/emi/records/' + id + '/activate', { method: 'POST', body: { start_date, add_expenses, expense_type } });
+  const expense_category = add_expenses ? (document.getElementById('eCategory')?.value.trim() || null) : null;
+  const r = await api('/api/emi/records/' + id + '/activate', { method: 'POST', body: { start_date, add_expenses, expense_type, expense_category } });
   if (r?.success) {
     closeModal();
     toast('Activated! Installments created.', 'success');
@@ -5504,7 +5662,8 @@ function _emiExpTypeToggle() {
   if (wrap) wrap.style.display = document.getElementById('emiAddExpenses').checked ? '' : 'none';
 }
 
-function showAddEmiExpensesModal(id, alreadyAdded) {
+async function showAddEmiExpensesModal(id, alreadyAdded) {
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const warning = alreadyAdded
     ? '<p style="color:var(--amber);font-size:13px;margin-bottom:12px">âš  Expenses are already added. Adding again will replace all existing entries.</p>'
     : '';
@@ -5513,6 +5672,7 @@ function showAddEmiExpensesModal(id, alreadyAdded) {
     '<label class="fl">Expense Type<select class="fi" id="emiExpType">' +
     '<option value="0">Fair (Essential)</option><option value="1">Extra (Discretionary)</option>' +
     '</select></label>' +
+    '<label class="fl">Expense Category' + expenseCategoryDatalistHtml('') + '</label>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn btn-p" onclick="doAddEmiExpenses(' + id + ')">Add to Expenses</button>' +
     '<button class="btn btn-g" onclick="closeModal()">Cancel</button>' +
@@ -5521,7 +5681,8 @@ function showAddEmiExpensesModal(id, alreadyAdded) {
 
 async function doAddEmiExpenses(id) {
   const expense_type = parseInt(document.getElementById('emiExpType').value);
-  const r = await api('/api/emi/records/' + id + '/add-expenses', { method: 'POST', body: { expense_type } });
+  const expense_category = document.getElementById('eCategory')?.value.trim() || null;
+  const r = await api('/api/emi/records/' + id + '/add-expenses', { method: 'POST', body: { expense_type, expense_category } });
   if (r?.success) {
     closeModal();
     const rec = _emiRecords.find(x => String(x.id) === String(id));
@@ -5992,6 +6153,7 @@ function showAddCycleTxnModal(cycleId, cycleStart, cycleEnd) {
           <option value="1">Extra / Non-essential</option>
         </select>
       </label>
+      <label class="fl" style="max-width:260px">Expense Category${expenseCategoryDatalistHtml('')}</label>
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doAddCycleTxn(${cycleId})">Add</button>
@@ -6139,10 +6301,12 @@ async function doAddCycleTxn(cycleId) {
   const r = await api(`/api/cc/cycles/${cycleId}/txns`, { method: 'POST', body });
   const addAsExpense = document.getElementById('ctAddExpense')?.checked;
   const expenseType = parseInt(document.getElementById('ctExpType')?.value || '0', 10) || 0;
+  const expenseCategory = document.getElementById('eCategory')?.value.trim() || null;
   if (r?.success) {
     if (addAsExpense) {
       await api('/api/expenses', { method: 'POST', body: {
         item_name: body.description,
+        category: expenseCategory,
         amount: body.amount,
         purchase_date: body.txn_date,
         is_extra: expenseType ? 1 : 0,
@@ -6607,6 +6771,7 @@ async function showCcTxnModal(cardId, txnId) {
           <option value="1">Extra / Non-essential</option>
         </select>
       </label>
+      <label class="fl" style="max-width:260px">Expense Category${expenseCategoryDatalistHtml('')}</label>
     </div>` : ''}
     <div class="fa">
       <button class="btn btn-p" onclick="saveCcTxn(${cardId},${txnId||'null'})">${txnId ? 'Update' : 'Add'}</button>
@@ -6638,6 +6803,7 @@ async function saveCcTxn(cardId, txnId) {
   if (!Number.isFinite(body.discount_pct) || body.discount_pct < 0 || body.discount_pct > 100) { toast('Discount % must be between 0 and 100', 'warning'); return; }
   const addAsExpense = !txnId && document.getElementById('ctAddExpense')?.checked;
   const expenseType = parseInt(document.getElementById('ctExpType')?.value || '0', 10) || 0;
+  const expenseCategory = document.getElementById('eCategory')?.value.trim() || null;
   const r = txnId
     ? await api(`/api/cc/txns/${txnId}`, { method: 'PUT', body })
     : await api('/api/cc/txns', { method: 'POST', body });
@@ -6645,6 +6811,7 @@ async function saveCcTxn(cardId, txnId) {
     if (addAsExpense) {
       await api('/api/expenses', { method: 'POST', body: {
         item_name: body.description,
+        category: expenseCategory,
         amount: body.amount,
         purchase_date: body.txn_date,
         is_extra: expenseType ? 1 : 0,
@@ -8145,6 +8312,7 @@ async function autoFillTracker(trackerId) {
 }
 
 async function addTrackerExpense(trackerId, year, month) {
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const sourceMonth = `${year}-${String(month).padStart(2, '0')}`;
   const nextMonth = _addMonths(sourceMonth, 1);
   const [nextYear, nextMonthNum] = nextMonth.split('-').map(Number);
@@ -8162,6 +8330,7 @@ async function addTrackerExpense(trackerId, year, month) {
         </label>
       </div>
     </div>
+    <label class="fl full" style="margin-top:12px">Expense Category${expenseCategoryDatalistHtml('')}</label>
     <div class="fa">
       <button class="btn btn-p" onclick="confirmAddTrackerExpense(${trackerId}, ${year}, ${month})">Add</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -8179,7 +8348,8 @@ function setTrackerExpenseMonthChoice(choice) {
 async function confirmAddTrackerExpense(trackerId, year, month) {
   const sourceMonth = `${year}-${String(month).padStart(2, '0')}`;
   const expenseMonth = window._trackerExpenseMonthChoice === 'next' ? _addMonths(sourceMonth, 1) : sourceMonth;
-  const r = await api(`/api/trackers/${trackerId}/month-expense`, { method: 'POST', body: { year, month, expense_month: expenseMonth } });
+  const expenseCategory = document.getElementById('eCategory')?.value.trim() || null;
+  const r = await api(`/api/trackers/${trackerId}/month-expense`, { method: 'POST', body: { year, month, expense_month: expenseMonth, expense_category: expenseCategory } });
   if (r?.success) {
     closeModal();
     toast(`${fmtCur(r.amount)} added to expenses`, 'success');
@@ -8325,6 +8495,7 @@ async function toggleRecurringActive(id, active) {
 
 async function showRecurringModal(id) {
   const entry = id ? _findRecurringEntryById(id) : null;
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
   const currentMonth = _localYM();
@@ -8363,9 +8534,17 @@ async function showRecurringModal(id) {
         <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
         Also add as expense
       </label>
+      <label class="fl full" id="reCcExpenseCategoryRow" style="${isCC && !entry?.also_expense ? 'display:none' : ''}">Expense Category
+        <input class="fi" id="reCcExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Subscriptions, Bills, Shopping">
+        <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+      </label>
     </div>
 
     <div id="reExpenseFields" style="${isCC ? 'display:none' : ''}">
+      <label class="fl full">Expense Category
+        <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
+        <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+      </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
         <input type="checkbox" id="reIsExtra" ${entry?.is_extra ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
         Mark as extra spending
@@ -8388,10 +8567,17 @@ function recurringTypeToggle() {
   document.getElementById('reExpenseFields').style.display = isCC ? 'none' : '';
   const bankRow = document.getElementById('reBankRow');
   if (bankRow) bankRow.style.display = isCC ? 'none' : '';
+  toggleRecurringExpenseCategory();
   if (isCC) {
     const bankEl = document.getElementById('reBank');
     if (bankEl) bankEl.value = '';
   }
+}
+
+function toggleRecurringExpenseCategory() {
+  const row = document.getElementById('reCcExpenseCategoryRow');
+  if (!row) return;
+  row.style.display = document.getElementById('reAlsoExpense')?.checked ? '' : 'none';
 }
 
 async function saveRecurring(id) {
@@ -8762,6 +8948,7 @@ function showPayModal(id, amount) {
 
 async function showRecurringModal(id) {
   const entry = id ? _findRecurringEntryById(id) : null;
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
   if (!_bankAccounts.length) {
@@ -8802,12 +8989,18 @@ async function showRecurringModal(id) {
         <label class="fl">Discount %<input class="fi" type="number" step="0.1" id="reDisc" value="${entry?.discount_pct || 0}" min="0" max="100"></label>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
-        <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+        <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleRecurringExpenseCategory()">
         Also add as expense
+      </label>
+      <label class="fl full" id="reCcExpenseCategoryRow" style="${isCC && !entry?.also_expense ? 'display:none' : ''}">Expense Category
+        <input class="fi" id="reCcExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Subscriptions, Bills, Shopping">
       </label>
     </div>
 
     <div id="reExpenseFields" style="${isCC ? 'display:none' : ''}">
+      <label class="fl full">Expense Category
+        <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
+      </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
         <input type="checkbox" id="reIsExtra" ${entry?.is_extra ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
         Mark as extra spending
@@ -8817,6 +9010,7 @@ async function showRecurringModal(id) {
         Add this recurring expense for the current month as well
       </label>` : ''}
     </div>
+    <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
 
     <div class="fa">
       <button class="btn btn-p" onclick="saveRecurring(${id || 'null'})">${id ? 'Update' : 'Add'}</button>
@@ -8844,6 +9038,9 @@ async function saveRecurring(id) {
     interval_months: intervalMonths,
     start_month: startMonth,
     bank_account_id: type === 'expense' ? (bankVal ? parseInt(bankVal, 10) : null) : null,
+    expense_category: type === 'cc_txn'
+      ? (document.getElementById('reCcExpenseCategory')?.value.trim() || null)
+      : (document.getElementById('reExpenseCategory')?.value.trim() || null),
   };
   if (type === 'cc_txn') {
     body.card_id = parseInt(document.getElementById('reCard').value, 10) || null;
@@ -9087,6 +9284,7 @@ async function showTrackerModal(id) {
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
   }
+  if (!_expenseCategories.length) await loadExpenseCategories();
   const t = id ? _findTrackerById(id) : null;
   const bankOpts = `<option value="">-- Do not deduct --</option>${_bankDropdownOptions(t?.expense_bank_account_id)}`;
   openModal(id ? 'Edit Tracker' : 'Add Tracker', `
@@ -9096,6 +9294,7 @@ async function showTrackerModal(id) {
       <label class="fl">Price per Unit (Rs) *<input class="fi" type="number" step="0.01" id="trPrice" value="${t?.price_per_unit || ''}" placeholder="0.00"></label>
       <label class="fl">Default Qty / Day<input class="fi" type="number" step="0.01" min="0" id="trDefaultQty" value="${t?.default_qty ?? 1}" placeholder="1"></label>
       <label class="fl full">Expense Bank<select class="fi" id="trExpenseBank">${bankOpts}</select></label>
+      <label class="fl full">Default Expense Category${expenseCategoryDatalistHtml(t?.expense_category || '')}</label>
       <label class="fl full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
         <input type="checkbox" id="trAutoExpense" ${t?.auto_add_to_expense ? 'checked' : ''}>
         <span>Automatically add the previous completed month to Expenses</span>
@@ -9119,6 +9318,7 @@ async function saveTracker(id) {
   const price_per_unit = parseFloat(document.getElementById('trPrice').value);
   const default_qty = parseFloat(document.getElementById('trDefaultQty').value) || 1;
   const bankVal = document.getElementById('trExpenseBank')?.value;
+  const expense_category = document.getElementById('eCategory')?.value.trim() || null;
   if (!name) { toast('Name is required', 'warning'); return; }
   if (name.length > 80) { toast('Name must be 80 characters or fewer', 'warning'); return; }
   if (!unit) { toast('Unit is required', 'warning'); return; }
@@ -9133,6 +9333,7 @@ async function saveTracker(id) {
     is_active: document.getElementById('trIsActive')?.checked ? 1 : 0,
     auto_add_to_expense: document.getElementById('trAutoExpense')?.checked ? 1 : 0,
     expense_bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
+    expense_category,
   };
   const r = id
     ? await api(`/api/trackers/${id}`, { method: 'PUT', body })

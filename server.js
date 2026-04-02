@@ -63,12 +63,27 @@ app.use(session({
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Public plans API — no auth required
+function getGoogleWebClientIdForRequest(req) {
+  const hostname = String(req.hostname || '').trim().toLowerCase();
+  const normalizedHostKey = hostname.replace(/[^a-z0-9]/gi, '_').replace(/^_+|_+$/g, '').toUpperCase();
+  const hostSpecificKey = normalizedHostKey ? `GOOGLE_WEB_CLIENT_ID_${normalizedHostKey}` : '';
+  const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+
+  return (
+    (hostSpecificKey && process.env[hostSpecificKey]) ||
+    (isLocalHost && process.env.GOOGLE_WEB_CLIENT_ID_LOCAL) ||
+    (!isLocalHost && process.env.GOOGLE_WEB_CLIENT_ID_PROD) ||
+    process.env.GOOGLE_WEB_CLIENT_ID ||
+    ''
+  );
+}
+
 app.get('/runtime-config.js', (_req, res) => {
   res.type('application/javascript');
   res.send(
     `window.__appRuntimeConfig = ${JSON.stringify({
       gaMeasurementId: process.env.GA_MEASUREMENT_ID || '',
-      googleWebClientId: process.env.GOOGLE_WEB_CLIENT_ID || '',
+      googleWebClientId: getGoogleWebClientIdForRequest(_req),
     })};`
   );
 });
