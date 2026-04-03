@@ -759,7 +759,7 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
   const [defaults, recurringEntries, trackerItems, emiAll, accounts, cardsR] = await Promise.all([
     pgOpsDb.getDefaultPayments(userId),
     pgOpsDb.getRecurringEntries(userId),
-    pgOpsDb.getDailyTrackerPlannerItems(userId, month),
+    pgOpsDb.getDailyTrackerPlannerItems(userId, month, { includeAutoAddToExpense: true }),
     getEmiDuesForMonth(userId, month),
     pgOpsDb.getBankAccounts(userId),
     query('SELECT * FROM credit_cards WHERE user_id = $1', [userId]),

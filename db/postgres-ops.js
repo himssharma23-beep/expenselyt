@@ -85,19 +85,20 @@ function normalizeDateValue(value, label = 'Date') {
 function dbDateToYmd(value) {
   if (!value) return null;
   if (value instanceof Date) {
-    // DATE columns can arrive as UTC midnight; use UTC getters to avoid day-shift by local timezone.
-    const y = value.getUTCFullYear();
-    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(value.getUTCDate()).padStart(2, '0');
+    // pg DATE values are represented as local-midnight Date objects in this app runtime.
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
   const raw = String(value).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
   const dt = new Date(raw);
   if (!Number.isNaN(dt.getTime())) {
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const d = String(dt.getDate()).padStart(2, '0');
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(dt.getUTCDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
   return raw.slice(0, 10);
@@ -403,13 +404,26 @@ async function generateMonthlyPayments(userId, month) {
     }
     for (const item of trackerPlannerItems) {
       const exists = await client.query(
-        `SELECT id
+        `SELECT id, status, paid_amount
          FROM monthly_payments
          WHERE user_id = $1 AND month = $2 AND daily_tracker_id = $3 AND tracker_source_month = $4
          LIMIT 1`,
         [userId, month, item.daily_tracker_id, item.tracker_source_month]
       );
-      if (exists.rows[0]) continue;
+      const existing = exists.rows[0];
+      if (existing) {
+        const existingPaid = parseFloat(existing.paid_amount) || 0;
+        const canRefresh = (existing.status === 'pending' || !existing.status) && existingPaid <= 0;
+        if (canRefresh) {
+          await client.query(
+            `UPDATE monthly_payments
+             SET name = $1, amount = $2, due_date = $3, notes = $4
+             WHERE id = $5`,
+            [item.name, item.amount, item.due_date, item.notes || 'Daily tracker total', existing.id]
+          );
+        }
+        continue;
+      }
       await client.query(
         `INSERT INTO monthly_payments (user_id, daily_tracker_id, tracker_source_month, month, name, amount, due_date, bank_account_id, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -801,7 +815,8 @@ async function applyRecurringEntries(userId) {
   return applied;
 }
 
-async function getDailyTrackerPlannerItems(userId, month) {
+async function getDailyTrackerPlannerItems(userId, month, options = {}) {
+  const includeAutoAddToExpense = !!options.includeAutoAddToExpense;
   const [yr, mo] = month.split('-').map(Number);
   const prevDate = new Date(yr, mo - 2, 1);
   const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
@@ -812,14 +827,13 @@ async function getDailyTrackerPlannerItems(userId, month) {
        t.id AS daily_tracker_id,
        t.name,
        COALESCE(t.auto_add_to_expense, FALSE) AS auto_add_to_expense,
-       ROUND(COALESCE(SUM(e.amount), 0)::numeric, 2) AS total_amount,
-       MAX(CASE WHEN e.added_to_expense = TRUE THEN 1 ELSE 0 END) AS added_to_expense
+       ROUND(COALESCE(SUM(e.amount), 0)::numeric, 2) AS total_amount
      FROM daily_trackers t
      LEFT JOIN daily_entries e
        ON e.tracker_id = t.id
       AND e.user_id = $1
       AND e.entry_date::text LIKE $2
-     WHERE t.user_id = $1 AND t.is_active = TRUE
+     WHERE t.user_id = $1 AND t.deleted_at IS NULL
      GROUP BY t.id
      ORDER BY t.name`,
     [userId, `${prevMonth}-%`]
@@ -827,8 +841,7 @@ async function getDailyTrackerPlannerItems(userId, month) {
   return result.rows.flatMap((row) => {
     const total = num(row.total_amount);
     if (total <= 0) return [];
-    if (row.auto_add_to_expense) return [];
-    if (Number(row.added_to_expense || 0) === 1) return [];
+    if (row.auto_add_to_expense && !includeAutoAddToExpense) return [];
     return [{
       daily_tracker_id: Number(row.daily_tracker_id),
       tracker_source_month: prevMonth,

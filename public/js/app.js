@@ -114,7 +114,8 @@ document.addEventListener('pointerdown', (event) => {
 }, true);
 let friendSort = 'name';
 let selectedFriend = null;
-let divideItems = [];
+const DIVIDE_DRAFT_STORAGE_KEY = 'expense-lite.divide-draft.v1';
+let divideItems = _loadDivideDraftItems();
 let divideSelected = new Set();
 let dividePaidBy = 'self';
 
@@ -165,6 +166,10 @@ function normalizeTxnDateValue(value) {
     if (value.value != null) return normalizeTxnDateValue(value.value);
   }
   return normalizeInputDate(value);
+}
+
+function repairMojibakeText(value) {
+  return String(value ?? '');
 }
 
 function parseIntegerField(raw, fieldLabel, { min = null, max = null, required = false } = {}) {
@@ -879,8 +884,8 @@ async function loadFriends() {
       <div class="filter-row">
         <button class="btn btn-p btn-sm" onclick="showAddFriend()">+ Add Friend</button>
         <button class="btn btn-s btn-sm" onclick="showFriendExcelImport()">Import Excel</button>
-        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">ðŸ”— Share</button>
-        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">â†“ PDF</button>
+        <button class="btn btn-s btn-sm" onclick="showFriendsShareModal()" title="Share your friends list">Share</button>
+        <button class="btn btn-s btn-sm" onclick="downloadFriendsPdf()">PDF</button>
         <div class="chip-group">
           ${['name','high','low'].map(s=>`<button class="chip ${friendSort===s?'active':''}" onclick="friendSort='${s}';loadFriends()">${s==='name'?'A-Z':s==='high'?'Highest':'Lowest'}</button>`).join('')}
         </div>
@@ -889,12 +894,21 @@ async function loadFriends() {
         ${list.map(f => {
           const safeName = String(f.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
           const safeDeleteName = safeName || 'this friend';
+          const linkedLabel = f.linked_user_display_name
+            ? `${f.linked_user_display_name}${f.linked_user_username ? ` (@${f.linked_user_username})` : ''}`
+            : 'Not linked';
+          const safeLinkedLabel = String(linkedLabel).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
           return `<div class="friend-card">
           <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer" onclick="selectedFriend=${f.id};loadFriendDetail()">
             <div class="avatar">${escHtml((f.name || '?')[0].toUpperCase())}</div>
-            <div class="friend-info"><div class="friend-name">${escHtml(f.name)}</div><div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div></div>
+            <div class="friend-info">
+              <div class="friend-name">${escHtml(f.name)}</div>
+              <div style="font-size:11px;color:${balColor(f.balance)}">${f.balance<0?'You owe':f.balance>0?'They owe':'Settled'}</div>
+              <div style="font-size:11px;color:${f.linked_user_id ? 'var(--green)' : 'var(--t3)'};margin-top:2px">${f.linked_user_id ? `Linked to ${escHtml(linkedLabel)}` : 'Link to an app user to share split history'}</div>
+            </div>
             <div class="friend-bal" style="color:${balColor(f.balance)}">${fmtCur(f.balance)}</div>
           </div>
+          <button class="btn-d" style="color:var(--blue)" onclick="stopEvent(event);showFriendLinkModal(${f.id}, '${safeName}', ${f.linked_user_id || 'null'}, '${safeLinkedLabel}')">${f.linked_user_id ? 'Manage' : 'Link'}</button>
           <button class="btn-d" style="color:var(--em)" onclick="stopEvent(event);showEditFriend(${f.id}, '${safeName}')">Edit</button>
           <button class="btn-d" style="color:var(--red)" onclick="stopEvent(event);deleteFriend(${f.id}, '${safeDeleteName}')">Del</button>
         </div>`;
@@ -903,7 +917,245 @@ async function loadFriends() {
     </div>`;
 }
 
-function showAddFriend() {
+function _groupReceivedDivideSessions(groups) {
+  const sessions = {};
+  (groups || []).forEach((group) => {
+    const sessionKey = group.session_id || `_solo_${group.id}`;
+    const key = `${group.owner_user_id}:${sessionKey}`;
+    if (!sessions[key]) {
+      sessions[key] = {
+        key,
+        session_key: sessionKey,
+        owner_user_id: Number(group.owner_user_id),
+        owner_name: group.owner_name,
+        heading: group.heading || group.details,
+        divide_date: group.divide_date,
+        total_share_amount: 0,
+        items: [],
+      };
+    }
+    sessions[key].items.push(group);
+    sessions[key].total_share_amount += Number(group.friend_share_amount || 0);
+  });
+  return Object.values(sessions).sort((a, b) => String(b.divide_date || '').localeCompare(String(a.divide_date || '')));
+}
+
+function _sharedDividePersonRows(group) {
+  const splits = group.splits || [];
+  const friendsTotal = splits.reduce((sum, split) => sum + Number(split.share_amount || 0), 0);
+  const ownerShare = Math.round((Number(group.total_amount || 0) - friendsTotal) * 100) / 100;
+  const rows = [];
+  if (ownerShare > 0.005) {
+    rows.push({
+      name: `${group.owner_name || 'Owner'} (owner)`,
+      share: ownerShare,
+      paid: group.paid_by === 'You' ? Number(group.total_amount || 0) : 0,
+      isTarget: false,
+    });
+  }
+  splits.forEach((split) => {
+    rows.push({
+      name: split.friend_name,
+      share: Number(split.share_amount || 0),
+      paid: group.paid_by === split.friend_name ? Number(group.total_amount || 0) : 0,
+      isTarget: Number(split.friend_id) === Number(group.friend_id),
+    });
+  });
+  return rows;
+}
+
+function _sharedDivideSessionSummary(session) {
+  const totals = new Map();
+  (session?.items || []).forEach((group) => {
+    _sharedDividePersonRows(group).forEach((person) => {
+      const key = String(person.name || '');
+      const current = totals.get(key) || { name: person.name, share: 0, paid: 0, isTarget: false };
+      current.share += Number(person.share || 0);
+      current.paid += Number(person.paid || 0);
+      current.isTarget = current.isTarget || !!person.isTarget;
+      totals.set(key, current);
+    });
+  });
+  return [...totals.values()];
+}
+
+function renderReceivedDivideShares(groups) {
+  const sessions = _groupReceivedDivideSessions(groups);
+  if (!sessions.length) return '';
+  return `
+    <div style="margin-top:26px">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px">Shared Split History</div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:12px">Friends can share saved split sessions with you after linking your account. This view is read-only, and you can hide any shared session whenever you want.</div>
+      <div style="display:grid;gap:12px">
+        ${sessions.map((session) => `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+              <div>
+                <div style="font-size:15px;font-weight:700">${escHtml(session.heading || 'Shared split')}</div>
+                <div style="font-size:12px;color:var(--t3);margin-top:4px">Shared by ${escHtml(session.owner_name || 'Unknown')} · ${fmtDate(session.divide_date)} · ${session.items.length} item${session.items.length !== 1 ? 's' : ''}</div>
+                <div style="font-size:12px;color:${session.total_share_amount > 0 ? 'var(--red)' : 'var(--t3)'};margin-top:6px;font-weight:600">${session.total_share_amount > 0 ? `You owe ${fmtCur(session.total_share_amount)}` : 'No amount owed'}</div>
+              </div>
+              <button class="btn-d" style="color:var(--red)" onclick="hideSharedDivideSession(${session.owner_user_id}, '${String(session.session_key).replace(/'/g, "\\'")}')">Hide</button>
+            </div>
+            <div style="margin-top:14px;display:grid;gap:10px">
+              ${session.items.map((group) => `
+                <div style="border:1px solid var(--br);border-radius:12px;padding:12px;background:var(--bg2)">
+                  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+                    <div>
+                      <div style="font-size:13px;font-weight:700">${escHtml(group.details || session.heading || 'Split item')}</div>
+                      <div style="font-size:11px;color:var(--t3);margin-top:3px">Paid by ${escHtml(group.paid_by || 'Unknown')} · Total ${fmtCur(group.total_amount || 0)}</div>
+                    </div>
+                    <div style="font-size:13px;font-weight:700;color:var(--red)">Your share ${fmtCur(group.friend_share_amount || 0)}</div>
+                  </div>
+                  <div style="margin-top:10px;border-top:1px solid var(--br);padding-top:10px">
+                    ${_sharedDividePersonRows(group).map((person) => {
+                      const net = Math.round((Number(person.share || 0) - Number(person.paid || 0)) * 100) / 100;
+                      const netLabel = Math.abs(net) < 0.005
+                        ? 'Settled'
+                        : net > 0
+                          ? `Owes ${fmtCur(net)}`
+                          : `Gets back ${fmtCur(Math.abs(net))}`;
+                      const netColor = Math.abs(net) < 0.005 ? 'var(--t3)' : net > 0 ? 'var(--red)' : 'var(--green)';
+                      return `
+                        <div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0;${person.isTarget ? 'font-weight:700' : ''}">
+                          <div>
+                            <div style="font-size:13px;color:var(--t1)">${escHtml(person.name)}${person.isTarget ? ' (you)' : ''}</div>
+                            <div style="font-size:11px;color:var(--t3)">Share ${fmtCur(person.share || 0)} · Paid ${person.paid ? fmtCur(person.paid) : '-'}</div>
+                          </div>
+                          <div style="font-size:12px;color:${netColor};font-weight:700;align-self:center">${netLabel}</div>
+                        </div>`;
+                    }).join('')}
+                  </div>
+                </div>`).join('')}
+            </div>
+            <div style="margin-top:14px;border-top:1px solid var(--br);padding-top:12px">
+              <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px;letter-spacing:.3px">SESSION TOTAL</div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th class="td-m">Share</th>
+                      <th class="td-m">Paid</th>
+                      <th class="td-m">Difference</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${_sharedDivideSessionSummary(session).map((person) => {
+                      const net = Math.round((Number(person.share || 0) - Number(person.paid || 0)) * 100) / 100;
+                      const diffLabel = Math.abs(net) < 0.005
+                        ? 'Settled'
+                        : net > 0
+                          ? `Owes ${fmtCur(net)}`
+                          : `Owed ${fmtCur(Math.abs(net))}`;
+                      const diffColor = Math.abs(net) < 0.005 ? 'var(--t3)' : net > 0 ? 'var(--red)' : 'var(--green)';
+                      return `<tr${person.isTarget ? ' style="font-weight:700"' : ''}>
+                        <td>${escHtml(person.name)}${person.isTarget ? ' (you)' : ''}</td>
+                        <td class="td-m">${fmtCur(person.share || 0)}</td>
+                        <td class="td-m">${person.paid ? fmtCur(person.paid) : '-'}</td>
+                        <td class="td-m" style="color:${diffColor}">${diffLabel}</td>
+                      </tr>`;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+let _friendLinkSearchTimeout = null;
+function showFriendLinkModal(friendId, friendName, linkedUserId, linkedLabel) {
+  openModal(`Link Friend: ${friendName}`, `
+    <div style="font-size:13px;color:var(--t2);margin-bottom:14px">Link this friend to an app account so saved split history can be shared with them. They will only get a view-only copy and can hide it from their side anytime.</div>
+    <div style="background:${linkedUserId ? 'var(--green-l)' : 'var(--bg2)'};border-radius:10px;padding:10px 12px;font-size:13px;color:${linkedUserId ? 'var(--green)' : 'var(--t2)'};margin-bottom:14px">
+      ${linkedUserId ? `Currently linked to <b>${escHtml(linkedLabel || 'app user')}</b>.` : 'This friend is not linked yet.'}
+      ${linkedUserId ? ` <button class="btn-d" style="color:var(--red);margin-left:8px" onclick="unlinkFriendFromUser(${friendId})">Unlink</button>` : ''}
+    </div>
+    <label class="fl">Search app users
+      <input class="fi" id="friendLinkSearchQ" placeholder="Type username or display name..." oninput="searchFriendLinkUsers()">
+    </label>
+    <div id="friendLinkSearchResults" style="margin-top:10px"></div>
+    <div class="fa" style="margin-top:18px">
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>
+    <input type="hidden" id="friendLinkId" value="${friendId}">`);
+}
+
+function searchFriendLinkUsers() {
+  clearTimeout(_friendLinkSearchTimeout);
+  _friendLinkSearchTimeout = setTimeout(async () => {
+    const q = document.getElementById('friendLinkSearchQ')?.value?.trim();
+    const box = document.getElementById('friendLinkSearchResults');
+    if (!box) return;
+    if (!q || q.length < 2) {
+      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">Type at least 2 characters to search.</div>';
+      return;
+    }
+    const data = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
+    const users = data?.users || [];
+    box.innerHTML = users.length
+      ? users.map((u) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid var(--br);border-radius:10px;margin-bottom:6px;font-size:13px">
+          <div>${escHtml(u.display_name || u.username)} <span style="color:var(--t3);font-size:11px">@${escHtml(u.username || '')}</span></div>
+          <button class="btn btn-p btn-sm" onclick="linkFriendToUserAccount(${u.id})">Link</button>
+        </div>`).join('')
+      : '<div style="font-size:12px;color:var(--t3)">No matching users found.</div>';
+  }, 250);
+}
+
+async function linkFriendToUserAccount(linkedUserId) {
+  const friendId = parseInt(document.getElementById('friendLinkId')?.value || '0', 10);
+  if (!friendId || !linkedUserId) return;
+  const res = await api(`/api/friends/${friendId}/link-user`, { method: 'PUT', body: { linked_user_id: linkedUserId } });
+  if (res?.success) {
+    closeModal();
+    toast('Friend linked to app user', 'success');
+    if (selectedFriend) await loadFriendDetail(true);
+    else await loadFriends();
+  } else {
+    toast(res?.error || 'Failed to link friend', 'error');
+  }
+}
+
+async function unlinkFriendFromUser(friendId) {
+  const res = await api(`/api/friends/${friendId}/link-user`, { method: 'PUT', body: { linked_user_id: null } });
+  if (res?.success) {
+    closeModal();
+    toast('Friend unlinked', 'success');
+    if (selectedFriend) await loadFriendDetail(true);
+    else await loadFriends();
+  } else {
+    toast(res?.error || 'Failed to unlink friend', 'error');
+  }
+}
+
+async function hideSharedDivideSession(ownerUserId, sessionKey) {
+  if (!await confirmDialog('Hide this shared split session from your view?')) return;
+  const res = await api('/api/divide/shared/hide', { method: 'POST', body: { owner_user_id: ownerUserId, session_key: sessionKey } });
+  if (res?.success) {
+    toast('Hidden from your shared history', 'success');
+    if (currentTab === 'divide') {
+      const sharedData = await api('/api/divide/shared');
+      _divSharedGroups = sharedData?.groups || [];
+      _divSharedExpandedId = null;
+      const body = document.getElementById('divSharedHistoryBody');
+      if (body) body.innerHTML = _buildSharedGroupRows().join('');
+      const lbl = document.querySelector('#divSharedHistorySection .div-shared-count');
+      if (lbl) {
+        const sessions = _buildSharedSessions();
+        lbl.textContent = `${sessions.length} session${sessions.length !== 1 ? 's' : ''}, ${_divSharedGroups.length} item${_divSharedGroups.length !== 1 ? 's' : ''}`;
+      }
+      if (!_divSharedGroups.length) renderDivide();
+    } else {
+      await loadFriends();
+    }
+  } else {
+    toast(res?.error || 'Failed to hide session', 'error');
+  }
+}
+
+function showAddFriendLegacy() {
   openModal('Add Friend', `
     <label class="fl">Friend's Name<input class="fi" id="fName" placeholder="Enter name" autofocus></label>
     <div class="fa" style="margin-top:16px"><button class="btn btn-p" onclick="addFriend()">Add</button><button class="btn btn-g" onclick="closeModal()">Cancel</button></div>`);
@@ -923,7 +1175,7 @@ async function deleteFriend(id, name) {
   loadFriends();
 }
 
-function showEditFriend(id, currentName) {
+function showEditFriendLegacy(id, currentName) {
   openModal('Edit Friend', `
     <label class="fl">Friend's Name
       <input class="fi" id="fEditName" value="${currentName}" autofocus>
@@ -1320,6 +1572,8 @@ let _divFriends = [];       // loaded once, reused in render
 let _divEditIdx = null;     // index being edited, null = new
 let _divGroups = [];        // saved groups from DB
 let _divExpandedId = null;  // which group row is expanded
+let _divSharedGroups = [];  // received shared groups
+let _divSharedExpandedId = null;
 let divideSplitMode = 'equal'; // 'equal'|'percent'|'fraction'|'amount'|'parts'
 let divideSplitValues = {};    // personKey â†’ numeric value for non-equal modes
 
@@ -1330,6 +1584,65 @@ const SPLIT_MODES = [
   { key: 'amount',   label: 'Direct &#8377;' },
   { key: 'parts',    label: 'Parts/Ratio' },
 ];
+
+function _normalizeDivideDraftItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const personShares = Array.isArray(item.personShares)
+    ? item.personShares.map((ps) => ({
+        key: String(ps?.key ?? ''),
+        name: String(ps?.name ?? ''),
+        share: Math.round((Number(ps?.share || 0)) * 100) / 100,
+      })).filter((ps) => ps.key && ps.name)
+    : [];
+  return {
+    date: normalizeInputDate(item.date) || todayStr(),
+    details: String(item.details || ''),
+    amount: Math.round((Number(item.amount || 0)) * 100) / 100,
+    paidById: String(item.paidById ?? 'self'),
+    paidByName: String(item.paidByName || 'You'),
+    splitMode: SPLIT_MODES.some((mode) => mode.key === item.splitMode) ? item.splitMode : 'equal',
+    personShares,
+    friendIds: Array.isArray(item.friendIds) ? item.friendIds.map((id) => String(id)) : personShares.filter((ps) => ps.key !== 'self').map((ps) => String(ps.key)),
+    selfIncluded: Array.isArray(item.personShares) ? personShares.some((ps) => ps.key === 'self') : !!item.selfIncluded,
+    friendNames: Array.isArray(item.friendNames) ? item.friendNames.map((name) => String(name)) : personShares.map((ps) => ps.name),
+    perPerson: Math.round((Number(item.perPerson || 0)) * 100) / 100,
+    ccInfo: item.ccInfo && typeof item.ccInfo === 'object'
+      ? {
+          cardId: Number(item.ccInfo.cardId) || null,
+          discountPct: Number(item.ccInfo.discountPct) || 0,
+          cardName: String(item.ccInfo.cardName || ''),
+        }
+      : null,
+  };
+}
+
+function _loadDivideDraftItems() {
+  try {
+    const raw = localStorage.getItem(DIVIDE_DRAFT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(_normalizeDivideDraftItem).filter((item) => item && item.details && item.amount > 0);
+  } catch (_) {
+    return [];
+  }
+}
+
+function _rehydrateDivideDraft(force = false) {
+  if (!force && Array.isArray(divideItems) && divideItems.length) return divideItems;
+  divideItems = _loadDivideDraftItems();
+  return divideItems;
+}
+
+function _saveDivideDraftItems() {
+  try {
+    if (!divideItems.length) {
+      localStorage.removeItem(DIVIDE_DRAFT_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(DIVIDE_DRAFT_STORAGE_KEY, JSON.stringify(divideItems.map(_normalizeDivideDraftItem).filter(Boolean)));
+  } catch (_) {}
+}
 
 function _selectedPeople() {
   return [...divideSelected].map(id => {
@@ -1415,13 +1728,16 @@ function selectSplitMode(mode) {
 }
 
 async function loadDivide() {
-  const [fData, dData] = await Promise.all([api('/api/friends'), api('/api/divide')]);
+  _rehydrateDivideDraft(true);
+  const [fData, dData, sharedData] = await Promise.all([api('/api/friends'), api('/api/divide'), api('/api/divide/shared')]);
   _divFriends = fData?.friends || [];
   _divGroups = dData?.groups || [];
+  _divSharedGroups = sharedData?.groups || [];
   renderDivide();
 }
 
 async function renderDivide() {
+  _rehydrateDivideDraft();
   await getCcCardsForForm();
   const friends = _divFriends;
   const editItem = _divEditIdx !== null ? divideItems[_divEditIdx] : null;
@@ -1585,6 +1901,7 @@ async function renderDivide() {
       ${itemsTable}
       ${summaryTable}
       ${renderDivHistory()}
+      ${renderSharedDivHistory()}
     </div>`;
 
   updateDivSplitInputs();
@@ -1677,6 +1994,12 @@ function _buildDivGroupRows() {
     const deleteBtn = isSingle
       ? `<button class="btn-d" style="color:var(--red)" onclick="deleteDivGroup(${sess.items[0].id})">Del</button>`
       : `<button class="btn-d" style="color:var(--red)" onclick="deleteSession('${sess.key}')">Del All</button>`;
+    const participantFriends = _getSessionParticipantFriends(sess.key);
+    const linkedParticipants = participantFriends.filter((friend) => friend.linked_user_id);
+    const sharedFriendIds = [...new Set(sess.items.flatMap((group) => (group.shared_targets || []).map((target) => Number(target.friend_id)).filter((id) => Number.isFinite(id) && id > 0)))];
+    const shareBtn = linkedParticipants.length
+      ? `<button class="btn-d" style="color:var(--blue)" onclick="event.stopPropagation();showDivideShareModal('${sess.key}')">${sharedFriendIds.length ? `Shared (${sharedFriendIds.length})` : 'Share'}</button>`
+      : `<span style="font-size:11px;color:var(--t3);margin-right:6px">No linked friends</span>`;
 
     return `<tr style="cursor:pointer" onclick="${toggle}">
         <td>${fmtDate(sess.date)}</td>
@@ -1685,11 +2008,61 @@ function _buildDivGroupRows() {
         <td class="td-m" style="font-weight:600">${fmtCur(sessionTotal)}</td>
         <td style="text-align:right;white-space:nowrap">
           <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? '-' : '+'}</span>
+          ${shareBtn}
           <button class="btn-d" style="color:var(--t2)" onclick="event.stopPropagation();downloadSplitSessionPdf('${sess.key}')">PDF</button>
           ${deleteBtn}
         </td>
       </tr>${expandDetail}`;
   });
+}
+
+function _getSessionParticipantFriends(sessionKey) {
+  const groups = _divGroups.filter((g) => (g.session_id || `_solo_${g.id}`) === sessionKey);
+  const friendIds = [...new Set(groups.flatMap((g) => (g.splits || []).map((split) => Number(split.friend_id)).filter((id) => Number.isFinite(id) && id > 0)))];
+  return friendIds
+    .map((friendId) => _divFriends.find((friend) => Number(friend.id) === Number(friendId)))
+    .filter(Boolean);
+}
+
+async function showDivideShareModal(sessionKey) {
+  const friends = _getSessionParticipantFriends(sessionKey);
+  const linkedFriends = friends.filter((friend) => friend.linked_user_id);
+  const groups = _divGroups.filter((g) => (g.session_id || `_solo_${g.id}`) === sessionKey);
+  const sharedFriendIds = [...new Set(groups.flatMap((group) => (group.shared_targets || []).map((target) => Number(target.friend_id)).filter((id) => Number.isFinite(id) && id > 0)))];
+  const friendRows = linkedFriends.map((friend) => `
+    <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-top:1px solid var(--br)">
+      <input type="checkbox" class="divide-share-friend" value="${friend.id}" ${sharedFriendIds.includes(Number(friend.id)) ? 'checked' : ''}>
+      <span style="flex:1">
+        <span style="font-size:13px;font-weight:600;color:var(--t1)">${escHtml(friend.name)}</span>
+        <span style="display:block;font-size:11px;color:var(--t3);margin-top:2px">Linked to ${escHtml(friend.linked_user_display_name || friend.linked_user_username || 'app user')}${friend.linked_user_username ? ` (@${escHtml(friend.linked_user_username)})` : ''}</span>
+      </span>
+    </label>`).join('');
+  const unlinkedCount = friends.length - linkedFriends.length;
+  openModal('Share Saved Split', `
+    <div style="font-size:13px;color:var(--t2);margin-bottom:14px">Choose which linked friends should receive this saved split session in their profile. They can view the breakdown and hide it from their side whenever they want.</div>
+    ${linkedFriends.length ? `
+      <div style="border:1px solid var(--br);border-radius:12px;padding:0 12px;background:var(--bg2)">
+        ${friendRows}
+      </div>` : `<div style="background:var(--bg2);border-radius:10px;padding:12px;font-size:12px;color:var(--t2)">No linked participant friends found for this session yet.</div>`}
+    ${unlinkedCount > 0 ? `<div style="font-size:12px;color:var(--t3);margin-top:10px">${unlinkedCount} participant${unlinkedCount !== 1 ? 's are' : ' is'} not linked to an app account yet, so sharing is not available for them.</div>` : ''}
+    <div class="fa" style="margin-top:18px">
+      <button class="btn btn-p" onclick="saveDivideShareSession('${String(sessionKey).replace(/'/g, "\\'")}')">Save Sharing</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function saveDivideShareSession(sessionKey) {
+  const friendIds = [...document.querySelectorAll('.divide-share-friend:checked')].map((input) => Number(input.value)).filter((id) => Number.isFinite(id) && id > 0);
+  const res = await api('/api/divide/share-session', { method: 'POST', body: { session_key: sessionKey, friend_ids: friendIds } });
+  if (res?.success) {
+    closeModal();
+    const dData = await api('/api/divide');
+    _divGroups = dData?.groups || [];
+    _refreshDivHistory();
+    toast(friendIds.length ? 'Split session sharing updated' : 'Split session unshared', 'success');
+  } else {
+    toast(res?.error || 'Failed to save sharing', 'error');
+  }
 }
 
 async function deleteDivGroup(id) {
@@ -1741,6 +2114,155 @@ function renderDivHistory() {
           <th class="td-m">Total</th><th style="width:110px;text-align:right"></th>
         </tr></thead>
         <tbody id="divHistoryBody">${_buildDivGroupRows().join('')}</tbody>
+      </table></div>
+    </div>`;
+}
+
+function _buildSharedSessions() {
+  const sessions = [];
+  const seen = {};
+  for (const group of _divSharedGroups) {
+    const sessionKey = group.session_id || `_solo_${group.id}`;
+    const key = `${group.owner_user_id}:${sessionKey}`;
+    if (!seen[key]) {
+      seen[key] = {
+        key,
+        session_key: sessionKey,
+        owner_user_id: Number(group.owner_user_id),
+        owner_name: group.owner_name,
+        heading: group.heading || group.details,
+        date: group.divide_date,
+        items: [],
+      };
+      sessions.push(seen[key]);
+    }
+    seen[key].items.push(group);
+  }
+  return sessions;
+}
+
+function _sharedSessionTotal(session) {
+  return session.items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+}
+
+function _sharedSessionSummaryRows(session) {
+  const totals = new Map();
+  session.items.forEach((group) => {
+    _sharedDividePersonRows(group).forEach((person) => {
+      const key = String(person.name || '');
+      const current = totals.get(key) || { name: person.name, share: 0, paid: 0, isTarget: false };
+      current.share += Number(person.share || 0);
+      current.paid += Number(person.paid || 0);
+      current.isTarget = current.isTarget || !!person.isTarget;
+      totals.set(key, current);
+    });
+  });
+  return [...totals.values()];
+}
+
+function _sharedSplitBreakdownTable(group) {
+  const rows = _sharedDividePersonRows(group);
+  return `
+    <table style="width:100%;font-size:12px;margin-top:6px">
+      <thead><tr style="background:transparent">
+        <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t2)">Person</th>
+        <th style="text-align:right;padding:4px 8px;font-size:11px;color:var(--t2)">Share</th>
+        <th style="text-align:right;padding:4px 8px;font-size:11px;color:var(--t2)">Paid Upfront</th>
+        <th style="text-align:right;padding:4px 8px;font-size:11px;color:var(--t2)">Owes / Gets Back</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((person) => {
+          const net = Number(person.share || 0) - Number(person.paid || 0);
+          const netLabel = Math.abs(net) < 0.005 ? `<span style="color:var(--t3)">Settled</span>`
+            : net > 0 ? `<span style="color:var(--red)">Owes ${fmtCur(net)}</span>`
+            : `<span style="color:var(--green)">Gets back ${fmtCur(Math.abs(net))}</span>`;
+          return `<tr style="border-top:1px solid var(--border-l);${person.isTarget ? 'background:var(--blue-l);font-style:italic' : ''}">
+            <td style="padding:5px 8px;font-weight:${person.isTarget ? '700' : '500'}">${escHtml(person.name)}${person.isTarget ? ' (you)' : ''}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:var(--mono)">${fmtCur(person.share || 0)}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:var(--mono);color:var(--green)">${person.paid ? fmtCur(person.paid) : '-'}</td>
+            <td style="padding:5px 8px;text-align:right">${netLabel}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function _buildSharedGroupRows() {
+  const sessions = _buildSharedSessions();
+  return sessions.map((session) => {
+    const isOpen = _divSharedExpandedId === session.key;
+    const total = _sharedSessionTotal(session);
+    const paidByText = [...new Set(session.items.map((item) => item.paid_by))].join(', ');
+    const expandDetail = isOpen ? `
+      <tr>
+        <td colspan="5" style="padding:0">
+          <div style="padding:14px 16px 18px;background:var(--bg-alt);border-bottom:1px solid var(--border)">
+            ${session.items.map((group) => `
+              <div style="margin-bottom:${session.items.length > 1 ? '18px' : '0'}">
+                ${session.items.length > 1 ? `
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                    <div style="font-size:12px;font-weight:600;color:var(--t1)">${escHtml(group.details)}
+                      <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">Shared by ${escHtml(session.owner_name || 'Unknown')} · Paid by ${escHtml(group.paid_by || 'Unknown')} · ${fmtDate(group.divide_date)} · ${fmtCur(group.total_amount || 0)}</span>
+                    </div>
+                  </div>` : `
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                    <div style="font-size:11px;font-weight:600;color:var(--t2);letter-spacing:.4px">SHARED SPLIT BREAKDOWN</div>
+                    <button class="btn-d" style="color:var(--red);font-size:11px" onclick="hideSharedDivideSession(${session.owner_user_id}, '${String(session.session_key).replace(/'/g, "\\'")}')">Hide</button>
+                  </div>`}
+                ${_sharedSplitBreakdownTable(group)}
+              </div>`).join('')}
+            <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+              <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px;letter-spacing:.3px">SESSION TOTAL</div>
+              <div class="table-wrap"><table>
+                <thead><tr><th>Name</th><th class="td-m">Share</th><th class="td-m">Paid</th><th class="td-m">Difference</th></tr></thead>
+                <tbody>
+                  ${_sharedSessionSummaryRows(session).map((person) => {
+                    const net = Number(person.share || 0) - Number(person.paid || 0);
+                    const diffLabel = Math.abs(net) < 0.005 ? 'Settled' : net > 0 ? `Owes ${fmtCur(net)}` : `Owed ${fmtCur(Math.abs(net))}`;
+                    const diffColor = Math.abs(net) < 0.005 ? 'var(--t3)' : net > 0 ? 'var(--red)' : 'var(--green)';
+                    return `<tr${person.isTarget ? ' style="font-weight:700"' : ''}>
+                      <td>${escHtml(person.name)}${person.isTarget ? ' (you)' : ''}</td>
+                      <td class="td-m">${fmtCur(person.share || 0)}</td>
+                      <td class="td-m">${person.paid ? fmtCur(person.paid) : '-'}</td>
+                      <td class="td-m" style="color:${diffColor}">${diffLabel}</td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table></div>
+            </div>
+          </div>
+        </td>
+      </tr>` : '';
+    const toggle = `_divSharedExpandedId=${isOpen ? 'null' : `'${session.key}'`};document.getElementById('divSharedHistoryBody').innerHTML=_buildSharedGroupRows().join('')`;
+    return `<tr style="cursor:pointer" onclick="${toggle}">
+      <td>${fmtDate(session.date)}</td>
+      <td style="font-weight:600">${escHtml(session.heading || 'Shared split')}${session.items.length > 1 ? ` <span style="font-size:11px;font-weight:400;color:var(--t3)">(${session.items.length} items)</span>` : ''}</td>
+      <td style="color:var(--t2);font-size:13px">${escHtml(session.owner_name || 'Unknown')} · ${escHtml(paidByText)}</td>
+      <td class="td-m" style="font-weight:600">${fmtCur(total)}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <span style="color:var(--t3);font-size:13px;margin-right:8px">${isOpen ? '-' : '+'}</span>
+        <button class="btn-d" style="color:var(--red)" onclick="event.stopPropagation();hideSharedDivideSession(${session.owner_user_id}, '${String(session.session_key).replace(/'/g, "\\'")}')">Hide</button>
+      </td>
+    </tr>${expandDetail}`;
+  });
+}
+
+function renderSharedDivHistory() {
+  if (_divSharedGroups.length === 0) return '';
+  const sessions = _buildSharedSessions();
+  return `
+    <div style="margin-top:28px" id="divSharedHistorySection">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:14px;font-weight:700">Shared Split Details
+          <span class="div-shared-count" style="font-size:12px;font-weight:400;color:var(--t3);margin-left:8px">${sessions.length} session${sessions.length !== 1 ? 's' : ''}, ${_divSharedGroups.length} item${_divSharedGroups.length !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Date</th><th>Heading / Details</th><th>Shared By</th>
+          <th class="td-m">Total</th><th style="width:110px;text-align:right"></th>
+        </tr></thead>
+        <tbody id="divSharedHistoryBody">${_buildSharedGroupRows().join('')}</tbody>
       </table></div>
     </div>`;
 }
@@ -1906,6 +2428,7 @@ async function addDivItem() {
   } else {
     divideItems.push(item);
   }
+  _saveDivideDraftItems();
 
   divideSelected = new Set();
   dividePaidBy = 'self';
@@ -1935,6 +2458,7 @@ function editDivItem(i) {
 
 function removeDivItem(i) {
   divideItems.splice(i, 1);
+  _saveDivideDraftItems();
   if (_divEditIdx === i) { _divEditIdx = null; divideSelected = new Set(); dividePaidBy = 'self'; }
   else if (_divEditIdx > i) _divEditIdx--;
   renderDivide();
@@ -1943,8 +2467,11 @@ function removeDivItem(i) {
 async function clearDivForm() {
   if (!await confirmDialog('Clear all items?')) return;
   divideItems = [];
+  _saveDivideDraftItems();
   divideSelected = new Set();
   dividePaidBy = 'self';
+  divideSplitMode = 'equal';
+  divideSplitValues = {};
   _divEditIdx = null;
   renderDivide();
 }
@@ -2023,6 +2550,7 @@ async function doSaveDivide() {
 
   // â”€â”€ 2. Save divide groups (split records) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const sessionId = String(Date.now());
+  const participantFriendIds = [...new Set(divideItems.flatMap((item) => (item.personShares || []).map((ps) => Number(ps.key)).filter((key) => Number.isFinite(key) && key > 0)))];
   for (const item of divideItems) {
     const splits = item.personShares
       ? item.personShares.filter(ps => ps.key !== 'self').map(ps => ({ friend_id: ps.key, friend_name: ps.name, share_amount: ps.share }))
@@ -2076,14 +2604,38 @@ async function doSaveDivide() {
   }
 
   closeModal();
-  divideItems = []; divideSelected = new Set(); dividePaidBy = 'self'; _divEditIdx = null;
+  divideSelected = new Set();
+  dividePaidBy = 'self';
+  divideSplitMode = 'equal';
+  divideSplitValues = {};
+  _divEditIdx = null;
+  _saveDivideDraftItems();
   _divExpandedId = null;
   // Reload groups from DB then re-render
   const dData = await api('/api/divide');
   _divGroups = dData?.groups || [];
   renderDivide();
+  const shareableFriendIds = participantFriendIds.filter((friendId) => {
+    const friend = _divFriends.find((entry) => Number(entry.id) === Number(friendId));
+    return !!friend?.linked_user_id;
+  });
+  if (shareableFriendIds.length > 0) {
+    const shouldShare = await confirmDialog(`Share this saved split history with ${shareableFriendIds.length} linked friend${shareableFriendIds.length !== 1 ? 's' : ''} now? They will be able to view the details in their profile.`);
+    if (shouldShare) {
+      const shareRes = await api('/api/divide/share-session', { method: 'POST', body: { session_key: sessionId, friend_ids: shareableFriendIds } });
+      if (shareRes?.success) {
+        const refreshed = await api('/api/divide');
+        _divGroups = refreshed?.groups || [];
+        renderDivide();
+        toast('Saved and shared with linked friends', 'success', 4500);
+        return;
+      }
+      toast(shareRes?.error || 'Saved, but sharing failed. Draft items were kept.', 'warning', 4500);
+      return;
+    }
+  }
   const friendCount = Object.keys(peopleMap).filter(k => k !== 'self').length;
-  toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded.`, 'success', 4500);
+  toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded. Draft items were kept.`, 'success', 4500);
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2994,6 +3546,10 @@ async function loadDashboard() {
   const year = dashFilters.year;
   const data = await api(`/api/dashboard?year=${year}`);
   if (!data) return;
+  const monthlyTotals = Array.isArray(data.monthlyTotals) ? data.monthlyTotals : [];
+  const monthlyByType = Array.isArray(data.monthlyByType) ? data.monthlyByType : [];
+  const spendBreakdown = Array.isArray(data.spendBreakdown) ? data.spendBreakdown : [];
+  const years = Array.isArray(data.years) ? data.years : [];
   const fixDashboardText = (value) => repairMojibakeText(String(value ?? '').trim());
   const topItems = (data.topItems || []).map((item) => ({
     ...item,
@@ -3012,8 +3568,8 @@ async function loadDashboard() {
   const monthly = Array(12).fill(0);
   const monthlyFair = Array(12).fill(0);
   const monthlyExtra = Array(12).fill(0);
-  data.monthlyTotals.forEach(m => { monthly[parseInt(m.month) - 1] = m.total; });
-  (data.monthlyByType || []).forEach(m => {
+  monthlyTotals.forEach(m => { monthly[parseInt(m.month) - 1] = m.total; });
+  monthlyByType.forEach(m => {
     const i = parseInt(m.month) - 1;
     if (m.is_extra) monthlyExtra[i] = m.total;
     else monthlyFair[i] = m.total;
@@ -3025,9 +3581,9 @@ async function loadDashboard() {
   }
 
   let fairTotal = 0, extraTotal = 0;
-  data.spendBreakdown.forEach(b => { if (b.is_extra) extraTotal = b.total; else fairTotal = b.total; });
+  spendBreakdown.forEach(b => { if (b.is_extra) extraTotal = b.total; else fairTotal = b.total; });
 
-  const yearOpts = (data.years.length ? data.years : [String(year)])
+  const yearOpts = (years.length ? years : [String(year)])
     .map(y => `<option value="${y}" ${y == year ? 'selected' : ''}>${y}</option>`).join('');
 
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -7181,9 +7737,13 @@ let _previewBankBalances = {}; // in-memory overrides for preview mode {bankId: 
 let _previewDataCache   = null; // cached preview response
 let _defaultsCount = null; // cached count of active default payments
 
-async function loadPlanner() {
+function invalidatePlannerPreviewCache() {
   _previewDataCache = null;
   _previewBankBalances = {};
+}
+
+async function loadPlanner() {
+  invalidatePlannerPreviewCache();
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loading...</div></div>';
   await renderPlanner();
 }
@@ -8283,6 +8843,7 @@ async function saveDayEntry(trackerId, date) {
   if (isNaN(qty) || qty < 0) { toast('Enter a valid quantity', 'warning'); return; }
   const r = await api(`/api/trackers/${trackerId}/entries`, { method: 'POST', body: { date, qty, is_auto: 0 } });
   if (r?.success) {
+    invalidatePlannerPreviewCache();
     const data = await api('/api/trackers');
     _trackers = data?.trackers || [];
     await renderTrackerDetail();
@@ -8306,6 +8867,7 @@ async function trackerNextMonth() {
 async function autoFillTracker(trackerId) {
   const r = await api(`/api/trackers/${trackerId}/autofill`, { method: 'POST', body: { year: _trackerYear, month: _trackerMonth } });
   if (r?.success) {
+    invalidatePlannerPreviewCache();
     toast(r.filled > 0 ? `${r.filled} day${r.filled !== 1 ? 's' : ''} auto-filled` : 'All days already have entries', r.filled > 0 ? 'success' : 'info');
     await renderTrackerDetail();
   } else toast(r?.error || 'Failed', 'error');
@@ -8351,6 +8913,7 @@ async function confirmAddTrackerExpense(trackerId, year, month) {
   const expenseCategory = document.getElementById('eCategory')?.value.trim() || null;
   const r = await api(`/api/trackers/${trackerId}/month-expense`, { method: 'POST', body: { year, month, expense_month: expenseMonth, expense_category: expenseCategory } });
   if (r?.success) {
+    invalidatePlannerPreviewCache();
     closeModal();
     toast(`${fmtCur(r.amount)} added to expenses`, 'success');
     const data = await api('/api/trackers');
@@ -8386,6 +8949,7 @@ async function saveTracker(id) {
     ? await api(`/api/trackers/${id}`, { method: 'PUT', body })
     : await api('/api/trackers', { method: 'POST', body });
   if (r?.success || r?.id) {
+    invalidatePlannerPreviewCache();
     closeModal();
     toast(id ? 'Tracker updated' : 'Tracker added', 'success');
     await loadTracker();
@@ -8396,6 +8960,7 @@ async function deleteTracker(id) {
   if (!await confirmDialog('Delete this tracker and all its daily entries?')) return;
   const r = await api(`/api/trackers/${id}`, { method: 'DELETE' });
   if (r?.success) {
+    invalidatePlannerPreviewCache();
     toast('Deleted', 'success');
     if (_selectedTrackerId === id) _selectedTrackerId = null;
     await loadTracker();
@@ -8636,7 +9201,7 @@ function showEditFriend(id, currentName) {
   bindModalSubmit(() => renameFriend(id));
 }
 
-async function loadFriends() {
+async function loadFriendsOld() {
   const data = await api('/api/friends');
   if (!data) return;
   let list = data.friends || [];

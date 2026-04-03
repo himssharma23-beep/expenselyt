@@ -54,10 +54,26 @@ CREATE TABLE IF NOT EXISTS friends (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id);
+CREATE INDEX IF NOT EXISTS idx_friends_linked_user ON friends(linked_user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM friends
+    WHERE linked_user_id IS NOT NULL
+      AND deleted_at IS NULL
+    GROUP BY linked_user_id
+    HAVING COUNT(*) > 1
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_friends_linked_user_unique_active ON friends(linked_user_id) WHERE linked_user_id IS NOT NULL AND deleted_at IS NULL';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS loan_transactions (
   id BIGSERIAL PRIMARY KEY,
@@ -94,6 +110,22 @@ CREATE TABLE IF NOT EXISTS divide_splits (
   share_amount NUMERIC(14,2) NOT NULL,
   is_paid BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+CREATE TABLE IF NOT EXISTS divide_group_shares (
+  id BIGSERIAL PRIMARY KEY,
+  group_id BIGINT NOT NULL REFERENCES divide_groups(id) ON DELETE CASCADE,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  friend_id BIGINT NOT NULL REFERENCES friends(id) ON DELETE CASCADE,
+  target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  shared_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  owner_hidden_at TIMESTAMPTZ,
+  target_hidden_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (group_id, target_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_divide_group_shares_owner ON divide_group_shares(owner_user_id, friend_id);
+CREATE INDEX IF NOT EXISTS idx_divide_group_shares_target ON divide_group_shares(target_user_id);
 
 CREATE TABLE IF NOT EXISTS trips (
   id BIGSERIAL PRIMARY KEY,
@@ -464,6 +496,7 @@ ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category TEXT;
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source_id BIGINT;
 ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;

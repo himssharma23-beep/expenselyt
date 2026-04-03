@@ -410,6 +410,15 @@ router.put('/friends/:id', async (req, res) => {
   }
 });
 
+router.put('/friends/:id/link-user', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().linkFriendToUser(req.session.userId, req.params.id, req.body?.linked_user_id || null));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.delete('/friends/:id', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().deleteFriend(req.session.userId, req.params.id));
@@ -489,6 +498,35 @@ router.post('/divide', async (req, res) => {
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/divide/share-session', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().syncDivideSessionShares(req.session.userId, req.body?.session_key, req.body?.friend_ids || [])
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.get('/divide/shared', async (req, res) => {
+  try {
+    const groups = await Promise.resolve(getCoreDb().getReceivedDivideShares(req.session.userId));
+    res.json({ groups });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/divide/shared/hide', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().hideReceivedDivideShare(req.session.userId, req.body?.owner_user_id, req.body?.session_key));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

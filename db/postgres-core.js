@@ -251,18 +251,27 @@ async function getFriends(userId) {
   const result = await query(
     `SELECT
        f.*,
+       u.display_name AS linked_user_display_name,
+       u.username AS linked_user_username,
        COALESCE(SUM(lt.paid - lt.received), 0) AS balance
      FROM friends f
+     LEFT JOIN users u
+       ON u.id = f.linked_user_id
+      AND u.deleted_at IS NULL
      LEFT JOIN loan_transactions lt
        ON lt.friend_id = f.id
       AND lt.user_id = $1
       AND lt.deleted_at IS NULL
      WHERE f.user_id = $1 AND f.deleted_at IS NULL
-     GROUP BY f.id
+     GROUP BY f.id, u.display_name, u.username
      ORDER BY f.name`,
     [userId]
   );
-  return result.rows.map((row) => ({ ...row, balance: Math.round(num(row.balance) * 100) / 100 }));
+  return result.rows.map((row) => ({
+    ...row,
+    linked_user_id: row.linked_user_id ? Number(row.linked_user_id) : null,
+    balance: Math.round(num(row.balance) * 100) / 100,
+  }));
 }
 
 async function addFriend(userId, name) {
@@ -279,6 +288,42 @@ async function addFriend(userId, name) {
 async function updateFriend(userId, id, name) {
   const safeName = validateFriendName(name);
   await query('UPDATE friends SET name = $1, updated_at = NOW(), updated_by = $2 WHERE id = $3 AND user_id = $2 AND deleted_at IS NULL', [safeName, userId, id]);
+}
+
+async function linkFriendToUser(userId, friendId, linkedUserId = null) {
+  const friendR = await query(
+    'SELECT id FROM friends WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [friendId, userId]
+  );
+  if (!friendR.rows[0]) throw new Error('Friend not found');
+  let targetUserId = linkedUserId != null ? Number(linkedUserId) : null;
+  if (targetUserId != null) {
+    if (!Number.isFinite(targetUserId) || targetUserId <= 0) throw validationError('Linked user is invalid');
+    if (targetUserId === Number(userId)) throw validationError('You cannot link a friend to your own account');
+    const userR = await query(
+      'SELECT id FROM users WHERE id = $1 AND is_active = TRUE AND deleted_at IS NULL LIMIT 1',
+      [targetUserId]
+    );
+    if (!userR.rows[0]) throw validationError('Linked user not found');
+    const conflictR = await query(
+      `SELECT f.id, f.name
+       FROM friends f
+       WHERE f.linked_user_id = $1
+         AND f.deleted_at IS NULL
+         AND f.id <> $2
+       LIMIT 1`,
+      [targetUserId, friendId]
+    );
+    if (conflictR.rows[0]) {
+      throw validationError(`This app user is already linked to friend "${conflictR.rows[0].name}". Unlink it first.`);
+    }
+  } else {
+    targetUserId = null;
+  }
+  await query(
+    'UPDATE friends SET linked_user_id = $1, updated_at = NOW(), updated_by = $2 WHERE id = $3 AND user_id = $2',
+    [targetUserId, userId, friendId]
+  );
 }
 
 async function deleteFriend(userId, id) {
@@ -344,6 +389,19 @@ async function getDivideGroups(userId) {
   const result = await query(
     `SELECT
        g.*,
+       COALESCE((
+         SELECT json_agg(
+           json_build_object(
+             'friend_id', dgs.friend_id,
+             'target_user_id', dgs.target_user_id
+           )
+           ORDER BY dgs.friend_id
+         )
+         FROM divide_group_shares dgs
+         WHERE dgs.group_id = g.id
+           AND dgs.owner_hidden_at IS NULL
+           AND dgs.target_hidden_at IS NULL
+       ), '[]'::json) AS shared_targets,
        COALESCE(
          json_agg(
            json_build_object(
@@ -368,6 +426,10 @@ async function getDivideGroups(userId) {
   return result.rows.map((row) => ({
     ...row,
     total_amount: num(row.total_amount),
+    shared_targets: (row.shared_targets || []).map((item) => ({
+      friend_id: Number(item.friend_id),
+      target_user_id: Number(item.target_user_id),
+    })),
     splits: (row.splits || []).map((split) => ({ ...split, share_amount: num(split.share_amount), is_paid: bool(split.is_paid) })),
   }));
 }
@@ -403,9 +465,154 @@ async function deleteDivideGroup(userId, id) {
   await withTransaction(async (client) => {
     const own = await client.query('SELECT id FROM divide_groups WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
     if (!own.rows[0]) throw new Error('Not found');
+    await client.query('DELETE FROM divide_group_shares WHERE group_id = $1', [id]);
     await client.query('DELETE FROM divide_splits WHERE group_id = $1', [id]);
     await client.query('DELETE FROM divide_groups WHERE id = $1', [id]);
   });
+}
+
+async function syncDivideSessionShares(userId, sessionKey, friendIds = []) {
+  const normalizedSessionKey = String(sessionKey || '').trim();
+  if (!normalizedSessionKey) throw validationError('Session is required');
+  const ids = [...new Set((friendIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  return withTransaction(async (client) => {
+    const groupsR = await client.query(
+      `SELECT id, session_id
+       FROM divide_groups
+       WHERE user_id = $1
+         AND (session_id = $2 OR ($2 LIKE '_solo_%' AND id = NULLIF(REPLACE($2, '_solo_', ''), '')::bigint))`,
+      [userId, normalizedSessionKey]
+    );
+    const groups = groupsR.rows;
+    if (!groups.length) throw new Error('Split session not found');
+    const groupIds = groups.map((row) => Number(row.id));
+
+    const participantsR = await client.query(
+      `SELECT DISTINCT s.group_id, s.friend_id, f.linked_user_id
+       FROM divide_splits s
+       JOIN friends f ON f.id = s.friend_id
+       WHERE s.group_id = ANY($1::bigint[])
+         AND f.user_id = $2
+         AND f.deleted_at IS NULL`,
+      [groupIds, userId]
+    );
+    const participantMap = new Map();
+    participantsR.rows.forEach((row) => {
+      const friendId = Number(row.friend_id);
+      if (!participantMap.has(friendId)) participantMap.set(friendId, []);
+      participantMap.get(friendId).push({
+        group_id: Number(row.group_id),
+        target_user_id: row.linked_user_id ? Number(row.linked_user_id) : null,
+      });
+    });
+
+    const eligibleFriendIds = ids.filter((friendId) => {
+      const rows = participantMap.get(friendId) || [];
+      return rows.some((row) => row.target_user_id);
+    });
+
+    for (const friendId of eligibleFriendIds) {
+      const rows = participantMap.get(friendId) || [];
+      for (const row of rows) {
+        if (!row.target_user_id) continue;
+        await client.query(
+          `INSERT INTO divide_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id, owner_hidden_at, target_hidden_at, updated_at)
+           VALUES ($1, $2, $3, $4, $2, NULL, NULL, NOW())
+           ON CONFLICT (group_id, target_user_id)
+           DO UPDATE SET friend_id = EXCLUDED.friend_id,
+                         shared_by_user_id = EXCLUDED.shared_by_user_id,
+                         owner_hidden_at = NULL,
+                         target_hidden_at = NULL,
+                         updated_at = NOW()`,
+          [row.group_id, userId, friendId, row.target_user_id]
+        );
+      }
+    }
+
+    const allParticipantFriendIds = [...participantMap.keys()];
+    const hiddenFriendIds = allParticipantFriendIds.filter((friendId) => !eligibleFriendIds.includes(friendId));
+    if (hiddenFriendIds.length) {
+      await client.query(
+        `UPDATE divide_group_shares
+         SET owner_hidden_at = NOW(), updated_at = NOW()
+         WHERE owner_user_id = $1
+           AND group_id = ANY($2::bigint[])
+           AND friend_id = ANY($3::bigint[])`,
+        [userId, groupIds, hiddenFriendIds]
+      );
+    }
+
+    return { shared_friend_ids: eligibleFriendIds };
+  });
+}
+
+async function getReceivedDivideShares(userId) {
+  const result = await query(
+    `SELECT
+       g.id,
+       g.divide_date,
+       g.details,
+       g.paid_by,
+       g.total_amount,
+       g.heading,
+       g.session_id,
+       owner.id AS owner_user_id,
+       owner.display_name AS owner_name,
+       share.friend_id,
+       share.target_user_id,
+       fs.friend_name,
+       fs.share_amount AS friend_share_amount,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'id', s.id,
+             'friend_id', s.friend_id,
+             'friend_name', s.friend_name,
+             'share_amount', s.share_amount,
+             'is_paid', s.is_paid
+           )
+           ORDER BY s.id
+         ) FILTER (WHERE s.id IS NOT NULL),
+         '[]'::json
+       ) AS splits
+     FROM divide_group_shares share
+     JOIN divide_groups g ON g.id = share.group_id
+     JOIN users owner ON owner.id = share.owner_user_id
+     LEFT JOIN divide_splits fs
+       ON fs.group_id = g.id
+      AND fs.friend_id = share.friend_id
+     LEFT JOIN divide_splits s ON s.group_id = g.id
+     WHERE share.target_user_id = $1
+       AND share.owner_hidden_at IS NULL
+       AND share.target_hidden_at IS NULL
+     GROUP BY g.id, owner.id, owner.display_name, share.friend_id, share.target_user_id, fs.friend_name, fs.share_amount
+     ORDER BY g.divide_date DESC, g.id DESC`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    owner_user_id: Number(row.owner_user_id),
+    friend_id: Number(row.friend_id),
+    target_user_id: Number(row.target_user_id),
+    total_amount: num(row.total_amount),
+    friend_share_amount: num(row.friend_share_amount),
+    splits: (row.splits || []).map((split) => ({ ...split, share_amount: num(split.share_amount), is_paid: bool(split.is_paid) })),
+  }));
+}
+
+async function hideReceivedDivideShare(userId, ownerUserId, sessionKey) {
+  const normalizedSessionKey = String(sessionKey || '').trim();
+  if (!normalizedSessionKey) throw validationError('Session is required');
+  await query(
+    `UPDATE divide_group_shares share
+     SET target_hidden_at = NOW(), updated_at = NOW()
+     FROM divide_groups g
+     WHERE share.group_id = g.id
+       AND share.target_user_id = $1
+       AND share.owner_user_id = $2
+       AND (g.session_id = $3 OR ($3 LIKE '_solo_%' AND g.id = NULLIF(REPLACE($3, '_solo_', ''), '')::bigint))`,
+    [userId, ownerUserId, normalizedSessionKey]
+  );
 }
 
 async function getDashboardData(userId, year) {
@@ -970,6 +1177,7 @@ module.exports = {
   getFriends,
   addFriend,
   updateFriend,
+  linkFriendToUser,
   deleteFriend,
   getLoanTransactions,
   addLoanTransaction,
@@ -978,6 +1186,9 @@ module.exports = {
   getDivideGroups,
   addDivideGroup,
   deleteDivideGroup,
+  syncDivideSessionShares,
+  getReceivedDivideShares,
+  hideReceivedDivideShare,
   getDashboardData,
   getReportYears,
   getReportMonths,
