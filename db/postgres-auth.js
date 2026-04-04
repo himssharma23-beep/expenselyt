@@ -32,6 +32,7 @@ function normalizeUser(row) {
   const currencyCode = normalizeCurrencyCode(row.currency_code) || 'INR';
   return {
     ...row,
+    apple_user_id: row.apple_user_id || null,
     currency_code: currencyCode,
     locale_code: normalizeLocaleCode(row.locale_code, currencyCode),
   };
@@ -108,6 +109,20 @@ async function findUserByEmail(email) {
   return normalizeUser(result.rows[0] || null);
 }
 
+async function findUserByAppleUserId(appleUserId) {
+  const normalized = String(appleUserId || '').trim();
+  if (!normalized) return null;
+  const result = await query(
+    `SELECT *
+     FROM users
+     WHERE apple_user_id = $1
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [normalized]
+  );
+  return normalizeUser(result.rows[0] || null);
+}
+
 async function findUserByMobile(mobile) {
   const cleaned = String(mobile || '').trim();
   if (!cleaned) return null;
@@ -124,7 +139,7 @@ async function findUserByMobile(mobile) {
 
 async function findUserById(id) {
   const result = await query(
-    `SELECT id, username, email, display_name, role, mobile, avatar_url, currency_code, locale_code, is_active,
+    `SELECT id, username, email, display_name, role, mobile, avatar_url, apple_user_id, currency_code, locale_code, is_active,
             created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
      FROM users
      WHERE id = $1
@@ -164,6 +179,18 @@ async function updateUserProfile(userId, data) {
     throw new Error('Profile picture must be a valid URL or uploaded file');
   }
 
+  const nextAppleUserId = data.apple_user_id !== undefined
+    ? (String(data.apple_user_id || '').trim() || null)
+    : (current.apple_user_id || null);
+
+  if (nextAppleUserId) {
+    const duplicateAppleUser = await query(
+      'SELECT id FROM users WHERE apple_user_id = $1 AND id != $2 AND deleted_at IS NULL LIMIT 1',
+      [nextAppleUserId, userId]
+    );
+    if (duplicateAppleUser.rows[0]) throw new Error('This Apple account is already linked to another user');
+  }
+
   await query(
     `UPDATE users
      SET display_name = $1,
@@ -172,9 +199,10 @@ async function updateUserProfile(userId, data) {
          avatar_url = $4,
          currency_code = $5,
          locale_code = $6,
+         apple_user_id = $7,
          updated_at = NOW(),
-         updated_by = $7
-     WHERE id = $8`,
+         updated_by = $8
+     WHERE id = $9`,
     [
       nextName,
       nextEmail,
@@ -182,6 +210,7 @@ async function updateUserProfile(userId, data) {
       normalizedAvatar,
       currencyCode,
       localeCode,
+      nextAppleUserId,
       userId,
       userId,
     ]
@@ -655,6 +684,7 @@ module.exports = {
   createUser,
   findUserByUsername,
   findUserByEmail,
+  findUserByAppleUserId,
   findUserByMobile,
   findUserById,
   verifyPassword,

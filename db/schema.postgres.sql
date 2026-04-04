@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   mobile TEXT,
+  apple_user_id TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   avatar_url TEXT,
   currency_code TEXT,
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS currency_code TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS locale_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_user_id TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
@@ -32,6 +34,7 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_active_unique ON users (lower(username)) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_active_unique ON users (lower(email)) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_user_id_active_unique ON users (apple_user_id) WHERE apple_user_id IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,

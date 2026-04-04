@@ -78,6 +78,21 @@ function getAllowedGoogleAudiences() {
   return new Set([...explicit, ...specific, ...dynamicWebIds]);
 }
 
+function getAllowedAppleAudiences() {
+  const explicit = String(process.env.APPLE_AUDIENCES || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const specific = [
+    process.env.APPLE_BUNDLE_ID,
+    process.env.IOS_BUNDLE_ID,
+    process.env.EXPO_PUBLIC_IOS_BUNDLE_ID,
+    process.env.APPLE_SERVICE_ID,
+    'com.expenselyt.app',
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return new Set([...explicit, ...specific]);
+}
+
 async function verifyGoogleIdToken(idToken) {
   const token = String(idToken || '').trim();
   if (!token) throw new Error('Missing Google ID token');
@@ -109,6 +124,56 @@ async function verifyGoogleIdToken(idToken) {
     email,
     displayName: String(payload.name || payload.given_name || email.split('@')[0] || 'Google User').trim(),
     avatarUrl: String(payload.picture || '').trim() || null,
+  };
+}
+
+async function verifyAppleIdToken(idToken) {
+  const token = String(idToken || '').trim();
+  if (!token) throw new Error('Missing Apple ID token');
+
+  const decoded = jwt.decode(token, { complete: true });
+  const header = decoded?.header || {};
+  const kid = String(header.kid || '').trim();
+  const alg = String(header.alg || '').trim();
+  if (!kid || alg !== 'RS256') throw new Error('Invalid Apple token header');
+
+  const response = await fetch('https://appleid.apple.com/auth/keys');
+  if (!response.ok) throw new Error('Unable to verify Apple token');
+  const keyPayload = await response.json();
+  const jwk = Array.isArray(keyPayload?.keys) ? keyPayload.keys.find((entry) => String(entry.kid || '').trim() === kid) : null;
+  if (!jwk) throw new Error('Apple signing key not found');
+
+  let publicKey;
+  try {
+    publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  } catch {
+    throw new Error('Invalid Apple signing key');
+  }
+
+  const allowedAudiences = [...getAllowedAppleAudiences()];
+  const verifyOptions = {
+    algorithms: ['RS256'],
+    issuer: 'https://appleid.apple.com',
+  };
+  if (allowedAudiences.length) verifyOptions.audience = allowedAudiences;
+
+  let payload;
+  try {
+    payload = jwt.verify(token, publicKey, verifyOptions);
+  } catch {
+    throw new Error('Invalid Apple token');
+  }
+
+  const providerUserId = String(payload.sub || '').trim();
+  if (!providerUserId) throw new Error('Apple account identifier is missing');
+
+  const email = String(payload.email || '').trim().toLowerCase() || null;
+  return {
+    provider: 'apple',
+    providerUserId,
+    email,
+    displayName: '',
+    avatarUrl: null,
   };
 }
 
@@ -329,34 +394,65 @@ router.post('/api/auth/social', async (req, res) => {
     if (!provider || !idToken) {
       return res.status(400).json({ error: 'Provider and ID token are required' });
     }
-    if (provider !== 'google') {
+    if (!['google', 'apple'].includes(provider)) {
       return res.status(400).json({ error: 'Unsupported social provider' });
     }
 
-    const profile = await verifyGoogleIdToken(idToken);
-    let user = await pgDb.findUserByEmail(profile.email);
+    const profile = provider === 'apple'
+      ? await verifyAppleIdToken(idToken)
+      : await verifyGoogleIdToken(idToken);
+    const providedEmail = String(req.body?.email || '').trim().toLowerCase() || null;
+    const providedName = String(req.body?.display_name || '').trim() || null;
+    if (provider === 'apple') {
+      profile.email = profile.email || providedEmail || null;
+      profile.displayName = profile.displayName || providedName || '';
+    }
+    const socialDisplayName = String(profile.displayName || '').trim() || String(profile.email || '').split('@')[0] || (provider === 'apple' ? 'Apple User' : 'Google User');
+
+    let user = null;
+    if (provider === 'apple') {
+      user = await pgDb.findUserByAppleUserId(profile.providerUserId);
+    }
+    if (!user && profile.email) {
+      user = await pgDb.findUserByEmail(profile.email);
+    }
     let isNewUser = false;
 
     if (!user) {
+      if (!profile.email) {
+        return res.status(400).json({ error: 'Apple did not provide an email for this account. Please try Sign in with Apple again and share your email the first time.' });
+      }
       isNewUser = true;
-      const usernameSeed = profile.email.split('@')[0] || profile.displayName || 'user';
+      const usernameSeed = profile.email.split('@')[0] || socialDisplayName || 'user';
       const username = await createUniqueUsername(usernameSeed);
       const randomPassword = crypto.randomBytes(32).toString('hex');
       const prefs = inferPreferences(req);
-      const userId = await pgDb.createUser(username, profile.email, randomPassword, profile.displayName, prefs, null);
+      const userId = await pgDb.createUser(username, profile.email, randomPassword, socialDisplayName, prefs, null);
       await pgDb.assignSignupPlanToUser(userId);
 
       await Promise.allSettled([
-        sendAdminNewUserEmail({ user: { display_name: profile.displayName, username, email: profile.email } }),
-        sendWelcomeEmail({ to: profile.email, name: profile.displayName }),
+        sendAdminNewUserEmail({ user: { display_name: socialDisplayName, username, email: profile.email } }),
+        sendWelcomeEmail({ to: profile.email, name: socialDisplayName }),
       ]);
 
       if (profile.avatarUrl) {
         await pgDb.updateUserProfile(userId, { avatar_url: profile.avatarUrl });
       }
       user = await pgDb.findUserById(userId);
-    } else if (!user.avatar_url && profile.avatarUrl) {
-      user = await pgDb.updateUserProfile(user.id, { avatar_url: profile.avatarUrl });
+    }
+
+    const socialProfileUpdate = {};
+    if (provider === 'apple' && profile.providerUserId && user?.apple_user_id !== profile.providerUserId) {
+      socialProfileUpdate.apple_user_id = profile.providerUserId;
+    }
+    if (!user?.avatar_url && profile.avatarUrl) {
+      socialProfileUpdate.avatar_url = profile.avatarUrl;
+    }
+    if (!user?.display_name && socialDisplayName) {
+      socialProfileUpdate.display_name = socialDisplayName;
+    }
+    if (Object.keys(socialProfileUpdate).length > 0) {
+      user = await pgDb.updateUserProfile(user.id, socialProfileUpdate);
     }
 
     if (!user) return res.status(500).json({ error: 'Failed to create social account' });
