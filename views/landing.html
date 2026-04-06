@@ -3,23 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Expense Lite AI helps you track expenses, manage loans and EMIs, plan monthly dues, monitor bank accounts and credit cards, split costs with friends, choose your preferred currency, and use AI-powered financial lookup in one place.">
+<meta name="description" content="Expense Lite AI is a personal finance app to track expenses, manage loans and EMIs, plan monthly dues, monitor bank accounts and credit cards, split expenses with friends, and use AI-powered financial lookup.">
 <meta name="keywords" content="expense tracker, personal finance app, EMI calculator, loan tracker, budget planner, split expenses, credit card tracker, bank balance tracker, Expense Lite AI">
 <meta name="author" content="Expense Lite AI">
 <meta name="robots" content="index,follow">
+<meta name="googlebot" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+<meta name="application-name" content="Expense Lite AI">
+<meta name="apple-mobile-web-app-title" content="Expense Lite AI">
 <meta name="theme-color" content="#145A3C">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Expense Lite AI">
-<meta property="og:title" content="Expense Lite AI - Personal Finance, Simplified">
-<meta property="og:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, use your preferred currency, and get AI-powered financial lookup in one streamlined finance workspace.">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Expense Lite AI - Expense Tracker, Planner, EMI and Split Expense App">
+<meta property="og:description" content="Track expenses, manage loans and EMIs, split bills, plan monthly dues, monitor cards and bank balances, and use AI-powered financial lookup in one place.">
 <meta property="og:url" content="https://expenselyt.com/">
 <meta property="og:image" content="https://expenselyt.com/logo.svg">
+<meta property="og:image:alt" content="Expense Lite AI logo">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Expense Lite AI - Personal Finance, Simplified">
-<meta name="twitter:description" content="Track expenses, manage loans and EMIs, split bills, plan dues, use your preferred currency, and get AI-powered financial lookup in one place.">
+<meta name="twitter:title" content="Expense Lite AI - Expense Tracker, Planner, EMI and Split Expense App">
+<meta name="twitter:description" content="Track expenses, manage loans and EMIs, split bills, plan monthly dues, monitor cards and bank balances, and use AI-powered financial lookup in one place.">
 <meta name="twitter:image" content="https://expenselyt.com/logo.svg">
+<meta name="twitter:image:alt" content="Expense Lite AI logo">
 <link rel="canonical" href="https://expenselyt.com/">
-<title>Expense Lite AI — Personal Finance, Simplified</title>
+<title>Expense Lite AI - Expense Tracker, Planner, EMI and Split Expense App</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
 <script src="/js/analytics.js"></script>
@@ -27,16 +33,43 @@
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Expense Lite AI",
-  "applicationCategory": "FinanceApplication",
-  "operatingSystem": "Web",
-  "description": "Expense Lite AI is a personal finance platform for expenses, loans, EMIs, planner workflows, shared spending, currency preferences, and AI-assisted lookup.",
-  "url": "https://expenselyt.com/",
-  "publisher": {
-    "@type": "Organization",
-    "name": "Expense Lite AI"
-  }
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://expenselyt.com/#organization",
+      "name": "Expense Lite AI",
+      "url": "https://expenselyt.com/",
+      "logo": "https://expenselyt.com/logo.svg",
+      "email": "hims.sharma23@gmail.com"
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://expenselyt.com/#website",
+      "url": "https://expenselyt.com/",
+      "name": "Expense Lite AI",
+      "description": "Expense Lite AI is a personal finance platform for expenses, EMIs, planner workflows, shared spending, bank accounts, credit cards, and AI-assisted lookup.",
+      "publisher": {
+        "@id": "https://expenselyt.com/#organization"
+      }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://expenselyt.com/#software",
+      "name": "Expense Lite AI",
+      "url": "https://expenselyt.com/",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Web, Android, iOS",
+      "description": "Expense Lite AI helps you track expenses, manage loans and EMIs, plan monthly dues, split expenses with friends, monitor bank accounts and credit cards, and use AI-powered financial lookup.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "publisher": {
+        "@id": "https://expenselyt.com/#organization"
+      }
+    }
+  ]
 }
 </script>
 <style>
@@ -58,6 +91,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,
 .nav-logo-sym{width:36px;height:36px;background:linear-gradient(135deg,var(--em),var(--em-l));border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600}
 .nav-logo-tagline{font-size:9px;color:var(--t3);letter-spacing:1.2px;font-weight:500;margin-top:1px}
 .nav-links{display:flex;gap:28px;margin-left:auto;align-items:center}
+.nav-store-links{display:flex;align-items:center;gap:8px;margin-left:20px}
 .nav-link{text-decoration:none;font-size:14px;font-weight:500;color:var(--t2);transition:color .15s}
 .nav-link:hover{color:var(--em)}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 20px;border-radius:10px;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer;border:none;transition:all .15s;font-family:'DM Sans',sans-serif}
@@ -76,6 +110,17 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,
 .hero h1 span{color:var(--em)}
 .hero p{font-size:18px;color:var(--t2);line-height:1.7;margin-bottom:36px;font-weight:400}
 .hero-cta{display:flex;gap:12px;flex-wrap:wrap}
+.store-links{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+.store-badge{display:flex;align-items:center;gap:10px;min-width:176px;padding:8px 12px;border-radius:10px;background:#000;color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.08);box-shadow:0 10px 24px rgba(15,23,42,.12);transition:transform .15s, box-shadow .15s, opacity .15s}
+.store-badge:hover{transform:translateY(-1px);box-shadow:0 14px 32px rgba(15,23,42,.18)}
+.store-badge.light{background:#000;color:#fff;border:1px solid rgba(255,255,255,.08)}
+.store-badge.disabled{opacity:.55;pointer-events:none}
+.store-badge-icon{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;background:rgba(255,255,255,.08);flex-shrink:0;color:#fff}
+.store-badge.light .store-badge-icon{background:rgba(255,255,255,.08);color:#fff}
+.store-badge-text{display:flex;flex-direction:column;line-height:1.1}
+.store-badge-over{font-size:9px;opacity:.78;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.store-badge-name{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.store-note{font-size:12px;color:var(--t3);margin-top:8px}
 .hero-stats{display:flex;gap:32px;margin-top:48px;padding-top:32px;border-top:1px solid var(--border)}
 .hero-stat .num{font-size:26px;font-weight:800;color:var(--t1);font-family:'JetBrains Mono',monospace}
 .hero-stat .lbl{font-size:12px;color:var(--t3);font-weight:500;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}
@@ -275,6 +320,22 @@ footer strong{color:rgba(255,255,255,.8)}
     <a class="nav-link" href="#features">Features</a>
     <a class="nav-link" href="#how">How it works</a>
     <a class="nav-link" href="#plans">Pricing</a>
+    <div class="nav-store-links">
+      <a class="store-badge light" id="playStoreBadge" href="https://play.google.com/store/apps/details?id=com.expenselyt.app" target="_blank" rel="noopener">
+        <span class="store-badge-icon">▶</span>
+        <span class="store-badge-text">
+          <span class="store-badge-over">Get it on</span>
+          <span class="store-badge-name">Google Play</span>
+        </span>
+      </a>
+      <a class="store-badge" id="appStoreBadge" href="/contact">
+        <span class="store-badge-icon">A</span>
+        <span class="store-badge-text">
+          <span class="store-badge-over">Download on the</span>
+          <span class="store-badge-name">App Store</span>
+        </span>
+      </a>
+    </div>
     <a class="btn btn-outline" href="/login">Log in</a>
     <a class="btn btn-primary" href="/register">Get started free →</a>
   </div>
@@ -291,6 +352,23 @@ footer strong{color:rgba(255,255,255,.8)}
         <a class="btn btn-primary btn-lg" href="/register">Start for free →</a>
         <a class="btn btn-outline btn-lg" href="/login">Log in to your account</a>
       </div>
+      <div class="store-links" style="display:none">
+        <a class="store-badge light" href="https://play.google.com/store/apps/details?id=com.expenselyt.app" target="_blank" rel="noopener">
+          <span class="store-badge-icon">▶</span>
+          <span class="store-badge-text">
+            <span class="store-badge-over">Get it on</span>
+            <span class="store-badge-name">Google Play</span>
+          </span>
+        </a>
+        <a class="store-badge" href="/contact">
+          <span class="store-badge-icon">A</span>
+          <span class="store-badge-text">
+            <span class="store-badge-over">Download on the</span>
+            <span class="store-badge-name">App Store</span>
+          </span>
+        </a>
+      </div>
+      <div class="store-note" style="display:none">Install Expense Lite AI on Android and iPhone.</div>
       <div class="hero-stats">
         <div class="hero-stat"><div class="num">16+</div><div class="lbl">Feature Modules</div></div>
         <div class="hero-stat"><div class="num">10+</div><div class="lbl">Currency Options</div></div>
@@ -776,6 +854,28 @@ document.querySelectorAll('a[href^="#"]').forEach(a => {
 window.addEventListener('scroll', () => {
   document.querySelector('nav').style.boxShadow = window.scrollY > 10 ? '0 2px 20px rgba(0,0,0,.08)' : 'none';
 });
+
+// Store badges
+(() => {
+  const cfg = window.__appRuntimeConfig || {};
+  const playBadge = document.getElementById('playStoreBadge');
+  const appBadge = document.getElementById('appStoreBadge');
+  const note = document.getElementById('storeBadgeNote');
+  if (playBadge && cfg.androidPlayStoreUrl) {
+    playBadge.href = cfg.androidPlayStoreUrl;
+  }
+  if (appBadge) {
+    if (cfg.iosAppStoreUrl) {
+      appBadge.href = cfg.iosAppStoreUrl;
+      appBadge.target = '_blank';
+      appBadge.rel = 'noopener';
+    } else {
+      appBadge.classList.add('disabled');
+      appBadge.title = 'Add IOS_APP_STORE_URL to enable this link';
+      if (note) note.textContent = 'Android download is live. Add your App Store URL to enable the iPhone badge.';
+    }
+  }
+})();
 </script>
 </body>
 </html>

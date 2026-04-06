@@ -2,9 +2,14 @@ const nodemailer = require('nodemailer');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'expenselyt@gmail.com';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000';
+const EMAIL_FROM_NAME = process.env.SMTP_FROM_NAME || 'Expense Lite AI';
 
 function isEmailEnabled() {
   return !!(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS);
+}
+
+function isWelcomeEmailEnabled() {
+  return String(process.env.EMAIL_WELCOME_ENABLED || '').toLowerCase() === 'true';
 }
 
 function getTransport() {
@@ -23,12 +28,15 @@ function getTransport() {
 async function sendMail({ to, subject, html, replyTo }) {
   const transport = getTransport();
   if (!transport) return { sent: false, reason: 'email_not_configured' };
+  const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER;
   await transport.sendMail({
-    from: process.env.SMTP_FROM || `"Expense Lite AI" <${process.env.SMTP_USER}>`,
+    from: `"${EMAIL_FROM_NAME}" <${fromAddress}>`,
+    sender: fromAddress,
     to,
     replyTo,
     subject,
     html,
+    text: htmlToText(html),
   });
   return { sent: true };
 }
@@ -40,6 +48,28 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/td>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\r/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function featurePills(items) {
@@ -169,28 +199,23 @@ async function sendPasswordResetEmail({ to, name, resetLink, resetCode }) {
 }
 
 async function sendWelcomeEmail({ to, name }) {
+  if (!isWelcomeEmailEnabled()) return { sent: false, reason: 'welcome_email_disabled' };
   return sendMail({
     to,
-    subject: 'Welcome to Expense Lite AI',
+    subject: 'Your Expense Lite AI account is ready',
     html: renderEmailLayout({
-      preheader: 'Your account is ready. Start tracking expenses, loans, EMIs, and planner dues.',
+      preheader: 'Your account was created successfully.',
       eyebrow: 'Welcome',
-      title: 'Your finance workspace is ready',
+      title: 'Your account is ready',
       intro: `Welcome ${name || 'there'} — your Expense Lite AI account has been created successfully.`,
       bodyHtml: `
-        <p style="margin:0 0 16px;">You now have one place to track spending, manage loans and EMIs, stay ahead of monthly dues, and keep bank accounts and credit cards organised.</p>
-        <p style="margin:0;">You can also use AI Lookup to ask plain-English questions about your finances and get fast answers from your own data.</p>
+        <p style="margin:0 0 16px;">You can now sign in and start using your account.</p>
+        <p style="margin:0;">If you did not create this account, please reply to this email.</p>
       `,
       actionLabel: 'Log In to Expense Lite AI',
       actionHref: `${APP_BASE_URL}/login`,
-      secondaryHtml: `
-        <div style="margin-top:22px;padding:18px 20px;border-radius:20px;background:#F8FAFC;border:1px solid #E2E8F0;">
-          <div style="font-size:13px;font-weight:800;color:#145A3C;margin-bottom:8px;">A good first setup</div>
-          <div style="font-size:14px;line-height:1.8;color:#475569;">Add your first expenses, set up your bank accounts or cards, and review your profile settings so your currency and contact details are correct from day one.</div>
-        </div>
-      `,
-      featureIntro: 'A few things you can do right away:',
-      featureItems: ['Expenses & Reports', 'Friends & Split Bills', 'Planner & Recurring Dues', 'Banks, Cards, and AI Lookup'],
+      secondaryHtml: '',
+      featureItems: [],
     }),
   });
 }
@@ -302,13 +327,234 @@ async function sendContactAckEmail({ to, name, subject }) {
   });
 }
 
+function formatCurrency(amount, currencyCode = 'INR', localeCode = 'en-IN') {
+  const value = Number(amount || 0);
+  try {
+    return new Intl.NumberFormat(localeCode || 'en-IN', {
+      style: 'currency',
+      currency: currencyCode || 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch (_err) {
+    return `${currencyCode || 'INR'} ${value.toFixed(2)}`;
+  }
+}
+
+function formatDate(value, localeCode = 'en-IN') {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const date = raw.includes('T') ? new Date(raw) : new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return raw;
+  try {
+    return new Intl.DateTimeFormat(localeCode || 'en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }).format(date);
+  } catch (_err) {
+    return raw;
+  }
+}
+
+function renderSummaryTable(rows = []) {
+  if (!rows.length) return '';
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:18px;margin-top:18px;">
+      ${detailRows(rows)}
+    </table>`;
+}
+
+async function sendSplitSharedEmail({ to, ownerName, recipientName, sessionTitle, divideDate, totalAmount, yourShare, itemCount, currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `${ownerName || 'A friend'} shared a split expense with you`,
+    html: renderEmailLayout({
+      preheader: 'A shared split expense is now available in your app.',
+      eyebrow: 'Split Expenses',
+      title: 'A split session was shared with you',
+      intro: `Hi ${recipientName || 'there'}, ${ownerName || 'someone'} shared a split expense session with you in Expense Lite AI.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">You can open the Split section to view the full breakdown, who paid, and how much you owe or are owed.</p>
+        ${renderSummaryTable([
+          { label: 'Session', value: escapeHtml(sessionTitle || 'Split expense') },
+          { label: 'Date', value: escapeHtml(formatDate(divideDate, localeCode)) },
+          { label: 'Total', value: escapeHtml(formatCurrency(totalAmount, currencyCode, localeCode)) },
+          { label: 'Your Share', value: escapeHtml(formatCurrency(yourShare, currencyCode, localeCode)) },
+          { label: 'Items', value: escapeHtml(String(itemCount || 0)) },
+        ])}
+      `,
+      actionLabel: 'Open Split Expenses',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Shared Split History', 'Who Owes What', 'Saved Session Details'],
+    }),
+  });
+}
+
+async function sendTripLinkedEmail({ to, ownerName, recipientName, tripName, startDate, permission, currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `${ownerName || 'A friend'} added you to a trip`,
+    html: renderEmailLayout({
+      preheader: 'You were added to a trip in Expense Lite AI.',
+      eyebrow: 'Trips',
+      title: 'You were added to a trip',
+      intro: `Hi ${recipientName || 'there'}, ${ownerName || 'someone'} linked you to the trip "${tripName}".`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">The trip is now visible in your app. You can review expenses, your share, and the current permission level.</p>
+        ${renderSummaryTable([
+          { label: 'Trip', value: escapeHtml(tripName || '-') },
+          { label: 'Start Date', value: escapeHtml(formatDate(startDate, localeCode)) },
+          { label: 'Permission', value: escapeHtml(permission || 'edit') },
+          { label: 'Added By', value: escapeHtml(ownerName || '-') },
+        ])}
+      `,
+      actionLabel: 'Open Trips',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Trip Expenses', 'Shared Members', 'Settlement Summary'],
+    }),
+  });
+}
+
+async function sendTripFinalizedEmail({ to, recipientName, tripName, ownerName, summaryLines = [], currencyCode, localeCode }) {
+  const rows = summaryLines.map((line) => ({
+    label: line.label,
+    value: escapeHtml(line.is_money ? formatCurrency(line.value, currencyCode, localeCode) : String(line.value)),
+  }));
+  return sendMail({
+    to,
+    subject: `Trip finalized: ${tripName}`,
+    html: renderEmailLayout({
+      preheader: 'A trip you were part of has been finalized.',
+      eyebrow: 'Trip Finalized',
+      title: 'Your trip settlement is ready',
+      intro: `Hi ${recipientName || 'there'}, ${ownerName || 'someone'} finalized the trip "${tripName}".`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">You can review the final totals and settlement details inside the app. A quick summary is below.</p>
+        ${renderSummaryTable(rows)}
+      `,
+      actionLabel: 'Open Trip Details',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Final Settlement', 'Expense Breakdown', 'Your Share'],
+    }),
+  });
+}
+
+async function sendMonthlyPlannerSummaryEmail({ to, name, monthLabel, currentDue, projectedDue, bankBalance, spendable, afterAll, currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `${monthLabel} planner summary`,
+    html: renderEmailLayout({
+      preheader: `Your ${monthLabel} planner totals are ready.`,
+      eyebrow: 'Monthly Planner',
+      title: `${monthLabel} planner summary`,
+      intro: `Hi ${name || 'there'}, here is your planner summary for ${monthLabel}.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">This snapshot shows what is due this month, your projected due position, and how your bank balance stands before and after dues.</p>
+        ${renderSummaryTable([
+          { label: 'Current Due', value: escapeHtml(formatCurrency(currentDue, currencyCode, localeCode)) },
+          { label: 'Projected Due', value: escapeHtml(formatCurrency(projectedDue, currencyCode, localeCode)) },
+          { label: 'Bank Balance', value: escapeHtml(formatCurrency(bankBalance, currencyCode, localeCode)) },
+          { label: 'Bank Spendable', value: escapeHtml(formatCurrency(spendable, currencyCode, localeCode)) },
+          { label: 'After All Dues', value: escapeHtml(formatCurrency(afterAll, currencyCode, localeCode)) },
+        ])}
+      `,
+      actionLabel: 'Open Planner',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Monthly Dues', 'Projected Payments', 'Bank Position'],
+    }),
+  });
+}
+
+async function sendTrackerMonthSummaryEmail({ to, name, trackerName, monthLabel, totalAmount, totalQty, autoDays, editedDays, expenseMonthLabel, currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `${trackerName} summary for ${monthLabel}`,
+    html: renderEmailLayout({
+      preheader: `Your daily tracker summary for ${monthLabel} is ready.`,
+      eyebrow: 'Daily Tracker',
+      title: `${trackerName} summary`,
+      intro: `Hi ${name || 'there'}, here is your ${trackerName} tracker summary for ${monthLabel}.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">This tracker total can also flow into planner or expenses depending on your settings.</p>
+        ${renderSummaryTable([
+          { label: 'Tracker Month', value: escapeHtml(monthLabel) },
+          { label: 'Total Amount', value: escapeHtml(formatCurrency(totalAmount, currencyCode, localeCode)) },
+          { label: 'Total Quantity', value: escapeHtml(String(totalQty || 0)) },
+          { label: 'Auto-filled Days', value: escapeHtml(String(autoDays || 0)) },
+          { label: 'Edited Days', value: escapeHtml(String(editedDays || 0)) },
+          { label: 'Applied To', value: escapeHtml(expenseMonthLabel || 'Planner / Expense based on settings') },
+        ])}
+      `,
+      actionLabel: 'Open Daily Tracker',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Monthly Totals', 'Auto-filled Days', 'Expense Carry Forward'],
+    }),
+  });
+}
+
+async function sendRecurringAppliedEmail({ to, name, monthLabel, entries = [], currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `Recurring amounts applied for ${monthLabel}`,
+    html: renderEmailLayout({
+      preheader: `Recurring amounts were added for ${monthLabel}.`,
+      eyebrow: 'Recurring',
+      title: `Recurring amounts added for ${monthLabel}`,
+      intro: `Hi ${name || 'there'}, these recurring amounts were added for ${monthLabel}.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">The following recurring entries were applied to this month.</p>
+        ${renderSummaryTable(entries.map((entry) => ({
+          label: entry.label,
+          value: escapeHtml(formatCurrency(entry.amount, currencyCode, localeCode)),
+        })))}
+      `,
+      actionLabel: 'Open Recurring',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Recurring Expenses', 'Monthly Application', 'Expense Sync'],
+    }),
+  });
+}
+
+async function sendTrackerExpenseAppliedEmail({ to, name, trackerName, sourceMonthLabel, expenseMonthLabel, amount, currencyCode, localeCode }) {
+  return sendMail({
+    to,
+    subject: `${trackerName} added to expenses`,
+    html: renderEmailLayout({
+      preheader: `${trackerName} was added to expenses.`,
+      eyebrow: 'Daily Tracker',
+      title: 'Tracker total added to expenses',
+      intro: `Hi ${name || 'there'}, your ${trackerName} tracker total was added to expenses.`,
+      bodyHtml: `
+        ${renderSummaryTable([
+          { label: 'Tracker', value: escapeHtml(trackerName) },
+          { label: 'Source Month', value: escapeHtml(sourceMonthLabel) },
+          { label: 'Expense Month', value: escapeHtml(expenseMonthLabel) },
+          { label: 'Amount', value: escapeHtml(formatCurrency(amount, currencyCode, localeCode)) },
+        ])}
+      `,
+      actionLabel: 'Open Expenses',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Tracker to Expense', 'Monthly Carry Forward'],
+    }),
+  });
+}
+
 module.exports = {
   ADMIN_EMAIL,
   isEmailEnabled,
+  isWelcomeEmailEnabled,
   sendPasswordResetEmail,
   sendWelcomeEmail,
   sendAdminNewUserEmail,
   sendPhoneLoginHelpEmail,
   sendContactEmail,
   sendContactAckEmail,
+  sendSplitSharedEmail,
+  sendTripLinkedEmail,
+  sendTripFinalizedEmail,
+  sendMonthlyPlannerSummaryEmail,
+  sendTrackerMonthSummaryEmail,
+  sendRecurringAppliedEmail,
+  sendTrackerExpenseAppliedEmail,
 };

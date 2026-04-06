@@ -16,6 +16,7 @@ const pgCoreDb = require('./db/postgres-core');
 const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
 const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
+const { sendMonthlySummaryEmailsForCurrentMonth } = require('./utils/user-email-events');
 const { verifyRecaptcha } = require('./utils/recaptcha');
 
 const app = express();
@@ -84,6 +85,8 @@ app.get('/runtime-config.js', (_req, res) => {
     `window.__appRuntimeConfig = ${JSON.stringify({
       gaMeasurementId: process.env.GA_MEASUREMENT_ID || '',
       googleWebClientId: getGoogleWebClientIdForRequest(_req),
+      androidPlayStoreUrl: process.env.ANDROID_PLAY_STORE_URL || 'https://play.google.com/store/apps/details?id=com.expenselyt.app',
+      iosAppStoreUrl: process.env.IOS_APP_STORE_URL || '',
     })};`
   );
 });
@@ -209,3 +212,21 @@ app.listen(PORT, () => {
   └──────────────────────────────────────────┘
   `);
 });
+
+async function runMonthlyEmailCycle() {
+  if (!isEmailEnabled()) return;
+  const now = new Date();
+  if (now.getDate() !== 1) return;
+  try {
+    await sendMonthlySummaryEmailsForCurrentMonth();
+  } catch (err) {
+    console.error('[email] monthly summary cycle failed:', err?.message || err);
+  }
+}
+
+setTimeout(() => {
+  runMonthlyEmailCycle().catch(() => {});
+  setInterval(() => {
+    runMonthlyEmailCycle().catch(() => {});
+  }, 60 * 60 * 1000);
+}, 10 * 1000);

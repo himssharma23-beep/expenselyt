@@ -11,6 +11,14 @@ const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
 const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth } = require('../middleware/auth');
+const { normalizeMessagePayload, sendExpoPushNotifications } = require('../utils/push-notifications');
+const {
+  sendSplitShareEmailsToTargets,
+  sendTripLinkedEmailToUser,
+  sendTripFinalizedEmails,
+  sendRecurringAppliedEmailForUser,
+  sendTrackerExpenseAppliedEmailForUser,
+} = require('../utils/user-email-events');
 
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
@@ -40,6 +48,10 @@ function parseBooleanFlag(value, defaultValue = false) {
   if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
   if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
   return defaultValue;
+}
+
+function parseAdminUserIdList(raw) {
+  return [...new Set((Array.isArray(raw) ? raw : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
 }
 
 function getCoreDb() {
@@ -428,6 +440,24 @@ router.delete('/friends/:id', async (req, res) => {
   }
 });
 
+router.post('/push/devices', async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgDb.upsertPushDeviceToken(req.session.userId, req.body || {}));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/push/devices', async (req, res) => {
+  try {
+    const removed = await Promise.resolve(pgDb.deactivatePushDeviceToken(req.session.userId, req.body?.token));
+    res.json({ success: true, removed });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ─── LOAN TRANSACTIONS ──────────────────────────────────────
 router.get('/loans/:friendId', async (req, res) => {
   try {
@@ -506,6 +536,10 @@ router.post('/divide/share-session', async (req, res) => {
     const result = await Promise.resolve(
       getCoreDb().syncDivideSessionShares(req.session.userId, req.body?.session_key, req.body?.friend_ids || [])
     );
+    const targetUserIds = Array.isArray(result?.target_user_ids) ? result.target_user_ids : [];
+    if (targetUserIds.length) {
+      sendSplitShareEmailsToTargets(req.session.userId, targetUserIds, req.body?.session_key).catch(() => {});
+    }
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -665,6 +699,11 @@ router.post('/trips', async (req, res) => {
     const { name, start_date, end_date, members } = req.body;
     if (!name || !start_date) return res.status(400).json({ error: 'Name and start date required' });
     const id = await Promise.resolve(getCoreDb().createTrip(req.session.userId, { name, start_date, end_date, members: members || [] }));
+    for (const member of (members || [])) {
+      if (member?.linked_user_id) {
+        sendTripLinkedEmailToUser(req.session.userId, id, member.linked_user_id, member.permission || 'edit').catch(() => {});
+      }
+    }
     res.json({ success: true, id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -723,6 +762,7 @@ router.post('/trips/:id/finalize', async (req, res) => {
       category: req.body?.category,
       friend_ids: req.body?.friend_ids || {},
     }));
+    sendTripFinalizedEmails(req.session.userId, req.params.id).catch(() => {});
     res.json(result || { success: true });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -740,6 +780,9 @@ router.put('/trips/:id/members/:mid/link', async (req, res) => {
   try {
     const { linked_user_id, permission } = req.body;
     await Promise.resolve(getCoreDb().linkTripMember(req.session.userId, req.params.mid, linked_user_id || null, permission || 'edit'));
+    if (linked_user_id) {
+      sendTripLinkedEmailToUser(req.session.userId, req.params.id, linked_user_id, permission || 'edit').catch(() => {});
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1400,6 +1443,55 @@ router.post('/admin/users/:id/otp', requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get('/admin/notifications/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await Promise.resolve(pgDb.getAdminPushUsers(req.query.search || ''));
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/notifications/send', requireAdmin, async (req, res) => {
+  try {
+    const userIds = parseAdminUserIdList(req.body?.user_ids);
+    if (!userIds.length) return res.status(400).json({ error: 'Select at least one user' });
+
+    const message = normalizeMessagePayload({
+      title: req.body?.title,
+      body: req.body?.message,
+      data: req.body?.data || {},
+    });
+
+    const tokenRows = await Promise.resolve(pgDb.getPushTokensForUsers(userIds));
+    if (!tokenRows.length) return res.status(400).json({ error: 'No active push devices found for the selected users' });
+
+    const tokenUsers = new Set(tokenRows.map((row) => row.user_id));
+    const missingUserIds = userIds.filter((id) => !tokenUsers.has(id));
+    const delivery = await sendExpoPushNotifications(tokenRows.map((row) => ({
+      to: row.token,
+      title: message.title,
+      body: message.body,
+      data: {
+        ...message.data,
+        user_id: row.user_id,
+      },
+    })));
+
+    res.json({
+      success: delivery.errors.length === 0,
+      requested_user_count: userIds.length,
+      delivered_user_count: tokenUsers.size,
+      device_count: tokenRows.length,
+      skipped_user_ids: missingUserIds,
+      sent_count: delivery.sent,
+      errors: delivery.errors,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.get('/admin/plans', requireAdmin, async (req, res) => {
   try {
     res.json({ plans: await Promise.resolve(pgDb.getPlans()) });
@@ -1887,6 +1979,7 @@ router.post('/trackers/:id/month-expense', (req, res) => {
   try {
     const { year, month, bank_account_id, expense_month, expense_category } = req.body;
     Promise.resolve(getOpsDb().addTrackerMonthToExpense(req.session.userId, req.params.id, year, month, { bank_account_id, expense_month, expense_category })).then((amount) => {
+      sendTrackerExpenseAppliedEmailForUser(req.session.userId, req.params.id, Number(year), Number(month), { expense_month }).catch(() => {});
       res.json({ success: true, amount });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1929,7 +2022,10 @@ router.post('/recurring', (req, res) => {
       also_expense,
       is_extra,
     })).then(async (id) => {
-      if (apply_current_month) await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));
+      if (apply_current_month) {
+        await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));
+        sendRecurringAppliedEmailForUser(req.session.userId, [Number(id)]).catch(() => {});
+      }
       res.json({ success: true, id });
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1949,6 +2045,7 @@ router.delete('/recurring/:id', (req, res) => {
 
 router.post('/recurring/apply', (req, res) => {
   Promise.resolve(getOpsDb().applyRecurringEntries(req.session.userId)).then((applied) => {
+    if ((applied || []).length) sendRecurringAppliedEmailForUser(req.session.userId, applied).catch(() => {});
     res.json({ success: true, applied: applied.length, ids: applied });
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });

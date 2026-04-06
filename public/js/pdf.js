@@ -833,6 +833,77 @@ async function downloadTrackerMonthPdf(trackerId, trackerName, year, month) {
 }
 
 // ── All Trackers — Monthly Overview ─────────────────────────
+async function downloadTrackerMonthPdf(trackerId, trackerName, year, month) {
+  const [entData, sumData] = await Promise.all([
+    api(`/api/trackers/${trackerId}/entries?year=${year}&month=${month}`),
+    api(`/api/trackers/${trackerId}/summary?year=${year}&month=${month}`)
+  ]);
+  const entries = entData?.entries || [];
+  const summary = sumData?.summary || {};
+  const label = `${_P.MONTHS[month-1]} ${year}`;
+
+  const doc = _P.init();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = _P.header(doc, `Daily Tracker - ${trackerName}`, label);
+  doc.setFontSize(7.25);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(95, 107, 122);
+  doc.text([
+    `Days: ${summary.days || 0}`,
+    `Qty: ${summary.total_qty || 0}`,
+    `Amount: ${_P.cur(summary.total_amount || 0)}`,
+    `Auto: ${summary.auto_days || 0}`,
+    `Edited: ${summary.edited_days || 0}`,
+  ].join('  |  '), 14, y);
+  doc.setTextColor(0, 0, 0);
+  doc.autoTable({
+    startY: y + 4,
+    head: [['Date', 'Day', 'Qty', 'Amount', 'Type']],
+    body: entries.map((e) => ([
+      _P.dt(e.entry_date),
+      new Date(e.entry_date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' }),
+      e.quantity,
+      _P.cur(e.amount),
+      e.is_auto ? 'Auto' : 'Edited',
+    ])),
+    theme: 'grid',
+    headStyles: {
+      fillColor: [20, 90, 60],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7,
+      cellPadding: 1.5,
+    },
+    bodyStyles: {
+      fontSize: 6.6,
+      cellPadding: 1.15,
+      minCellHeight: 4.7,
+    },
+    alternateRowStyles: { fillColor: [244, 245, 247] },
+    margin: { left: 12, right: 12, bottom: 12 },
+    columnStyles: {
+      0: { cellWidth: 38 },
+      1: { cellWidth: 20, halign: 'center' },
+      2: { cellWidth: 22, halign: 'right' },
+      3: { cellWidth: 42, halign: 'right', fontStyle: 'bold' },
+      4: { cellWidth: 24, halign: 'center' },
+    },
+    didDrawPage: (d) => {
+      if (d.pageNumber > 1) {
+        doc.setFillColor(20, 90, 60);
+        doc.rect(0, 0, pageWidth, 7, 'F');
+        doc.setFontSize(6.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(255, 255, 255);
+        doc.text('EXPENSE LITE AI (cont.)', 14, 5);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont('helvetica', 'normal');
+      }
+    }
+  });
+  _P.save(doc, `Tracker_${trackerName}_${label}`);
+}
+
 async function downloadTrackersOverviewPdf(year, month) {
   const label = `${_P.MONTHS[month-1]} ${year}`;
   const trData = await api('/api/trackers');

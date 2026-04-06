@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+
+# Private app areas
+Disallow: /app
+Disallow: /login
+Disallow: /register
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /s/
+Disallow: /api/
+
+Sitemap: https://expenselyt.com/sitemap.xml

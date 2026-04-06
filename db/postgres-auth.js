@@ -299,6 +299,208 @@ async function getAllUsers() {
   }));
 }
 
+function normalizeExpoPushToken(token) {
+  const value = String(token || '').trim();
+  if (!value) return null;
+  if (!/^ExponentPushToken\[[A-Za-z0-9_-]+\]$/.test(value)) return null;
+  return value;
+}
+
+async function upsertPushDeviceToken(userId, data = {}) {
+  const token = normalizeExpoPushToken(data.token || data.expo_push_token);
+  if (!token) throw new Error('Valid Expo push token is required');
+  const platform = String(data.platform || '').trim().toLowerCase().slice(0, 20) || null;
+  const deviceName = String(data.device_name || data.deviceLabel || '').trim().slice(0, 120) || null;
+  const appVersion = String(data.app_version || '').trim().slice(0, 40) || null;
+  await query(
+    `INSERT INTO push_device_tokens (user_id, expo_push_token, platform, device_name, app_version, last_seen_at, deleted_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW(), NULL, NOW())
+     ON CONFLICT (expo_push_token)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       platform = EXCLUDED.platform,
+       device_name = EXCLUDED.device_name,
+       app_version = EXCLUDED.app_version,
+       last_seen_at = NOW(),
+       deleted_at = NULL,
+       updated_at = NOW()`,
+    [userId, token, platform, deviceName, appVersion]
+  );
+  return { success: true, token };
+}
+
+async function deactivatePushDeviceToken(userId, token) {
+  const normalized = normalizeExpoPushToken(token);
+  if (!normalized) return false;
+  const result = await query(
+    `UPDATE push_device_tokens
+     SET deleted_at = NOW(),
+         updated_at = NOW()
+     WHERE user_id = $1
+       AND expo_push_token = $2
+       AND deleted_at IS NULL`,
+    [userId, normalized]
+  );
+  return (result.rowCount || 0) > 0;
+}
+
+async function getAdminPushUsers(search = '') {
+  const trimmed = String(search || '').trim();
+  const params = [];
+  let whereSql = `WHERE u.deleted_at IS NULL`;
+  if (trimmed) {
+    params.push(`%${trimmed}%`);
+    whereSql += ` AND (
+      u.display_name ILIKE $${params.length}
+      OR u.username ILIKE $${params.length}
+      OR u.email ILIKE $${params.length}
+    )`;
+  }
+  const result = await query(
+    `SELECT
+       u.id,
+       u.display_name,
+       u.username,
+       u.email,
+       u.is_active,
+       COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) AS push_device_count,
+       MAX(t.last_seen_at) FILTER (WHERE t.deleted_at IS NULL) AS push_last_seen_at
+     FROM users u
+     LEFT JOIN push_device_tokens t ON t.user_id = u.id
+     ${whereSql}
+     GROUP BY u.id
+     ORDER BY
+       COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) DESC,
+       lower(u.display_name) ASC
+     LIMIT 200`,
+    params
+  );
+  const users = result.rows.map((row) => ({
+    id: Number(row.id),
+    display_name: row.display_name,
+    username: row.username,
+    email: row.email,
+    is_active: !!row.is_active,
+    push_device_count: Number(row.push_device_count || 0),
+    push_last_seen_at: row.push_last_seen_at || null,
+  }));
+  const userIds = users.map((row) => row.id);
+  const devicesByUser = new Map();
+  if (userIds.length) {
+    const devicesResult = await query(
+      `SELECT
+         user_id,
+         platform,
+         device_name,
+         app_version,
+         last_seen_at
+       FROM push_device_tokens
+       WHERE user_id = ANY($1::bigint[])
+         AND deleted_at IS NULL
+       ORDER BY user_id, last_seen_at DESC, id DESC`,
+      [userIds]
+    );
+    for (const row of devicesResult.rows) {
+      const userId = Number(row.user_id);
+      if (!devicesByUser.has(userId)) devicesByUser.set(userId, []);
+      devicesByUser.get(userId).push({
+        platform: row.platform || null,
+        device_name: row.device_name || null,
+        app_version: row.app_version || null,
+        last_seen_at: row.last_seen_at || null,
+      });
+    }
+  }
+  return users.map((user) => ({
+    ...user,
+    devices: devicesByUser.get(user.id) || [],
+  }));
+}
+
+async function getPushTokensForUsers(userIds = []) {
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+  if (!ids.length) return [];
+  const result = await query(
+    `SELECT
+       t.user_id,
+       t.expo_push_token,
+       t.platform,
+       t.device_name,
+       u.display_name,
+       u.username
+     FROM push_device_tokens t
+     JOIN users u ON u.id = t.user_id
+     WHERE t.user_id = ANY($1::bigint[])
+       AND t.deleted_at IS NULL
+       AND u.deleted_at IS NULL
+       AND u.is_active = TRUE
+     ORDER BY u.display_name, t.id`,
+    [ids]
+  );
+  return result.rows.map((row) => ({
+    user_id: Number(row.user_id),
+    token: row.expo_push_token,
+    platform: row.platform || null,
+    device_name: row.device_name || null,
+    display_name: row.display_name,
+    username: row.username,
+  }));
+}
+
+async function getBasicUsersByIds(userIds = []) {
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+  if (!ids.length) return [];
+  const result = await query(
+    `SELECT id, username, email, display_name, role, currency_code, locale_code, is_active
+     FROM users
+     WHERE id = ANY($1::bigint[])
+       AND deleted_at IS NULL`,
+    [ids]
+  );
+  return result.rows.map((row) => normalizeUser({
+    ...row,
+    id: Number(row.id),
+    is_active: !!row.is_active,
+  }));
+}
+
+async function getAllActiveUsersForEmail() {
+  const result = await query(
+    `SELECT id, username, email, display_name, role, currency_code, locale_code, is_active
+     FROM users
+     WHERE deleted_at IS NULL
+       AND is_active = TRUE
+     ORDER BY id`
+  );
+  return result.rows.map((row) => normalizeUser({
+    ...row,
+    id: Number(row.id),
+    is_active: !!row.is_active,
+  }));
+}
+
+async function markEmailNotificationSent(userId, notificationKey, monthKey = null, payload = null) {
+  await query(
+    `INSERT INTO email_notification_log (user_id, notification_key, month_key, payload)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT DO NOTHING`,
+    [userId, String(notificationKey || '').trim(), monthKey || null, payload ? JSON.stringify(payload) : null]
+  );
+}
+
+async function hasEmailNotificationBeenSent(userId, notificationKey, monthKey = null) {
+  const result = await query(
+    `SELECT id
+     FROM email_notification_log
+     WHERE user_id = $1
+       AND notification_key = $2
+       AND COALESCE(month_key, '') = COALESCE($3, '')
+     LIMIT 1`,
+    [userId, String(notificationKey || '').trim(), monthKey || null]
+  );
+  return !!result.rows[0];
+}
+
 async function updateUserAdmin(id, data, actorUserId = null) {
   const fields = [];
   const params = [];
@@ -691,6 +893,15 @@ module.exports = {
   updateUserProfile,
   changeUserPassword,
   getAllUsers,
+  getBasicUsersByIds,
+  getAllActiveUsersForEmail,
+  markEmailNotificationSent,
+  hasEmailNotificationBeenSent,
+  normalizeExpoPushToken,
+  upsertPushDeviceToken,
+  deactivatePushDeviceToken,
+  getAdminPushUsers,
+  getPushTokensForUsers,
   updateUserAdmin,
   resetUserPassword,
   softDeleteUser,

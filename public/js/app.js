@@ -2098,7 +2098,6 @@ function _refreshDivHistory() {
 }
 
 function renderDivHistory() {
-  if (_divGroups.length === 0) return '';
   const sessions = _buildSessions();
   return `
     <div style="margin-top:28px" id="divHistorySection">
@@ -2108,13 +2107,17 @@ function renderDivHistory() {
         </div>
         <button class="btn btn-s btn-sm" onclick="downloadSplitHistoryPdf()">PDF</button>
       </div>
+      ${_divGroups.length ? `
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Date</th><th>Heading / Details</th><th>Paid By</th>
           <th class="td-m">Total</th><th style="width:110px;text-align:right"></th>
         </tr></thead>
         <tbody id="divHistoryBody">${_buildDivGroupRows().join('')}</tbody>
-      </table></div>
+      </table></div>` : `
+      <div class="card" style="text-align:center;color:var(--t3);padding:24px 18px">
+        No saved split history yet.
+      </div>`}
     </div>`;
 }
 
@@ -2248,7 +2251,6 @@ function _buildSharedGroupRows() {
 }
 
 function renderSharedDivHistory() {
-  if (_divSharedGroups.length === 0) return '';
   const sessions = _buildSharedSessions();
   return `
     <div style="margin-top:28px" id="divSharedHistorySection">
@@ -2257,13 +2259,17 @@ function renderSharedDivHistory() {
           <span class="div-shared-count" style="font-size:12px;font-weight:400;color:var(--t3);margin-left:8px">${sessions.length} session${sessions.length !== 1 ? 's' : ''}, ${_divSharedGroups.length} item${_divSharedGroups.length !== 1 ? 's' : ''}</span>
         </div>
       </div>
+      ${_divSharedGroups.length ? `
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Date</th><th>Heading / Details</th><th>Shared By</th>
           <th class="td-m">Total</th><th style="width:110px;text-align:right"></th>
         </tr></thead>
         <tbody id="divSharedHistoryBody">${_buildSharedGroupRows().join('')}</tbody>
-      </table></div>
+      </table></div>` : `
+      <div class="card" style="text-align:center;color:var(--t3);padding:24px 18px">
+        No shared split details yet.
+      </div>`}
     </div>`;
 }
 
@@ -2604,6 +2610,7 @@ async function doSaveDivide() {
   }
 
   closeModal();
+  divideItems = [];
   divideSelected = new Set();
   dividePaidBy = 'self';
   divideSplitMode = 'equal';
@@ -2630,12 +2637,12 @@ async function doSaveDivide() {
         toast('Saved and shared with linked friends', 'success', 4500);
         return;
       }
-      toast(shareRes?.error || 'Saved, but sharing failed. Draft items were kept.', 'warning', 4500);
+      toast(shareRes?.error || 'Saved, but sharing failed. You can share it later from Saved Splits History.', 'warning', 4500);
       return;
     }
   }
   const friendCount = Object.keys(peopleMap).filter(k => k !== 'self').length;
-  toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded. Draft items were kept.`, 'success', 4500);
+  toast(`Saved!${selfEntry?.totalShare > 0 ? ' Expense added to your account.' : ''} ${friendCount} friend transaction(s) recorded.`, 'success', 4500);
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -4645,7 +4652,11 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | plans | subscriptions
+let adminSection = 'users'; // users | plans | subscriptions | notifications
+let _adminNotifUsers = [];
+let _adminNotifSelected = new Set();
+let _adminNotifSearch = '';
+let _adminNotifLastResult = null;
 
 const ALL_PAGES = [
   { key: 'dashboard',   label: 'Dashboard' },
@@ -4674,10 +4685,11 @@ async function loadAdmin() {
   if (adminSection === 'users') await loadAdminUsers();
   else if (adminSection === 'plans') await loadAdminPlans();
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
+  else if (adminSection === 'notifications') await loadAdminNotifications();
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['plans','Plans'], ['subscriptions','Subscriptions']];
+  const tabs = [['users','Users'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -4687,6 +4699,157 @@ function renderAdminShell() {
       <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
+}
+
+function _adminNotifSelectedUsers() {
+  return _adminNotifUsers.filter((user) => _adminNotifSelected.has(user.id));
+}
+
+function _adminNotifToggleUser(userId) {
+  if (_adminNotifSelected.has(userId)) _adminNotifSelected.delete(userId);
+  else _adminNotifSelected.add(userId);
+  renderAdminNotifications();
+}
+
+function _adminNotifToggleVisible(selectAll) {
+  (_adminNotifUsers || []).forEach((user) => {
+    if (!user?.id) return;
+    if (selectAll) _adminNotifSelected.add(user.id);
+    else _adminNotifSelected.delete(user.id);
+  });
+  renderAdminNotifications();
+}
+
+async function loadAdminNotifications() {
+  const data = await api(`/api/admin/notifications/users${_adminNotifSearch ? `?search=${encodeURIComponent(_adminNotifSearch)}` : ''}`);
+  _adminNotifUsers = data?.users || [];
+  const visibleIds = new Set(_adminNotifUsers.map((user) => user.id));
+  _adminNotifSelected = new Set([..._adminNotifSelected].filter((userId) => visibleIds.has(userId)));
+  renderAdminNotifications();
+}
+
+function renderAdminNotifications() {
+  const users = _adminNotifUsers || [];
+  const selectedUsers = _adminNotifSelectedUsers();
+  const selectedReadyUsers = selectedUsers.filter((user) => Number(user.push_device_count || 0) > 0);
+  const totalDevices = selectedReadyUsers.reduce((sum, user) => sum + Number(user.push_device_count || 0), 0);
+  const allVisibleSelected = users.length > 0 && users.every((user) => _adminNotifSelected.has(user.id));
+
+  const userCards = users.map((user) => {
+    const selected = _adminNotifSelected.has(user.id);
+    const ready = Number(user.push_device_count || 0) > 0;
+    const deviceSummary = (Array.isArray(user.devices) ? user.devices : []).map((device) => {
+      const platform = String(device?.platform || '').trim();
+      const platformLabel = platform ? (platform === 'ios' ? 'iPhone' : platform.charAt(0).toUpperCase() + platform.slice(1)) : 'Unknown';
+      const deviceName = String(device?.device_name || '').trim();
+      const appVersion = String(device?.app_version || '').trim();
+      return [platformLabel, deviceName, appVersion ? `v${appVersion}` : ''].filter(Boolean).join(' • ');
+    }).filter(Boolean);
+    return `
+      <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid ${selected ? 'var(--green)' : 'var(--br)'};border-radius:14px;background:${selected ? '#f3fbf6' : '#fff'};cursor:pointer">
+        <input type="checkbox" ${selected ? 'checked' : ''} onchange="_adminNotifToggleUser(${user.id})" style="margin-top:2px;width:16px;height:16px">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="min-width:0">
+              <div style="font-weight:700;color:var(--t1)">${escHtml(user.display_name || '')}</div>
+              <div style="font-size:12px;color:var(--t2)">@${escHtml(user.username || '')}</div>
+              <div style="font-size:12px;color:var(--t3);word-break:break-all">${escHtml(user.email || '')}</div>
+            </div>
+            <span style="font-size:11px;padding:4px 8px;border-radius:999px;background:${ready ? 'var(--green-l)' : 'var(--border-l)'};color:${ready ? 'var(--green)' : 'var(--t3)'};white-space:nowrap">${ready ? `${user.push_device_count} device${user.push_device_count === 1 ? '' : 's'}` : 'No device'}</span>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">${user.push_last_seen_at ? `Last seen ${fmtDate(user.push_last_seen_at)}` : 'No app device registered yet'}</div>
+          ${deviceSummary.length ? `<div style="display:grid;gap:4px;margin-top:8px">${deviceSummary.map((line) => `<div style="font-size:11px;color:var(--t2);padding:6px 8px;border:1px solid var(--br);border-radius:10px;background:var(--bg2)">${escHtml(line)}</div>`).join('')}</div>` : ''}
+        </div>
+      </label>`;
+  }).join('');
+
+  const resultBox = _adminNotifLastResult
+    ? `<div class="card" style="margin-top:16px;background:${_adminNotifLastResult.success ? '#f3fbf6' : '#fff7f5'};border-color:${_adminNotifLastResult.success ? '#b8e0c2' : '#f1c7bf'}">
+        <div style="font-size:14px;font-weight:700;color:${_adminNotifLastResult.success ? 'var(--green)' : 'var(--red)'}">${_adminNotifLastResult.success ? 'Notification sent' : 'Notification completed with issues'}</div>
+        <div style="font-size:12px;color:var(--t2);margin-top:6px">
+          Selected users: ${_adminNotifLastResult.requested_user_count || 0}
+          &nbsp;&middot;&nbsp; Users with devices: ${_adminNotifLastResult.delivered_user_count || 0}
+          &nbsp;&middot;&nbsp; Device sends: ${_adminNotifLastResult.device_count || 0}
+        </div>
+        ${_adminNotifLastResult.errors?.length ? `<div style="font-size:12px;color:var(--red);margin-top:8px">${escHtml(_adminNotifLastResult.errors.join(' | '))}</div>` : ''}
+      </div>`
+    : '';
+
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.1fr);gap:18px;align-items:start">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:15px;font-weight:700">Recipients</div>
+            <div style="font-size:12px;color:var(--t3)">Only users with registered app devices will receive the push.</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-s btn-sm" onclick="_adminNotifToggleVisible(true)">${allVisibleSelected ? 'Visible Selected' : 'Select Visible'}</button>
+            <button class="btn btn-s btn-sm" onclick="_adminNotifToggleVisible(false)">Clear Visible</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input class="fi" id="adminNotifSearch" placeholder="Search by name, username, or email" value="${escHtml(_adminNotifSearch)}" onkeydown="if(event.key==='Enter'){_adminNotifSearch=this.value.trim();loadAdminNotifications()}">
+          <button class="btn btn-p btn-sm" onclick="_adminNotifSearch=document.getElementById('adminNotifSearch').value.trim();loadAdminNotifications()">Search</button>
+        </div>
+        <div style="display:grid;gap:10px;max-height:520px;overflow:auto">
+          ${userCards || '<div style="text-align:center;color:var(--t3);padding:30px 16px">No users found.</div>'}
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-size:15px;font-weight:700;margin-bottom:6px">Compose Notification</div>
+        <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Select users on the left, then write the notification title and message you want to send to the app.</div>
+        <div style="display:grid;gap:12px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px">Title</div>
+            <input class="fi" id="adminNotifTitle" maxlength="80" placeholder="e.g. Bill reminder">
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px">Message</div>
+            <textarea class="fi" id="adminNotifMessage" rows="6" maxlength="250" placeholder="Write the notification message here"></textarea>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px">
+          <div style="padding:12px;border:1px solid var(--br);border-radius:12px;background:var(--bg2)">
+            <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Users</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px">${selectedUsers.length}</div>
+          </div>
+          <div style="padding:12px;border:1px solid var(--br);border-radius:12px;background:var(--bg2)">
+            <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Ready Users</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px">${selectedReadyUsers.length}</div>
+          </div>
+          <div style="padding:12px;border:1px solid var(--br);border-radius:12px;background:var(--bg2)">
+            <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Target Devices</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px">${totalDevices}</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--t3);margin-top:12px">${selectedUsers.length ? selectedUsers.map((user) => escHtml(user.display_name)).join(', ') : 'No users selected yet.'}</div>
+        <div class="fa" style="margin-top:16px">
+          <button class="btn btn-p" onclick="adminSendNotification()">Send Notification</button>
+        </div>
+        ${resultBox}
+      </div>
+    </div>`;
+}
+
+async function adminSendNotification() {
+  const title = document.getElementById('adminNotifTitle')?.value?.trim() || '';
+  const message = document.getElementById('adminNotifMessage')?.value?.trim() || '';
+  const userIds = [..._adminNotifSelected];
+  if (!userIds.length) { toast('Select at least one user', 'warning'); return; }
+  if (!title) { toast('Notification title is required', 'warning'); return; }
+  if (!message) { toast('Notification message is required', 'warning'); return; }
+  const result = await api('/api/admin/notifications/send', {
+    method: 'POST',
+    body: {
+      user_ids: userIds,
+      title,
+      message,
+    },
+  });
+  _adminNotifLastResult = result || null;
+  toast(result?.success ? 'Notification sent' : (result?.error || 'Notification finished with issues'), result?.success ? 'success' : 'warning');
+  renderAdminNotifications();
 }
 
 // â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

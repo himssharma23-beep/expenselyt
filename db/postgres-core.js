@@ -510,6 +510,10 @@ async function syncDivideSessionShares(userId, sessionKey, friendIds = []) {
       const rows = participantMap.get(friendId) || [];
       return rows.some((row) => row.target_user_id);
     });
+    const targetUserIds = [...new Set(eligibleFriendIds.flatMap((friendId) => {
+      const rows = participantMap.get(friendId) || [];
+      return rows.map((row) => row.target_user_id).filter(Boolean);
+    }))];
 
     for (const friendId of eligibleFriendIds) {
       const rows = participantMap.get(friendId) || [];
@@ -542,7 +546,7 @@ async function syncDivideSessionShares(userId, sessionKey, friendIds = []) {
       );
     }
 
-    return { shared_friend_ids: eligibleFriendIds };
+    return { shared_friend_ids: eligibleFriendIds, target_user_ids: targetUserIds };
   });
 }
 

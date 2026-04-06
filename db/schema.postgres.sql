@@ -36,6 +36,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_active_unique ON users (low
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_active_unique ON users (lower(email)) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_user_id_active_unique ON users (apple_user_id) WHERE apple_user_id IS NOT NULL AND deleted_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS push_device_tokens (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expo_push_token TEXT NOT NULL,
+  platform TEXT,
+  device_name TEXT,
+  app_version TEXT,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS platform TEXT;
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS device_name TEXT;
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS app_version TEXT;
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE push_device_tokens ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_device_tokens_token_unique ON push_device_tokens (expo_push_token);
+CREATE INDEX IF NOT EXISTS idx_push_device_tokens_user_active ON push_device_tokens (user_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS email_notification_log (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  notification_key TEXT NOT NULL,
+  month_key TEXT,
+  payload JSONB,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_notification_log_unique
+  ON email_notification_log (user_id, notification_key, COALESCE(month_key, ''));
+
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

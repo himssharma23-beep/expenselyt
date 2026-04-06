@@ -1,0 +1,26 @@
+# Expense Lite AI
+
+> Expense Lite AI is a personal finance platform for expense tracking, EMI and loan management, monthly planning, split expenses, bank accounts, credit cards, and AI-assisted financial lookup.
+
+## Canonical Site
+- https://expenselyt.com/
+
+## Public Pages
+- Home: https://expenselyt.com/
+- Contact: https://expenselyt.com/contact
+- Privacy Policy: https://expenselyt.com/privacy-policy
+- Terms and Conditions: https://expenselyt.com/terms-and-conditions
+
+## Product Summary
+- Track personal expenses and categorize spending
+- Manage EMIs, recurring payments, and monthly due planning
+- Monitor bank accounts and credit cards
+- Split expenses with friends
+- Use AI-powered financial lookup features
+
+## Crawl Guidance
+- Public marketing and policy pages may be indexed and summarized
+- Authenticated app pages, shared private data, and API routes should not be indexed
+
+## Contact
+- Email: hims.sharma23@gmail.com
