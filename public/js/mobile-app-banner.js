@@ -24,7 +24,6 @@
   document.head.appendChild(style);
 
   if (window.matchMedia && !window.matchMedia('(max-width:900px)').matches) return;
-  if (sessionStorage.getItem('hide_mobile_install_banner') === '1') return;
   if (document.querySelector('.mobile-install-banner')) return;
 
   var banner = document.createElement('div');
@@ -42,7 +41,6 @@
     '<button type="button" class="mib-close" aria-label="Close">&times;</button>';
 
   banner.querySelector('.mib-close').addEventListener('click', function () {
-    sessionStorage.setItem('hide_mobile_install_banner', '1');
     document.body.classList.remove('has-mobile-install-banner');
     banner.remove();
   });

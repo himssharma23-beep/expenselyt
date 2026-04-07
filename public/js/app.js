@@ -762,7 +762,7 @@ function showExcelImport() {
   openModal('Import from Excel', `
     <div style="background:var(--blue-l);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--t2)">
       <b style="color:var(--t1)">Expected columns:</b>
-      <span style="margin-left:10px"><b>B</b> Date &nbsp;Â·&nbsp; <b>D</b> Description &nbsp;Â·&nbsp; <b>E</b> Debit &nbsp;Â·&nbsp; <b>F</b> Extras (Y/N)</span>
+      <span style="margin-left:10px"><b>B</b> Date &nbsp;&middot;&nbsp; <b>D</b> Description &nbsp;&middot;&nbsp; <b>E</b> Debit &nbsp;&middot;&nbsp; <b>F</b> Extras (Y/N)</span>
     </div>
     <div class="fg" style="margin-bottom:14px">
       <label class="fl full">File (.xlsx / .xls / .ods)
@@ -772,7 +772,7 @@ function showExcelImport() {
         <input type="password" id="xlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets â†’</button>
+        <button class="btn btn-p" onclick="loadExcelSheets()">Load Sheets &rarr;</button>
       </label>
     </div>
     <div id="xlsxSheetArea"></div>
@@ -783,7 +783,7 @@ async function loadExcelSheets() {
   const file = document.getElementById('xlsxFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('xlsxPass').value;
-  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
+  document.getElementById('xlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file...</div>`;
   document.getElementById('xlsxPreview').innerHTML = '';
   const fd = new FormData();
   fd.append('file', file);
@@ -816,7 +816,7 @@ async function loadExcelSheets() {
       </div>
       ${checkboxes}
     </div>
-    <button class="btn btn-s" onclick="previewExcel()">Preview â†’</button>`;
+    <button class="btn btn-s" onclick="previewExcel()">Preview &rarr;</button>`;
   if (data.sheets.length === 1) previewExcel();
 }
 
@@ -830,7 +830,7 @@ async function previewExcel() {
   const password = document.getElementById('xlsxPass')?.value || '';
   if (!file) return;
   if (sheets.length === 0) { toast('Select at least one sheet', 'warning'); return; }
-  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading previewâ€¦</div>`;
+  document.getElementById('xlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheets', JSON.stringify(sheets));
@@ -838,7 +838,7 @@ async function previewExcel() {
   const res = await fetch('/api/expenses/import-excel/preview', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.error) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`; return; }
-  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped â€” zero amount or missing data).</p>`; return; }
+  if (data.count === 0) { document.getElementById('xlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid rows found (${data.skipped} rows skipped - zero amount or missing data).</p>`; return; }
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('xlsxPreview').innerHTML = `
     <p style="font-size:13px;margin-bottom:10px">Found <b>${data.count}</b> valid rows from ${sheetLabel} &nbsp;<span style="color:var(--t3)">(${data.skipped} skipped)</span></p>
@@ -1221,7 +1221,7 @@ function showFriendExcelImport() {
         <input type="password" id="fiPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
       </label>
       <label class="fl" style="justify-content:flex-end;padding-top:20px">
-        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets â†’</button>
+        <button class="btn btn-p" onclick="loadFriendImportSheets()">Load Sheets &rarr;</button>
       </label>
     </div>
     <div id="fiSheetArea"></div>
@@ -1233,7 +1233,7 @@ function showFriendExcelImport() {
         <label class="fl">Paid (you gave) *<select id="fiMapPaid" class="fi"></select></label>
         <label class="fl">Received (you got) *<select id="fiMapReceived" class="fi"></select></label>
       </div>
-      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview â†’</button>
+      <button class="btn btn-s btn-sm" style="margin-top:4px" onclick="previewFriendImport()">Preview &rarr;</button>
     </div>
     <div id="fiPreview"></div>`);
 }
@@ -1244,7 +1244,7 @@ async function loadFriendImportSheets() {
   const file = document.getElementById('fiFile').files[0];
   if (!file) { toast('Please select a file first', 'warning'); return; }
   const password = document.getElementById('fiPass').value;
-  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading fileâ€¦</div>`;
+  document.getElementById('fiSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file...</div>`;
   document.getElementById('fiMapping').style.display = 'none';
   document.getElementById('fiPreview').innerHTML = '';
   const fd = new FormData();
@@ -1317,7 +1317,7 @@ async function previewFriendImport() {
     paid:     parseInt(document.getElementById('fiMapPaid').value),
     received: parseInt(document.getElementById('fiMapReceived').value),
   };
-  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading previewâ€¦</div>`;
+  document.getElementById('fiPreview').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-top:12px">Loading preview...</div>`;
   const fd = new FormData();
   fd.append('file', file);
   fd.append('sheet', sheets[0]);
@@ -1330,7 +1330,7 @@ async function previewFriendImport() {
   const sheetLabel = sheets.length > 1 ? `${sheets.length} sheets` : `"${sheets[0]}"`;
   document.getElementById('fiPreview').innerHTML = `
     <div style="margin-top:14px">
-      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> â€” <b>${data.count}</b> rows
+      <p style="font-size:13px;margin-bottom:8px">Preview of <b>"${sheets[0]}"</b> - <b>${data.count}</b> rows
         <span style="color:var(--t3)">(${data.skipped} skipped)</span>
         ${sheets.length > 1 ? `&nbsp;+&nbsp;<span style="color:var(--em);font-weight:600">${sheets.length - 1} more sheet${sheets.length>2?'s':''}</span>` : ''}
       </p>
@@ -1370,7 +1370,7 @@ async function doFriendExcelImport() {
   const res = await fetch('/api/friends/import-excel', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.success) {
-    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' � ');
+    const summary = data.results.map(r => `${r.sheet}: ${r.imported} rows`).join(' | ');
     toast(`Imported ${data.totalImported} transactions across ${data.results.length} friend(s) - ${summary}`, 'success', 5000);
     closeModal();
     loadFriends();
@@ -7865,7 +7865,7 @@ function _buildDivCcSection(existingCcInfo) {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingCcInfo?.cardId === c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} **${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = existingCcInfo?.discountPct ?? (cards[0]?.default_discount_pct || 0);
   const checked = existingCcInfo ? 'checked' : '';
@@ -7909,7 +7909,7 @@ function ccFormSection() {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} â€¢â€¢${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} **${escHtml(c.last4)})</option>`
   ).join('');
   const firstDisc = cards[0]?.default_discount_pct || 0;
   return `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
@@ -9501,7 +9501,7 @@ async function showRecurringModal(id) {
   const currentMonth = _localYM();
 
   const isCC = entry?.type === 'cc_txn';
-  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
+  const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
     <div class="fg">
@@ -9957,7 +9957,7 @@ async function showRecurringModal(id) {
   }
   const currentMonth = _localYM();
   const isCC = entry?.type === 'cc_txn';
-  const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} â€¢â€¢${escHtml(c.last4)}</option>`).join('');
+  const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
   const bankOptions = `<option value="">-- Default / none --</option>${_bankDropdownOptions(entry?.bank_account_id)}`;
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `

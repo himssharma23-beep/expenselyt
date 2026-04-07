@@ -104,6 +104,49 @@ function dbDateToYmd(value) {
   return raw.slice(0, 10);
 }
 
+const TRACKER_PRICE_BASELINE_DATE = '1900-01-01';
+
+function monthStartFromYmd(value) {
+  const ymd = normalizeDateValue(value, 'Date');
+  return `${ymd.slice(0, 7)}-01`;
+}
+
+async function setDailyTrackerPriceVersion(userId, trackerId, effectiveFrom, pricePerUnit, client = null) {
+  const run = client || { query };
+  await run.query(
+    `INSERT INTO daily_tracker_prices (tracker_id, user_id, effective_from, price_per_unit, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $2, $2)
+     ON CONFLICT (tracker_id, effective_from)
+     DO UPDATE SET price_per_unit = EXCLUDED.price_per_unit, updated_at = NOW(), updated_by = EXCLUDED.updated_by`,
+    [trackerId, userId, effectiveFrom, pricePerUnit]
+  );
+}
+
+async function ensureDailyTrackerPriceBaseline(userId, trackerId, baselinePricePerUnit, client = null) {
+  const run = client || { query };
+  await run.query(
+    `INSERT INTO daily_tracker_prices (tracker_id, user_id, effective_from, price_per_unit, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $2, $2)
+     ON CONFLICT (tracker_id, effective_from) DO NOTHING`,
+    [trackerId, userId, TRACKER_PRICE_BASELINE_DATE, baselinePricePerUnit]
+  );
+}
+
+async function getDailyTrackerPriceForDate(userId, trackerId, entryDate, fallbackPrice = null, client = null) {
+  const run = client || { query };
+  const normalizedDate = normalizeDateValue(entryDate, 'Entry date');
+  const priceR = await run.query(
+    `SELECT price_per_unit
+     FROM daily_tracker_prices
+     WHERE user_id = $1 AND tracker_id = $2 AND effective_from <= $3
+     ORDER BY effective_from DESC, id DESC
+     LIMIT 1`,
+    [userId, trackerId, normalizedDate]
+  );
+  if (priceR.rows[0]) return num(priceR.rows[0].price_per_unit);
+  return Number.isFinite(Number(fallbackPrice)) ? num(fallbackPrice) : 0;
+}
+
 async function getDefaultBankAccountId(userId, client = null) {
   const run = client || { query };
   const result = await run.query(
@@ -721,10 +764,21 @@ async function addDailyTracker(userId, data) {
      RETURNING id`,
     [userId, name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory]
   );
-  return Number(result.rows[0].id);
+  const trackerId = Number(result.rows[0].id);
+  await ensureDailyTrackerPriceBaseline(userId, trackerId, pricePerUnit);
+  return trackerId;
 }
 
 async function updateDailyTracker(userId, id, data) {
+  const trackerId = Number(id);
+  if (!Number.isFinite(trackerId) || trackerId <= 0) throw validationError('Invalid tracker id');
+  const trackerR = await query(
+    'SELECT id, price_per_unit FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1',
+    [trackerId, userId]
+  );
+  const currentTracker = trackerR.rows[0];
+  if (!currentTracker) throw validationError('Tracker not found');
+
   const name = normalizeText(data.name, 'Tracker name', 80);
   const unit = normalizeText(data.unit || 'unit', 'Unit', 30);
   const pricePerUnit = normalizePositiveAmount(data.price_per_unit, 'Price per unit');
@@ -737,8 +791,13 @@ async function updateDailyTracker(userId, id, data) {
      SET name = $1, unit = $2, price_per_unit = $3, default_qty = $4, is_active = $5,
          auto_add_to_expense = $6, expense_bank_account_id = $7, expense_category = $8, updated_at = NOW(), updated_by = $10
      WHERE id = $9 AND user_id = $10`,
-    [name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory, id, userId]
+    [name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory, trackerId, userId]
   );
+
+  // Keep historical tracker prices immutable for prior months.
+  await ensureDailyTrackerPriceBaseline(userId, trackerId, num(currentTracker.price_per_unit));
+  const currentMonthStart = monthStartFromYmd(_localDate(new Date()));
+  await setDailyTrackerPriceVersion(userId, trackerId, currentMonthStart, pricePerUnit);
 }
 
 async function deleteDailyTracker(userId, id) {
@@ -771,7 +830,8 @@ async function upsertDailyEntry(userId, trackerId, date, qty, isAuto) {
   const entryDate = normalizeDateValue(date, 'Entry date');
   const quantity = Number(qty);
   if (!Number.isFinite(quantity) || quantity < 0) throw validationError('Quantity cannot be negative');
-  const amount = Math.round(quantity * parseFloat(tracker.price_per_unit) * 100) / 100;
+  const unitPrice = await getDailyTrackerPriceForDate(userId, trackerId, entryDate, tracker.price_per_unit);
+  const amount = Math.round(quantity * unitPrice * 100) / 100;
   await query(
     `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -794,7 +854,9 @@ async function autoFillDailyEntries(userId, trackerId, year, month) {
     [trackerId, `${prefix}-%`]
   );
   const existing = new Set(existingR.rows.map((row) => dbDateToYmd(row.entry_date)));
-  const amount = Math.round(parseFloat(tracker.default_qty) * parseFloat(tracker.price_per_unit) * 100) / 100;
+  const monthStart = `${prefix}-01`;
+  const unitPrice = await getDailyTrackerPriceForDate(userId, trackerId, monthStart, tracker.price_per_unit);
+  const amount = Math.round(parseFloat(tracker.default_qty) * unitPrice * 100) / 100;
   const daysInMonth = new Date(year, month, 0).getDate();
   let filled = 0;
   for (let day = 1; day <= daysInMonth; day++) {

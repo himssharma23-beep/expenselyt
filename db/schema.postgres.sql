@@ -409,6 +409,20 @@ CREATE TABLE IF NOT EXISTS daily_trackers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS daily_tracker_prices (
+  id BIGSERIAL PRIMARY KEY,
+  tracker_id BIGINT NOT NULL REFERENCES daily_trackers(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  effective_from DATE NOT NULL,
+  price_per_unit NUMERIC(14,2) NOT NULL,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(tracker_id, effective_from)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_tracker_prices_lookup ON daily_tracker_prices(tracker_id, effective_from DESC);
+
 CREATE TABLE IF NOT EXISTS daily_entries (
   id BIGSERIAL PRIMARY KEY,
   tracker_id BIGINT NOT NULL REFERENCES daily_trackers(id) ON DELETE CASCADE,
@@ -560,6 +574,7 @@ BEGIN
     'cc_cycles',
     'cc_txns',
     'daily_trackers',
+    'daily_tracker_prices',
     'daily_entries',
     'recurring_entries',
     'trip_invites',

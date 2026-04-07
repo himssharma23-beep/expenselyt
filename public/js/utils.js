@@ -59,6 +59,15 @@ function escHtml(s) {
 function repairMojibakeText(value) {
   let text = String(value ?? '');
   for (const [from, to] of MOJIBAKE_REPLACEMENTS) text = text.split(from).join(to);
+  // Direct fallbacks for common mojibake that still appears in UI labels/buttons.
+  text = text
+    .replace(/Â·/g, ' · ')
+    .replace(/â†’/g, '->')
+    .replace(/â†/g, '<-')
+    .replace(/â€¦/g, '...')
+    .replace(/â€”/g, '-')
+    .replace(/ï¿½/g, '-')
+    .replace(/Ã¢â‚¬Â¢Ã¢â‚¬Â¢/g, '••');
   // Additional fallback fixes for patterns that frequently survive replacement tables.
   text = text
     .replace(/\u00c2\u00b7/g, ' \u00b7 ')

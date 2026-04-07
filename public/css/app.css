@@ -573,6 +573,12 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     left:0;
     z-index:85;
     padding:18px 12px 16px;
+    padding-bottom:calc(16px + env(safe-area-inset-bottom));
+    height:100dvh;
+    max-height:100dvh;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-y:contain;
     transform:translateX(-100%);
     transition:transform .22s ease;
     box-shadow:0 24px 48px rgba(0,0,0,0.22);
@@ -591,6 +597,12 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   }
   .nav-btn .icon { width:28px; font-size:18px; }
   .nav-btn span:not(.icon) { display:block; font-size:13px; }
+  .logout-btn {
+    position:sticky;
+    bottom:calc(8px + env(safe-area-inset-bottom));
+    background:rgba(255,255,255,0.16);
+    backdrop-filter:blur(4px);
+  }
   .main { min-height:100vh; }
   .tab-content {
     padding:84px 14px 24px;
@@ -632,7 +644,8 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 @media(max-width:480px) {
   .sidebar {
     width:min(88vw, 320px);
-    height:100vh;
+    height:100dvh;
+    max-height:100dvh;
     flex-direction:column;
     bottom:auto;
     justify-content:flex-start;

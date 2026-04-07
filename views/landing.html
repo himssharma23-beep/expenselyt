@@ -306,10 +306,20 @@ footer strong{color:rgba(255,255,255,.8)}
   .plans-grid{grid-template-columns:1fr}
   .full-inner{padding:0 20px}
   nav{padding:10px 12px}
+  .nav-logo{font-size:16px;min-width:0}
   nav .nav-links .nav-link{display:none}
   .nav-logo-tagline{display:none}
-  .nav-links{gap:8px}
-  .nav-store-links{width:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
+  .nav-links{gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+  .nav-store-links{
+    display:flex;
+    width:100%;
+    margin-left:0;
+    order:3;
+    justify-content:flex-start;
+    overflow-x:auto;
+    flex-wrap:nowrap;
+    padding-bottom:2px;
+  }
   .store-badge{min-width:158px;padding:7px 10px}
   .store-badge-name{font-size:14px}
   .btn{padding:8px 12px;font-size:13px}
