@@ -501,6 +501,196 @@ async function hasEmailNotificationBeenSent(userId, notificationKey, monthKey = 
   return !!result.rows[0];
 }
 
+async function ensureUserNotificationPreferences(userId) {
+  await query(
+    `INSERT INTO user_notification_preferences (user_id)
+     VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+}
+
+async function getUserNotificationPreferences(userId) {
+  await ensureUserNotificationPreferences(userId);
+  const result = await query(
+    `SELECT user_id, push_enabled, created_at, updated_at
+     FROM user_notification_preferences
+     WHERE user_id = $1
+     LIMIT 1`,
+    [userId]
+  );
+  const row = result.rows[0] || {};
+  return {
+    user_id: Number(userId),
+    push_enabled: row.push_enabled !== false,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+async function updateUserNotificationPreferences(userId, data = {}) {
+  await ensureUserNotificationPreferences(userId);
+  if (data.push_enabled !== undefined) {
+    await query(
+      `UPDATE user_notification_preferences
+       SET push_enabled = $1,
+           updated_at = NOW()
+       WHERE user_id = $2`,
+      [!!data.push_enabled, userId]
+    );
+  }
+  return getUserNotificationPreferences(userId);
+}
+
+async function createUserNotification(userId, payload = {}) {
+  const type = String(payload.type || '').trim();
+  const title = String(payload.title || '').trim();
+  const body = String(payload.body || '').trim();
+  if (!type) throw new Error('Notification type is required');
+  if (!title) throw new Error('Notification title is required');
+  if (!body) throw new Error('Notification body is required');
+
+  const targetScreen = String(payload.target_screen || '').trim() || null;
+  const dedupeKey = String(payload.dedupe_key || '').trim() || null;
+  const targetParams = payload.target_params && typeof payload.target_params === 'object' ? payload.target_params : {};
+  const data = payload.data && typeof payload.data === 'object' ? payload.data : {};
+
+  const insert = await query(
+    `INSERT INTO user_notifications (user_id, type, dedupe_key, title, body, target_screen, target_params, data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT DO NOTHING
+     RETURNING id, user_id, type, dedupe_key, title, body, target_screen, target_params, data, is_read, read_at, pushed_at, created_at`,
+    [userId, type, dedupeKey, title, body, targetScreen, JSON.stringify(targetParams), JSON.stringify(data)]
+  );
+  const row = insert.rows[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    type: row.type,
+    dedupe_key: row.dedupe_key || null,
+    title: row.title,
+    body: row.body,
+    target_screen: row.target_screen || null,
+    target_params: row.target_params || {},
+    data: row.data || {},
+    is_read: !!row.is_read,
+    read_at: row.read_at || null,
+    pushed_at: row.pushed_at || null,
+    created_at: row.created_at || null,
+  };
+}
+
+async function markUserNotificationPushed(userId, notificationId) {
+  if (!notificationId) return false;
+  const result = await query(
+    `UPDATE user_notifications
+     SET pushed_at = COALESCE(pushed_at, NOW())
+     WHERE id = $1
+       AND user_id = $2`,
+    [notificationId, userId]
+  );
+  return (result.rowCount || 0) > 0;
+}
+
+async function getUnreadNotificationCount(userId) {
+  const result = await query(
+    `SELECT COUNT(*)::int AS unread_count
+     FROM user_notifications
+     WHERE user_id = $1
+       AND is_read = FALSE`,
+    [userId]
+  );
+  return Number(result.rows[0]?.unread_count || 0);
+}
+
+async function listUserNotifications(userId, options = {}) {
+  const limit = Math.min(100, Math.max(1, Number(options.limit || 50)));
+  const offset = Math.max(0, Number(options.offset || 0));
+  const result = await query(
+    `SELECT id, user_id, type, dedupe_key, title, body, target_screen, target_params, data, is_read, read_at, pushed_at, created_at
+     FROM user_notifications
+     WHERE user_id = $1
+     ORDER BY created_at DESC, id DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limit, offset]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    type: row.type,
+    dedupe_key: row.dedupe_key || null,
+    title: row.title,
+    body: row.body,
+    target_screen: row.target_screen || null,
+    target_params: row.target_params || {},
+    data: row.data || {},
+    is_read: !!row.is_read,
+    read_at: row.read_at || null,
+    pushed_at: row.pushed_at || null,
+    created_at: row.created_at || null,
+  }));
+}
+
+async function markUserNotificationRead(userId, notificationId, isRead = true) {
+  const result = await query(
+    `UPDATE user_notifications
+     SET is_read = $1,
+         read_at = CASE WHEN $1 THEN NOW() ELSE NULL END
+     WHERE id = $2
+       AND user_id = $3
+     RETURNING id, is_read, read_at`,
+    [!!isRead, notificationId, userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    is_read: !!row.is_read,
+    read_at: row.read_at || null,
+  };
+}
+
+async function markAllUserNotificationsRead(userId, isRead = true) {
+  const result = await query(
+    `UPDATE user_notifications
+     SET is_read = $1,
+         read_at = CASE WHEN $1 THEN NOW() ELSE NULL END
+     WHERE user_id = $2
+       AND is_read <> $1`,
+    [!!isRead, userId]
+  );
+  return Number(result.rowCount || 0);
+}
+
+async function getAllActiveUsersForNotifications() {
+  const result = await query(
+    `SELECT
+       u.id,
+       u.username,
+       u.email,
+       u.display_name,
+       u.role,
+       u.currency_code,
+       u.locale_code,
+       u.is_active,
+       COALESCE(p.push_enabled, TRUE) AS push_enabled
+     FROM users u
+     LEFT JOIN user_notification_preferences p ON p.user_id = u.id
+     WHERE u.deleted_at IS NULL
+       AND u.is_active = TRUE
+     ORDER BY u.id`
+  );
+  return result.rows.map((row) => ({
+    ...normalizeUser({
+      ...row,
+      id: Number(row.id),
+      is_active: !!row.is_active,
+    }),
+    push_enabled: row.push_enabled !== false,
+  }));
+}
+
 async function updateUserAdmin(id, data, actorUserId = null) {
   const fields = [];
   const params = [];
@@ -895,6 +1085,7 @@ module.exports = {
   getAllUsers,
   getBasicUsersByIds,
   getAllActiveUsersForEmail,
+  getAllActiveUsersForNotifications,
   markEmailNotificationSent,
   hasEmailNotificationBeenSent,
   normalizeExpoPushToken,
@@ -902,6 +1093,15 @@ module.exports = {
   deactivatePushDeviceToken,
   getAdminPushUsers,
   getPushTokensForUsers,
+  ensureUserNotificationPreferences,
+  getUserNotificationPreferences,
+  updateUserNotificationPreferences,
+  createUserNotification,
+  markUserNotificationPushed,
+  getUnreadNotificationCount,
+  listUserNotifications,
+  markUserNotificationRead,
+  markAllUserNotificationsRead,
   updateUserAdmin,
   resetUserPassword,
   softDeleteUser,

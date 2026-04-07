@@ -14,6 +14,19 @@ let _expenseCategories = [];
 let _activeExpenseForm = null;
 let _expenseCategoryHideTimer = null;
 
+function cleanMojibakeText(value) {
+  const raw = String(value ?? '');
+  if (!raw) return '';
+  return raw
+    .replace(/Ã¢â‚¬â€|â€”|â€"/g, '-')
+    .replace(/Ã¢â‚¬Â¢|Â·|â€¢/g, '|')
+    .replace(/Ã¢Ë†Å¾|âˆž/g, '')
+    .replace(/Ã¢â‚¬Ëœ|Ã¢â‚¬â„¢|â€™/g, "'")
+    .replace(/Ã¢â‚¬Å“|Ã¢â‚¬Â|â€œ|â€�/g, '"')
+    .replace(/Â/g, '')
+    .trim();
+}
+
 async function loadExpenseCategories() {
   const data = await api('/api/expenses/categories');
   _expenseCategories = (data?.categories || []).filter(Boolean);
@@ -4652,11 +4665,41 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | plans | subscriptions | notifications
+let adminSection = 'users'; // users | plans | subscriptions | notifications | ai
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
 let _adminNotifLastResult = null;
+let _adminAiDays = 30;
+let _adminAiReport = null;
+let _adminAiTestResult = null;
+let _adminAiTestError = '';
+
+const ADMIN_AI_INTENTS = [
+  { key: 'top_expenses', label: 'Most Expensive Item', description: 'Find the highest recent expense or top expense list.', examples: ['what is the most expensive item', 'what are my top expenses'] },
+  { key: 'top_expense_year', label: 'Highest Spend Year', description: 'Tell which year had the most total spending.', examples: ['which year did i spend the most'] },
+  { key: 'expense_year_total', label: 'Yearly Expense Total', description: 'Show total spending for a year.', examples: ['what is my total expense this year'] },
+  { key: 'fair_expense_year', label: 'Fair Expense Total', description: 'Show fair spending for a year.', examples: ['what is my fair expense this year'] },
+  { key: 'extra_expense_year', label: 'Extra Expense Total', description: 'Show extra spending for a year.', examples: ['what is my extra expense this year'] },
+  { key: 'expense_month_total', label: 'Monthly Expense Total', description: 'Show spending for a given month.', examples: ['what did i spend this month'] },
+  { key: 'expense_month_comparison', label: 'Month Comparison', description: 'Compare one month with another.', examples: ['compare this month vs last month'] },
+  { key: 'expenses_last_3_months', label: 'Last 3 Months', description: 'Summarize last 3 months of spending.', examples: ['how much did i spend in the last 3 months'] },
+  { key: 'expenses_last_6_months', label: 'Last 6 Months', description: 'Summarize last 6 months of spending.', examples: ['how much did i spend in the last 6 months'] },
+  { key: 'recent_expenses', label: 'Recent Expenses', description: 'List the latest expenses or transactions.', examples: ['show my recent transactions'] },
+  { key: 'category_total', label: 'Category Spend', description: 'Show spending for one category.', examples: ['how much did i spend on groceries'] },
+  { key: 'top_category', label: 'Top Category', description: 'Find the category with the most spend.', examples: ['what is my top category'] },
+  { key: 'friend_balance', label: 'Friend Balance', description: 'Show balance with a named friend.', examples: ['does neena owe me money'] },
+  { key: 'friends_owe_me', label: 'Who Owes Me', description: 'List friends who owe you money.', examples: ['who owes me money'] },
+  { key: 'i_owe_friends', label: 'I Owe Friends', description: 'List friends you owe money to.', examples: ['do i owe anyone'] },
+  { key: 'trip_summary', label: 'Trip Summary', description: 'Show totals for a named trip.', examples: ['how much did i spend on goa trip'] },
+  { key: 'trip_list', label: 'Trip List', description: 'List trips.', examples: ['show my trips'] },
+  { key: 'credit_card_detail', label: 'Credit Card Detail', description: 'Show due, spent, or limit for a card.', examples: ['what is the due on hdfc card'] },
+  { key: 'credit_card_due', label: 'Credit Card Due', description: 'Show all current card dues.', examples: ['how much is my credit card due this month'] },
+  { key: 'active_emis', label: 'Active EMIs', description: 'List active or pending EMI records.', examples: ['which emis are active'] },
+  { key: 'recurring_payments', label: 'Recurring Payments', description: 'Show recurring and planner dues.', examples: ['what are my recurring monthly payments'] },
+  { key: 'bank_balances', label: 'Bank Balances', description: 'Show bank totals and spendable balance.', examples: ['show my bank balances'] },
+  { key: 'financial_overview', label: 'Financial Overview', description: 'Give a broad summary of finances.', examples: ['show my financial overview'] },
+];
 
 const ALL_PAGES = [
   { key: 'dashboard',   label: 'Dashboard' },
@@ -4686,10 +4729,11 @@ async function loadAdmin() {
   else if (adminSection === 'plans') await loadAdminPlans();
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
   else if (adminSection === 'notifications') await loadAdminNotifications();
+  else if (adminSection === 'ai') await loadAdminAiLearning();
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications']];
+  const tabs = [['users','Users'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -4853,6 +4897,229 @@ async function adminSendNotification() {
 }
 
 // â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function loadAdminAiLearning() {
+  const data = await api(`/api/admin/ai-learning/report?days=${encodeURIComponent(_adminAiDays)}`);
+  _adminAiReport = data?.report || null;
+  renderAdminAiLearning();
+}
+
+function _adminAiIntentMeta(intentKey) {
+  return ADMIN_AI_INTENTS.find((item) => item.key === intentKey) || { key: intentKey, label: intentKey, description: 'Custom intent', examples: [] };
+}
+
+function renderAdminAiLearning() {
+  const report = _adminAiReport || {};
+  const topIntents = report.top_intents || [];
+  const topFallbacks = report.top_fallback_questions || [];
+  const unknowns = report.unknown_intents || [];
+  const topQuestions = report.top_questions || [];
+
+  const topIntentHtml = topIntents.length
+    ? topIntents.slice(0, 6).map((item) => {
+        const meta = _adminAiIntentMeta(item.detected_intent);
+        return `<div class="admin-ai-stat">
+          <div class="admin-ai-stat-label">${escHtml(meta.label)}</div>
+          <div class="admin-ai-stat-value">${Number(item.ask_count || 0)}</div>
+          <div class="admin-ai-stat-sub">${escHtml(item.detected_intent || '')}</div>
+        </div>`;
+      }).join('')
+    : '<div style="color:var(--t3);font-size:13px">No AI query data yet.</div>';
+
+  const fallbackHtml = topFallbacks.length
+    ? topFallbacks.map((item) => `<div class="admin-ai-row">
+        <div style="flex:1;min-width:0">
+          <div class="admin-ai-question">${escHtml(item.normalized_question || '')}</div>
+          <div class="admin-ai-meta">Fallbacks ${Number(item.fail_count || 0)} &middot; Last seen ${item.last_seen_at ? fmtDate(item.last_seen_at) : '-'}</div>
+        </div>
+        <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${String(item.normalized_question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">Teach</button>
+      </div>`).join('')
+    : '<div style="color:var(--t3);font-size:13px">No fallback questions in this time window.</div>';
+
+  const unknownHtml = unknowns.length
+    ? unknowns.map((item) => `<div class="admin-ai-row">
+        <div style="flex:1;min-width:0">
+          <div class="admin-ai-question">${escHtml(item.normalized_question || '')}</div>
+          <div class="admin-ai-meta">Asked ${Number(item.ask_count || 0)} &middot; Last seen ${item.last_seen_at ? fmtDate(item.last_seen_at) : '-'}</div>
+        </div>
+        <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${String(item.normalized_question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">Map Intent</button>
+      </div>`).join('')
+    : '<div style="color:var(--t3);font-size:13px">No unknown intents found.</div>';
+
+  const questionHtml = topQuestions.length
+    ? topQuestions.map((item) => `<div class="admin-ai-mini-row"><span>${escHtml(item.normalized_question || '')}</span><strong>${Number(item.ask_count || 0)}</strong></div>`).join('')
+    : '<div style="color:var(--t3);font-size:13px">No saved AI questions yet.</div>';
+
+  const intentDirectoryHtml = ADMIN_AI_INTENTS.map((intent) => `<div class="admin-ai-intent-card">
+      <div class="admin-ai-intent-title">${escHtml(intent.label)}</div>
+      <div class="admin-ai-intent-key">${escHtml(intent.key)}</div>
+      <div class="admin-ai-intent-desc">${escHtml(intent.description)}</div>
+      <div class="admin-ai-intent-ex">${escHtml(intent.examples[0] || '')}</div>
+    </div>`).join('');
+
+  const testResultHtml = _adminAiTestResult
+    ? `<div class="admin-ai-test-result">
+        <div class="admin-ai-test-label">Detected intent</div>
+        <div class="admin-ai-test-value">${escHtml(_adminAiTestResult.ai_meta?.detected_intent || 'unknown')}</div>
+        <div class="admin-ai-test-label">Detected confidence</div>
+        <div class="admin-ai-test-value">${Number(_adminAiTestResult.ai_meta?.detected_confidence || 0).toFixed(2)}</div>
+        <div class="admin-ai-test-label">Resolved intent</div>
+        <div class="admin-ai-test-value">${escHtml(_adminAiTestResult.ai_meta?.resolved_intent || 'unknown')}</div>
+        <div class="admin-ai-test-label">Resolved confidence</div>
+        <div class="admin-ai-test-value">${Number(_adminAiTestResult.ai_meta?.resolved_confidence || 0).toFixed(2)}</div>
+        <div class="admin-ai-test-label">Resolution method</div>
+        <div class="admin-ai-test-value">${escHtml(_adminAiTestResult.ai_meta?.resolution_method || '-')}</div>
+        <div class="admin-ai-test-label">Answer type</div>
+        <div class="admin-ai-test-value">${escHtml(_adminAiTestResult.ai_meta?.answer_type || '-')}</div>
+        ${_adminAiTestResult.ai_meta?.learned_match ? `<div class="admin-ai-test-label">Learned match</div>
+        <div class="admin-ai-test-value">${escHtml(_adminAiTestResult.ai_meta.learned_match.method || '')} · ${escHtml(_adminAiTestResult.ai_meta.learned_match.example || '')}</div>` : ''}
+        <div class="admin-ai-test-label">Answer</div>
+        <div class="admin-ai-test-answer">${escHtml(_adminAiTestResult.answer || '')}</div>
+      </div>`
+    : '<div style="color:var(--t3);font-size:13px">Type a question and run a test to inspect how the assistant resolves it.</div>';
+  const testErrorHtml = _adminAiTestError
+    ? `<div class="admin-ai-test-error">${escHtml(_adminAiTestError)}</div>`
+    : '';
+
+  document.getElementById('adminContent').innerHTML = `
+    <div class="admin-ai-topbar">
+      <div>
+        <div style="font-size:15px;font-weight:700">AI Learning</div>
+        <div style="font-size:12px;color:var(--t3)">Review user queries, fallback patterns, and teach the assistant with intent mappings.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${[7, 30, 90].map((days) => `<button class="chip ${Number(_adminAiDays)===days ? 'active' : ''}" onclick="_adminAiDays=${days};loadAdminAiLearning()">${days} days</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Test Question</div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:12px">Preview how the assistant interprets a question without using daily AI quota.</div>
+      <div style="display:grid;gap:12px">
+        <textarea class="fi" id="adminAiTestQuestion" rows="3" placeholder="e.g. what is the most expensive item">${escHtml(_adminAiTestResult?.question || '')}</textarea>
+        <div class="fa">
+          <button class="btn btn-p" onclick="adminAiRunTest()">Run Test</button>
+        </div>
+      </div>
+      <div style="margin-top:14px">${testErrorHtml}${testResultHtml}</div>
+    </div>
+
+    <div class="admin-ai-grid">
+      <div class="card">
+        <div class="card-title">Top Intents</div>
+        <div class="admin-ai-stats">${topIntentHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Top Questions</div>
+        <div class="admin-ai-list">${questionHtml}</div>
+      </div>
+    </div>
+
+    <div class="admin-ai-grid">
+      <div class="card">
+        <div class="card-title">Top Fallback Questions</div>
+        <div class="admin-ai-list">${fallbackHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Unknown Intents</div>
+        <div class="admin-ai-list">${unknownHtml}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Intent Directory</div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Use these intent definitions when teaching repeated fallback questions.</div>
+      <div class="admin-ai-directory">${intentDirectoryHtml}</div>
+    </div>`;
+}
+
+function showAdminAiTeachModal(normalizedQuestion) {
+  const selected = ADMIN_AI_INTENTS[0];
+  openModal('Teach AI Intent', `
+    <div class="admin-ai-teach-box">
+      <label class="fl full">Normalized Question
+        <textarea class="fi" id="adminAiTeachQuestion" rows="3">${escHtml(normalizedQuestion || '')}</textarea>
+      </label>
+      <div class="admin-ai-selected" id="adminAiSelectedIntentBox">
+        <div class="admin-ai-intent-title">${escHtml(selected.label)}</div>
+        <div class="admin-ai-intent-key">${escHtml(selected.key)}</div>
+        <div class="admin-ai-intent-desc">${escHtml(selected.description)}</div>
+        <div class="admin-ai-intent-ex">${escHtml((selected.examples || []).join(' | '))}</div>
+      </div>
+      <div class="admin-ai-directory">
+        ${ADMIN_AI_INTENTS.map((intent, idx) => `<button type="button" class="admin-ai-intent-pick ${idx===0 ? 'active' : ''}" data-intent="${escHtml(intent.key)}" onclick="adminAiSelectIntent('${escHtml(intent.key)}', this)">${escHtml(intent.label)}</button>`).join('')}
+      </div>
+      <input type="hidden" id="adminAiTeachIntent" value="${escHtml(selected.key)}">
+      <div class="fa" style="margin-top:16px">
+        <button class="btn btn-p" onclick="adminAiTeachIntent()">Save Mapping</button>
+      </div>
+    </div>`);
+}
+
+function adminAiSelectIntent(intentKey, buttonEl) {
+  const meta = _adminAiIntentMeta(intentKey);
+  const hidden = document.getElementById('adminAiTeachIntent');
+  if (hidden) hidden.value = meta.key;
+  const box = document.getElementById('adminAiSelectedIntentBox');
+  if (box) {
+    box.innerHTML = `
+      <div class="admin-ai-intent-title">${escHtml(meta.label)}</div>
+      <div class="admin-ai-intent-key">${escHtml(meta.key)}</div>
+      <div class="admin-ai-intent-desc">${escHtml(meta.description)}</div>
+      <div class="admin-ai-intent-ex">${escHtml((meta.examples || []).join(' | '))}</div>`;
+  }
+  document.querySelectorAll('.admin-ai-intent-pick').forEach((node) => node.classList.remove('active'));
+  if (buttonEl) buttonEl.classList.add('active');
+}
+
+async function adminAiTeachIntent() {
+  const normalizedQuestion = document.getElementById('adminAiTeachQuestion')?.value?.trim().toLowerCase() || '';
+  const detectedIntent = document.getElementById('adminAiTeachIntent')?.value?.trim() || '';
+  if (!normalizedQuestion) { toast('Normalized question is required', 'warning'); return; }
+  if (!detectedIntent) { toast('Choose an intent first', 'warning'); return; }
+  const result = await api('/api/admin/ai-learning/teach', {
+    method: 'POST',
+    body: {
+      normalized_question: normalizedQuestion,
+      detected_intent: detectedIntent,
+    },
+  });
+  if (result?.success) {
+    closeModal();
+    toast(`Intent mapping saved (${Number(result.updated_count || 0)} rows updated)`, 'success');
+    await loadAdminAiLearning();
+  } else {
+    toast(result?.error || 'Failed to save mapping', 'error');
+  }
+}
+
+async function adminAiRunTest() {
+  const question = document.getElementById('adminAiTestQuestion')?.value?.trim() || '';
+  if (!question) { toast('Question is required', 'warning'); return; }
+  try {
+    _adminAiTestError = '';
+    const result = await api('/api/admin/ai-learning/test', {
+      method: 'POST',
+      body: { question },
+    });
+    if (result?.success) {
+      _adminAiTestResult = result;
+      _adminAiTestError = '';
+      toast('AI test complete', 'success');
+      renderAdminAiLearning();
+      return;
+    }
+    _adminAiTestResult = null;
+    _adminAiTestError = result?.error || 'Failed to test question';
+    toast(_adminAiTestError, 'error');
+    renderAdminAiLearning();
+  } catch (err) {
+    _adminAiTestResult = null;
+    _adminAiTestError = err?.message || 'Failed to test question';
+    toast(_adminAiTestError, 'error');
+    renderAdminAiLearning();
+  }
+}
+
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
   const users = data?.users || [];
@@ -5044,8 +5311,13 @@ async function adminRestoreUser(id) {
 async function loadAdminPlans() {
   const data = await api('/api/admin/plans');
   const plans = data?.plans || [];
+  const normalizedPlans = plans.map((plan) => ({
+    ...plan,
+    description: cleanMojibakeText(plan.description),
+    pages: Array.isArray(plan.pages) ? plan.pages : [],
+  }));
 
-  const cards = plans.length ? plans.map(p => {
+  const cards = normalizedPlans.length ? normalizedPlans.map(p => {
     const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'â€”';
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
@@ -5055,11 +5327,11 @@ async function loadAdminPlans() {
             ${p.is_free ? '<span style="font-size:10px;padding:2px 7px;background:var(--blue-l);color:var(--blue);border-radius:10px;margin-left:6px">Free</span>' : ''}
             ${p.auto_assign_on_signup ? '<span style="font-size:10px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px;margin-left:6px">Signup Default</span>' : ''}
           </div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${p.description||'â€”'}</div>
-          <div style="font-size:12px;color:var(--t3);margin-top:4px">Pages: ${pageLabels}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${escHtml(p.description || '-')}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">Pages: ${escHtml(cleanMojibakeText(pageLabels) || '-')}</div>
           <div style="font-size:12px;margin-top:4px">
             Monthly: <b>${p.price_monthly>0?fmtCur(p.price_monthly):'Free'}</b>
-            &nbsp;Â·&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
+            &nbsp;|&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -5164,7 +5436,7 @@ async function loadAdminSubscriptions() {
       <td>${s.plan_name}</td>
       <td style="font-size:12px">${s.billing_cycle}</td>
       <td style="font-size:12px">${fmtDate(s.start_date)}</td>
-      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : 'âˆž No expiry'}</td>
+      <td style="font-size:12px">${s.end_date ? fmtDate(s.end_date) : 'No expiry'}</td>
       <td style="color:${statusColor};font-weight:600;font-size:12px">${s.status}</td>
       <td>
         <button class="btn-d" style="color:var(--em)" onclick="showSubModal(${s.id},${s.plan_id},'${s.billing_cycle}','${s.end_date||''}','${s.status}')">Edit</button>

@@ -17,6 +17,7 @@ const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
 const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
 const { sendMonthlySummaryEmailsForCurrentMonth } = require('./utils/user-email-events');
+const { runPushNotificationCycle } = require('./utils/user-push-events');
 const { verifyRecaptcha } = require('./utils/recaptcha');
 
 const app = express();
@@ -224,9 +225,19 @@ async function runMonthlyEmailCycle() {
   }
 }
 
+async function runPushCycle() {
+  try {
+    await runPushNotificationCycle();
+  } catch (err) {
+    console.error('[push] notification cycle failed:', err?.message || err);
+  }
+}
+
 setTimeout(() => {
   runMonthlyEmailCycle().catch(() => {});
+  runPushCycle().catch(() => {});
   setInterval(() => {
     runMonthlyEmailCycle().catch(() => {});
+    runPushCycle().catch(() => {});
   }, 60 * 60 * 1000);
 }, 10 * 1000);

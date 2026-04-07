@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -17,9 +17,10 @@
 <meta name="twitter:title" content="Login - Expense Lite AI">
 <meta name="twitter:description" content="Secure sign-in page for Expense Lite AI.">
 <link rel="canonical" href="https://expenselyt.com/login">
-<title>Login — Expense Lite AI</title>
+<title>Login â€” Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
+<script src="/js/mobile-app-banner.js"></script>
 <script src="/js/analytics.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
@@ -88,17 +89,17 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
       </div>
     </div>
     <h1>Expense Lite AI</h1>
-    <p>Your complete personal finance toolkit — expenses, loans, EMIs, credit cards, and more.</p>
+    <p>Your complete personal finance toolkit â€” expenses, loans, EMIs, credit cards, and more.</p>
     <div class="features">
       <div class="feat"><span class="dot"></span> Daily expense tracker with smart filters &amp; reports</div>
-      <div class="feat"><span class="dot"></span> Friend loans — track who owes what</div>
+      <div class="feat"><span class="dot"></span> Friend loans â€” track who owes what</div>
       <div class="feat"><span class="dot"></span> Split expenses with flexible modes (equal, %, ratio)</div>
       <div class="feat"><span class="dot"></span> Trip expense manager with group settlements</div>
       <div class="feat"><span class="dot"></span> EMI calculator with GST, schedule &amp; activation</div>
-      <div class="feat"><span class="dot"></span> My EMIs — track installments, mark paid, auto-past</div>
-      <div class="feat"><span class="dot"></span> Credit card tracking — cycles, billing history, dues</div>
-      <div class="feat"><span class="dot"></span> Bank accounts — balances, spendable, auto-deduct</div>
-      <div class="feat"><span class="dot"></span> Monthly planner — bills, EMIs, CC dues in one view</div>
+      <div class="feat"><span class="dot"></span> My EMIs â€” track installments, mark paid, auto-past</div>
+      <div class="feat"><span class="dot"></span> Credit card tracking â€” cycles, billing history, dues</div>
+      <div class="feat"><span class="dot"></span> Bank accounts â€” balances, spendable, auto-deduct</div>
+      <div class="feat"><span class="dot"></span> Monthly planner â€” bills, EMIs, CC dues in one view</div>
       <div class="feat"><span class="dot"></span> Import expenses from CSV or Excel files</div>
     </div>
   </div>
@@ -137,8 +138,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
       Don't have an account? <a href="/register">Create one</a>
     </div>
     <div class="switch-link" style="margin-top:12px;font-size:12px">
-      <a href="/privacy-policy">Privacy Policy</a> &nbsp;·&nbsp;
-      <a href="/terms-and-conditions">Terms</a> &nbsp;·&nbsp;
+      <a href="/privacy-policy">Privacy Policy</a> &nbsp;Â·&nbsp;
+      <a href="/terms-and-conditions">Terms</a> &nbsp;Â·&nbsp;
       <a href="/contact">Contact</a>
     </div>
   </div>
@@ -146,19 +147,31 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
 
 <script>
 function detectCurrencyPrefs() {
-  const locale = (navigator.language || 'en-US').replace(/_/g, '-');
+  const options = Intl.DateTimeFormat().resolvedOptions();
+  const locale = (navigator.language || options.locale || 'en-US').replace(/_/g, '-');
+  const timeZone = String(options.timeZone || '').trim();
   const region = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
   const currencyByRegion = {
     IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD',
     CA: 'CAD', SG: 'SGD', JP: 'JPY', CN: 'CNY', DE: 'EUR',
     FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
   };
+  const regionByTimeZone = {
+    'asia/kolkata': 'IN', 'asia/calcutta': 'IN', 'asia/dubai': 'AE', 'asia/singapore': 'SG',
+    'asia/tokyo': 'JP', 'asia/shanghai': 'CN', 'asia/hong_kong': 'CN',
+    'europe/london': 'GB', 'europe/dublin': 'IE', 'europe/berlin': 'DE', 'europe/paris': 'FR',
+    'europe/madrid': 'ES', 'europe/rome': 'IT', 'europe/amsterdam': 'NL',
+    'america/new_york': 'US', 'america/chicago': 'US', 'america/denver': 'US', 'america/los_angeles': 'US',
+    'america/phoenix': 'US', 'america/toronto': 'CA', 'america/vancouver': 'CA',
+    'australia/sydney': 'AU', 'australia/melbourne': 'AU', 'australia/perth': 'AU',
+  };
   const currencyByCode = {
     INR: 'en-IN', USD: 'en-US', EUR: 'de-DE', GBP: 'en-GB', AED: 'en-AE',
     CAD: 'en-CA', AUD: 'en-AU', SGD: 'en-SG', JPY: 'ja-JP', CNY: 'zh-CN',
   };
-  const currency_code = currencyByRegion[region] || 'USD';
-  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US' };
+  const zoneRegion = regionByTimeZone[String(timeZone).toLowerCase()] || '';
+  const currency_code = currencyByRegion[region] || currencyByRegion[zoneRegion] || 'USD';
+  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US', time_zone: timeZone || null };
 }
 
 async function handleLogin(e) {

@@ -11,7 +11,12 @@ function normalizeMessagePayload(payload = {}) {
   if (!body) throw new Error('Notification message is required');
   if (title.length > 80) throw new Error('Notification title must be 80 characters or fewer');
   if (body.length > 250) throw new Error('Notification message must be 250 characters or fewer');
-  return { title, body, data: payload.data && typeof payload.data === 'object' ? payload.data : {} };
+  return {
+    title,
+    body,
+    data: payload.data && typeof payload.data === 'object' ? payload.data : {},
+    badge: Number.isFinite(Number(payload.badge)) ? Math.max(0, Math.trunc(Number(payload.badge))) : undefined,
+  };
 }
 
 async function sendExpoPushNotifications(messages = []) {
@@ -24,6 +29,7 @@ async function sendExpoPushNotifications(messages = []) {
       title: base.title,
       body: base.body,
       data: base.data,
+      badge: base.badge,
       sound: 'default',
       priority: 'high',
     };

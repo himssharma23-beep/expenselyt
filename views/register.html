@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -17,9 +17,10 @@
 <meta name="twitter:title" content="Register - Expense Lite AI">
 <meta name="twitter:description" content="Create your Expense Lite AI account and start managing your money in one place.">
 <link rel="canonical" href="https://expenselyt.com/register">
-<title>Register — Expense Lite AI</title>
+<title>Register â€” Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
+<script src="/js/mobile-app-banner.js"></script>
 <script src="/js/analytics.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
@@ -121,27 +122,39 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
     </div>
     <div class="switch-link">Already have an account? <a href="/login">Sign in</a></div>
     <div class="switch-link" style="margin-top:12px;font-size:12px">
-      <a href="/privacy-policy">Privacy Policy</a> &nbsp;·&nbsp;
-      <a href="/terms-and-conditions">Terms</a> &nbsp;·&nbsp;
+      <a href="/privacy-policy">Privacy Policy</a> &nbsp;Â·&nbsp;
+      <a href="/terms-and-conditions">Terms</a> &nbsp;Â·&nbsp;
       <a href="/contact">Contact</a>
     </div>
   </div>
 </div>
 <script>
 function detectCurrencyPrefs() {
-  const locale = (navigator.language || 'en-US').replace(/_/g, '-');
+  const options = Intl.DateTimeFormat().resolvedOptions();
+  const locale = (navigator.language || options.locale || 'en-US').replace(/_/g, '-');
+  const timeZone = String(options.timeZone || '').trim();
   const region = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
   const currencyByRegion = {
     IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD',
     CA: 'CAD', SG: 'SGD', JP: 'JPY', CN: 'CNY', DE: 'EUR',
     FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
   };
+  const regionByTimeZone = {
+    'asia/kolkata': 'IN', 'asia/calcutta': 'IN', 'asia/dubai': 'AE', 'asia/singapore': 'SG',
+    'asia/tokyo': 'JP', 'asia/shanghai': 'CN', 'asia/hong_kong': 'CN',
+    'europe/london': 'GB', 'europe/dublin': 'IE', 'europe/berlin': 'DE', 'europe/paris': 'FR',
+    'europe/madrid': 'ES', 'europe/rome': 'IT', 'europe/amsterdam': 'NL',
+    'america/new_york': 'US', 'america/chicago': 'US', 'america/denver': 'US', 'america/los_angeles': 'US',
+    'america/phoenix': 'US', 'america/toronto': 'CA', 'america/vancouver': 'CA',
+    'australia/sydney': 'AU', 'australia/melbourne': 'AU', 'australia/perth': 'AU',
+  };
   const currencyByCode = {
     INR: 'en-IN', USD: 'en-US', EUR: 'de-DE', GBP: 'en-GB', AED: 'en-AE',
     CAD: 'en-CA', AUD: 'en-AU', SGD: 'en-SG', JPY: 'ja-JP', CNY: 'zh-CN',
   };
-  const currency_code = currencyByRegion[region] || 'USD';
-  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US' };
+  const zoneRegion = regionByTimeZone[String(timeZone).toLowerCase()] || '';
+  const currency_code = currencyByRegion[region] || currencyByRegion[zoneRegion] || 'USD';
+  return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US', time_zone: timeZone || null };
 }
 
 async function handleRegister(e) {

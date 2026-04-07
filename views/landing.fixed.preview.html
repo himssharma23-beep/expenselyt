@@ -28,7 +28,6 @@
 <title>Expense Lite AI - Expense Tracker, Planner, EMI and Split Expense App</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
-<script src="/js/mobile-app-banner.js"></script>
 <script src="/js/analytics.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script type="application/ld+json">
@@ -86,7 +85,7 @@
 html{scroll-behavior:smooth}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);overflow-x:hidden}
 
-/* ── NAV ── */
+/* â”€â”€ NAV â”€â”€ */
 nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 48px;height:64px;display:flex;align-items:center;gap:32px}
 .nav-logo{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:700;font-size:18px;color:var(--t1)}
 .nav-logo-sym{width:36px;height:36px;background:linear-gradient(135deg,var(--em),var(--em-l));border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600}
@@ -103,7 +102,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,
 .btn-lg{padding:14px 32px;font-size:16px;border-radius:12px}
 .btn-xl{padding:16px 40px;font-size:17px;border-radius:14px}
 
-/* ── HERO ── */
+/* â”€â”€ HERO â”€â”€ */
 .hero{padding:140px 48px 80px;max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center}
 .hero-badge{display:inline-flex;align-items:center;gap:8px;background:var(--em-xl);color:var(--em);padding:6px 14px;border-radius:99px;font-size:13px;font-weight:600;margin-bottom:24px}
 .hero-badge-dot{width:6px;height:6px;border-radius:50%;background:var(--em)}
@@ -126,7 +125,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,
 .hero-stat .num{font-size:26px;font-weight:800;color:var(--t1);font-family:'JetBrains Mono',monospace}
 .hero-stat .lbl{font-size:12px;color:var(--t3);font-weight:500;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}
 
-/* ── DASHBOARD MOCKUP ── */
+/* â”€â”€ DASHBOARD MOCKUP â”€â”€ */
 .mockup-wrap{position:relative}
 .mockup-browser{background:var(--white);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.12),0 32px 64px rgba(0,0,0,.08);overflow:hidden;border:1px solid var(--border)}
 .mockup-bar{background:#F1F5F9;padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
@@ -154,7 +153,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,
 .mockup-float-1{bottom:-24px;right:-24px;font-size:11px}
 .mockup-float-2{top:-20px;left:-20px;font-size:11px}
 
-/* ── SECTIONS ── */
+/* â”€â”€ SECTIONS â”€â”€ */
 section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .section-tag{display:inline-block;background:var(--em-xl);color:var(--em);padding:4px 14px;border-radius:99px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:16px}
 .section-title{font-size:38px;font-weight:800;letter-spacing:-1px;line-height:1.15;margin-bottom:12px}
@@ -163,7 +162,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .section-head.centered{text-align:center;display:flex;flex-direction:column;align-items:center}
 .section-head.centered .section-sub{max-width:600px}
 
-/* ── FEATURES GRID ── */
+/* â”€â”€ FEATURES GRID â”€â”€ */
 .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .feat-card{background:var(--white);border-radius:16px;padding:28px;border:1px solid var(--border);transition:all .2s;position:relative;overflow:hidden}
 .feat-card:hover{transform:translateY(-4px);box-shadow:var(--card-shadow-hover);border-color:rgba(20,90,60,.2)}
@@ -183,7 +182,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .feat-tag.purple{background:#F5F3FF;color:var(--purple)}
 .feat-tag.amber{background:#FFFBEB;color:var(--amber)}
 
-/* ── FEATURE SHOWCASE (alternating) ── */
+/* â”€â”€ FEATURE SHOWCASE (alternating) â”€â”€ */
 .showcase{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center;padding:40px 0;border-top:1px solid var(--border)}
 .showcase:first-child{border-top:none}
 .showcase.reverse{direction:rtl}
@@ -195,7 +194,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .showcase-bullet{display:flex;align-items:flex-start;gap:10px;font-size:14px;color:var(--t2)}
 .showcase-bullet-dot{width:20px;height:20px;border-radius:6px;background:var(--em-xl);color:var(--em);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:1px;font-weight:700}
 
-/* ── MINI MOCKUPS ── */
+/* â”€â”€ MINI MOCKUPS â”€â”€ */
 .mini-expense-row{display:flex;align-items:center;padding:9px 12px;background:#fff;border-radius:8px;border:1px solid var(--border);margin-bottom:6px;gap:10px;font-size:12px}
 .mini-expense-row .date{color:var(--t3);width:60px;flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px}
 .mini-expense-row .name{flex:1;font-weight:500;color:var(--t1)}
@@ -230,7 +229,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .mini-cc-due-label{font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.06em}
 .mini-cc-due-amt{font-size:16px;font-weight:800;font-family:'JetBrains Mono',monospace}
 
-/* ── PLANS ── */
+/* â”€â”€ PLANS â”€â”€ */
 .plans-wrap{padding:80px 48px;background:var(--white)}
 .plans-inner{max-width:1100px;margin:0 auto}
 .plans-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-top:48px}
@@ -257,7 +256,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .plan-cta-white:hover{box-shadow:0 4px 16px rgba(0,0,0,.15);transform:translateY(-1px)}
 .plan-free-badge{display:inline-block;background:var(--em-xl);color:var(--em);font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;margin-bottom:8px}
 
-/* ── STEPS ── */
+/* â”€â”€ STEPS â”€â”€ */
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
 .step{text-align:center;padding:32px 24px}
 .step-num{width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,var(--em-xl),#C6EDD8);color:var(--em);font-size:22px;font-weight:800;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-family:'JetBrains Mono',monospace}
@@ -265,7 +264,7 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .step p{font-size:14px;color:var(--t2);line-height:1.6}
 .step-connector{display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--border);margin-top:26px}
 
-/* ── CTA BAND ── */
+/* â”€â”€ CTA BAND â”€â”€ */
 .cta-band{background:linear-gradient(135deg,var(--em-d) 0%,var(--em) 60%,var(--em-l) 100%);padding:80px 48px;text-align:center;color:#fff}
 .cta-band h2{font-size:40px;font-weight:800;letter-spacing:-1px;margin-bottom:14px}
 .cta-band p{font-size:17px;opacity:.8;margin-bottom:36px}
@@ -274,11 +273,11 @@ section{padding:80px 48px;max-width:1200px;margin:0 auto}
 .cta-band .btn-ghost{margin-left:12px;border:1.5px solid rgba(255,255,255,.4);color:#fff;font-size:16px;padding:14px 36px;border-radius:12px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:8px;transition:all .15s}
 .cta-band .btn-ghost:hover{background:rgba(255,255,255,.1)}
 
-/* ── FOOTER ── */
+/* â”€â”€ FOOTER â”€â”€ */
 footer{background:var(--t1);color:rgba(255,255,255,.5);text-align:center;padding:28px 48px;font-size:13px}
 footer strong{color:rgba(255,255,255,.8)}
 
-/* ── FULL-WIDTH SECTIONS ── */
+/* â”€â”€ FULL-WIDTH SECTIONS â”€â”€ */
 .full-section{width:100vw;margin-left:calc(-50vw + 50%);padding:80px 0}
 .full-inner{max-width:1200px;margin:0 auto;padding:0 48px}
 .alt-bg{background:var(--white)}
@@ -320,7 +319,7 @@ footer strong{color:rgba(255,255,255,.8)}
 </head>
 <body>
 
-<!-- ── NAV ── -->
+<!-- â”€â”€ NAV â”€â”€ -->
 <nav>
   <a class="nav-logo" href="/">
     <img src="/favicon.svg" alt="Expense Lite AI logo" width="36" height="36">
@@ -335,7 +334,7 @@ footer strong{color:rgba(255,255,255,.8)}
     <a class="nav-link" href="#plans">Pricing</a>
     <div class="nav-store-links">
       <a class="store-badge light" id="playStoreBadge" href="https://play.google.com/store/apps/details?id=com.expenselyt.app" target="_blank" rel="noopener">
-        <span class="store-badge-icon">▶</span>
+        <span class="store-badge-icon">â–¶</span>
         <span class="store-badge-text">
           <span class="store-badge-over">Get it on</span>
           <span class="store-badge-name">Google Play</span>
@@ -350,11 +349,11 @@ footer strong{color:rgba(255,255,255,.8)}
       </a>
     </div>
     <a class="btn btn-outline" href="/login">Log in</a>
-    <a class="btn btn-primary" href="/register">Get started free →</a>
+    <a class="btn btn-primary" href="/register">Get started free â†’</a>
   </div>
 </nav>
 
-<!-- ── HERO ── -->
+<!-- â”€â”€ HERO â”€â”€ -->
 <div style="max-width:1200px;margin:0 auto;padding:0 48px">
   <div class="hero" style="padding-left:0;padding-right:0">
     <div>
@@ -362,12 +361,12 @@ footer strong{color:rgba(255,255,255,.8)}
       <h1>Know where every <span>amount</span> goes</h1>
       <p>Track expenses, split bills with friends, manage loans and EMIs, monitor cards and banks, set your preferred currency, and plan your monthly finances across web and mobile &mdash; all in one beautifully simple app.</p>
       <div class="hero-cta">
-        <a class="btn btn-primary btn-lg" href="/register">Start for free →</a>
+        <a class="btn btn-primary btn-lg" href="/register">Start for free â†’</a>
         <a class="btn btn-outline btn-lg" href="/login">Log in to your account</a>
       </div>
       <div class="store-links" style="display:none">
         <a class="store-badge light" href="https://play.google.com/store/apps/details?id=com.expenselyt.app" target="_blank" rel="noopener">
-          <span class="store-badge-icon">▶</span>
+          <span class="store-badge-icon">â–¶</span>
           <span class="store-badge-text">
             <span class="store-badge-over">Get it on</span>
             <span class="store-badge-name">Google Play</span>
@@ -410,8 +409,8 @@ footer strong{color:rgba(255,255,255,.8)}
           </div>
           <div class="mockup-content">
             <div class="mockup-row">
-              <div class="mockup-card"><div class="mockup-card-label">This Month</div><div class="mockup-card-val" style="color:var(--em)">₹24,580</div></div>
-              <div class="mockup-card"><div class="mockup-card-label">You Are Owed</div><div class="mockup-card-val" style="color:var(--blue)">₹8,200</div></div>
+              <div class="mockup-card"><div class="mockup-card-label">This Month</div><div class="mockup-card-val" style="color:var(--em)">â‚¹24,580</div></div>
+              <div class="mockup-card"><div class="mockup-card-label">You Are Owed</div><div class="mockup-card-val" style="color:var(--blue)">â‚¹8,200</div></div>
             </div>
             <div class="mockup-card" style="flex:1">
               <div class="mockup-card-label">Monthly Spending</div>
@@ -426,27 +425,27 @@ footer strong{color:rgba(255,255,255,.8)}
               </div>
             </div>
             <div class="mockup-list">
-              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--em)"></div><div class="mockup-list-name">Grocery</div><div class="mockup-list-amt">₹1,240</div></div>
-              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--blue)"></div><div class="mockup-list-name">Electricity Bill</div><div class="mockup-list-amt">₹2,100</div></div>
-              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--amber)"></div><div class="mockup-list-name">Netflix</div><div class="mockup-list-amt">₹649</div></div>
+              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--em)"></div><div class="mockup-list-name">Grocery</div><div class="mockup-list-amt">â‚¹1,240</div></div>
+              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--blue)"></div><div class="mockup-list-name">Electricity Bill</div><div class="mockup-list-amt">â‚¹2,100</div></div>
+              <div class="mockup-list-row"><div class="mockup-list-dot" style="background:var(--amber)"></div><div class="mockup-list-name">Netflix</div><div class="mockup-list-amt">â‚¹649</div></div>
             </div>
           </div>
         </div>
       </div>
       <div class="mockup-float mockup-float-1">
         <div style="font-size:10px;color:var(--t3);margin-bottom:2px">Remaining to pay</div>
-        <div style="font-size:16px;font-weight:800;color:var(--em);font-family:'JetBrains Mono',monospace">₹ 11,340</div>
-        <div style="font-size:9px;color:var(--t3);margin-top:2px">after all dues ✓</div>
+        <div style="font-size:16px;font-weight:800;color:var(--em);font-family:'JetBrains Mono',monospace">â‚¹ 11,340</div>
+        <div style="font-size:9px;color:var(--t3);margin-top:2px">after all dues âœ“</div>
       </div>
       <div class="mockup-float mockup-float-2">
         <div style="font-size:10px;color:var(--t3);margin-bottom:2px">EMI hdfc loan</div>
-        <div style="font-size:13px;font-weight:700;color:var(--t1)">₹ 12,450 <span style="color:var(--em);font-size:9px">● Active</span></div>
+        <div style="font-size:13px;font-weight:700;color:var(--t1)">â‚¹ 12,450 <span style="color:var(--em);font-size:9px">â— Active</span></div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ── FEATURES ── -->
+<!-- â”€â”€ FEATURES â”€â”€ -->
 <div class="full-section alt-bg" id="features">
   <div class="full-inner">
     <div class="section-head centered">
@@ -456,33 +455,33 @@ footer strong{color:rgba(255,255,255,.8)}
     </div>
     <div class="features-grid">
       <div class="feat-card">
-        <div class="feat-icon green">📊</div>
+        <div class="feat-icon green">ðŸ“Š</div>
         <h3>Dashboard & Reports</h3>
         <p>At-a-glance overview with monthly spend charts, year-over-year comparisons, top expenses, and Fair vs Extra spending breakdown.</p>
         <span class="feat-tag">Live data</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon blue">₹</div>
+        <div class="feat-icon blue">â‚¹</div>
         <h3>Expense Tracker</h3>
         <p>Log daily expenses with date, category (Fair/Extra), and optional credit card charging. Filter, search, sort, and import from CSV or Excel.</p>
         <span class="feat-tag blue">Import ready</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon amber">⇄</div>
+        <div class="feat-icon amber">â‡„</div>
         <h3>Friends & Loans</h3>
-        <p>Track money lent and borrowed with full transaction history per friend. Net balances at a glance — green means they owe, red means you owe.</p>
+        <p>Track money lent and borrowed with full transaction history per friend. Net balances at a glance â€” green means they owe, red means you owe.</p>
         <span class="feat-tag amber">Net balance</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon purple">÷</div>
+        <div class="feat-icon purple">Ã·</div>
         <h3>Split Expenses</h3>
         <p>Split any bill equally, by percentage, ratio, fraction, or exact amount. Supports multiple items per session with a live settlement preview.</p>
         <span class="feat-tag" style="background:#F5F3FF;color:var(--purple)">5 modes</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon teal">✈</div>
+        <div class="feat-icon teal">âœˆ</div>
         <h3>Trip Manager</h3>
-        <p>Group travel made easy — add members, log expenses with flexible splitting, track who paid, and finalize settlements in one click.</p>
+        <p>Group travel made easy â€” add members, log expenses with flexible splitting, track who paid, and finalize settlements in one click.</p>
         <span class="feat-tag" style="background:#F0FDFA;color:#0D9488">Group trips</span>
       </div>
       <div class="feat-card">
@@ -492,45 +491,45 @@ footer strong{color:rgba(255,255,255,.8)}
         <span class="feat-tag">GST included</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon blue">☰</div>
+        <div class="feat-icon blue">â˜°</div>
         <h3>My EMIs</h3>
         <p>Track all active, pending, and completed loans with installment-level visibility. Mark paid, bulk edit amounts, and see progress bars.</p>
         <span class="feat-tag blue">Auto past-due</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon teal">♟</div>
+        <div class="feat-icon teal">Ã¢â„¢Å¸</div>
         <h3>Friend EMIs</h3>
         <p>Track EMIs you manage for friends separately from your own loans. Save, activate, mark installments paid, and monitor balances month by month.</p>
         <span class="feat-tag" style="background:#F0FDFA;color:#0D9488">Shared lending</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon red">▣</div>
+        <div class="feat-icon red">â–£</div>
         <h3>Credit Cards</h3>
         <p>Manage billing cycles, track transactions, import historical data, and see monthly/yearly spending per card with due date alerts.</p>
         <span class="feat-tag" style="background:#FEF2F2;color:var(--red)">Bill tracking</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon amber">⊟</div>
+        <div class="feat-icon amber">âŠŸ</div>
         <h3>Bank Accounts</h3>
         <p>Keep running balances across all your banks. Spendable amount (balance minus minimum) auto-deducts when you mark payments as paid.</p>
         <span class="feat-tag amber">Auto deduct</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon purple">◎</div>
+        <div class="feat-icon purple">â—Ž</div>
         <h3>Monthly Planner</h3>
         <p>See all recurring bills, EMI installments, and CC dues in one view. Mark paid, track surplus per bank, and plan ahead with the preview mode.</p>
         <span class="feat-tag" style="background:#F5F3FF;color:var(--purple)">Future preview</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon teal">✦</div>
+        <div class="feat-icon teal">âœ¦</div>
         <h3>AI Lookup</h3>
         <p>Ask anything in plain English &mdash; "who owes me money?", "what's my total spend this year?", "which EMIs are active?" &mdash; with 10 free queries per day, then unlimited on paid plans.</p>
         <span class="feat-tag" style="background:#F0FDFA;color:#0D9488">10 free/day</span>
       </div>
       <div class="feat-card">
-        <div class="feat-icon green">▦</div>
+        <div class="feat-icon green">â–¦</div>
         <h3>Drill-down Reports</h3>
-        <p>Year → Month → Expense level drill-down with stacked charts, print/PDF export, and full search at every level.</p>
+        <p>Year â†’ Month â†’ Expense level drill-down with stacked charts, print/PDF export, and full search at every level.</p>
         <span class="feat-tag">PDF export</span>
       </div>
       <div class="feat-card">
@@ -567,7 +566,7 @@ footer strong{color:rgba(255,255,255,.8)}
   </div>
 </div>
 
-<!-- ── SHOWCASE SECTIONS ── -->
+<!-- â”€â”€ SHOWCASE SECTIONS â”€â”€ -->
 <section id="showcase">
   <!-- Expenses -->
   <div class="showcase">
@@ -575,42 +574,42 @@ footer strong{color:rgba(255,255,255,.8)}
       <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Expense Tracker</div>
       <div class="mini-expense-row">
         <div class="date">21 Mar</div>
-        <div class="name">Grocery — Big Bazaar</div>
+        <div class="name">Grocery â€” Big Bazaar</div>
         <div class="type fair">Fair</div>
-        <div class="amt">₹1,850</div>
+        <div class="amt">â‚¹1,850</div>
       </div>
       <div class="mini-expense-row">
         <div class="date">20 Mar</div>
         <div class="name">Amazon Prime</div>
         <div class="type extra">Extra</div>
-        <div class="amt">₹1,499</div>
+        <div class="amt">â‚¹1,499</div>
       </div>
       <div class="mini-expense-row">
         <div class="date">19 Mar</div>
         <div class="name">Electricity Bill</div>
         <div class="type fair">Fair</div>
-        <div class="amt">₹2,340</div>
+        <div class="amt">â‚¹2,340</div>
       </div>
       <div class="mini-expense-row">
         <div class="date">18 Mar</div>
-        <div class="name">Restaurant — Dinner</div>
+        <div class="name">Restaurant â€” Dinner</div>
         <div class="type extra">Extra</div>
-        <div class="amt">₹3,200</div>
+        <div class="amt">â‚¹3,200</div>
       </div>
       <div style="margin-top:12px;display:flex;gap:8px">
         <div style="flex:1;height:6px;background:var(--em-xl);border-radius:3px;overflow:hidden"><div style="width:62%;height:100%;background:var(--em);border-radius:3px"></div></div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:4px"><span>Fair ₹4,190 (62%)</span><span>Extra ₹4,699 (38%)</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:4px"><span>Fair â‚¹4,190 (62%)</span><span>Extra â‚¹4,699 (38%)</span></div>
     </div>
     <div class="showcase-text">
       <h3>Every expense, perfectly organised</h3>
       <p>Log expenses in seconds. Filter by year, month, type, or search by name. Every expense can be charged to a credit card automatically.</p>
       <div class="showcase-bullets">
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Fair vs Extra categorisation</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Import from CSV or Excel (including password-protected)</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Instant credit card charging on add</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Sort, search, paginate across all entries</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Currency display follows your profile preference</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Fair vs Extra categorisation</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Import from CSV or Excel (including password-protected)</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Instant credit card charging on add</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Sort, search, paginate across all entries</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Currency display follows your profile preference</div>
       </div>
     </div>
   </div>
@@ -621,38 +620,38 @@ footer strong{color:rgba(255,255,255,.8)}
       <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">My EMIs</div>
       <div class="mini-emi-card">
         <div class="mini-emi-head">
-          <div class="mini-emi-name">Home Loan — SBI</div>
-          <div class="mini-emi-badge active">● Active</div>
+          <div class="mini-emi-name">Home Loan â€” SBI</div>
+          <div class="mini-emi-badge active">â— Active</div>
         </div>
-        <div style="font-size:10px;color:var(--t3);margin-bottom:6px">₹30L · 8.5% · 240 months · EMI ₹26,035</div>
+        <div style="font-size:10px;color:var(--t3);margin-bottom:6px">â‚¹30L Â· 8.5% Â· 240 months Â· EMI â‚¹26,035</div>
         <div class="mini-emi-progress"><div class="mini-emi-progress-fill" style="width:18%"></div></div>
-        <div class="mini-emi-meta"><span>43 of 240 paid</span><span>₹5.12L remaining</span></div>
+        <div class="mini-emi-meta"><span>43 of 240 paid</span><span>â‚¹5.12L remaining</span></div>
       </div>
       <div class="mini-emi-card">
         <div class="mini-emi-head">
-          <div class="mini-emi-name">Car Loan — HDFC</div>
-          <div class="mini-emi-badge active">● Active</div>
+          <div class="mini-emi-name">Car Loan â€” HDFC</div>
+          <div class="mini-emi-badge active">â— Active</div>
         </div>
-        <div style="font-size:10px;color:var(--t3);margin-bottom:6px">₹7L · 9.2% · 60 months · EMI ₹14,552</div>
+        <div style="font-size:10px;color:var(--t3);margin-bottom:6px">â‚¹7L Â· 9.2% Â· 60 months Â· EMI â‚¹14,552</div>
         <div class="mini-emi-progress"><div class="mini-emi-progress-fill" style="width:65%"></div></div>
-        <div class="mini-emi-meta"><span>39 of 60 paid</span><span>₹3.08L remaining</span></div>
+        <div class="mini-emi-meta"><span>39 of 60 paid</span><span>â‚¹3.08L remaining</span></div>
       </div>
       <div class="mini-emi-card" style="border-color:rgba(245,158,11,.3)">
         <div class="mini-emi-head">
           <div class="mini-emi-name">Personal Loan</div>
           <div class="mini-emi-badge saved">Saved</div>
         </div>
-        <div style="font-size:10px;color:var(--t3)">₹2L · 12% · 24 months · EMI ₹9,418</div>
+        <div style="font-size:10px;color:var(--t3)">â‚¹2L Â· 12% Â· 24 months Â· EMI â‚¹9,418</div>
       </div>
     </div>
     <div class="showcase-text">
       <h3>Never miss an EMI installment</h3>
       <p>Activate loans with a start date, get a full installment schedule, and track payments month by month. Old EMIs auto-mark as paid.</p>
       <div class="showcase-bullets">
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Progress bar per loan</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Edit interest, principal, or EMI per row</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Past installments auto-marked paid on activation</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>EMIs appear in monthly planner automatically</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Progress bar per loan</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Edit interest, principal, or EMI per row</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Past installments auto-marked paid on activation</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>EMIs appear in monthly planner automatically</div>
       </div>
     </div>
   </div>
@@ -663,23 +662,23 @@ footer strong{color:rgba(255,255,255,.8)}
       <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Credit Cards</div>
       <div class="mini-cc-card">
         <div class="mini-cc-name">HDFC Regalia Gold</div>
-        <div class="mini-cc-num">•••• •••• •••• 1737</div>
+        <div class="mini-cc-num">â€¢â€¢â€¢â€¢ â€¢â€¢â€¢â€¢ â€¢â€¢â€¢â€¢ 1737</div>
         <div class="mini-cc-due">
-          <div><div class="mini-cc-due-label">Current Due</div><div class="mini-cc-due-amt">₹ 24,318</div></div>
+          <div><div class="mini-cc-due-label">Current Due</div><div class="mini-cc-due-amt">â‚¹ 24,318</div></div>
           <div style="text-align:right"><div class="mini-cc-due-label">Due Date</div><div style="font-size:13px;font-weight:700">10 Apr</div></div>
         </div>
       </div>
       <div class="mini-cc-card" style="background:linear-gradient(135deg,#1a1a2e,#16213e)">
         <div class="mini-cc-name">ICICI Amazon Pay</div>
-        <div class="mini-cc-num">•••• •••• •••• 1005</div>
+        <div class="mini-cc-num">â€¢â€¢â€¢â€¢ â€¢â€¢â€¢â€¢ â€¢â€¢â€¢â€¢ 1005</div>
         <div class="mini-cc-due">
-          <div><div class="mini-cc-due-label">Current Due</div><div class="mini-cc-due-amt">₹ 8,741</div></div>
+          <div><div class="mini-cc-due-label">Current Due</div><div class="mini-cc-due-amt">â‚¹ 8,741</div></div>
           <div style="text-align:right"><div class="mini-cc-due-label">Due Date</div><div style="font-size:13px;font-weight:700">01 Apr</div></div>
         </div>
       </div>
       <div class="mini-stat-row" style="margin-top:10px;margin-bottom:0">
-        <div class="mini-stat"><div class="v">₹33,059</div><div class="l">Total Due</div></div>
-        <div class="mini-stat"><div class="v green">₹4,280</div><div class="l">Discounts</div></div>
+        <div class="mini-stat"><div class="v">â‚¹33,059</div><div class="l">Total Due</div></div>
+        <div class="mini-stat"><div class="v green">â‚¹4,280</div><div class="l">Discounts</div></div>
         <div class="mini-stat"><div class="v amber">10 Apr</div><div class="l">Next Due</div></div>
       </div>
     </div>
@@ -687,10 +686,10 @@ footer strong{color:rgba(255,255,255,.8)}
       <h3>Credit cards under control</h3>
       <p>Track every billing cycle, see transactions per cycle, and get notified when dues are upcoming. Import years of history in minutes.</p>
       <div class="showcase-bullets">
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Billing cycle management (open → billed → paid)</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Default discount % per card</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Monthly & yearly spending history per card</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>CC dues appear in Planner on due date</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Billing cycle management (open â†’ billed â†’ paid)</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Default discount % per card</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Monthly & yearly spending history per card</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>CC dues appear in Planner on due date</div>
       </div>
     </div>
   </div>
@@ -698,46 +697,46 @@ footer strong{color:rgba(255,255,255,.8)}
   <!-- Planner -->
   <div class="showcase reverse">
     <div class="showcase-visual">
-      <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Monthly Planner — March 2026</div>
+      <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Monthly Planner â€” March 2026</div>
       <div class="mini-stat-row">
-        <div class="mini-stat"><div class="v">₹48,200</div><div class="l">Total Due</div></div>
-        <div class="mini-stat"><div class="v green">₹32,400</div><div class="l">Paid</div></div>
-        <div class="mini-stat"><div class="v red">₹15,800</div><div class="l">Remaining</div></div>
+        <div class="mini-stat"><div class="v">â‚¹48,200</div><div class="l">Total Due</div></div>
+        <div class="mini-stat"><div class="v green">â‚¹32,400</div><div class="l">Paid</div></div>
+        <div class="mini-stat"><div class="v red">â‚¹15,800</div><div class="l">Remaining</div></div>
       </div>
       <div style="margin-bottom:8px;font-size:10px;font-weight:700;color:var(--t3)">PENDING</div>
       <div class="mini-expense-row" style="border-left:3px solid var(--blue)">
         <div class="date" style="width:auto;margin-right:4px"><span style="background:#EFF6FF;color:var(--blue);font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">CC</span></div>
         <div class="name">HDFC Regalia Due</div>
-        <div class="amt" style="color:var(--blue)">₹24,318</div>
+        <div class="amt" style="color:var(--blue)">â‚¹24,318</div>
       </div>
       <div class="mini-expense-row" style="border-left:3px solid var(--em)">
         <div class="date" style="width:auto;margin-right:4px"><span style="background:var(--em-xl);color:var(--em);font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">EMI</span></div>
-        <div class="name">Car Loan — Inst #8</div>
-        <div class="amt" style="color:var(--em)">₹14,552</div>
+        <div class="name">Car Loan â€” Inst #8</div>
+        <div class="amt" style="color:var(--em)">â‚¹14,552</div>
       </div>
       <div class="mini-expense-row">
         <div class="name">Rent</div>
-        <div class="amt">₹18,000</div>
+        <div class="amt">â‚¹18,000</div>
       </div>
       <div style="margin-top:8px;background:var(--em-xl);border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
         <div style="font-size:11px;color:var(--em);font-weight:600">After paying all dues</div>
-        <div style="font-size:15px;font-weight:800;color:var(--em);font-family:'JetBrains Mono',monospace">₹ 8,960</div>
+        <div style="font-size:15px;font-weight:800;color:var(--em);font-family:'JetBrains Mono',monospace">â‚¹ 8,960</div>
       </div>
     </div>
     <div class="showcase-text">
       <h3>Plan your month before it begins</h3>
       <p>All your recurring bills, EMI installments, and CC dues in one view. Preview next month to see if your balance will cover everything.</p>
       <div class="showcase-bullets">
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Recurring payments auto-generated each month</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Bank-wise surplus / shortfall breakdown</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Future month preview — edit balances to simulate</div>
-        <div class="showcase-bullet"><div class="showcase-bullet-dot">✓</div>Pay any due → bank balance auto-deducted</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Recurring payments auto-generated each month</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Bank-wise surplus / shortfall breakdown</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Future month preview â€” edit balances to simulate</div>
+        <div class="showcase-bullet"><div class="showcase-bullet-dot">âœ“</div>Pay any due â†’ bank balance auto-deducted</div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ── HOW IT WORKS ── -->
+<!-- â”€â”€ HOW IT WORKS â”€â”€ -->
 <div class="full-section alt-bg" id="how">
   <div class="full-inner">
     <div class="section-head centered">
@@ -765,7 +764,7 @@ footer strong{color:rgba(255,255,255,.8)}
   </div>
 </div>
 
-<!-- ── PLANS ── -->
+<!-- â”€â”€ PLANS â”€â”€ -->
 <div class="plans-wrap" id="plans">
   <div class="plans-inner">
     <div class="section-head centered">
@@ -779,13 +778,13 @@ footer strong{color:rgba(255,255,255,.8)}
         <div class="plan-free-badge">Free forever</div>
         <div class="plan-name">Basic</div>
         <div class="plan-desc">Perfect for getting started with expense tracking.</div>
-        <div class="plan-price">₹0<span>/mo</span></div>
+        <div class="plan-price">â‚¹0<span>/mo</span></div>
         <div class="plan-price-yearly">No credit card needed</div>
         <div class="plan-divider"></div>
         <div class="plan-features">
-          <div class="plan-feat"><div class="plan-feat-check">✓</div>Expense Tracker</div>
-          <div class="plan-feat"><div class="plan-feat-check">✓</div>Dashboard & Reports</div>
-          <div class="plan-feat"><div class="plan-feat-check">✓</div>Friends & Loans</div>
+          <div class="plan-feat"><div class="plan-feat-check">âœ“</div>Expense Tracker</div>
+          <div class="plan-feat"><div class="plan-feat-check">âœ“</div>Dashboard & Reports</div>
+          <div class="plan-feat"><div class="plan-feat-check">âœ“</div>Friends & Loans</div>
         </div>
         <a class="plan-cta plan-cta-outline" href="/register">Get started free</a>
       </div>
@@ -794,23 +793,23 @@ footer strong{color:rgba(255,255,255,.8)}
   </div>
 </div>
 
-<!-- ── CTA BAND ── -->
+<!-- â”€â”€ CTA BAND â”€â”€ -->
 <div class="cta-band">
   <h2>Take control of your finances today</h2>
-  <p>Join and start tracking every rupee — it's free to get started.</p>
+  <p>Join and start tracking every rupee â€” it's free to get started.</p>
   <div>
-    <a class="btn-white" href="/register">Create free account →</a>
+    <a class="btn-white" href="/register">Create free account â†’</a>
     <a class="btn-ghost" href="/login">Log in</a>
   </div>
 </div>
 
-<!-- ── FOOTER ── -->
+<!-- â”€â”€ FOOTER â”€â”€ -->
 <footer>
-  <strong>Expense Lite AI</strong> &nbsp;·&nbsp; Personal Finance Simplified &nbsp;·&nbsp;
-  <a href="/login" style="color:rgba(255,255,255,.5);text-decoration:none">Login</a> &nbsp;·&nbsp;
-  <a href="/register" style="color:rgba(255,255,255,.5);text-decoration:none">Register</a> &nbsp;·&nbsp;
-  <a href="/privacy-policy" style="color:rgba(255,255,255,.5);text-decoration:none">Privacy Policy</a> &nbsp;·&nbsp;
-  <a href="/terms-and-conditions" style="color:rgba(255,255,255,.5);text-decoration:none">Terms</a> &nbsp;·&nbsp;
+  <strong>Expense Lite AI</strong> &nbsp;Â·&nbsp; Personal Finance Simplified &nbsp;Â·&nbsp;
+  <a href="/login" style="color:rgba(255,255,255,.5);text-decoration:none">Login</a> &nbsp;Â·&nbsp;
+  <a href="/register" style="color:rgba(255,255,255,.5);text-decoration:none">Register</a> &nbsp;Â·&nbsp;
+  <a href="/privacy-policy" style="color:rgba(255,255,255,.5);text-decoration:none">Privacy Policy</a> &nbsp;Â·&nbsp;
+  <a href="/terms-and-conditions" style="color:rgba(255,255,255,.5);text-decoration:none">Terms</a> &nbsp;Â·&nbsp;
   <a href="/contact" style="color:rgba(255,255,255,.5);text-decoration:none">Contact</a>
 </footer>
 
@@ -836,7 +835,7 @@ footer strong{color:rgba(255,255,255,.8)}
       const pages = (p.pages || '').split(',').filter(Boolean);
       const monthlyPrice = p.monthly_price || 0;
       const yearlyPrice  = p.yearly_price  || 0;
-      const priceStr = monthlyPrice === 0 ? '₹0' : `₹${monthlyPrice.toLocaleString('en-IN')}`;
+      const priceStr = monthlyPrice === 0 ? 'â‚¹0' : `â‚¹${monthlyPrice.toLocaleString('en-IN')}`;
 
       return `<div class="plan-card${isFeatured ? ' featured' : ''}">
         ${isFeatured ? '<div class="plan-badge">Most Popular</div>' : ''}
@@ -844,10 +843,10 @@ footer strong{color:rgba(255,255,255,.8)}
         <div class="plan-name">${p.name}</div>
         <div class="plan-desc">${p.description || ''}</div>
         <div class="plan-price">${priceStr}<span>/mo</span></div>
-        ${yearlyPrice ? `<div class="plan-price-yearly">₹${yearlyPrice.toLocaleString('en-IN')}/year · save ${Math.round((1 - yearlyPrice/(monthlyPrice*12))*100)}%</div>` : '<div class="plan-price-yearly">&nbsp;</div>'}
+        ${yearlyPrice ? `<div class="plan-price-yearly">â‚¹${yearlyPrice.toLocaleString('en-IN')}/year Â· save ${Math.round((1 - yearlyPrice/(monthlyPrice*12))*100)}%</div>` : '<div class="plan-price-yearly">&nbsp;</div>'}
         <div class="plan-divider"></div>
         <div class="plan-features">
-          ${pages.map(k => `<div class="plan-feat"><div class="plan-feat-check">✓</div>${pageLabels[k]||k}</div>`).join('')}
+          ${pages.map(k => `<div class="plan-feat"><div class="plan-feat-check">âœ“</div>${pageLabels[k]||k}</div>`).join('')}
         </div>
         <a class="plan-cta ${isFeatured ? 'plan-cta-white' : 'plan-cta-outline'}" href="/register">Get started</a>
       </div>`;
@@ -856,6 +855,54 @@ footer strong{color:rgba(255,255,255,.8)}
 })();
 
 
+(function repairMojibakeOnLanding(){
+  const map = [
+    ['â‚¹','?'],
+    ['₹','?'],
+    ['â€”','�'],
+    ['—','�'],
+    ['â†’','?'],
+    ['âœ“','?'],
+    ['â€¢','�'],
+    ['Â·','�'],
+    ['·','�'],
+    ['â—','?'],
+    ['▶','?'],
+    ['📊','??'],
+    ['✈','?'],
+    ['÷','�'],
+    ['☰','?'],
+    ['â™Ÿ','?'],
+    ['✦','?'],
+    ['▣','?'],
+    ['◎','?'],
+    ['▦','?'],
+    ['⇄','?'],
+    ['→','?'],
+    ['↏','?'],
+    ['↓','?'],
+    ['✓','?'],
+    ['Â','']
+  ];
+
+  const repair = () => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      let t = node.nodeValue;
+      if (!t || !/[����]/.test(t)) continue;
+      for (const [from, to] of map) t = t.split(from).join(to);
+      node.nodeValue = t;
+    }
+  };
+
+  repair();
+  setTimeout(repair, 300);
+  setTimeout(repair, 1200);
+
+  const observer = new MutationObserver(() => repair());
+  observer.observe(document.body, { childList: true, subtree: true });
+})();
 // Smooth scroll for nav links
 document.querySelectorAll('a[href^="#"]').forEach(a => {
   a.addEventListener('click', e => {

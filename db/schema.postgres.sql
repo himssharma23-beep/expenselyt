@@ -68,6 +68,47 @@ CREATE TABLE IF NOT EXISTS email_notification_log (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_email_notification_log_unique
   ON email_notification_log (user_id, notification_key, COALESCE(month_key, ''));
 
+CREATE TABLE IF NOT EXISTS user_notification_preferences (
+  user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  push_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS push_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS user_notifications (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  dedupe_key TEXT,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  target_screen TEXT,
+  target_params JSONB,
+  data JSONB,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_at TIMESTAMPTZ,
+  pushed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS body TEXT;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS target_screen TEXT;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS target_params JSONB;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS data JSONB;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ;
+ALTER TABLE user_notifications ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_unread ON user_notifications (user_id, is_read, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_dedupe
+  ON user_notifications (user_id, type, COALESCE(dedupe_key, ''));
+
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -483,6 +524,19 @@ CREATE TABLE IF NOT EXISTS ai_lookup_usage (
   UNIQUE(user_id, usage_date)
 );
 
+CREATE TABLE IF NOT EXISTS ai_query_logs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  normalized_question TEXT,
+  detected_intent TEXT,
+  answer_type TEXT NOT NULL DEFAULT 'structured_rule',
+  was_fallback BOOLEAN NOT NULL DEFAULT FALSE,
+  response_preview TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 DO $$
 DECLARE
   tbl TEXT;
@@ -515,7 +569,8 @@ BEGIN
     'user_subscriptions',
     'otps',
     'password_resets',
-    'ai_lookup_usage'
+    'ai_lookup_usage',
+    'ai_query_logs'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL', tbl);
@@ -529,6 +584,8 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category TEXT;
+CREATE INDEX IF NOT EXISTS idx_ai_query_logs_user_created_at ON ai_query_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_query_logs_intent_created_at ON ai_query_logs(detected_intent, created_at DESC);
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE friends ADD COLUMN IF NOT EXISTS linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;

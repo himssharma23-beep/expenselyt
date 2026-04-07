@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -27,12 +27,12 @@
 </head>
 <body class="app-page">
 <div class="app-mobile-topbar">
-  <button class="mobile-menu-btn" type="button" aria-label="Open navigation" onclick="toggleSidebar(true)">☰</button>
+  <button class="mobile-menu-btn" type="button" aria-label="Open navigation" onclick="toggleSidebar(true)">â˜°</button>
   <div class="app-mobile-brand">
     <img src="/favicon.svg" alt="Expense Lite AI logo" width="28" height="28">
     <div>
       <div class="app-mobile-title">Expense Lite AI</div>
-      <div class="app-mobile-sub">Track · Plan · Ask AI</div>
+      <div class="app-mobile-sub">Track Â· Plan Â· Ask AI</div>
     </div>
   </div>
 </div>
@@ -47,25 +47,25 @@
         <div style="font-size:9px;color:rgba(255,255,255,0.45);letter-spacing:1.2px;font-weight:500;margin-top:1px">TRACK &middot; PLAN &middot; ASK AI</div>
       </div>
     </div>
-    <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="icon">◉</span><span>Dashboard</span></button>
-    <button class="nav-btn" data-tab="expenses" onclick="switchTab('expenses')"><span class="icon">₹</span><span>Expenses</span></button>
-    <button class="nav-btn" data-tab="friends" onclick="switchTab('friends')"><span class="icon">⇄</span><span>Friends</span></button>
-    <button class="nav-btn" data-tab="divide" onclick="switchTab('divide')"><span class="icon">÷</span><span>Split</span></button>
-    <button class="nav-btn" data-tab="trips" onclick="switchTab('trips')"><span class="icon">✈</span><span>Trips</span></button>
-    <button class="nav-btn" data-tab="reports" onclick="switchTab('reports')"><span class="icon">▦</span><span>Reports</span></button>
+    <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="icon">â—‰</span><span>Dashboard</span></button>
+    <button class="nav-btn" data-tab="expenses" onclick="switchTab('expenses')"><span class="icon">â‚¹</span><span>Expenses</span></button>
+    <button class="nav-btn" data-tab="friends" onclick="switchTab('friends')"><span class="icon">â‡„</span><span>Friends</span></button>
+    <button class="nav-btn" data-tab="divide" onclick="switchTab('divide')"><span class="icon">Ã·</span><span>Split</span></button>
+    <button class="nav-btn" data-tab="trips" onclick="switchTab('trips')"><span class="icon">âœˆ</span><span>Trips</span></button>
+    <button class="nav-btn" data-tab="reports" onclick="switchTab('reports')"><span class="icon">â–¦</span><span>Reports</span></button>
     <button class="nav-btn" data-tab="emi" onclick="switchTab('emi')"><span class="icon">%</span><span>EMI Calc</span></button>
-    <button class="nav-btn" data-tab="emitracker" onclick="switchTab('emitracker')"><span class="icon">☰</span><span>My EMIs</span></button>
-    <button class="nav-btn" data-tab="friendemis" onclick="switchTab('friendemis')"><span class="icon">♟</span><span>Friend EMIs</span></button>
-    <button class="nav-btn" data-tab="creditcards" onclick="switchTab('creditcards')"><span class="icon">▣</span><span>Credit Cards</span></button>
-    <button class="nav-btn" data-tab="banks" onclick="switchTab('banks')"><span class="icon">⊟</span><span>Bank Accounts</span></button>
-    <button class="nav-btn" data-tab="planner" onclick="switchTab('planner')"><span class="icon">◎</span><span>Planner</span></button>
-    <button class="nav-btn" data-tab="tracker" onclick="switchTab('tracker')"><span class="icon">◈</span><span>Daily Tracker</span></button>
-    <button class="nav-btn" data-tab="recurring" onclick="switchTab('recurring')"><span class="icon">↻</span><span>Recurring</span></button>
-    <button class="nav-btn" data-tab="ailookup" onclick="switchTab('ailookup')"><span class="icon">✦</span><span>AI Lookup</span></button>
-    <button class="nav-btn" id="adminNavBtn" data-tab="admin" onclick="switchTab('admin')" style="display:none"><span class="icon">⚙</span><span>Admin</span></button>
+    <button class="nav-btn" data-tab="emitracker" onclick="switchTab('emitracker')"><span class="icon">â˜°</span><span>My EMIs</span></button>
+    <button class="nav-btn" data-tab="friendemis" onclick="switchTab('friendemis')"><span class="icon">â™Ÿ</span><span>Friend EMIs</span></button>
+    <button class="nav-btn" data-tab="creditcards" onclick="switchTab('creditcards')"><span class="icon">â–£</span><span>Credit Cards</span></button>
+    <button class="nav-btn" data-tab="banks" onclick="switchTab('banks')"><span class="icon">âŠŸ</span><span>Bank Accounts</span></button>
+    <button class="nav-btn" data-tab="planner" onclick="switchTab('planner')"><span class="icon">â—Ž</span><span>Planner</span></button>
+    <button class="nav-btn" data-tab="tracker" onclick="switchTab('tracker')"><span class="icon">â—ˆ</span><span>Daily Tracker</span></button>
+    <button class="nav-btn" data-tab="recurring" onclick="switchTab('recurring')"><span class="icon">â†»</span><span>Recurring</span></button>
+    <button class="nav-btn" data-tab="ailookup" onclick="switchTab('ailookup')"><span class="icon">âœ¦</span><span>AI Lookup</span></button>
+    <button class="nav-btn" id="adminNavBtn" data-tab="admin" onclick="switchTab('admin')" style="display:none"><span class="icon">âš™</span><span>Admin</span></button>
     <div style="flex:1"></div>
     <div class="user-box" id="userBox"></div>
-    <button class="nav-btn" onclick="logout()"><span class="icon">⏻</span><span>Logout</span></button>
+    <button class="nav-btn" onclick="logout()"><span class="icon">â»</span><span>Logout</span></button>
   </nav>
 
   <!-- Main content area -->
@@ -79,6 +79,7 @@
 
 <script src="/js/utils.js"></script>
 <script src="/runtime-config.js"></script>
+<script src="/js/mobile-app-banner.js"></script>
 <script src="/js/analytics.js"></script>
 <script src="/js/pdf.js"></script>
 <script src="/js/app.js"></script>

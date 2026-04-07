@@ -252,6 +252,155 @@ async function recordAiLookupUsage(userId) {
   return getAiLookupStatus(userId);
 }
 
+async function logAiLookupQuery(userId, payload = {}) {
+  const question = String(payload.question || '').trim();
+  if (!question) return null;
+  const normalizedQuestion = payload.normalized_question != null
+    ? String(payload.normalized_question || '').trim()
+    : question.toLowerCase().replace(/\s+/g, ' ').trim();
+  const detectedIntent = payload.detected_intent ? String(payload.detected_intent).trim() : null;
+  const answerType = payload.answer_type ? String(payload.answer_type).trim() : 'structured_rule';
+  const wasFallback = !!payload.was_fallback;
+  const responsePreview = payload.response_preview ? String(payload.response_preview).slice(0, 500) : null;
+  const result = await query(
+    `INSERT INTO ai_query_logs (
+       user_id, question, normalized_question, detected_intent, answer_type, was_fallback, response_preview, created_by, updated_by
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $1, $1)
+     RETURNING id`,
+    [userId, question, normalizedQuestion || null, detectedIntent, answerType, wasFallback, responsePreview]
+  );
+  return Number(result.rows[0]?.id || 0);
+}
+
+async function getAiIntentLearningExamples(limit = 400) {
+  const safeLimit = Math.max(20, Math.min(1000, Number(limit) || 400));
+  const result = await query(
+    `SELECT normalized_question, detected_intent, COUNT(*)::int AS use_count, MAX(created_at) AS last_seen_at
+     FROM ai_query_logs
+     WHERE was_fallback = FALSE
+       AND COALESCE(detected_intent, '') NOT IN ('', 'unknown')
+       AND COALESCE(normalized_question, '') <> ''
+       AND deleted_at IS NULL
+     GROUP BY normalized_question, detected_intent
+     ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+     LIMIT $1`,
+    [safeLimit]
+  );
+  return result.rows.map((row) => ({
+    normalized_question: row.normalized_question,
+    detected_intent: row.detected_intent,
+    use_count: Number(row.use_count || 0),
+    last_seen_at: row.last_seen_at || null,
+  }));
+}
+
+async function getAiLearningReport(days = 30) {
+  const safeDays = Math.max(1, Math.min(365, Number(days) || 30));
+  const topQuestionsR = await query(
+    `SELECT normalized_question, COUNT(*)::int AS ask_count, MAX(created_at) AS last_seen_at
+     FROM ai_query_logs
+     WHERE created_at >= NOW() - ($1::text || ' days')::interval
+       AND COALESCE(normalized_question, '') <> ''
+       AND deleted_at IS NULL
+     GROUP BY normalized_question
+     ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+     LIMIT 20`,
+    [safeDays]
+  );
+  const topFallbackR = await query(
+    `SELECT normalized_question, COUNT(*)::int AS fail_count, MAX(created_at) AS last_seen_at
+     FROM ai_query_logs
+     WHERE created_at >= NOW() - ($1::text || ' days')::interval
+       AND was_fallback = TRUE
+       AND COALESCE(normalized_question, '') <> ''
+       AND deleted_at IS NULL
+     GROUP BY normalized_question
+     ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+     LIMIT 20`,
+    [safeDays]
+  );
+  const unknownIntentR = await query(
+    `SELECT normalized_question, COUNT(*)::int AS ask_count, MAX(created_at) AS last_seen_at
+     FROM ai_query_logs
+     WHERE created_at >= NOW() - ($1::text || ' days')::interval
+       AND COALESCE(detected_intent, 'unknown') = 'unknown'
+       AND deleted_at IS NULL
+     GROUP BY normalized_question
+     ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+     LIMIT 20`,
+    [safeDays]
+  );
+  const fallbackByDayR = await query(
+    `SELECT created_at::date AS day,
+            COUNT(*)::int AS total_count,
+            COUNT(*) FILTER (WHERE was_fallback = TRUE)::int AS fallback_count
+     FROM ai_query_logs
+     WHERE created_at >= NOW() - ($1::text || ' days')::interval
+       AND deleted_at IS NULL
+     GROUP BY created_at::date
+     ORDER BY created_at::date DESC
+     LIMIT $1`,
+    [safeDays]
+  );
+  const topIntentR = await query(
+    `SELECT detected_intent, COUNT(*)::int AS ask_count
+     FROM ai_query_logs
+     WHERE created_at >= NOW() - ($1::text || ' days')::interval
+       AND COALESCE(detected_intent, '') NOT IN ('', 'unknown')
+       AND deleted_at IS NULL
+     GROUP BY detected_intent
+     ORDER BY COUNT(*) DESC, detected_intent ASC
+     LIMIT 20`,
+    [safeDays]
+  );
+  return {
+    days: safeDays,
+    top_questions: topQuestionsR.rows.map((row) => ({
+      normalized_question: row.normalized_question,
+      ask_count: Number(row.ask_count || 0),
+      last_seen_at: row.last_seen_at || null,
+    })),
+    top_fallback_questions: topFallbackR.rows.map((row) => ({
+      normalized_question: row.normalized_question,
+      fail_count: Number(row.fail_count || 0),
+      last_seen_at: row.last_seen_at || null,
+    })),
+    unknown_intents: unknownIntentR.rows.map((row) => ({
+      normalized_question: row.normalized_question,
+      ask_count: Number(row.ask_count || 0),
+      last_seen_at: row.last_seen_at || null,
+    })),
+    fallback_by_day: fallbackByDayR.rows.map((row) => ({
+      day: row.day,
+      total_count: Number(row.total_count || 0),
+      fallback_count: Number(row.fallback_count || 0),
+    })),
+    top_intents: topIntentR.rows.map((row) => ({
+      detected_intent: row.detected_intent,
+      ask_count: Number(row.ask_count || 0),
+    })),
+  };
+}
+
+async function teachAiIntent(normalizedQuestion, detectedIntent, adminUserId) {
+  const normalized = String(normalizedQuestion || '').trim().toLowerCase();
+  const intent = String(detectedIntent || '').trim();
+  if (!normalized) throw new Error('Normalized question is required');
+  if (!intent) throw new Error('Detected intent is required');
+  const result = await query(
+    `UPDATE ai_query_logs
+     SET detected_intent = $2,
+         was_fallback = FALSE,
+         answer_type = 'admin_taught',
+         updated_at = NOW(),
+         updated_by = $3
+     WHERE normalized_question = $1
+       AND deleted_at IS NULL`,
+    [normalized, intent, adminUserId]
+  );
+  return { updated_count: Number(result.rowCount || 0) };
+}
+
 async function getBankAccounts(userId) {
   const result = await query(
     `SELECT *
@@ -856,6 +1005,10 @@ async function getDailyTrackerPlannerItems(userId, month, options = {}) {
 module.exports = {
   getAiLookupStatus,
   recordAiLookupUsage,
+  logAiLookupQuery,
+  getAiIntentLearningExamples,
+  getAiLearningReport,
+  teachAiIntent,
   getBankAccounts,
   addBankAccount,
   updateBankAccount,

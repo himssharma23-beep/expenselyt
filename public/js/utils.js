@@ -146,13 +146,51 @@ function normalizeCurrencyCode(code) {
   return /^[A-Z]{3}$/.test(cleaned) ? cleaned : null;
 }
 
+const TIMEZONE_REGION_MAP = {
+  'asia/kolkata': 'IN',
+  'asia/calcutta': 'IN',
+  'asia/dubai': 'AE',
+  'asia/singapore': 'SG',
+  'asia/tokyo': 'JP',
+  'asia/shanghai': 'CN',
+  'asia/hong_kong': 'CN',
+  'europe/london': 'GB',
+  'europe/dublin': 'IE',
+  'europe/berlin': 'DE',
+  'europe/paris': 'FR',
+  'europe/madrid': 'ES',
+  'europe/rome': 'IT',
+  'europe/amsterdam': 'NL',
+  'america/new_york': 'US',
+  'america/chicago': 'US',
+  'america/denver': 'US',
+  'america/los_angeles': 'US',
+  'america/phoenix': 'US',
+  'america/toronto': 'CA',
+  'america/vancouver': 'CA',
+  'australia/sydney': 'AU',
+  'australia/melbourne': 'AU',
+  'australia/perth': 'AU',
+};
+
+function inferRegionFromTimeZone(timeZone) {
+  const normalized = String(timeZone || '').trim().toLowerCase();
+  if (!normalized) return '';
+  return TIMEZONE_REGION_MAP[normalized] || '';
+}
+
 function deriveCurrencyPrefs(locale, timeZone) {
   const localeCode = normalizeLocaleCode(locale, 'USD');
   const region = localeCode.includes('-') ? localeCode.split('-')[1].toUpperCase() : '';
-  let currencyCode = REGION_CURRENCY_MAP[region] || null;
+  const zoneRegion = inferRegionFromTimeZone(timeZone);
+  let currencyCode = REGION_CURRENCY_MAP[region] || REGION_CURRENCY_MAP[zoneRegion] || null;
   if (!currencyCode && /kolkata|calcutta|india/i.test(String(timeZone || ''))) currencyCode = 'INR';
   currencyCode = currencyCode || 'USD';
-  return { currencyCode, localeCode: CURRENCY_LOCALE_MAP[currencyCode] || localeCode };
+  return {
+    currencyCode,
+    localeCode: CURRENCY_LOCALE_MAP[currencyCode] || localeCode,
+    timeZone: String(timeZone || '').trim() || null,
+  };
 }
 
 function detectCurrencyPrefs() {
@@ -160,7 +198,7 @@ function detectCurrencyPrefs() {
     const options = Intl.DateTimeFormat().resolvedOptions();
     return deriveCurrencyPrefs(navigator.language || options.locale, options.timeZone);
   } catch (_err) {
-    return { currencyCode: 'INR', localeCode: 'en-IN' };
+    return { currencyCode: 'INR', localeCode: 'en-IN', timeZone: null };
   }
 }
 
@@ -177,6 +215,7 @@ function getCurrencyPrefsForCode(currencyCode, localeCode) {
   return {
     currency_code: safeCurrency,
     locale_code: normalizeLocaleCode(localeCode, safeCurrency),
+    time_zone: detectCurrencyPrefs().timeZone,
   };
 }
 

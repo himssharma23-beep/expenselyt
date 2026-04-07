@@ -19,6 +19,11 @@ const {
   sendRecurringAppliedEmailForUser,
   sendTrackerExpenseAppliedEmailForUser,
 } = require('../utils/user-email-events');
+const {
+  AI_SYNONYM_GROUPS,
+  AI_CANONICAL_QUESTIONS,
+  AI_INTENT_RULES,
+} = require('../utils/ai-lookup-config');
 
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
@@ -453,6 +458,70 @@ router.delete('/push/devices', async (req, res) => {
   try {
     const removed = await Promise.resolve(pgDb.deactivatePushDeviceToken(req.session.userId, req.body?.token));
     res.json({ success: true, removed });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/notifications/preferences', async (req, res) => {
+  try {
+    const preferences = await Promise.resolve(pgDb.getUserNotificationPreferences(req.session.userId));
+    res.json({ preferences });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/notifications/preferences', async (req, res) => {
+  try {
+    const preferences = await Promise.resolve(pgDb.updateUserNotificationPreferences(req.session.userId, req.body || {}));
+    res.json({ success: true, preferences });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/notifications/unread-count', async (req, res) => {
+  try {
+    const unread = await Promise.resolve(pgDb.getUnreadNotificationCount(req.session.userId));
+    res.json({ unread });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/notifications', async (req, res) => {
+  try {
+    const limit = Number(req.query?.limit || 50);
+    const offset = Number(req.query?.offset || 0);
+    const [notifications, unread] = await Promise.all([
+      Promise.resolve(pgDb.listUserNotifications(req.session.userId, { limit, offset })),
+      Promise.resolve(pgDb.getUnreadNotificationCount(req.session.userId)),
+    ]);
+    res.json({ notifications, unread });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/notifications/:id/read', async (req, res) => {
+  try {
+    const notification = await Promise.resolve(
+      pgDb.markUserNotificationRead(req.session.userId, req.params.id, req.body?.is_read !== false)
+    );
+    if (!notification) return res.status(404).json({ error: 'Notification not found' });
+    const unread = await Promise.resolve(pgDb.getUnreadNotificationCount(req.session.userId));
+    res.json({ success: true, notification, unread });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/notifications/read-all', async (req, res) => {
+  try {
+    const updated = await Promise.resolve(pgDb.markAllUserNotificationsRead(req.session.userId, req.body?.is_read !== false));
+    const unread = await Promise.resolve(pgDb.getUnreadNotificationCount(req.session.userId));
+    res.json({ success: true, updated, unread });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1553,6 +1622,87 @@ router.delete('/admin/subscriptions/:id', requireAdmin, async (req, res) => {
 });
 
 // ─── BANK ACCOUNTS ────────────────────────────────────────────
+router.get('/admin/ai-learning/report', requireAdmin, async (req, res) => {
+  try {
+    const days = Number(req.query.days || 30);
+    const report = await Promise.resolve(getOpsDb().getAiLearningReport(days));
+    res.json({ success: true, report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ai-learning/teach', requireAdmin, async (req, res) => {
+  try {
+    const normalizedQuestion = String(req.body?.normalized_question || '').trim().toLowerCase();
+    const detectedIntent = String(req.body?.detected_intent || '').trim();
+    if (!normalizedQuestion || !detectedIntent) {
+      return res.status(400).json({ error: 'normalized_question and detected_intent are required' });
+    }
+    const result = await Promise.resolve(getOpsDb().teachAiIntent(normalizedQuestion, detectedIntent, req.session.userId));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ai-learning/test', requireAdmin, async (req, res) => {
+  try {
+    const question = String(req.body?.question || '').trim();
+    if (!question) return res.status(400).json({ error: 'Question is required' });
+
+    const [summary, currentUser] = await Promise.all([
+      Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId)),
+      Promise.resolve(pgDb.findUserById(req.session.userId)),
+    ]);
+
+    const normalizedQuestion = aiNormalizeQuestion(question);
+    const detectedResolution = aiResolveIntent(question, summary);
+    const detectedIntent = detectedResolution.intent;
+    let resolvedIntent = detectedIntent;
+    let learnedMatch = null;
+    let questionForAnswer = question;
+    let resolvedConfidence = Number(detectedResolution.confidence || 0);
+    let resolutionMethod = detectedResolution.method || 'concept_rule';
+
+    if (resolvedIntent === 'unknown') {
+      const examples = await Promise.resolve(getOpsDb().getAiIntentLearningExamples(400));
+      learnedMatch = aiInferIntentFromExamples(question, examples);
+      if (learnedMatch?.intent) {
+        resolvedIntent = learnedMatch.intent;
+        questionForAnswer = aiCanonicalQuestionForIntent(resolvedIntent, question);
+        resolvedConfidence = Number(learnedMatch.score || 0);
+        resolutionMethod = learnedMatch.method || 'similar_log_match';
+      }
+    }
+
+    const answer = aiAnswerFromSummary(questionForAnswer, summary, currentUser);
+    const wasFallback = aiIsFallbackAnswer(answer);
+    const answerType = learnedMatch?.intent && !wasFallback ? 'learned_rule' : (wasFallback ? 'fallback' : 'structured_rule');
+    res.json({
+      success: true,
+      question,
+      normalized_question: normalizedQuestion,
+      answer,
+      ai_meta: {
+        detected_intent: detectedIntent,
+        detected_confidence: Number(detectedResolution.confidence || 0),
+        resolved_intent: wasFallback ? detectedIntent : resolvedIntent,
+        resolved_confidence: wasFallback ? Number(detectedResolution.confidence || 0) : resolvedConfidence,
+        resolution_method: wasFallback ? (detectedResolution.method || 'unknown') : resolutionMethod,
+        learned_match: learnedMatch ? {
+          method: learnedMatch.method,
+          score: learnedMatch.score,
+          example: learnedMatch.example,
+        } : null,
+        answer_type: answerType,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/banks', (req, res) => {
   Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)).then((accounts) => {
     res.json({ accounts });
@@ -1828,7 +1978,517 @@ router.post('/cc/cycles/:id/close', (req, res) => {
 });
 
 // ─── AI LOOKUP ───────────────────────────────────────────────────────────────
-const Anthropic = require('@anthropic-ai/sdk');
+function aiNum(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function aiCurrency(summary, currentUser, value) {
+  const currency = currentUser?.currency_code || 'USD';
+  const locale = currentUser?.locale_code || 'en-US';
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(aiNum(value));
+  } catch (_err) {
+    return `${currency} ${aiNum(value).toFixed(2)}`;
+  }
+}
+
+function aiMonthLabel(value) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return raw || 'this month';
+  const date = new Date(`${raw}-01T00:00:00Z`);
+  try {
+    return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+  } catch (_err) {
+    return raw;
+  }
+}
+
+function aiExtractYear(question, fallbackMonth) {
+  const match = String(question || '').match(/\b(20\d{2})\b/);
+  if (match) return match[1];
+  return String(fallbackMonth || '').slice(0, 4) || String(new Date().getFullYear());
+}
+
+function aiMonthShift(monthKey, delta) {
+  const raw = String(monthKey || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return '';
+  const [year, month] = raw.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function aiExtractMonthKey(question, summary) {
+  const normalized = String(question || '').toLowerCase();
+  if (normalized.includes('last month') || normalized.includes('previous month')) {
+    return aiMonthShift(summary?.current_month, -1);
+  }
+  if (normalized.includes('this month') || normalized.includes('current month')) {
+    return String(summary?.current_month || '');
+  }
+
+  const monthNames = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december',
+  ];
+  const year = aiExtractYear(question, summary?.current_month);
+  for (let idx = 0; idx < monthNames.length; idx += 1) {
+    if (normalized.includes(monthNames[idx])) {
+      return `${year}-${String(idx + 1).padStart(2, '0')}`;
+    }
+  }
+  return '';
+}
+
+function aiFindMonthRow(summary, monthKey) {
+  const rows = Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : [];
+  return rows.find((row) => String(row.month) === String(monthKey)) || null;
+}
+
+function aiFindFriendByName(summary, question) {
+  const friends = Array.isArray(summary?.friends_loan_summary) ? summary.friends_loan_summary : [];
+  const normalized = String(question || '').toLowerCase();
+  return friends.find((row) => String(row.name || '').toLowerCase() && normalized.includes(String(row.name || '').toLowerCase())) || null;
+}
+
+function aiFindCategoryRow(summary, question) {
+  const rows = Array.isArray(summary?.expense_by_category) ? summary.expense_by_category : [];
+  const normalized = String(question || '').toLowerCase();
+  return rows.find((row) => String(row.category || '').toLowerCase() && normalized.includes(String(row.category || '').toLowerCase())) || null;
+}
+
+function aiFindTrip(summary, question) {
+  const trips = Array.isArray(summary?.active_trips) ? summary.active_trips : [];
+  const normalized = String(question || '').toLowerCase();
+  return trips.find((row) => String(row.name || '').toLowerCase() && normalized.includes(String(row.name || '').toLowerCase())) || null;
+}
+
+function aiFindCard(summary, question) {
+  const cards = Array.isArray(summary?.credit_cards) ? summary.credit_cards : [];
+  const normalized = String(question || '').toLowerCase();
+  return cards.find((row) => {
+    const cardName = String(row.card_name || '').toLowerCase();
+    const bankName = String(row.bank_name || '').toLowerCase();
+    const last4 = String(row.last4 || '').toLowerCase();
+    return (cardName && normalized.includes(cardName)) || (bankName && normalized.includes(bankName)) || (last4 && normalized.includes(last4));
+  }) || null;
+}
+
+function aiRecentMonthsTotal(summary, count) {
+  const rows = Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : [];
+  return rows.slice(0, count).reduce((sum, row) => sum + aiNum(row.total), 0);
+}
+
+function aiLines(items) {
+  return items.filter(Boolean).join('\n');
+}
+
+const AI_SYNONYM_TO_CANONICAL = Object.entries(AI_SYNONYM_GROUPS).reduce((acc, [canonical, values]) => {
+  values.forEach((value) => {
+    acc[value] = canonical;
+  });
+  return acc;
+}, {});
+
+function aiSingularizeToken(token) {
+  const value = String(token || '').trim().toLowerCase();
+  if (!value) return '';
+  if (value.endsWith('ies') && value.length > 3) return `${value.slice(0, -3)}y`;
+  if (value.endsWith('es') && value.length > 3) return value.slice(0, -2);
+  if (value.endsWith('s') && value.length > 3) return value.slice(0, -1);
+  return value;
+}
+
+function aiCanonicalToken(token) {
+  const base = aiSingularizeToken(token);
+  return AI_SYNONYM_TO_CANONICAL[base] || base;
+}
+
+function aiTokens(question) {
+  return String(question || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .map(aiCanonicalToken)
+    .filter(Boolean);
+}
+
+function aiHasAnyToken(tokens, values) {
+  return values.some((value) => tokens.includes(value));
+}
+
+function aiHasAllTokens(tokens, values) {
+  return values.every((value) => tokens.includes(value));
+}
+
+function aiTopExpenseYear(summary) {
+  const rows = Array.isArray(summary?.expense_by_year) ? summary.expense_by_year : [];
+  if (!rows.length) return null;
+  return rows.reduce((best, row) => (aiNum(row.total) > aiNum(best?.total) ? row : best), rows[0]);
+}
+
+function aiNormalizeQuestion(question) {
+  return aiTokens(question).join(' ');
+}
+
+function aiIsFallbackAnswer(answer) {
+  return String(answer || '').startsWith('I can answer structured questions about your expenses');
+}
+
+function aiResolveIntent(question, summary) {
+  const q = String(question || '').trim();
+  const normalized = q.toLowerCase();
+  const tokens = aiTokens(q);
+  const concepts = {
+    expense: aiHasAnyToken(tokens, ['expense']),
+    item: aiHasAnyToken(tokens, ['item']),
+    expensive: aiHasAnyToken(tokens, ['expensive']),
+    top: aiHasAnyToken(tokens, ['top']),
+    year: aiHasAnyToken(tokens, ['year']),
+    month: aiHasAnyToken(tokens, ['month']),
+    compare: aiHasAnyToken(tokens, ['compare']),
+    category: aiHasAnyToken(tokens, ['category']),
+    friend: aiHasAnyToken(tokens, ['friend']),
+    owe: aiHasAnyToken(tokens, ['owe']),
+    trip: aiHasAnyToken(tokens, ['trip']),
+    card: aiHasAnyToken(tokens, ['card']),
+    due: aiHasAnyToken(tokens, ['due']),
+    bank: aiHasAnyToken(tokens, ['bank']),
+    recurring: aiHasAnyToken(tokens, ['recurring']),
+    emi: aiHasAnyToken(tokens, ['emi']),
+    active: aiHasAnyToken(tokens, ['active']),
+    recent: aiHasAnyToken(tokens, ['recent']),
+    summary: aiHasAnyToken(tokens, ['summary']),
+    fair: aiHasAnyToken(tokens, ['fair']),
+    extra: aiHasAnyToken(tokens, ['extra']),
+  };
+  const context = {
+    question: q,
+    normalized,
+    tokens,
+    concepts,
+    monthKey: aiExtractMonthKey(q, summary),
+    namedFriend: aiFindFriendByName(summary, q),
+    namedTrip: aiFindTrip(summary, q),
+    namedCard: aiFindCard(summary, q),
+    categoryRow: aiFindCategoryRow(summary, q),
+  };
+  const matchedRule = AI_INTENT_RULES.find((rule) => {
+    try {
+      return !!rule.match(context);
+    } catch (error) {
+      return false;
+    }
+  });
+  if (matchedRule) {
+    return {
+      intent: matchedRule.intent,
+      confidence: matchedRule.confidence || 0.8,
+      method: matchedRule.method || 'concept_rule',
+    };
+  }
+  return { intent: 'unknown', confidence: 0.1, method: 'unknown' };
+}
+
+function aiDetectIntent(question, summary) {
+  return aiResolveIntent(question, summary).intent;
+}
+
+function aiCanonicalQuestionForIntent(intent, originalQuestion) {
+  return AI_CANONICAL_QUESTIONS[String(intent || '')] || originalQuestion;
+}
+
+function aiFilteredTokens(question) {
+  const stopWords = new Set(['a', 'an', 'the', 'is', 'are', 'am', 'i', 'me', 'my', 'with', 'what', 'which', 'show', 'tell', 'give', 'do', 'did', 'to', 'of', 'for', 'in', 'on', 'at', 'this', 'that', 'it', 'be', 'have', 'has']);
+  return aiTokens(question).filter((token) => !stopWords.has(token));
+}
+
+function aiTokenSimilarity(questionA, questionB) {
+  const a = new Set(aiFilteredTokens(questionA));
+  const b = new Set(aiFilteredTokens(questionB));
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  a.forEach((token) => {
+    if (b.has(token)) intersection += 1;
+  });
+  const union = new Set([...a, ...b]).size || 1;
+  return intersection / union;
+}
+
+function aiInferIntentFromExamples(question, examples) {
+  const normalizedQuestion = aiNormalizeQuestion(question);
+  const exact = examples.find((row) => String(row.normalized_question || '') === normalizedQuestion);
+  if (exact) {
+    return { intent: exact.detected_intent, score: 1, method: 'exact_log_match', example: exact.normalized_question };
+  }
+
+  let best = null;
+  for (const row of examples) {
+    const exampleQuestion = String(row.normalized_question || '');
+    if (!exampleQuestion) continue;
+    const score = aiTokenSimilarity(normalizedQuestion, exampleQuestion);
+    const weightedScore = score + Math.min(Number(row.use_count || 0), 10) * 0.01;
+    if (!best || weightedScore > best.weightedScore) {
+      best = { intent: row.detected_intent, score, weightedScore, example: exampleQuestion };
+    }
+  }
+  if (best && best.score >= 0.5) {
+    return { intent: best.intent, score: best.score, method: 'similar_log_match', example: best.example };
+  }
+  return null;
+}
+
+function aiAnswerFromSummary(question, summary, currentUser) {
+  const q = String(question || '').trim();
+  const normalized = q.toLowerCase();
+  const tokens = aiTokens(q);
+  const asksAboutExpense = aiHasAnyToken(tokens, ['expense', 'expenses', 'spend', 'spent', 'spending']);
+  const asksAboutItem = aiHasAnyToken(tokens, ['item', 'items', 'thing', 'things', 'stuff', 'purchase', 'purchases']);
+  const asksAboutExpensive = aiHasAnyToken(tokens, ['expensive', 'costly', 'costliest']);
+  const asksAboutYear = aiHasAnyToken(tokens, ['year', 'years']);
+  const asksAboutTop = aiHasAnyToken(tokens, ['top', 'highest', 'largest', 'most', 'max']);
+  const currentMonth = summary?.current_month || '';
+  const year = aiExtractYear(q, currentMonth);
+  const expenseYears = Array.isArray(summary?.expense_by_year) ? summary.expense_by_year : [];
+  const yearRow = expenseYears.find((row) => String(row.year) === String(year));
+  const friends = Array.isArray(summary?.friends_loan_summary) ? summary.friends_loan_summary : [];
+  const emis = Array.isArray(summary?.emis) ? summary.emis : [];
+  const cards = Array.isArray(summary?.credit_cards) ? summary.credit_cards : [];
+  const trips = Array.isArray(summary?.active_trips) ? summary.active_trips : [];
+  const recurring = Array.isArray(summary?.recurring_defaults) ? summary.recurring_defaults : [];
+  const planner = Array.isArray(summary?.current_month_planner) ? summary.current_month_planner : [];
+  const banks = Array.isArray(summary?.bank_accounts) ? summary.bank_accounts : [];
+  const monthKey = aiExtractMonthKey(q, summary);
+  const monthRow = aiFindMonthRow(summary, monthKey);
+  const previousMonthKey = monthKey ? aiMonthShift(monthKey, -1) : aiMonthShift(currentMonth, -1);
+  const previousMonthRow = aiFindMonthRow(summary, previousMonthKey);
+  const namedFriend = aiFindFriendByName(summary, q);
+  const categoryRow = aiFindCategoryRow(summary, q);
+  const namedTrip = aiFindTrip(summary, q);
+  const namedCard = aiFindCard(summary, q);
+  const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
+
+  if ((normalized.includes('last 3 month') || normalized.includes('last three month')) && (normalized.includes('expense') || normalized.includes('spent'))) {
+    const total = aiRecentMonthsTotal(summary, 3);
+    const recentMonths = (Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : []).slice(0, 3);
+    if (!recentMonths.length) return 'I do not have expense totals for the last 3 months yet.';
+    return aiLines([
+      `Your total spending across the last 3 recorded months is ${aiCurrency(summary, currentUser, total)}.`,
+      ...recentMonths.map((row) => `- ${aiMonthLabel(row.month)}: ${aiCurrency(summary, currentUser, row.total)}`),
+    ]);
+  }
+
+  if ((normalized.includes('last 6 month') || normalized.includes('last six month')) && (normalized.includes('expense') || normalized.includes('spent'))) {
+    const rows = Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : [];
+    if (!rows.length) return 'I do not have expense totals for the last 6 months yet.';
+    const total = rows.reduce((sum, row) => sum + aiNum(row.total), 0);
+    return aiLines([
+      `Your total spending across the last 6 recorded months is ${aiCurrency(summary, currentUser, total)}.`,
+      ...rows.map((row) => `- ${aiMonthLabel(row.month)}: ${aiCurrency(summary, currentUser, row.total)}`),
+    ]);
+  }
+
+  if ((normalized.includes('recent expense') || normalized.includes('recent transaction') || normalized.includes('latest expense') || normalized.includes('latest transaction') || normalized.includes('last expense')) && recentExpenses.length) {
+    return aiLines([
+      'Your recent expenses:',
+      ...recentExpenses.slice(0, 5).map((row) => `- ${row.item_name} on ${row.purchase_date}: ${aiCurrency(summary, currentUser, row.amount)}${row.is_extra ? ' (extra)' : ''}`),
+    ]);
+  }
+
+  if (normalized.includes('biggest expense') || normalized.includes('highest expense') || normalized.includes('largest expense') || normalized.includes('top expenses') || ((asksAboutExpense || asksAboutItem) && (asksAboutExpensive || asksAboutTop))) {
+    const sortedRecent = [...recentExpenses].sort((a, b) => aiNum(b.amount) - aiNum(a.amount));
+    if (!sortedRecent.length) return 'I could not find any recent expenses yet.';
+    if (normalized.includes('top expenses') || (asksAboutTop && (asksAboutExpense || asksAboutItem))) {
+      return aiLines([
+        'Your highest recent expenses:',
+        ...sortedRecent.slice(0, 5).map((row) => `- ${row.item_name}: ${aiCurrency(summary, currentUser, row.amount)} on ${row.purchase_date}${row.is_extra ? ' (extra)' : ''}`),
+      ]);
+    }
+    const biggest = sortedRecent[0];
+    return `Your biggest recent expense is ${biggest.item_name} on ${biggest.purchase_date} for ${aiCurrency(summary, currentUser, biggest.amount)}${biggest.is_extra ? ' and it was marked as extra.' : '.'}`;
+  }
+
+  if (asksAboutExpense && asksAboutYear && asksAboutTop) {
+    const topYear = aiTopExpenseYear(summary);
+    if (!topYear) return 'I could not find any yearly expense totals yet.';
+    return `You spent the most in ${topYear.year}, with total expenses of ${aiCurrency(summary, currentUser, topYear.total)}.`;
+  }
+
+  if ((normalized.includes('month') || monthKey) && (normalized.includes('expense') || normalized.includes('spent')) && monthRow) {
+    return `Your total expenses for ${aiMonthLabel(monthKey)} are ${aiCurrency(summary, currentUser, monthRow.total)} across ${Number(monthRow.count) || 0} transaction(s).`;
+  }
+
+  if ((normalized.includes('compare') || normalized.includes('vs') || normalized.includes('versus')) && (normalized.includes('month') || normalized.includes('spent') || normalized.includes('expense'))) {
+    const currentCompareRow = monthRow || aiFindMonthRow(summary, currentMonth);
+    const previousCompareRow = previousMonthRow || aiFindMonthRow(summary, aiMonthShift((monthKey || currentMonth), -1));
+    if (currentCompareRow && previousCompareRow) {
+      const diff = aiNum(currentCompareRow.total) - aiNum(previousCompareRow.total);
+      const direction = diff > 0.005 ? 'higher' : diff < -0.005 ? 'lower' : 'the same';
+      return aiLines([
+        `${aiMonthLabel(currentCompareRow.month)}: ${aiCurrency(summary, currentUser, currentCompareRow.total)}.`,
+        `${aiMonthLabel(previousCompareRow.month)}: ${aiCurrency(summary, currentUser, previousCompareRow.total)}.`,
+        direction === 'the same'
+          ? 'Your spending was the same across both months.'
+          : `Your spending in ${aiMonthLabel(currentCompareRow.month)} was ${aiCurrency(summary, currentUser, Math.abs(diff))} ${direction} than ${aiMonthLabel(previousCompareRow.month)}.`,
+      ]);
+    }
+  }
+
+  if (categoryRow && (normalized.includes('category') || normalized.includes('spent') || normalized.includes('expense'))) {
+    return `Your total spending in category "${categoryRow.category}" is ${aiCurrency(summary, currentUser, categoryRow.total)} across ${Number(categoryRow.count) || 0} transaction(s).`;
+  }
+
+  if (normalized.includes('top category') || normalized.includes('highest category') || normalized.includes('most spent category') || (asksAboutTop && aiHasAnyToken(tokens, ['category', 'categories']) && asksAboutExpense)) {
+    const categories = Array.isArray(summary?.expense_by_category) ? summary.expense_by_category : [];
+    const topCategory = categories[0];
+    if (!topCategory) return 'No expense categories are available yet.';
+    return `Your top spending category is "${topCategory.category}" with ${aiCurrency(summary, currentUser, topCategory.total)} across ${Number(topCategory.count) || 0} transaction(s).`;
+  }
+
+  if (namedFriend && (normalized.includes('friend') || normalized.includes('owe') || normalized.includes('balance') || normalized.includes('loan'))) {
+    const net = aiNum(namedFriend.net_balance);
+    if (net > 0.005) return `${namedFriend.name} owes you ${aiCurrency(summary, currentUser, net)}.`;
+    if (net < -0.005) return `You owe ${namedFriend.name} ${aiCurrency(summary, currentUser, Math.abs(net))}.`;
+    return `You and ${namedFriend.name} are settled right now.`;
+  }
+
+  if (namedTrip && (normalized.includes('trip') || normalized.includes('spent') || normalized.includes('expense'))) {
+    return aiLines([
+      `Trip "${namedTrip.name}" has ${namedTrip.status || 'unknown'} status.`,
+      `Total recorded trip expense: ${aiCurrency(summary, currentUser, namedTrip.total_amount)}.`,
+      `${Number(namedTrip.expense_count) || 0} expense item(s) are saved for it.`,
+    ]);
+  }
+
+  if (normalized.includes('trip') && (normalized.includes('total') || normalized.includes('active'))) {
+    if (!trips.length) return 'You do not have any saved trips right now.';
+    return aiLines([
+      'Recent trips:',
+      ...trips.map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.total_amount)} across ${Number(row.expense_count) || 0} expense item(s), status ${row.status}`),
+    ]);
+  }
+
+  if (namedCard && (normalized.includes('card') || normalized.includes('credit') || normalized.includes('limit') || normalized.includes('spent') || normalized.includes('due'))) {
+    const due = aiNum(namedCard?.current_cycle?.net_payable);
+    const spent = aiNum(namedCard?.current_cycle?.total_spent);
+    const limit = aiNum(namedCard.credit_limit);
+    if (!namedCard.current_cycle) {
+      return aiLines([
+        `${namedCard.card_name} (${namedCard.bank_name} ending ${namedCard.last4}) does not have a current cycle summary yet.`,
+        `Credit limit: ${aiCurrency(summary, currentUser, limit)}.`,
+      ]);
+    }
+    return aiLines([
+      `${namedCard.card_name} (${namedCard.bank_name} ending ${namedCard.last4}) current cycle spent: ${aiCurrency(summary, currentUser, spent)}.`,
+      `Current due: ${aiCurrency(summary, currentUser, due)}.`,
+      `Credit limit: ${aiCurrency(summary, currentUser, limit)}.`,
+      `${namedCard.current_cycle?.due_date ? `Due date: ${namedCard.current_cycle.due_date}.` : ''}`,
+    ]);
+  }
+
+  if ((normalized.includes('total expense') || normalized.includes('total spend') || normalized.includes('spent this year') || normalized.includes('expense this year')) && yearRow) {
+    return aiLines([
+      `Your total expenses for ${year} are ${aiCurrency(summary, currentUser, yearRow.total)}.`,
+      `Fair spending: ${aiCurrency(summary, currentUser, yearRow.fair)}.`,
+      `Extra spending: ${aiCurrency(summary, currentUser, yearRow.extra)}.`,
+      `${Number(yearRow.count) || 0} transaction(s) were recorded.`,
+    ]);
+  }
+
+  if ((normalized.includes('fair') || normalized.includes('regular')) && normalized.includes('expense') && yearRow) {
+    return `Your fair expenses for ${year} are ${aiCurrency(summary, currentUser, yearRow.fair)}.`;
+  }
+
+  if (normalized.includes('extra') && normalized.includes('expense') && yearRow) {
+    return `Your extra expenses for ${year} are ${aiCurrency(summary, currentUser, yearRow.extra)}.`;
+  }
+
+  if (normalized.includes('owes me') || normalized.includes('who owes me') || normalized.includes('loan balance')) {
+    const owesYou = friends.filter((row) => aiNum(row.net_balance) > 0.005);
+    if (!owesYou.length) return 'No friends currently owe you money based on the saved loan transactions.';
+    return aiLines([
+      'These friends currently owe you money:',
+      ...owesYou.sort((a, b) => aiNum(b.net_balance) - aiNum(a.net_balance)).map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.net_balance)}`),
+    ]);
+  }
+
+  if (normalized.includes('i owe') || normalized.includes('do i owe')) {
+    const youOwe = friends.filter((row) => aiNum(row.net_balance) < -0.005);
+    if (!youOwe.length) return 'You do not currently owe money to any friend based on the saved loan transactions.';
+    return aiLines([
+      'You currently owe these friends:',
+      ...youOwe.sort((a, b) => aiNum(a.net_balance) - aiNum(b.net_balance)).map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, Math.abs(aiNum(row.net_balance)))}`),
+    ]);
+  }
+
+  if ((normalized.includes('emi') || normalized.includes('loan')) && (normalized.includes('active') || normalized.includes('which emi') || normalized.includes('what emi'))) {
+    const activeEmis = emis.filter((row) => ['active', 'pending'].includes(String(row.status || '').toLowerCase()));
+    if (!activeEmis.length) return 'You do not have any active EMI records right now.';
+    return aiLines([
+      'Active EMI records:',
+      ...activeEmis.map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.monthly_emi)} per month, remaining ${aiCurrency(summary, currentUser, row.remaining_amount)}, paid ${Number(row.paid_count) || 0}/${Number(row.total_installments) || 0}`),
+    ]);
+  }
+
+  if ((normalized.includes('credit card') || normalized.includes('card due') || normalized.includes('cards due')) && (normalized.includes('due') || normalized.includes('payable') || normalized.includes('this month'))) {
+    const openCards = cards.filter((row) => aiNum(row?.current_cycle?.net_payable) > 0.005);
+    if (!openCards.length) return `You do not have any credit card dues for ${aiMonthLabel(currentMonth)}.`;
+    const totalDue = openCards.reduce((sum, row) => sum + aiNum(row.current_cycle.net_payable), 0);
+    return aiLines([
+      `Your total credit card due for ${aiMonthLabel(currentMonth)} is ${aiCurrency(summary, currentUser, totalDue)}.`,
+      ...openCards.map((row) => `- ${row.card_name} (${row.bank_name} ending ${row.last4}): ${aiCurrency(summary, currentUser, row.current_cycle.net_payable)} due ${row.current_cycle?.due_date || ''}`.trim()),
+    ]);
+  }
+
+  if (normalized.includes('recurring') || normalized.includes('monthly payments') || normalized.includes('default payments')) {
+    if (!recurring.length && !planner.length) return 'You do not have any recurring or default monthly payments saved right now.';
+    return aiLines([
+      recurring.length ? 'Recurring defaults:' : '',
+      ...recurring.map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.amount)}${row.due_day ? ` on day ${row.due_day}` : ''}${row.category ? ` (${row.category})` : ''}`),
+      recurring.length && planner.length ? '' : '',
+      planner.length ? `Planner items for ${aiMonthLabel(currentMonth)}:` : '',
+      ...planner.map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.amount)} due ${row.due_date || ''}`.trim()),
+    ]);
+  }
+
+  if (normalized.includes('bank') && (normalized.includes('balance') || normalized.includes('balances') || normalized.includes('spendable'))) {
+    if (!banks.length) return 'No bank accounts are saved yet.';
+    return aiLines([
+      `Total bank balance: ${aiCurrency(summary, currentUser, summary.total_bank_balance)}.`,
+      `Total spendable balance: ${aiCurrency(summary, currentUser, summary.total_spendable)}.`,
+      'Bank accounts:',
+      ...banks.map((row) => `- ${row.bank_name}${row.account_name ? ` - ${row.account_name}` : ''}: balance ${aiCurrency(summary, currentUser, row.balance)}, minimum ${aiCurrency(summary, currentUser, row.min_balance || 0)}`),
+    ]);
+  }
+
+  if (normalized.includes('summary') || normalized.includes('overview') || normalized.includes('financial overview') || aiHasAllTokens(tokens, ['financial', 'status'])) {
+    const topYear = aiTopExpenseYear(summary);
+    return aiLines([
+      `As of ${summary?.as_of || 'today'}, your total bank balance is ${aiCurrency(summary, currentUser, summary.total_bank_balance)} and spendable balance is ${aiCurrency(summary, currentUser, summary.total_spendable)}.`,
+      topYear ? `Your highest recorded expense year is ${topYear.year} with ${aiCurrency(summary, currentUser, topYear.total)} spent.` : '',
+      `You have ${emis.filter((row) => ['active', 'pending'].includes(String(row.status || '').toLowerCase())).length} active or pending EMI record(s).`,
+      `You have ${cards.filter((row) => aiNum(row?.current_cycle?.net_payable) > 0.005).length} credit card(s) with dues in ${aiMonthLabel(currentMonth)}.`,
+      `You have ${friends.filter((row) => aiNum(row.net_balance) > 0.005).length} friend balance(s) where money is owed to you.`,
+    ]);
+  }
+
+  return aiLines([
+    'I can answer structured questions about your expenses, friend balances, active EMIs, credit card dues, recurring payments, and bank balances.',
+    'Try asking things like:',
+    '- What is my total expense this year?',
+    '- Who owes me money?',
+    '- Which EMIs are active?',
+    '- How much is my credit card due this month?',
+    '- Show my bank account balances',
+    '- Show my recent transactions',
+    '- What are my top expenses?',
+  ]);
+}
 
 router.get('/ai/lookup/status', (req, res) => {
   Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId)).then((status) => {
@@ -1840,7 +2500,7 @@ router.get('/ai/lookup/status', (req, res) => {
 
 router.post('/ai/lookup', async (req, res) => {
   try {
-    const { question, history } = req.body;
+    const { question } = req.body;
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
     const aiStatus = await Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId));
@@ -1851,55 +2511,66 @@ router.post('/ai/lookup', async (req, res) => {
       });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'AI service not configured. Set ANTHROPIC_API_KEY environment variable.' });
-
-    // Gather user's complete financial data
     const [summary, currentUser] = await Promise.all([
       Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId)),
       Promise.resolve(pgDb.findUserById(req.session.userId)),
     ]);
-    const currencyCode = currentUser?.currency_code || 'USD';
-    const localeCode = currentUser?.locale_code || 'en-US';
 
-    const systemPrompt = `You are a personal finance assistant for the Expense Lite AI application.
-You have access to the user's complete financial data as of ${summary.as_of}. Answer their questions accurately based on this data.
-Be concise but complete. Use Indian number formatting (₹ symbol, lakhs/crores where appropriate).
-If the user asks something not covered by the data, say so clearly.
+    const normalizedQuestion = aiNormalizeQuestion(question);
+    const detectedResolution = aiResolveIntent(question, summary);
+    const detectedIntent = detectedResolution.intent;
+    let resolvedIntent = detectedIntent;
+    let learnedMatch = null;
+    let questionForAnswer = question;
+    let resolvedConfidence = Number(detectedResolution.confidence || 0);
+    let resolutionMethod = detectedResolution.method || 'concept_rule';
 
-PREFERRED FORMATTING:
-Use ${currencyCode} currency formatting with locale ${localeCode}.${currencyCode === 'INR' ? ' Use lakhs/crores where appropriate.' : ''}
-
-USER'S FINANCIAL DATA:
-${JSON.stringify(summary, null, 2)}`;
-
-    const client = new Anthropic({ apiKey });
-
-    // Build message history for multi-turn conversation
-    const messages = [];
-    if (history && Array.isArray(history)) {
-      for (const msg of history) {
-        messages.push({ role: msg.role, content: msg.content });
+    if (resolvedIntent === 'unknown') {
+      const examples = await Promise.resolve(getOpsDb().getAiIntentLearningExamples(400));
+      learnedMatch = aiInferIntentFromExamples(question, examples);
+      if (learnedMatch?.intent) {
+        resolvedIntent = learnedMatch.intent;
+        questionForAnswer = aiCanonicalQuestionForIntent(resolvedIntent, question);
+        resolvedConfidence = Number(learnedMatch.score || 0);
+        resolutionMethod = learnedMatch.method || 'similar_log_match';
       }
     }
-    messages.push({ role: 'user', content: question });
 
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages,
-    });
-
-    const answer = response.content[0]?.text || 'No response';
+    const answer = aiAnswerFromSummary(questionForAnswer, summary, currentUser);
+    const wasFallback = aiIsFallbackAnswer(answer);
+    const answerType = learnedMatch?.intent && !wasFallback ? 'learned_rule' : (wasFallback ? 'fallback' : 'structured_rule');
+    await Promise.resolve(getOpsDb().logAiLookupQuery(req.session.userId, {
+      question,
+      normalized_question: normalizedQuestion,
+      detected_intent: wasFallback ? detectedIntent : resolvedIntent,
+      answer_type: answerType,
+      was_fallback: wasFallback,
+      response_preview: answer,
+    }));
     const nextStatus = await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId));
-    res.json({ success: true, answer, ai_status: nextStatus });
+    res.json({
+      success: true,
+      answer,
+      ai_status: nextStatus,
+      ai_meta: {
+        detected_intent: detectedIntent,
+        detected_confidence: Number(detectedResolution.confidence || 0),
+        resolved_intent: wasFallback ? detectedIntent : resolvedIntent,
+        resolved_confidence: wasFallback ? Number(detectedResolution.confidence || 0) : resolvedConfidence,
+        resolution_method: wasFallback ? (detectedResolution.method || 'unknown') : resolutionMethod,
+        learned_match: learnedMatch ? {
+          method: learnedMatch.method,
+          score: learnedMatch.score,
+          example: learnedMatch.example,
+        } : null,
+        answer_type: answerType,
+      },
+    });
   } catch (err) {
     console.error('[AI lookup]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
-
 // ─── DAILY TRACKERS ──────────────────────────────────────────
 router.get('/trackers', (req, res) => {
   Promise.resolve(getOpsDb().getDailyTrackers(req.session.userId)).then((trackers) => {

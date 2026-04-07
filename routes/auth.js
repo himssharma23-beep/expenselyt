@@ -29,6 +29,32 @@ const DEFAULT_LOCALE_BY_CURRENCY = {
   INR: 'en-IN', USD: 'en-US', GBP: 'en-GB', EUR: 'de-DE', AED: 'en-AE',
   AUD: 'en-AU', CAD: 'en-CA', SGD: 'en-SG', JPY: 'ja-JP', CNY: 'zh-CN',
 };
+const TIMEZONE_TO_REGION = {
+  'asia/kolkata': 'IN',
+  'asia/calcutta': 'IN',
+  'asia/dubai': 'AE',
+  'asia/singapore': 'SG',
+  'asia/tokyo': 'JP',
+  'asia/shanghai': 'CN',
+  'asia/hong_kong': 'CN',
+  'europe/london': 'GB',
+  'europe/dublin': 'IE',
+  'europe/berlin': 'DE',
+  'europe/paris': 'FR',
+  'europe/madrid': 'ES',
+  'europe/rome': 'IT',
+  'europe/amsterdam': 'NL',
+  'america/new_york': 'US',
+  'america/chicago': 'US',
+  'america/denver': 'US',
+  'america/los_angeles': 'US',
+  'america/phoenix': 'US',
+  'america/toronto': 'CA',
+  'america/vancouver': 'CA',
+  'australia/sydney': 'AU',
+  'australia/melbourne': 'AU',
+  'australia/perth': 'AU',
+};
 
 function normalizeLocaleCode(locale) {
   const cleaned = String(locale || '').trim().replace(/_/g, '-');
@@ -48,12 +74,20 @@ function normalizePhone(phone) {
   return normalized;
 }
 
+function inferRegionFromTimeZone(timeZone) {
+  const normalized = String(timeZone || '').trim().toLowerCase();
+  if (!normalized) return '';
+  return TIMEZONE_TO_REGION[normalized] || '';
+}
+
 function inferPreferences(req) {
   const explicitLocale = normalizeLocaleCode(req.body?.locale_code);
+  const explicitTimeZone = String(req.body?.time_zone || req.body?.timeZone || req.headers['x-time-zone'] || '').trim();
   const acceptLanguage = String(req.headers['accept-language'] || '').split(',')[0];
   const localeCode = explicitLocale || normalizeLocaleCode(acceptLanguage) || 'en-US';
   const region = localeCode.includes('-') ? localeCode.split('-')[1].toUpperCase() : '';
-  const currencyCode = normalizeCurrencyCode(req.body?.currency_code) || REGION_TO_CURRENCY[region] || 'USD';
+  const timeZoneRegion = inferRegionFromTimeZone(explicitTimeZone);
+  const currencyCode = normalizeCurrencyCode(req.body?.currency_code) || REGION_TO_CURRENCY[region] || REGION_TO_CURRENCY[timeZoneRegion] || 'USD';
   return {
     currency_code: currencyCode,
     locale_code: DEFAULT_LOCALE_BY_CURRENCY[currencyCode] || localeCode,

@@ -893,10 +893,11 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
 async function getUserFinancialSummary(userId) {
   const today = _localDate(new Date());
   const currentMonth = today.slice(0, 7);
-  const [banks, expYearlyR, expMonthlyR, recentExpensesR, friendsR, emisR, cardsR, tripsR, plannerPaymentsR, defaultsR] = await Promise.all([
+  const [banks, expYearlyR, expMonthlyR, expCategoryR, recentExpensesR, friendsR, emisR, cardsR, tripsR, plannerPaymentsR, defaultsR] = await Promise.all([
     pgOpsDb.getBankAccounts(userId),
     query(`SELECT to_char(purchase_date, 'YYYY') AS year, COALESCE(SUM(amount),0) AS total, COALESCE(SUM(CASE WHEN is_extra THEN amount ELSE 0 END),0) AS extra, COALESCE(SUM(CASE WHEN NOT is_extra THEN amount ELSE 0 END),0) AS fair, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND deleted_at IS NULL GROUP BY year ORDER BY year DESC`, [userId]),
     query(`SELECT to_char(purchase_date, 'YYYY-MM') AS month, COALESCE(SUM(amount),0) AS total, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND deleted_at IS NULL AND purchase_date >= (CURRENT_DATE - INTERVAL '6 months') GROUP BY month ORDER BY month DESC`, [userId]),
+    query(`SELECT COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized') AS category, COALESCE(SUM(amount),0) AS total, COUNT(*)::int AS count FROM expenses WHERE user_id = $1 AND deleted_at IS NULL GROUP BY category ORDER BY total DESC LIMIT 20`, [userId]),
     query(`SELECT purchase_date, item_name, amount, is_extra FROM expenses WHERE user_id = $1 AND deleted_at IS NULL ORDER BY purchase_date DESC LIMIT 30`, [userId]),
     query('SELECT id, name FROM friends WHERE user_id = $1 AND deleted_at IS NULL', [userId]),
     query(`SELECT r.name, r.status, r.principal, r.annual_rate, r.tenure_months, r.monthly_emi, r.start_date, COUNT(i.id)::int AS total_installments, COALESCE(SUM(CASE WHEN i.paid_amount >= i.emi_amount * 0.99 THEN 1 ELSE 0 END),0)::int AS paid_count, COALESCE(SUM(CASE WHEN i.paid_amount < i.emi_amount * 0.99 THEN i.emi_amount ELSE 0 END),0) AS remaining_amount FROM emi_records r LEFT JOIN emi_installments i ON i.emi_id = r.id WHERE r.user_id = $1 GROUP BY r.id ORDER BY r.id DESC`, [userId]),
@@ -937,6 +938,7 @@ async function getUserFinancialSummary(userId) {
     total_spendable: banks.reduce((sum, bank) => sum + (num(bank.balance) - num(bank.min_balance)), 0),
     expense_by_year: expYearlyR.rows.map((row) => ({ ...row, total: num(row.total), extra: num(row.extra), fair: num(row.fair), count: Number(row.count) })),
     expense_last_6_months: expMonthlyR.rows.map((row) => ({ ...row, total: num(row.total), count: Number(row.count) })),
+    expense_by_category: expCategoryR.rows.map((row) => ({ ...row, total: num(row.total), count: Number(row.count) })),
     recent_expenses: recentExpensesR.rows.map((row) => ({ ...row, amount: num(row.amount), is_extra: !!row.is_extra })),
     friends_loan_summary: friendSummaries,
     emis: emisR.rows.map((row) => ({ ...row, principal: num(row.principal), annual_rate: num(row.annual_rate), monthly_emi: num(row.monthly_emi), remaining_amount: num(row.remaining_amount), total_installments: Number(row.total_installments), paid_count: Number(row.paid_count) })),
