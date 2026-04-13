@@ -24,6 +24,12 @@ const {
   AI_CANONICAL_QUESTIONS,
   AI_INTENT_RULES,
 } = require('../utils/ai-lookup-config');
+const { sendLiveSplitInviteEmail } = require('../utils/mailer');
+const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
+const {
+  notifyLiveSplitTripCreated,
+  notifyLiveSplitSessionShared,
+} = require('../utils/live-split-notifications');
 
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
@@ -57,6 +63,22 @@ function parseBooleanFlag(value, defaultValue = false) {
 
 function parseAdminUserIdList(raw) {
   return [...new Set((Array.isArray(raw) ? raw : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+}
+
+function isEmailAddress(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
+function deriveInviteName(target) {
+  const raw = String(target || '').trim();
+  if (!raw) return 'Friend';
+  if (raw.includes('@')) return raw.split('@')[0] || 'Friend';
+  return `Friend ${raw.replace(/\D/g, '').slice(-4) || ''}`.trim();
+}
+
+function buildLiveSplitInviteRegisterUrl(baseUrl, inviteToken) {
+  const root = String(baseUrl || '').replace(/\/+$/, '');
+  return `${root}/register?invite=${encodeURIComponent(String(inviteToken || '').trim())}`;
 }
 
 function getCoreDb() {
@@ -596,7 +618,7 @@ router.post('/divide', async (req, res) => {
     const id = await Promise.resolve(getCoreDb().addDivideGroup(req.session.userId, { divide_date, details, paid_by, total_amount: parseFloat(total_amount), splits, auto_loans, heading, session_id }));
     res.json({ success: true, id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -627,6 +649,436 @@ router.get('/divide/shared', async (req, res) => {
 router.post('/divide/shared/hide', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().hideReceivedDivideShare(req.session.userId, req.body?.owner_user_id, req.body?.session_key));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Live Split (isolated from friends/divide)
+router.get('/live-split/friends', async (req, res) => {
+  try {
+    const friends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
+    res.json({ friends });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/friends', async (req, res) => {
+  try {
+    const id = await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, req.body?.name));
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+router.put('/live-split/friends/:id', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().updateLiveSplitFriend(req.session.userId, req.params.id, req.body?.name));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+router.put('/live-split/friends/:id/link-user', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().linkLiveSplitFriendToUser(req.session.userId, req.params.id, req.body?.linked_user_id ?? null));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+router.delete('/live-split/friends/:id', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteLiveSplitFriend(req.session.userId, req.params.id));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/invite', async (req, res) => {
+  try {
+    const targetRaw = String(req.body?.target || '').trim();
+    if (!targetRaw) return res.status(400).json({ error: 'Enter email or phone to invite.' });
+
+    const byEmail = isEmailAddress(targetRaw);
+    const normalizedPhone = byEmail ? '' : normalizePhone(targetRaw);
+    if (!byEmail && !normalizedPhone) {
+      return res.status(400).json({ error: 'Use a valid email or phone number.' });
+    }
+
+    const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const inviterName = String(me?.display_name || me?.username || 'A friend').trim();
+    const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+
+    const existing = byEmail
+      ? await Promise.resolve(pgDb.findUserByEmail(targetRaw.toLowerCase()))
+      : await Promise.resolve(pgDb.findUserByMobile(normalizedPhone));
+
+    if (existing?.id && Number(existing.id) === Number(req.session.userId)) {
+      return res.status(400).json({ error: 'You cannot invite yourself.' });
+    }
+
+    // If app user already exists, create request so they can accept from their Live Split screen.
+    if (existing?.id) {
+      const targetName = String(existing.display_name || existing.username || deriveInviteName(targetRaw)).trim();
+      const liveFriends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
+      const existingLinked = liveFriends.find((item) => Number(item.linked_user_id) === Number(existing.id));
+      if (!existingLinked) {
+        const sameName = liveFriends.find((item) => String(item.name || '').trim().toLowerCase() === targetName.toLowerCase());
+        if (!sameName) {
+          await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, targetName));
+        }
+      }
+      const invite = await Promise.resolve(getCoreDb().createLiveSplitInvite({
+        inviterUserId: req.session.userId,
+        targetUserId: Number(existing.id),
+        targetEmail: existing.email || null,
+        targetPhone: existing.mobile || null,
+        targetName,
+      }));
+      return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
+    }
+
+    const fallbackName = String(req.body?.fallback_name || '').trim();
+    const inviteName = String(fallbackName || deriveInviteName(targetRaw))
+      .replace(/[^A-Za-z0-9 ]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Friend';
+    const liveFriends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
+    if (!liveFriends.find((item) => String(item.name || '').trim().toLowerCase() === inviteName.toLowerCase())) {
+      await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, inviteName));
+    }
+    const invite = await Promise.resolve(getCoreDb().createLiveSplitInvite({
+      inviterUserId: req.session.userId,
+      targetEmail: byEmail ? targetRaw.toLowerCase() : null,
+      targetPhone: byEmail ? null : normalizedPhone,
+      targetName: inviteName,
+    }));
+    const inviteLink = buildLiveSplitInviteRegisterUrl(appBase, invite?.invite_token);
+
+    if (byEmail) {
+      const emailResult = await sendLiveSplitInviteEmail({
+        to: targetRaw.toLowerCase(),
+        inviterName,
+        inviteLink,
+      });
+      if (!emailResult?.sent) {
+        return res.status(400).json({ error: 'Email not configured on server. Set SMTP settings first.' });
+      }
+      return res.json({ success: true, mode: 'invite_sent', channel: 'email', message: 'Invite email sent.' });
+    }
+
+    if (!isSmsEnabled()) {
+      return res.status(400).json({ error: 'SMS not configured on server. Set Twilio settings first.' });
+    }
+    const smsResult = await sendSms({
+      to: normalizedPhone,
+      body: `${inviterName} invited you to join Live Split on Expense Lite AI. Sign up: ${inviteLink}`,
+    });
+    if (!smsResult?.sent) {
+      return res.status(400).json({ error: 'Could not send SMS invite.' });
+    }
+    return res.json({ success: true, mode: 'invite_sent', channel: 'sms', message: 'Invite SMS sent.' });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send invite.' });
+  }
+});
+
+router.post('/live-split/invite-user', async (req, res) => {
+  try {
+    const targetUserId = Number(req.body?.target_user_id || 0);
+    if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'target_user_id is required' });
+    }
+    if (targetUserId === Number(req.session.userId)) {
+      return res.status(400).json({ error: 'You cannot invite yourself.' });
+    }
+    const target = await Promise.resolve(pgDb.findUserById(targetUserId));
+    if (!target?.id) return res.status(404).json({ error: 'User not found' });
+    const targetName = String(target.display_name || target.username || 'Friend').trim();
+    const liveFriends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
+    const existingLinked = liveFriends.find((item) => Number(item.linked_user_id) === Number(target.id));
+    if (!existingLinked) {
+      const sameName = liveFriends.find((item) => String(item.name || '').trim().toLowerCase() === targetName.toLowerCase());
+      if (!sameName) {
+        await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, targetName));
+      }
+    }
+    await Promise.resolve(getCoreDb().createLiveSplitInvite({
+      inviterUserId: req.session.userId,
+      targetUserId: Number(target.id),
+      targetEmail: target.email || null,
+      targetPhone: target.mobile || null,
+      targetName,
+    }));
+    return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send request.' });
+  }
+});
+
+router.get('/live-split/invites/incoming', async (req, res) => {
+  try {
+    const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const invites = await Promise.resolve(getCoreDb().getIncomingLiveSplitInvites(req.session.userId, me?.email || '', me?.mobile || ''));
+    return res.json({ invites });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/live-split/invites/outgoing', async (req, res) => {
+  try {
+    const invites = await Promise.resolve(getCoreDb().getOutgoingLiveSplitInvites(req.session.userId));
+    return res.json({ invites });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/invites/:id/accept', async (req, res) => {
+  try {
+    const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const result = await Promise.resolve(getCoreDb().acceptLiveSplitInvite(req.session.userId, req.params.id, me || {}));
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/invites/:id/reject', async (req, res) => {
+  try {
+    const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    await Promise.resolve(getCoreDb().rejectLiveSplitInvite(req.session.userId, req.params.id, me || {}));
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/invites/:id/cancel', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().cancelLiveSplitInviteForInviter(req.session.userId, req.params.id));
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/invites/:id/resend', async (req, res) => {
+  try {
+    const invite = await Promise.resolve(getCoreDb().getLiveSplitInviteByIdForInviter(req.session.userId, req.params.id));
+    if (!invite) return res.status(404).json({ error: 'Pending invite not found' });
+
+    const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const inviterName = String(me?.display_name || me?.username || 'A friend').trim();
+    const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const targetEmail = String(invite.target_email || invite.target_user_email || '').trim().toLowerCase();
+    if (targetEmail) {
+      const inviteLink = buildLiveSplitInviteRegisterUrl(appBase, invite.invite_token);
+      const emailResult = await sendLiveSplitInviteEmail({
+        to: targetEmail,
+        inviterName,
+        inviteLink,
+      });
+      if (!emailResult?.sent) return res.status(400).json({ error: 'Email not configured on server. Set SMTP settings first.' });
+      return res.json({ success: true, channel: 'email', message: 'Invite sent again by email.' });
+    }
+
+    const normalizedPhone = normalizePhone(String(invite.target_phone || invite.target_user_mobile || '').trim());
+    if (normalizedPhone) {
+      if (!isSmsEnabled()) return res.status(400).json({ error: 'SMS not configured on server. Set Twilio settings first.' });
+      const inviteLink = buildLiveSplitInviteRegisterUrl(appBase, invite.invite_token);
+      const smsResult = await sendSms({
+        to: normalizedPhone,
+        body: `${inviterName} invited you to join Live Split on Expense Lite AI. Sign up: ${inviteLink}`,
+      });
+      if (!smsResult?.sent) return res.status(400).json({ error: 'Could not send SMS invite.' });
+      return res.json({ success: true, channel: 'sms', message: 'Invite sent again by SMS.' });
+    }
+
+    return res.json({ success: true, message: 'Request is still pending. User can accept in Live Split.' });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Could not resend invite.' });
+  }
+});
+
+router.get('/live-split/groups', async (req, res) => {
+  try {
+    const groups = await Promise.resolve(getCoreDb().getLiveSplitGroups(req.session.userId));
+    res.json({ groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/live-split/groups/:id(\\d+)', async (req, res) => {
+  try {
+    const group = await Promise.resolve(getCoreDb().getLiveSplitGroupDetailForUser(req.session.userId, req.params.id));
+    if (!group) return res.status(404).json({ error: 'Not found' });
+    res.json({ group });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/live-split/trips', async (req, res) => {
+  try {
+    const trips = await Promise.resolve(getCoreDb().getLiveSplitTrips(req.session.userId));
+    res.json({ trips });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/trips', async (req, res) => {
+  try {
+    const id = await Promise.resolve(
+      getCoreDb().createLiveSplitTrip(req.session.userId, {
+        name: req.body?.name,
+        start_date: req.body?.start_date,
+        end_date: req.body?.end_date,
+        notes: req.body?.notes,
+        members: req.body?.members || [],
+      })
+    );
+    notifyLiveSplitTripCreated(req.session.userId, id).catch(() => {});
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/live-split/trips/:id(\\d+)', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().updateLiveSplitTrip(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/live-split/trips/:id(\\d+)', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteLiveSplitTrip(req.session.userId, req.params.id));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/trips/:id(\\d+)/members', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().addLiveSplitTripMembers(req.session.userId, req.params.id, req.body?.members || [])
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/live-split/trips/:id(\\d+)/members/:mid(\\d+)', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().removeLiveSplitTripMember(req.session.userId, req.params.id, req.params.mid)
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/groups', async (req, res) => {
+  try {
+    const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id } = req.body;
+    if (!details || !total_amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
+    const id = await Promise.resolve(
+      getCoreDb().addLiveSplitGroup(req.session.userId, {
+        divide_date,
+        details,
+        paid_by,
+        total_amount: parseFloat(total_amount),
+        split_mode: String(split_mode || 'equal'),
+        trip_id: trip_id || null,
+        splits,
+        heading,
+        session_id,
+      })
+    );
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/live-split/groups/:id(\\d+)', async (req, res) => {
+  try {
+    const { divide_date, details, paid_by, total_amount, splits, heading, split_mode, trip_id } = req.body;
+    if (!details || !total_amount || !splits || !splits.length) {
+      return res.status(400).json({ error: 'Missing fields' });
+    }
+    await Promise.resolve(
+      getCoreDb().updateLiveSplitGroup(req.session.userId, req.params.id, {
+        divide_date,
+        details,
+        paid_by,
+        total_amount: parseFloat(total_amount),
+        split_mode: String(split_mode || 'equal'),
+        trip_id: trip_id || null,
+        splits,
+        heading,
+      })
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || (err.message === 'Not found' ? 404 : 500)).json({ error: err.message });
+  }
+});
+
+router.delete('/live-split/groups/:id(\\d+)', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteLiveSplitGroup(req.session.userId, req.params.id));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === 'Not found' ? 404 : 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/groups/share-session', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().syncLiveSplitSessionShares(req.session.userId, req.body?.session_key, req.body?.friend_ids || [])
+    );
+    const targetUserIds = Array.isArray(result?.target_user_ids) ? result.target_user_ids : [];
+    if (targetUserIds.length) {
+      sendSplitShareEmailsToTargets(req.session.userId, targetUserIds, req.body?.session_key).catch(() => {});
+      notifyLiveSplitSessionShared(req.session.userId, req.body?.session_key, targetUserIds).catch(() => {});
+    }
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.get('/live-split/groups/shared', async (req, res) => {
+  try {
+    const groups = await Promise.resolve(getCoreDb().getReceivedLiveSplitShares(req.session.userId));
+    res.json({ groups });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/groups/shared/hide', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().hideReceivedLiveSplitShare(req.session.userId, req.body?.owner_user_id, req.body?.session_key));
     res.json({ success: true });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -883,7 +1335,9 @@ router.get('/users/search', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.length < 2) return res.json({ users: [] });
-    res.json({ users: await Promise.resolve(getCoreDb().searchUsers(q, req.session.userId)) });
+    const users = await Promise.resolve(getCoreDb().searchUsers(q, req.session.userId));
+    const selfId = Number(req.session.userId) || 0;
+    res.json({ users: (users || []).filter((user) => Number(user?.id) !== selfId) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1460,6 +1914,45 @@ router.get('/admin/users', requireAdmin, async (req, res) => {
   try {
     res.json({ users: await Promise.resolve(pgDb.getAllUsers()) });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const displayName = String(req.body?.display_name || '').trim();
+    const password = String(req.body?.password || '');
+    const mobile = String(req.body?.mobile || '').trim();
+    const role = String(req.body?.role || 'user').toLowerCase() === 'admin' ? 'admin' : 'user';
+    const isActive = req.body?.is_active === undefined ? true : !!req.body?.is_active;
+
+    if (!username || !email || !displayName || !password) {
+      return res.status(400).json({ error: 'Username, email, display name, and password are required.' });
+    }
+    if (username.length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' });
+    if (!/^[a-z0-9._-]+$/.test(username)) {
+      return res.status(400).json({ error: 'Username can include only letters, numbers, dot, underscore, and hyphen' });
+    }
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' });
+
+    if (await Promise.resolve(pgDb.findUserByUsername(username))) return res.status(400).json({ error: 'Username already taken' });
+    if (await Promise.resolve(pgDb.findUserByEmail(email))) return res.status(400).json({ error: 'Email already registered' });
+    if (mobile && await Promise.resolve(pgDb.findUserByMobile(mobile))) return res.status(400).json({ error: 'Phone number already registered' });
+
+    const userId = await Promise.resolve(pgDb.createUser(username, email, password, displayName, {}, mobile || null));
+    await Promise.resolve(pgDb.assignSignupPlanToUser(userId));
+    await Promise.resolve(pgDb.updateUserAdmin(userId, { role, is_active: isActive ? 1 : 0 }, req.session.userId));
+
+    res.json({ success: true, id: Number(userId) });
+  } catch (err) {
+    if (err?.code === '23505') {
+      if (String(err.constraint || '').includes('username')) return res.status(400).json({ error: 'Username already taken' });
+      if (String(err.constraint || '').includes('email')) return res.status(400).json({ error: 'Email already registered' });
+      return res.status(400).json({ error: 'That account information is already in use' });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.put('/admin/users/:id', requireAdmin, async (req, res) => {

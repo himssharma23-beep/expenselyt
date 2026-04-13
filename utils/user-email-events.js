@@ -12,7 +12,9 @@ const {
   sendTrackerMonthSummaryEmail,
   sendRecurringAppliedEmail,
   sendTrackerExpenseAppliedEmail,
+  sendLiveSplitMonthlySummaryEmail,
 } = require('./mailer');
+const { getLiveSplitBalanceSummaryForUser } = require('./live-split-summary');
 
 function monthLabel(month, localeCode = 'en-IN') {
   if (!month) return '';
@@ -256,6 +258,28 @@ async function sendMonthlySummaryEmailsForCurrentMonth() {
     }
 
     await pgAuth.markEmailNotificationSent(user.id, 'monthly-summary', month, { month });
+
+    const liveSplitSent = await pgAuth.hasEmailNotificationBeenSent(user.id, 'live-split-monthly-summary', month);
+    if (!liveSplitSent) {
+      const liveSplitSummary = await getLiveSplitBalanceSummaryForUser(user.id);
+      const oweToMe = Number(liveSplitSummary?.totals?.oweToMe || 0);
+      const iOwe = Number(liveSplitSummary?.totals?.iOwe || 0);
+      if (oweToMe > 0 || iOwe > 0) {
+        const topRows = (liveSplitSummary?.rows || []).slice(0, 5);
+        await sendLiveSplitMonthlySummaryEmail({
+          to: user.email,
+          name: user.display_name,
+          month,
+          oweToMe,
+          iOwe,
+          net: Math.round((oweToMe - iOwe) * 100) / 100,
+          topRows,
+          currencyCode: user.currency_code,
+          localeCode: user.locale_code,
+        }).catch(() => {});
+      }
+      await pgAuth.markEmailNotificationSent(user.id, 'live-split-monthly-summary', month, { month });
+    }
   }
 }
 

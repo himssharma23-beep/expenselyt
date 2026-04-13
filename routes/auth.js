@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pgDb = require('../db/postgres-auth');
+const pgCoreDb = require('../db/postgres-core');
 const { assertPostgresConfigured } = require('../db/provider');
 const { guestOnly, requireAuth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
@@ -72,6 +73,10 @@ function normalizePhone(phone) {
   const normalized = cleaned.replace(/[^\d+]/g, '');
   if (!/^\+?\d{7,15}$/.test(normalized)) return null;
   return normalized;
+}
+
+function normalizeInviteToken(token) {
+  return String(token || '').trim();
 }
 
 function inferRegionFromTimeZone(timeZone) {
@@ -265,6 +270,27 @@ router.get('/register', guestOnly, (req, res) => {
   res.sendFile('register.html', { root: './views' });
 });
 
+router.get('/api/auth/live-split-invite/:token', guestOnly, async (req, res) => {
+  try {
+    const invite = await pgCoreDb.getLiveSplitInviteByToken(normalizeInviteToken(req.params.token));
+    if (!invite || invite.status !== 'pending') {
+      return res.status(404).json({ error: 'Invite not found or already used' });
+    }
+    return res.json({
+      success: true,
+      invite: {
+        invite_token: invite.invite_token,
+        inviter_name: String(invite.inviter_display_name || invite.inviter_username || 'A friend').trim(),
+        target_email: String(invite.target_email || '').trim().toLowerCase() || null,
+        target_phone: String(invite.target_phone || '').trim() || null,
+        target_name: String(invite.target_name || '').trim() || null,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Could not load invite' });
+  }
+});
+
 router.get('/forgot-password', guestOnly, (req, res) => {
   res.sendFile('forgot-password.html', { root: './views' });
 });
@@ -274,34 +300,54 @@ router.post('/api/auth/register', async (req, res) => {
   try {
     const authDb = pgDb;
     const { username, email, password, display_name, mobile } = req.body;
-    const normalizedMobile = normalizePhone(mobile);
+    const inviteToken = normalizeInviteToken(req.body?.invite_token);
+    let invite = null;
+    if (inviteToken) {
+      invite = await pgCoreDb.getLiveSplitInviteByToken(inviteToken);
+      if (!invite || invite.status !== 'pending') {
+        return res.status(400).json({ error: 'This invite is no longer valid. Ask the sender to send a new one.' });
+      }
+    }
+    const inviteEmail = String(invite?.target_email || '').trim().toLowerCase() || null;
+    const invitePhone = normalizePhone(invite?.target_phone || null);
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedMobile = invitePhone || normalizePhone(mobile);
 
     if (!username || !email || !password || !display_name) {
       return res.status(400).json({ error: 'All fields are required' });
     }
     if (username.length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' });
-    if (mobile && !normalizedMobile) return res.status(400).json({ error: 'Invalid phone number' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ error: 'Invalid email address' });
+    if (mobile && !normalizedMobile && !invitePhone) return res.status(400).json({ error: 'Invalid phone number' });
+    if (inviteEmail && normalizedEmail !== inviteEmail) {
+      return res.status(400).json({ error: `This invite must be registered using ${inviteEmail}` });
+    }
+    if (invitePhone && normalizedMobile !== invitePhone) {
+      return res.status(400).json({ error: 'This invite must be registered using the invited phone number' });
+    }
 
     if (await authDb.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
-    if (await authDb.findUserByEmail(email)) return res.status(400).json({ error: 'Email already registered' });
+    if (await authDb.findUserByEmail(normalizedEmail)) return res.status(400).json({ error: 'Email already registered' });
     if (normalizedMobile && await authDb.findUserByMobile(normalizedMobile)) {
       return res.status(400).json({ error: 'Phone number already registered' });
     }
 
     const prefs = inferPreferences(req);
-    const userId = await authDb.createUser(username, email, password, display_name, prefs, normalizedMobile);
+    const userId = await authDb.createUser(username, normalizedEmail, password, display_name, prefs, normalizedMobile);
+    if (inviteToken) {
+      await pgCoreDb.bindLiveSplitInviteToUser(inviteToken, userId);
+    }
     await authDb.assignSignupPlanToUser(userId);
     await Promise.allSettled([
-      sendAdminNewUserEmail({ user: { display_name, username, email } }),
-      sendWelcomeEmail({ to: email, name: display_name }),
+      sendAdminNewUserEmail({ user: { display_name, username, email: normalizedEmail } }),
+      sendWelcomeEmail({ to: normalizedEmail, name: display_name }),
     ]);
     req.session.userId = userId;
     req.session.displayName = display_name;
 
     const token = jwt.sign({ userId, displayName: display_name }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email, mobile: normalizedMobile, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
+    res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email: normalizedEmail, mobile: normalizedMobile, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
   } catch (err) {
     console.error('Register error:', err);
     if (err?.code === '23505') {
@@ -435,11 +481,28 @@ router.post('/api/auth/social', async (req, res) => {
     const profile = provider === 'apple'
       ? await verifyAppleIdToken(idToken)
       : await verifyGoogleIdToken(idToken);
+    const inviteToken = normalizeInviteToken(req.body?.invite_token);
+    let invite = null;
+    if (inviteToken) {
+      invite = await pgCoreDb.getLiveSplitInviteByToken(inviteToken);
+      if (!invite || invite.status !== 'pending') {
+        return res.status(400).json({ error: 'This invite is no longer valid. Ask the sender to send a new one.' });
+      }
+    }
     const providedEmail = String(req.body?.email || '').trim().toLowerCase() || null;
     const providedName = String(req.body?.display_name || '').trim() || null;
     if (provider === 'apple') {
       profile.email = profile.email || providedEmail || null;
       profile.displayName = profile.displayName || providedName || '';
+    }
+    if (invite?.target_email) {
+      const lockedInviteEmail = String(invite.target_email || '').trim().toLowerCase();
+      if (!profile.email || String(profile.email).trim().toLowerCase() !== lockedInviteEmail) {
+        return res.status(400).json({ error: `This invite must be registered using ${lockedInviteEmail}` });
+      }
+    }
+    if (invite?.target_phone) {
+      return res.status(400).json({ error: 'Phone-invite registration must be completed with the invited phone number on the register form.' });
     }
     const socialDisplayName = String(profile.displayName || '').trim() || String(profile.email || '').split('@')[0] || (provider === 'apple' ? 'Apple User' : 'Google User');
 
@@ -462,6 +525,9 @@ router.post('/api/auth/social', async (req, res) => {
       const randomPassword = crypto.randomBytes(32).toString('hex');
       const prefs = inferPreferences(req);
       const userId = await pgDb.createUser(username, profile.email, randomPassword, socialDisplayName, prefs, null);
+      if (inviteToken) {
+        await pgCoreDb.bindLiveSplitInviteToUser(inviteToken, userId);
+      }
       await pgDb.assignSignupPlanToUser(userId);
 
       await Promise.allSettled([
@@ -490,6 +556,9 @@ router.post('/api/auth/social', async (req, res) => {
     }
 
     if (!user) return res.status(500).json({ error: 'Failed to create social account' });
+    if (inviteToken) {
+      await pgCoreDb.bindLiveSplitInviteToUser(inviteToken, user.id);
+    }
 
     if (!user.currency_code || !user.locale_code) {
       const prefs = inferPreferences(req);

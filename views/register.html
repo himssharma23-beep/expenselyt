@@ -47,6 +47,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
 .btn-login{width:100%;padding:13px;border:none;border-radius:12px;background:var(--em);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.15s;margin-top:8px}
 .btn-login:hover{background:var(--em-l);transform:translateY(-1px);box-shadow:0 4px 16px rgba(20,90,60,0.3)}
 .error-msg{background:#FEF2F2;border:1px solid #FECACA;color:var(--red);padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.invite-lock{display:none;background:#F0F9F4;border:1px solid #BFE3CF;color:var(--em);padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px}
+.locked-field{background:#F8FAFC !important;color:#475467}
 .switch-link{text-align:center;margin-top:22px;font-size:13.5px;color:var(--t3)}
 .switch-link a{color:var(--em);font-weight:600;text-decoration:none}
 .switch-link a:hover{text-decoration:underline}
@@ -79,6 +81,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
     <h2>Create account</h2>
     <p class="subtitle">Fill in your details to get started</p>
     <div class="error-msg" id="error"></div>
+    <div class="invite-lock" id="inviteLock"></div>
     <form id="regForm" onsubmit="handleRegister(event)">
       <div class="form-group">
         <label>Display Name</label>
@@ -129,6 +132,12 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;disp
   </div>
 </div>
 <script>
+const inviteState = {
+  token: new URLSearchParams(window.location.search).get('invite') || '',
+  lockedEmail: '',
+  lockedPhone: '',
+};
+
 function detectCurrencyPrefs() {
   const options = Intl.DateTimeFormat().resolvedOptions();
   const locale = (navigator.language || options.locale || 'en-US').replace(/_/g, '-');
@@ -155,6 +164,48 @@ function detectCurrencyPrefs() {
   const zoneRegion = regionByTimeZone[String(timeZone).toLowerCase()] || '';
   const currency_code = currencyByRegion[region] || currencyByRegion[zoneRegion] || 'USD';
   return { currency_code, locale_code: currencyByCode[currency_code] || locale || 'en-US', time_zone: timeZone || null };
+}
+
+async function loadInviteLock() {
+  const inviteBox = document.getElementById('inviteLock');
+  const emailInput = document.getElementById('email');
+  const phoneInput = document.getElementById('mobile');
+  if (!inviteState.token) return;
+  try {
+    const res = await fetch(`/api/auth/live-split-invite/${encodeURIComponent(inviteState.token)}`);
+    const data = await res.json();
+    if (!res.ok || !data?.success || !data?.invite) {
+      throw new Error(data?.error || 'Invite is not valid anymore');
+    }
+    const invite = data.invite;
+    inviteState.lockedEmail = String(invite.target_email || '').trim().toLowerCase();
+    inviteState.lockedPhone = String(invite.target_phone || '').trim();
+    if (inviteState.lockedEmail) {
+      emailInput.value = inviteState.lockedEmail;
+      emailInput.readOnly = true;
+      emailInput.classList.add('locked-field');
+    }
+    if (inviteState.lockedPhone) {
+      phoneInput.value = inviteState.lockedPhone;
+      phoneInput.readOnly = true;
+      phoneInput.classList.add('locked-field');
+    }
+    if (inviteState.lockedPhone) {
+      const wrap = document.querySelector('.social-wrap');
+      if (wrap) wrap.style.display = 'none';
+    }
+    const lockedLabel = inviteState.lockedEmail
+      ? `This Live Split invite is locked to ${inviteState.lockedEmail}.`
+      : `This Live Split invite is locked to ${inviteState.lockedPhone}.`;
+    inviteBox.textContent = `${lockedLabel} Complete registration with this contact to continue.`;
+    inviteBox.style.display = 'block';
+  } catch (err) {
+    inviteBox.textContent = err.message || 'Invite is not valid anymore.';
+    inviteBox.style.display = 'block';
+    inviteBox.style.background = '#FEF2F2';
+    inviteBox.style.borderColor = '#FECACA';
+    inviteBox.style.color = 'var(--red)';
+  }
 }
 
 async function handleRegister(e) {
@@ -188,6 +239,7 @@ async function handleRegister(e) {
         email: document.getElementById('email').value,
         mobile,
         password: pw,
+        invite_token: inviteState.token || null,
         ...prefs,
       }),
     });
@@ -218,6 +270,7 @@ async function handleGoogleCredentialResponse(response) {
       body: JSON.stringify({
         provider: 'google',
         id_token: response.credential,
+        invite_token: inviteState.token || null,
         ...prefs,
       }),
     });
@@ -251,7 +304,10 @@ function initGoogleSignIn() {
   });
 }
 
-window.addEventListener('load', initGoogleSignIn);
+window.addEventListener('load', async () => {
+  await loadInviteLock();
+  initGoogleSignIn();
+});
 </script>
 </body>
 </html>

@@ -363,10 +363,12 @@ function confirmDialog(message) {
   });
 }
 
-// ─── Modal Helper ────────────────────────────────────────────
+// Modal Helper
 function openModal(title, bodyHTML) {
+  const headerActions = window.__modalHeaderActionsHTML || '';
+  window.__modalHeaderActionsHTML = '';
   document.getElementById('modalContent').innerHTML = `
-    <div class="modal-head"><h3>${title}</h3><button onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>${title}</h3><div class="modal-head-actions">${headerActions}<button onclick="closeModal()">x</button></div></div>
     <div class="modal-body">${bodyHTML}</div>`;
   document.getElementById('modalOverlay').style.display = 'flex';
   repairMojibakeInNode(document.getElementById('modalContent'));
@@ -393,8 +395,8 @@ function showModal(html) {
 
 function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
+  window.__modalHeaderActionsHTML = '';
   document.getElementById('modalOverlay').style.display = 'none';
 }
-
 setCurrencyPrefs(window.__currencyPrefs);
 startMojibakeRepairObserver();

@@ -132,6 +132,13 @@ let divideItems = _loadDivideDraftItems();
 let divideSelected = new Set();
 let dividePaidBy = 'self';
 
+function canAccessTab(tab) {
+  if (_userRole === 'admin') return true;
+  if (tab === 'admin') return false;
+  if (tab === 'livesplit') return _accessiblePages.includes('livesplit') || _accessiblePages.includes('divide');
+  return _accessiblePages.includes(tab);
+}
+
 function validateFriendNameInput(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
   if (!value) return 'Friend name is required';
@@ -239,7 +246,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.querySelectorAll('.nav-btn[data-tab]').forEach(btn => {
       const tab = btn.dataset.tab;
       if (tab === 'admin') return; // admin button handled separately
-      if (!_accessiblePages.includes(tab)) btn.style.display = 'none';
+      if (!canAccessTab(tab)) btn.style.display = 'none';
     });
   }
   loadTab();
@@ -412,7 +419,7 @@ async function deleteOwnAccount() {
 }
 
 function switchTab(tab) {
-  if (_userRole !== 'admin' && tab !== 'admin' && tab !== 'ailookup' && !_accessiblePages.includes(tab)) {
+  if (!canAccessTab(tab)) {
     toast('You do not have access to this page. Please upgrade your plan.', 'error');
     return;
   }
@@ -441,6 +448,10 @@ function loadTab() {
   else if (currentTab === 'expenses') loadExpenses();
   else if (currentTab === 'friends') selectedFriend ? loadFriendDetail() : loadFriends();
   else if (currentTab === 'divide') loadDivide();
+  else if (currentTab === 'livesplit') {
+    if (typeof loadLiveSplit === 'function') loadLiveSplit();
+    else loadDivide();
+  }
   else if (currentTab === 'emi') loadEMI();
   else if (currentTab === 'reports') loadReports();
   else if (currentTab === 'trips') loadTrips();
@@ -4706,6 +4717,7 @@ const ALL_PAGES = [
   { key: 'expenses',    label: 'Expenses' },
   { key: 'friends',     label: 'Friends & Loans' },
   { key: 'divide',      label: 'Split Expenses' },
+  { key: 'livesplit',   label: 'Live Split' },
   { key: 'trips',       label: 'Trips' },
   { key: 'reports',     label: 'Reports' },
   { key: 'emi',         label: 'EMI Calculator' },
@@ -5181,9 +5193,86 @@ async function loadAdminUsers() {
   document.getElementById('adminContent').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
       <div style="font-size:14px;font-weight:700">Users (${users.length})</div>
-      <div style="font-size:12px;color:var(--t3)">Soft delete keeps data for audit and restore.</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-p btn-sm" onclick="showAdminCreateUserModal()">+ Add User</button>
+        <div style="font-size:12px;color:var(--t3)">Soft delete keeps data for audit and restore.</div>
+      </div>
     </div>
     <div class="admin-user-grid">${cards || '<div class="card" style="text-align:center;color:var(--t3)">No users</div>'}</div>`;
+}
+
+function showAdminCreateUserModal() {
+  openModal('Add User', `
+    <div class="fg">
+      <label class="fl">Username<input class="fi" id="acuUsername" placeholder="username123" autocomplete="off"></label>
+      <label class="fl">Email<input class="fi" id="acuEmail" type="email" placeholder="user@example.com" autocomplete="off"></label>
+      <label class="fl full">Display Name<input class="fi" id="acuName" placeholder="Full name"></label>
+      <label class="fl full">Mobile Number (optional)<input class="fi" id="acuMobile" placeholder="+91 9876543210"></label>
+      <label class="fl full">Password
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="fi" id="acuPassword" type="password" placeholder="Minimum 6 characters" style="flex:1">
+          <button type="button" class="btn btn-s btn-sm" onclick="adminGenStrongPassword()">Generate</button>
+        </div>
+      </label>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;margin:8px 0 12px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="acuRole" value="user" checked> User
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="acuRole" value="admin"> Admin
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:auto">
+        <input type="checkbox" id="acuActive" checked style="width:16px;height:16px"> Account Active
+      </label>
+    </div>
+    <div class="fa" style="margin-top:12px">
+      <button class="btn btn-p" onclick="adminCreateUser()">Create User</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function adminCreateUser() {
+  const username = document.getElementById('acuUsername').value.trim().toLowerCase();
+  const email = document.getElementById('acuEmail').value.trim().toLowerCase();
+  const display_name = document.getElementById('acuName').value.trim();
+  const mobile = document.getElementById('acuMobile').value.trim();
+  const password = document.getElementById('acuPassword').value;
+  const role = document.querySelector('input[name="acuRole"]:checked')?.value || 'user';
+  const is_active = document.getElementById('acuActive').checked ? 1 : 0;
+
+  if (!username || !email || !display_name || !password) {
+    toast('Username, email, name, and password are required', 'warning');
+    return;
+  }
+  if (password.length < 6) {
+    toast('Password min 6 chars', 'warning');
+    return;
+  }
+
+  const r = await api('/api/admin/users', {
+    method: 'POST',
+    body: { username, email, display_name, mobile: mobile || null, password, role, is_active },
+  });
+  if (!r?.success) {
+    toast(r?.error || 'Failed to create user', 'error');
+    return;
+  }
+  toast('User created', 'success');
+  closeModal();
+  await loadAdminUsers();
+}
+
+function adminGenStrongPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?';
+  let out = '';
+  for (let i = 0; i < 14; i += 1) out += chars[Math.floor(Math.random() * chars.length)];
+  const el = document.getElementById('acuPassword');
+  if (el) {
+    el.value = out;
+    el.focus();
+  }
+  toast('Strong password generated', 'success');
 }
 
 async function adminUpdateUser(id, data) {

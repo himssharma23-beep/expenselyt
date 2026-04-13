@@ -540,6 +540,87 @@ async function sendTrackerExpenseAppliedEmail({ to, name, trackerName, sourceMon
   });
 }
 
+async function sendLiveSplitInviteEmail({ to, inviterName, inviteLink }) {
+  return sendMail({
+    to,
+    subject: `${inviterName || 'A friend'} invited you to Live Split`,
+    html: renderEmailLayout({
+      preheader: `${inviterName || 'A friend'} invited you to split expenses on Expense Lite AI.`,
+      eyebrow: 'Live Split Invite',
+      title: 'You are invited to Live Split',
+      intro: `${inviterName || 'A friend'} invited you to join Live Split on Expense Lite AI.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">Create your account (or sign in) to see and manage shared Live Split balances.</p>
+      `,
+      actionLabel: 'Open Invite',
+      actionHref: inviteLink || `${APP_BASE_URL}/register`,
+      secondaryHtml: `
+        <p style="margin:14px 0 0;font-size:13px;color:#64748B;">If button does not open, use this link:</p>
+        <div style="padding:12px 14px;border-radius:14px;background:#F8FAFC;border:1px solid #E2E8F0;word-break:break-all;font-size:13px;color:#145A3C;">
+          ${escapeHtml(inviteLink || `${APP_BASE_URL}/register`)}
+        </div>
+      `,
+      featureItems: ['Split Expenses', 'Live Balances', 'Shared History'],
+    }),
+  });
+}
+
+async function sendLiveSplitTripCreatedEmail({ to, ownerName, recipientName, tripName, startDate, endDate, currencyCode = 'INR', localeCode = 'en-IN' }) {
+  return sendMail({
+    to,
+    subject: `${ownerName || 'A friend'} created a Live Split trip with you`,
+    html: renderEmailLayout({
+      preheader: `${ownerName || 'A friend'} created a Live Split trip and added you.`,
+      eyebrow: 'Live Split Trip',
+      title: 'You were added to a Live Split trip',
+      intro: `Hi ${recipientName || 'there'}, ${ownerName || 'someone'} created the trip "${tripName || 'Trip'}" with you.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">Open Live Split to view the trip, members, and shared expenses.</p>
+        ${renderSummaryTable([
+          { label: 'Trip', value: escapeHtml(tripName || '-') },
+          { label: 'Start Date', value: escapeHtml(startDate || '-') },
+          { label: 'End Date', value: escapeHtml(endDate || startDate || '-') },
+        ])}
+      `,
+      actionLabel: 'Open Live Split',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Trip Expenses', 'Member Shares', 'Real-time Balances'],
+    }),
+  });
+}
+
+async function sendLiveSplitMonthlySummaryEmail({ to, name, month, oweToMe = 0, iOwe = 0, net = 0, topRows = [], currencyCode = 'INR', localeCode = 'en-IN' }) {
+  const [year, mon] = String(month || '').split('-').map(Number);
+  const monthDate = year && mon ? new Date(year, mon - 1, 1) : new Date();
+  const monthLabel = monthDate.toLocaleDateString(localeCode || 'en-IN', { month: 'long', year: 'numeric' });
+  const rows = (topRows || []).slice(0, 5).map((row) => {
+    const amount = Number(Math.abs(Number(row?.amount || 0)).toFixed(2));
+    const status = Number(row?.amount || 0) > 0 ? 'owes you' : Number(row?.amount || 0) < 0 ? 'you owe' : 'settled';
+    return `<li style="margin:0 0 6px;color:#334155;">${escapeHtml(String(row?.name || 'Friend'))} - ${escapeHtml(status)} ${escapeHtml(formatCurrency(amount, currencyCode, localeCode))}</li>`;
+  }).join('');
+  return sendMail({
+    to,
+    subject: `${monthLabel} Live Split summary`,
+    html: renderEmailLayout({
+      preheader: `Your Live Split monthly balance summary for ${monthLabel}.`,
+      eyebrow: 'Live Split',
+      title: `${monthLabel} balance summary`,
+      intro: `Hi ${name || 'there'}, here is your current Live Split summary.`,
+      bodyHtml: `
+        ${renderSummaryTable([
+          { label: 'People owe you', value: escapeHtml(formatCurrency(oweToMe, currencyCode, localeCode)) },
+          { label: 'You owe others', value: escapeHtml(formatCurrency(iOwe, currencyCode, localeCode)) },
+          { label: 'Net balance', value: escapeHtml(formatCurrency(net, currencyCode, localeCode)) },
+        ])}
+        ${rows ? `<div style="margin-top:16px;font-size:13px;color:#334155;font-weight:700;">Top balances</div><ul style="padding-left:18px;margin:8px 0 0;">${rows}</ul>` : ''}
+      `,
+      actionLabel: 'Open Live Split',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Who owes whom', 'Net position', 'Live split history'],
+    }),
+  });
+}
+
 module.exports = {
   ADMIN_EMAIL,
   isEmailEnabled,
@@ -557,4 +638,7 @@ module.exports = {
   sendTrackerMonthSummaryEmail,
   sendRecurringAppliedEmail,
   sendTrackerExpenseAppliedEmail,
+  sendLiveSplitInviteEmail,
+  sendLiveSplitTripCreatedEmail,
+  sendLiveSplitMonthlySummaryEmail,
 };

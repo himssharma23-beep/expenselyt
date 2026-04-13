@@ -4,6 +4,7 @@ const pgFinance = require('../db/postgres-finance');
 const pgBilling = require('../db/postgres-billing');
 const { query } = require('../db/postgres');
 const { sendExpoPushNotifications } = require('./push-notifications');
+const { notifyMonthlyLiveSplitSummary } = require('./live-split-notifications');
 
 function num(value) {
   return Number(value || 0);
@@ -322,6 +323,7 @@ async function runPushNotificationCycle() {
     try {
       if (now.getDate() === 1) {
         await notifyMonthlySummariesForUser(user, month);
+        await notifyMonthlyLiveSplitSummary(user, month);
       }
       await notifyUpcomingEmiRemindersForUser(user, dueReminderDate);
       await notifyCreditCardCycleEventsForUser(user, now, dueReminderDate);

@@ -203,6 +203,133 @@ CREATE TABLE IF NOT EXISTS divide_group_shares (
 CREATE INDEX IF NOT EXISTS idx_divide_group_shares_owner ON divide_group_shares(owner_user_id, friend_id);
 CREATE INDEX IF NOT EXISTS idx_divide_group_shares_target ON divide_group_shares(target_user_id);
 
+CREATE TABLE IF NOT EXISTS live_split_friends (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL
+);
+ALTER TABLE live_split_friends ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE live_split_friends ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE live_split_friends ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE live_split_friends ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE live_split_friends ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_live_split_friends_user ON live_split_friends(user_id);
+CREATE INDEX IF NOT EXISTS idx_live_split_friends_linked_user ON live_split_friends(linked_user_id);
+DO $$
+BEGIN
+  EXECUTE 'DROP INDEX IF EXISTS idx_live_split_friends_linked_user_unique_active';
+  EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_live_split_friends_user_linked_unique_active ON live_split_friends(user_id, linked_user_id) WHERE linked_user_id IS NOT NULL AND deleted_at IS NULL';
+END $$;
+
+CREATE TABLE IF NOT EXISTS live_split_invites (
+  id BIGSERIAL PRIMARY KEY,
+  inviter_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  invite_token TEXT,
+  target_email TEXT,
+  target_phone TEXT,
+  target_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  accepted_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  responded_at TIMESTAMPTZ
+);
+ALTER TABLE live_split_invites ADD COLUMN IF NOT EXISTS invite_token TEXT;
+CREATE INDEX IF NOT EXISTS idx_live_split_invites_inviter ON live_split_invites(inviter_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_live_split_invites_target_user ON live_split_invites(target_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_live_split_invites_target_email ON live_split_invites(lower(target_email), status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_split_invites_token_unique ON live_split_invites(invite_token) WHERE invite_token IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS live_split_groups (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  divide_date DATE NOT NULL,
+  details TEXT NOT NULL,
+  paid_by TEXT NOT NULL,
+  total_amount NUMERIC(14,2) NOT NULL,
+  heading TEXT,
+  session_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS split_mode TEXT NOT NULL DEFAULT 'equal';
+
+CREATE TABLE IF NOT EXISTS live_split_splits (
+  id BIGSERIAL PRIMARY KEY,
+  group_id BIGINT NOT NULL REFERENCES live_split_groups(id) ON DELETE CASCADE,
+  friend_id BIGINT NOT NULL REFERENCES live_split_friends(id) ON DELETE CASCADE,
+  friend_name TEXT NOT NULL,
+  share_amount NUMERIC(14,2) NOT NULL,
+  is_paid BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS live_split_group_shares (
+  id BIGSERIAL PRIMARY KEY,
+  group_id BIGINT NOT NULL REFERENCES live_split_groups(id) ON DELETE CASCADE,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  friend_id BIGINT NOT NULL REFERENCES live_split_friends(id) ON DELETE CASCADE,
+  target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  shared_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  owner_hidden_at TIMESTAMPTZ,
+  target_hidden_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (group_id, target_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_live_split_group_shares_owner ON live_split_group_shares(owner_user_id, friend_id);
+CREATE INDEX IF NOT EXISTS idx_live_split_group_shares_target ON live_split_group_shares(target_user_id);
+
+CREATE TABLE IF NOT EXISTS live_split_group_activity (
+  id BIGSERIAL PRIMARY KEY,
+  group_id BIGINT NOT NULL,
+  actor_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  summary TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_live_split_group_activity_group ON live_split_group_activity(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS live_split_trips (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  status TEXT NOT NULL DEFAULT 'active',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_live_split_trips_user ON live_split_trips(user_id, status, start_date DESC);
+
+CREATE TABLE IF NOT EXISTS live_split_trip_members (
+  id BIGSERIAL PRIMARY KEY,
+  trip_id BIGINT NOT NULL REFERENCES live_split_trips(id) ON DELETE CASCADE,
+  friend_id BIGINT REFERENCES live_split_friends(id) ON DELETE SET NULL,
+  member_name TEXT NOT NULL,
+  target_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  permission TEXT NOT NULL DEFAULT 'edit',
+  is_locked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_live_split_trip_members_trip ON live_split_trip_members(trip_id);
+CREATE INDEX IF NOT EXISTS idx_live_split_trip_members_target_user ON live_split_trip_members(target_user_id);
+
+ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS trip_id BIGINT REFERENCES live_split_trips(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_live_split_groups_trip ON live_split_groups(trip_id, divide_date DESC);
+
 CREATE TABLE IF NOT EXISTS trips (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -561,6 +688,12 @@ BEGIN
     'loan_transactions',
     'divide_groups',
     'divide_splits',
+    'live_split_friends',
+    'live_split_trips',
+    'live_split_trip_members',
+    'live_split_groups',
+    'live_split_splits',
+    'live_split_group_shares',
     'trips',
     'trip_members',
     'trip_expenses',
