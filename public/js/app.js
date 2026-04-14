@@ -136,6 +136,8 @@ function canAccessTab(tab) {
   if (_userRole === 'admin') return true;
   if (tab === 'admin') return false;
   if (tab === 'livesplit') return _accessiblePages.includes('livesplit') || _accessiblePages.includes('divide');
+  // Keep Divide Petrol always available for signed-in users.
+  if (tab === 'petroldivide') return true;
   return _accessiblePages.includes(tab);
 }
 
@@ -419,7 +421,8 @@ async function deleteOwnAccount() {
 }
 
 function switchTab(tab) {
-  if (!canAccessTab(tab)) {
+  const isPetrolTab = tab === 'petroldivide';
+  if (!isPetrolTab && !canAccessTab(tab)) {
     toast('You do not have access to this page. Please upgrade your plan.', 'error');
     return;
   }
@@ -451,6 +454,14 @@ function loadTab() {
   else if (currentTab === 'livesplit') {
     if (typeof loadLiveSplit === 'function') loadLiveSplit();
     else loadDivide();
+  }
+  else if (currentTab === 'petroldivide') {
+    if (typeof loadPetrolDivide === 'function') loadPetrolDivide();
+    else if (typeof loadLiveSplit === 'function') loadLiveSplit();
+    else {
+      console.error('[petroldivide] loader missing');
+      toast('Divide Petrol script not loaded. Please hard refresh.', 'error');
+    }
   }
   else if (currentTab === 'emi') loadEMI();
   else if (currentTab === 'reports') loadReports();
@@ -4718,6 +4729,7 @@ const ALL_PAGES = [
   { key: 'friends',     label: 'Friends & Loans' },
   { key: 'divide',      label: 'Split Expenses' },
   { key: 'livesplit',   label: 'Live Split' },
+  { key: 'petroldivide', label: 'Divide Petrol' },
   { key: 'trips',       label: 'Trips' },
   { key: 'reports',     label: 'Reports' },
   { key: 'emi',         label: 'EMI Calculator' },

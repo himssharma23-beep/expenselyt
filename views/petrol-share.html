@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Petrol Divide Share - Expense Lite AI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f7;color:#1a1d24;font-family:'DM Sans',sans-serif}
+.top{background:#145A3C;color:#fff;padding:14px 18px;font-weight:700}
+.wrap{max-width:960px;margin:0 auto;padding:20px}
+.card{background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px;margin-bottom:14px}
+.h1{font-size:22px;font-weight:700;margin:0 0 4px}.sub{color:#6b7280;font-size:13px}
+.kpi{display:flex;gap:10px;flex-wrap:wrap}.k{background:#fff;border:1px solid #e4e7ec;border-radius:10px;padding:10px 12px;min-width:140px}
+.kl{font-size:11px;color:#6b7280;text-transform:uppercase}.kv{font:700 22px 'JetBrains Mono',monospace;color:#145A3C}
+table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1px solid #eef1f5;text-align:left;font-size:13px}th{color:#6b7280;font-size:12px}
+.empty{padding:22px;color:#8b93a1;text-align:center}
+</style>
+</head>
+<body>
+  <div class="top">Expense Lite AI - Petrol Divide (Shared View)</div>
+  <div class="wrap" id="app"><div class="card">Loading...</div></div>
+<script>
+const token = location.pathname.split('/p/')[1]?.split('/')[0];
+const fmtCur = (n) => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(n||0));
+const esc=(s)=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+async function load(){
+  try{
+    const res=await fetch('/api/public/petrol-divide/'+encodeURIComponent(token));
+    const data=await res.json();
+    if(!res.ok) throw new Error(data?.error||'Link not found');
+    render(data);
+  }catch(err){
+    document.getElementById('app').innerHTML=`<div class="card"><div style="color:#c94444;font-weight:700;margin-bottom:6px">Link not available</div><div class="sub">${esc(err.message)}</div></div>`;
+  }
+}
+function render(data){
+  const totals = Array.isArray(data.totals)?data.totals:[];
+  const entries = Array.isArray(data.entries)?data.entries:[];
+  const sum = totals.reduce((s,r)=>s+Number(r.final_total||r.final_real||0),0);
+  let html=`
+    <div class="card">
+      <div class="h1">${esc(data.owner_name||'Owner')} - Petrol Divide</div>
+      <div class="sub">Month ${esc(data.month_key||'')} - ${esc((data.share_type||'entries').toUpperCase())} (${esc((data.view_mode||'real').toUpperCase())})</div>
+    </div>
+    <div class="kpi">
+      <div class="k"><div class="kl">Month Total</div><div class="kv">${fmtCur(sum)}</div></div>
+      <div class="k"><div class="kl">Entries</div><div class="kv">${entries.length}</div></div>
+      <div class="k"><div class="kl">Members</div><div class="kv">${totals.length}</div></div>
+    </div>
+    <div class="card"><div style="font-weight:700;margin-bottom:8px">Per Member Total</div>`;
+
+  if(!totals.length) html += '<div class="empty">No totals found.</div>';
+  else {
+    html += '<table><thead><tr><th>Member</th><th>Total Share</th></tr></thead><tbody>' +
+      totals.map(r=>`<tr><td>${esc(r.friend_name)}</td><td>${fmtCur(r.final_total ?? r.final_real ?? 0)}</td></tr>`).join('') +
+      '</tbody></table>';
+  }
+  html += '</div>';
+
+  if ((data.share_type||'entries') === 'entries') {
+    html += '<div class="card"><div style="font-weight:700;margin-bottom:8px">Daily Entries</div>';
+    if(!entries.length) html += '<div class="empty">No entries found.</div>';
+    else {
+      html += '<table><thead><tr><th>Date</th><th>Remarks</th><th>Distance</th><th>Average</th><th>Petrol</th><th>Amount</th><th>Split</th></tr></thead><tbody>' +
+        entries.map(e=>`<tr><td>${esc(e.entry_date)}</td><td>${esc(e.remarks||'-')}</td><td>${Number(e.distance_km||0).toFixed(2)} km</td><td>${Number(e.average_kmpl||0).toFixed(2)}</td><td>${Number(e.petrol_used_litre||0).toFixed(2)} L</td><td>${fmtCur(e.amount_used)}</td><td>${(e.members||[]).map(m=>`${esc(m.friend_name)}: ${fmtCur(m.share_amount)}`).join('<br>')}</td></tr>`).join('') +
+        '</tbody></table>';
+    }
+    html += '</div>';
+  }
+  document.getElementById('app').innerHTML = html;
+}
+load();
+</script>
+</body>
+</html>

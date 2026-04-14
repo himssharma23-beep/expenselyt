@@ -6,6 +6,7 @@ const router = express.Router();
 const multer = require('multer');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
+const pgPetrolDb = require('../db/postgres-petrol');
 const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
@@ -83,6 +84,10 @@ function buildLiveSplitInviteRegisterUrl(baseUrl, inviteToken) {
 
 function getCoreDb() {
   return pgCoreDb;
+}
+
+function getPetrolDb() {
+  return pgPetrolDb;
 }
 
 function getOpsDb() {
@@ -373,10 +378,13 @@ async function parseCcExcelBuffer(buffer, sheetNames, password, defaultTxnDate) 
 
 function parseExcelDate(val) {
   if (val === null || val === undefined || val === '') return null;
+  const formatLocalDate = (date) => {
+    if (!(date instanceof Date) || isNaN(date.getTime())) return null;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  };
   // xlsx-populate returns JS Date for date-formatted cells
   if (val instanceof Date) {
-    if (isNaN(val.getTime())) return null;
-    return val.toISOString().split('T')[0];
+    return formatLocalDate(val);
   }
   // Excel numeric serial (rare with xlsx-populate but handle it)
   if (typeof val === 'number') {
@@ -401,7 +409,8 @@ function parseExcelDate(val) {
   m = str.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
   if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
   const d = new Date(str);
-  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  const formatted = formatLocalDate(d);
+  if (formatted) return formatted;
   return null;
 }
 
@@ -650,6 +659,254 @@ router.post('/divide/shared/hide', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().hideReceivedDivideShare(req.session.userId, req.body?.owner_user_id, req.body?.session_key));
     res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Petrol Divide
+router.get('/petrol-divide/months', async (req, res) => {
+  try {
+    const months = await Promise.resolve(getPetrolDb().getPetrolDivideMonths(req.session.userId));
+    res.json({ months });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/petrol-divide/months/:month', async (req, res) => {
+  try {
+    const months = await Promise.resolve(getPetrolDb().deletePetrolDivideMonth(req.session.userId, req.params.month));
+    res.json({ success: true, months });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.get('/petrol-divide', async (req, res) => {
+  try {
+    const monthKey = String(req.query.month || new Date().toISOString().slice(0, 7));
+    const data = await Promise.resolve(getPetrolDb().getPetrolDivideMonth(req.session.userId, monthKey));
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/petrol-divide/config', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getPetrolDb().savePetrolDivideMonthConfig(req.session.userId, req.body || {}));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/petrol-divide/entries', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getPetrolDb().addPetrolDivideEntry(req.session.userId, req.body || {}));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/petrol-divide/entries/:id(\\d+)', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getPetrolDb().updatePetrolDivideEntry(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/petrol-divide/entries/:id(\\d+)', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getPetrolDb().deletePetrolDivideEntry(req.session.userId, req.params.id));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/petrol-divide/fake/generate', async (req, res) => {
+  try {
+    const monthKey = String(req.body?.month_key || '').trim();
+    const increasePct = Number(req.body?.increase_pct || 0);
+    const data = await Promise.resolve(getPetrolDb().generatePetrolDivideFakeEntries(req.session.userId, monthKey, increasePct));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/petrol-divide/adjustments', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getPetrolDb().savePetrolDivideMonthAdjustments(req.session.userId, req.body || {}));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/petrol-divide/import-excel', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const monthKey = String(req.body?.month_key || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(monthKey)) return res.status(400).json({ error: 'Valid month_key is required (YYYY-MM)' });
+
+    const defaultAverage = Number(req.body?.default_average_kmpl || req.body?.average_kmpl || 0);
+    const rawSelf = String(req.body?.self_initial || '').trim().toUpperCase();
+    const user = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const fallbackSelf = String(user?.display_name || user?.username || 'H').trim().charAt(0).toUpperCase() || 'H';
+    const selfInitial = (rawSelf || fallbackSelf).charAt(0);
+    const sheets = parseSheetParam(req.body?.sheets);
+
+    const parsed = await parsePetrolExcelBuffer(req.file.buffer, sheets, req.body?.password);
+    const sourceRows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+    if (!sourceRows.length) return res.status(400).json({ error: 'No valid rows found in file' });
+
+    const monthData = await Promise.resolve(getPetrolDb().getPetrolDivideMonth(req.session.userId, monthKey));
+    const monthMembers = Array.isArray(monthData?.month_members) ? monthData.month_members : [];
+    const allFriends = Array.isArray(monthData?.live_split_friends) ? monthData.live_split_friends : [];
+    const monthMemberIds = new Set(monthMembers.map((m) => Number(m.friend_id)).filter((id) => id > 0));
+    const friends = monthMemberIds.size
+      ? allFriends.filter((friend) => monthMemberIds.has(Number(friend?.id)))
+      : allFriends;
+    const initialsMap = new Map();
+    const registerInitial = (raw, friendId) => {
+      const initial = String(raw || '').trim().charAt(0).toUpperCase();
+      if (!initial) return;
+      if (initialsMap.has(initial) && initialsMap.get(initial) !== friendId) {
+        initialsMap.set(initial, null); // ambiguous initial
+        return;
+      }
+      if (!initialsMap.has(initial)) initialsMap.set(initial, friendId);
+    };
+    for (const friend of friends) {
+      const friendId = Number(friend?.id);
+      if (!(friendId > 0)) continue;
+      registerInitial(friend?.name, friendId);
+      registerInitial(friend?.linked_user_display_name, friendId);
+      registerInitial(friend?.linked_user_username, friendId);
+    }
+
+    let imported = 0;
+    let skipped = Number(parsed?.skipped || 0);
+    const skippedRows = [];
+
+    for (let i = 0; i < sourceRows.length; i++) {
+      const row = sourceRows[i] || {};
+      const rowNo = Number(row.source_row) > 0 ? Number(row.source_row) : (i + 2);
+      const entryDate = String(row.entry_date || '').trim();
+      if (!entryDate || entryDate.slice(0, 7) !== monthKey) {
+        skipped++;
+        skippedRows.push({ row: rowNo, reason: `Date ${entryDate || '-'} is outside selected month ${monthKey}` });
+        continue;
+      }
+
+      const distanceKm = Number(row.distance_km || 0);
+      const averageKmpl = Number(row.average_kmpl || defaultAverage || 0);
+      if (!(distanceKm > 0) || !(averageKmpl > 0)) {
+        skipped++;
+        skippedRows.push({ row: rowNo, reason: 'Distance/average is invalid (average can be passed in import modal)' });
+        continue;
+      }
+
+      const letters = [...new Set(String(row.members || '').toUpperCase().split('').filter((ch) => /[A-Z0-9]/.test(ch)))];
+      const friendIds = [];
+      const unknown = [];
+      for (const ch of letters) {
+        if (ch === selfInitial) continue;
+        const mapped = initialsMap.get(ch);
+        if (mapped === null) {
+          unknown.push(`${ch} (ambiguous)`);
+          continue;
+        }
+        if (!(Number(mapped) > 0)) {
+          unknown.push(ch);
+          continue;
+        }
+        friendIds.push(Number(mapped));
+      }
+      if (unknown.length) {
+        skipped++;
+        skippedRows.push({ row: rowNo, reason: `Unknown/ambiguous member initials: ${unknown.join(', ')}` });
+        continue;
+      }
+
+      try {
+        const petrolPrice = row.petrol_price === null || row.petrol_price === undefined || row.petrol_price === ''
+          ? NaN
+          : Number(row.petrol_price);
+        await Promise.resolve(getPetrolDb().addPetrolDivideEntry(req.session.userId, {
+          month_key: monthKey,
+          entry_date: entryDate,
+          remarks: String(row.remarks || '').trim(),
+          ...(Number.isFinite(petrolPrice) && petrolPrice >= 0 ? { petrol_price: petrolPrice } : {}),
+          distance_km: distanceKm,
+          average_kmpl: averageKmpl,
+          member_friend_ids: friendIds,
+        }));
+        imported++;
+      } catch (err) {
+        skipped++;
+        skippedRows.push({ row: rowNo, reason: err?.message || 'Could not import row' });
+      }
+    }
+
+    const latest = await Promise.resolve(getPetrolDb().getPetrolDivideMonth(req.session.userId, monthKey));
+    res.json({
+      success: true,
+      imported,
+      skipped,
+      skipped_rows: skippedRows.slice(0, 25),
+      self_initial: selfInitial,
+      ...latest,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Import failed' });
+  }
+});
+
+router.post('/petrol-divide/share-link', async (req, res) => {
+  try {
+    const result = await Promise.resolve(getPetrolDb().createPetrolDivideShareLink(req.session.userId, req.body || {}));
+    const base = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const url = `${String(base || '').replace(/\/+$/, '')}/p/${encodeURIComponent(result.token)}`;
+    res.json({ success: true, ...result, url });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/petrol-divide/add-to-live-split', async (req, res) => {
+  try {
+    const monthKey = String(req.body?.month_key || '').trim();
+    const viewMode = String(req.body?.view_mode || 'real').toLowerCase();
+    const data = await Promise.resolve(getPetrolDb().getPetrolDivideMonthlySettlements(req.session.userId, monthKey, viewMode));
+    const settlements = Array.isArray(data?.settlements) ? data.settlements : [];
+    let created = 0;
+    for (const row of settlements) {
+      const amount = Number(row?.amount || 0);
+      const friendId = Number(row?.friend_id || 0);
+      if (!(amount > 0) || !(friendId > 0)) continue;
+      const sessionId = `petrol-${monthKey}-${friendId}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      await Promise.resolve(getCoreDb().addLiveSplitGroup(req.session.userId, {
+        divide_date: getPetrolDb().monthToDate(monthKey),
+        details: `Petrol share for ${monthKey}`,
+        paid_by: 'You',
+        total_amount: amount,
+        split_mode: 'settlement',
+        trip_id: null,
+        heading: `Petrol ${monthKey}`,
+        session_id: sessionId,
+        splits: [{ friend_id: friendId, friend_name: row.friend_name, share_amount: amount }],
+      }));
+      await Promise.resolve(getCoreDb().syncLiveSplitSessionShares(req.session.userId, sessionId, [friendId]));
+      created += 1;
+    }
+    res.json({ success: true, created, month_key: monthKey });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -2734,6 +2991,107 @@ function aiInferIntentFromExamples(question, examples) {
     return { intent: best.intent, score: best.score, method: 'similar_log_match', example: best.example };
   }
   return null;
+}
+
+async function parsePetrolExcelBuffer(buffer, sheetNames, password) {
+  const opts = password ? { password } : {};
+  const wb = await XlsxPopulate.fromDataAsync(buffer, opts);
+  const allSheets = wb.sheets().map((s) => s.name());
+  const targets = (Array.isArray(sheetNames) && sheetNames.length > 0)
+    ? sheetNames.filter((n) => allSheets.includes(n))
+    : [allSheets[0]];
+
+  const rows = [];
+  let skipped = 0;
+
+  const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const aliases = {
+    date: ['date', 'entry date'],
+    remarks: ['remarks', 'remark', 'details', 'description'],
+    price: ['petrol price', 'petrolprice', 'price'],
+    distance: ['distance', 'distance (in km)', 'distance in km', 'km'],
+    members: ['members', 'member', 'initials'],
+    average: ['average', 'avg', 'average (km/l)', 'average km/l', 'average kmpl'],
+  };
+  const findCol = (headers, names) => headers.findIndex((h) => names.includes(h));
+
+  for (const sheetName of targets) {
+    const sheet = wb.sheet(sheetName);
+    const usedRange = sheet.usedRange();
+    if (!usedRange) continue;
+    const lastRow = usedRange.endCell().rowNumber();
+    const lastCol = usedRange.endCell().columnNumber();
+
+    let headerRow = 1;
+    let dateCol = -1;
+    let remarksCol = -1;
+    let priceCol = -1;
+    let distanceCol = -1;
+    let membersCol = -1;
+    let averageCol = -1;
+
+    for (let r = 1; r <= Math.min(8, lastRow); r++) {
+      const headers = Array.from({ length: lastCol }, (_, i) => norm(sheet.cell(r, i + 1).value()));
+      const d = findCol(headers, aliases.date);
+      const rem = findCol(headers, aliases.remarks);
+      const p = findCol(headers, aliases.price);
+      const dist = findCol(headers, aliases.distance);
+      const mem = findCol(headers, aliases.members);
+      const avg = findCol(headers, aliases.average);
+      if (d >= 0 && dist >= 0 && mem >= 0) {
+        headerRow = r;
+        dateCol = d + 1;
+        remarksCol = rem >= 0 ? rem + 1 : -1;
+        priceCol = p >= 0 ? p + 1 : -1;
+        distanceCol = dist + 1;
+        membersCol = mem + 1;
+        averageCol = avg >= 0 ? avg + 1 : -1;
+        break;
+      }
+    }
+
+    if (dateCol < 0 || distanceCol < 0 || membersCol < 0) {
+      continue;
+    }
+
+    for (let r = headerRow + 1; r <= lastRow; r++) {
+      const rawDateCell = sheet.cell(r, dateCol);
+      const rawDate = rawDateCell.value();
+      const rawDateText = String(rawDateCell.text ? rawDateCell.text() : '').trim();
+      const rawDistance = sheet.cell(r, distanceCol).value();
+      const rawMembers = sheet.cell(r, membersCol).value();
+
+      const entryDate = parseExcelDate(rawDateText || rawDate);
+      const distanceKm = parseFloat(String(rawDistance ?? '').replace(/[^0-9.-]/g, ''));
+      const members = String(rawMembers || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const hasAnyData = String(rawDateText || rawDate || '').trim() || String(rawDistance || '').trim() || String(rawMembers || '').trim();
+      if (!hasAnyData) continue;
+
+      if (!entryDate || !(distanceKm >= 0) || !members) {
+        skipped++;
+        continue;
+      }
+
+      const remarks = remarksCol > 0 ? String(sheet.cell(r, remarksCol).value() || '').trim() : '';
+      const rawPrice = priceCol > 0 ? sheet.cell(r, priceCol).value() : '';
+      const rawAverage = averageCol > 0 ? sheet.cell(r, averageCol).value() : '';
+      const petrolPrice = parseFloat(String(rawPrice ?? '').replace(/[^0-9.-]/g, ''));
+      const averageKmpl = parseFloat(String(rawAverage ?? '').replace(/[^0-9.-]/g, ''));
+
+      rows.push({
+        source_row: r,
+        source_sheet: sheetName,
+        entry_date: entryDate,
+        remarks,
+        petrol_price: Number.isFinite(petrolPrice) ? petrolPrice : null,
+        distance_km: distanceKm,
+        average_kmpl: Number.isFinite(averageKmpl) ? averageKmpl : null,
+        members,
+      });
+    }
+  }
+
+  return { rows, skipped };
 }
 
 function aiAnswerFromSummary(question, summary, currentUser) {

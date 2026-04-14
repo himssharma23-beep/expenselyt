@@ -13,6 +13,7 @@ const apiRoutes = require('./routes/api');
 const { assertPostgresConfigured, getDbProvider } = require('./db/provider');
 const pgDb = require('./db/postgres-auth');
 const pgCoreDb = require('./db/postgres-core');
+const pgPetrolDb = require('./db/postgres-petrol');
 const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
 const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
@@ -105,6 +106,10 @@ app.get('/s/:token', (req, res) => {
   res.sendFile('share.html', { root: './views' });
 });
 
+app.get('/p/:token', (req, res) => {
+  res.sendFile('petrol-share.html', { root: './views' });
+});
+
 // Public share data API — no auth required
 app.get('/health', (req, res) => {
   res.json({
@@ -133,6 +138,15 @@ app.get('/contact', (req, res) => {
 
 app.get('/api/public/share/:token', (req, res) => {
   Promise.resolve(pgCoreDb.getPublicShareData(req.params.token)).then((data) => {
+    if (!data) return res.status(404).json({ error: 'Link not found or expired' });
+    res.json(data);
+  }).catch((err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+app.get('/api/public/petrol-divide/:token', (req, res) => {
+  Promise.resolve(pgPetrolDb.getPetrolDivideShareByToken(req.params.token)).then((data) => {
     if (!data) return res.status(404).json({ error: 'Link not found or expired' });
     res.json(data);
   }).catch((err) => {

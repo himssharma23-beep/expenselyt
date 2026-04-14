@@ -964,7 +964,7 @@ async function getUserAccessiblePages(userId) {
   const user = userResult.rows[0];
   if (!user) return ['dashboard'];
   if (user.role === 'admin') {
-    return ['dashboard', 'expenses', 'friends', 'divide', 'livesplit', 'trips', 'reports', 'emi', 'emitracker', 'friendemis', 'creditcards', 'banks', 'planner', 'tracker', 'recurring', 'ailookup', 'admin'];
+    return ['dashboard', 'expenses', 'friends', 'divide', 'livesplit', 'petroldivide', 'trips', 'reports', 'emi', 'emitracker', 'friendemis', 'creditcards', 'banks', 'planner', 'tracker', 'recurring', 'ailookup', 'admin'];
   }
 
   const pages = new Set(['dashboard']);
