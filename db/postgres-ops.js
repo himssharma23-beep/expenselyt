@@ -249,11 +249,11 @@ async function autoAddCompletedTrackerExpenses(userId) {
 
 async function getAiLookupStatus(userId) {
   const today = new Date().toISOString().slice(0, 10);
-  const dailyFreeLimit = 10;
-  const [usageR, activeSubR] = await Promise.all([
+  const DEFAULT_FREE_LIMIT = 10;
+  const [usageR, activeSubR, userR] = await Promise.all([
     query('SELECT query_count FROM ai_lookup_usage WHERE user_id = $1 AND usage_date = $2 LIMIT 1', [userId, today]),
     query(
-      `SELECT p.is_free, p.name
+      `SELECT p.is_free, p.name, p.ai_query_limit
        FROM user_subscriptions s
        JOIN plans p ON p.id = s.plan_id
        WHERE s.user_id = $1
@@ -263,24 +263,68 @@ async function getAiLookupStatus(userId) {
        LIMIT 1`,
       [userId]
     ),
+    query('SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1', [userId]),
   ]);
   const usedToday = Number(usageR.rows[0]?.query_count || 0);
   const activeSub = activeSubR.rows[0] || null;
+  const isAdmin = userR.rows[0]?.role === 'admin';
+
+  if (isAdmin) {
+    return {
+      date: today,
+      dailyFreeLimit: -1,
+      usedToday,
+      remainingFreeQueries: -1,
+      hasPaidPlan: true,
+      isAdmin: true,
+      planName: activeSub?.name || 'Admin',
+      canAsk: true,
+      message: 'Admin account — unlimited AI lookups.',
+    };
+  }
+
+  // Determine daily limit from plan's ai_query_limit, or fall back to default
+  const planLimit = activeSub?.ai_query_limit != null ? Number(activeSub.ai_query_limit) : null;
+  const dailyLimit = planLimit != null ? planLimit : (activeSub ? -1 : DEFAULT_FREE_LIMIT);
+  const isUnlimited = dailyLimit === -1;
   const hasPaidPlan = !!(activeSub && !activeSub.is_free);
-  const remainingFreeQueries = Math.max(0, dailyFreeLimit - usedToday);
-  const canAsk = hasPaidPlan || remainingFreeQueries > 0;
+  const remainingFreeQueries = isUnlimited ? -1 : Math.max(0, dailyLimit - usedToday);
+  const canAsk = isUnlimited ? true : remainingFreeQueries > 0;
+
   return {
     date: today,
-    dailyFreeLimit,
+    dailyFreeLimit: isUnlimited ? -1 : dailyLimit,
     usedToday,
     remainingFreeQueries,
     hasPaidPlan,
+    isAdmin: false,
     planName: activeSub?.name || null,
     canAsk,
-    message: hasPaidPlan
-      ? `Unlimited AI lookups available on your ${activeSub.name} plan.`
-      : `Free plan includes ${dailyFreeLimit} AI lookups per day. ${remainingFreeQueries} remaining today.`,
+    message: isUnlimited
+      ? `Unlimited AI lookups available on your ${activeSub?.name || 'plan'}.`
+      : `Plan includes ${dailyLimit} AI lookups per day. ${remainingFreeQueries} remaining today.`,
   };
+}
+
+async function getAiQueryHistory(userId, limit = 30) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 30));
+  const result = await query(
+    `SELECT id, question, response_preview, detected_intent, answer_type, was_fallback, created_at
+     FROM ai_query_logs
+     WHERE user_id = $1 AND deleted_at IS NULL
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, safeLimit]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    question: row.question,
+    response_preview: row.response_preview || null,
+    detected_intent: row.detected_intent || null,
+    answer_type: row.answer_type || null,
+    was_fallback: !!row.was_fallback,
+    created_at: row.created_at,
+  }));
 }
 
 async function recordAiLookupUsage(userId) {
@@ -1071,6 +1115,7 @@ module.exports = {
   getAiIntentLearningExamples,
   getAiLearningReport,
   teachAiIntent,
+  getAiQueryHistory,
   getBankAccounts,
   addBankAccount,
   updateBankAccount,

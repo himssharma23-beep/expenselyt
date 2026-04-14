@@ -749,3 +749,4 @@ ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS auto_add_to_expense BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_bank_account_id BIGINT;
 ALTER TABLE emi_installments ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_query_limit INTEGER NOT NULL DEFAULT -1;

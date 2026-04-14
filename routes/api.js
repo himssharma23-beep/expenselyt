@@ -3379,6 +3379,15 @@ router.get('/ai/lookup/status', (req, res) => {
   });
 });
 
+router.get('/ai/lookup/history', (req, res) => {
+  const limit = Number(req.query.limit || 30);
+  Promise.resolve(getOpsDb().getAiQueryHistory(req.session.userId, limit)).then((history) => {
+    res.json({ success: true, history });
+  }).catch((err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
 router.post('/ai/lookup', async (req, res) => {
   try {
     const { question } = req.body;

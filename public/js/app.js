@@ -5147,73 +5147,120 @@ async function adminAiRunTest() {
   }
 }
 
+let _adminUsersData = [];
+let _adminUserFilter = 'all'; // 'all' | 'active' | 'deleted'
+let _adminUserSearch = '';
+
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
-  const users = data?.users || [];
-  const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-  const cards = users.map(u => {
-    const subBadge = u.subscription
-      ? `<span style="font-size:11px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px">${u.subscription.plan_name}</span>`
-      : `<span style="font-size:11px;color:var(--t3)">No plan</span>`;
-    const statusText = u.deleted_at ? 'Deleted' : (u.is_active ? 'Active' : 'Inactive');
-    const statusColor = u.deleted_at ? 'var(--red)' : (u.is_active ? 'var(--green)' : 'var(--orange)');
-    const activeBadge = `<span class="admin-user-status" style="color:${statusColor};background:${u.deleted_at ? 'var(--red-l)' : u.is_active ? 'var(--green-l)' : 'var(--border-l)'}">${statusText}</span>`;
-    const safeDisplayName = (u.display_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const safeMobile = (u.mobile || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const auditText = `
-      <div class="admin-user-audit">
-        <div><span>Created</span><strong>${shortAuditDate(u.created_at)}</strong></div>
-        <div><span>Modified</span><strong>${shortAuditDate(u.updated_at)}</strong></div>
-        <div><span>Deleted</span><strong>${shortAuditDate(u.deleted_at)}</strong></div>
-      </div>`;
-    return `<div class="admin-user-card">
-      <div class="admin-user-top">
-        <div>
-          <div class="admin-user-name">${u.display_name}</div>
-          <div class="admin-user-handle">@${u.username}</div>
-        </div>
-        ${activeBadge}
-      </div>
-      <div class="admin-user-meta">
-        <div>
-          <div class="admin-user-label">Contact</div>
-          <div class="admin-user-value">${u.email}</div>
-          <div class="admin-user-sub">${u.mobile || 'No phone added'}</div>
-        </div>
-        <div>
-          <div class="admin-user-label">Role</div>
-          <select class="admin-user-role"
-          onchange="adminUpdateUser(${u.id},{role:this.value})">
-          <option value="user" ${u.role==='user'?'selected':''}>User</option>
-          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
-        </select>
-        </div>
-        <div>
-          <div class="admin-user-label">Subscription</div>
-          <div class="admin-user-value">${subBadge}</div>
-        </div>
-      </div>
-      ${auditText}
-      <div class="admin-user-actions">
-        <button class="btn btn-s btn-sm" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0},${u.deleted_at ? 1 : 0})">Edit</button>
-        <button class="btn btn-s btn-sm" onclick="adminGenOtp(${u.id})">OTP</button>
-        <button class="btn btn-s btn-sm" onclick="adminResetLink(${u.id})">Reset Link</button>
-        ${u.deleted_at
-          ? `<button class="btn btn-s btn-sm" style="border-color:var(--green);color:var(--green)" onclick="adminRestoreUser(${u.id})">Restore</button>`
-          : `<button class="btn btn-s btn-sm" style="border-color:var(--red);color:var(--red)" onclick="adminDeleteUser(${u.id})">Delete</button>`}
-      </div>
-    </div>`;
-  }).join('');
+  _adminUsersData = data?.users || [];
+  _adminUserFilter = 'all';
+  _adminUserSearch = '';
+  _renderAdminUsersPage();
+}
 
-  document.getElementById('adminContent').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
-      <div style="font-size:14px;font-weight:700">Users (${users.length})</div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-p btn-sm" onclick="showAdminCreateUserModal()">+ Add User</button>
-        <div style="font-size:12px;color:var(--t3)">Soft delete keeps data for audit and restore.</div>
+function _renderAdminUserCard(u) {
+  const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+  const subBadge = u.subscription
+    ? `<span style="font-size:11px;padding:2px 7px;background:var(--green-l);color:var(--green);border-radius:10px">${u.subscription.plan_name}</span>`
+    : `<span style="font-size:11px;color:var(--t3)">No plan</span>`;
+  const statusText = u.deleted_at ? 'Deleted' : (u.is_active ? 'Active' : 'Inactive');
+  const statusColor = u.deleted_at ? 'var(--red)' : (u.is_active ? 'var(--green)' : 'var(--orange)');
+  const activeBadge = `<span class="admin-user-status" style="color:${statusColor};background:${u.deleted_at ? 'var(--red-l)' : u.is_active ? 'var(--green-l)' : 'var(--border-l)'}">${statusText}</span>`;
+  const safeDisplayName = (u.display_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const safeMobile = (u.mobile || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const auditText = `
+    <div class="admin-user-audit">
+      <div><span>Created</span><strong>${shortAuditDate(u.created_at)}</strong></div>
+      <div><span>Modified</span><strong>${shortAuditDate(u.updated_at)}</strong></div>
+      <div><span>Deleted</span><strong>${shortAuditDate(u.deleted_at)}</strong></div>
+    </div>`;
+  return `<div class="admin-user-card">
+    <div class="admin-user-top">
+      <div>
+        <div class="admin-user-name">${u.display_name}</div>
+        <div class="admin-user-handle">@${u.username}</div>
+      </div>
+      ${activeBadge}
+    </div>
+    <div class="admin-user-meta">
+      <div>
+        <div class="admin-user-label">Contact</div>
+        <div class="admin-user-value">${u.email}</div>
+        <div class="admin-user-sub">${u.mobile || 'No phone added'}</div>
+      </div>
+      <div>
+        <div class="admin-user-label">Role</div>
+        <select class="admin-user-role"
+        onchange="adminUpdateUser(${u.id},{role:this.value})">
+        <option value="user" ${u.role==='user'?'selected':''}>User</option>
+        <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+      </select>
+      </div>
+      <div>
+        <div class="admin-user-label">Subscription</div>
+        <div class="admin-user-value">${subBadge}</div>
       </div>
     </div>
-    <div class="admin-user-grid">${cards || '<div class="card" style="text-align:center;color:var(--t3)">No users</div>'}</div>`;
+    ${auditText}
+    <div class="admin-user-actions">
+      <button class="btn btn-s btn-sm" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0},${u.deleted_at ? 1 : 0})">Edit</button>
+      <button class="btn btn-s btn-sm" onclick="adminGenOtp(${u.id})">OTP</button>
+      <button class="btn btn-s btn-sm" onclick="adminResetLink(${u.id})">Reset Link</button>
+      ${u.deleted_at
+        ? `<button class="btn btn-s btn-sm" style="border-color:var(--green);color:var(--green)" onclick="adminRestoreUser(${u.id})">Restore</button>`
+        : `<button class="btn btn-s btn-sm" style="border-color:var(--red);color:var(--red)" onclick="adminDeleteUser(${u.id})">Delete</button>`}
+    </div>
+  </div>`;
+}
+
+function _renderAdminUsersPage() {
+  const q = _adminUserSearch.toLowerCase();
+  const filtered = _adminUsersData.filter(u => {
+    const matchFilter =
+      _adminUserFilter === 'all' ? true :
+      _adminUserFilter === 'active' ? (!u.deleted_at && u.is_active) :
+      _adminUserFilter === 'inactive' ? (!u.deleted_at && !u.is_active) :
+      _adminUserFilter === 'deleted' ? !!u.deleted_at : true;
+    if (!matchFilter) return false;
+    if (!q) return true;
+    return (
+      (u.display_name || '').toLowerCase().includes(q) ||
+      (u.username || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q) ||
+      (u.mobile || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filterBtn = (val, label) => {
+    const active = _adminUserFilter === val;
+    return `<button class="chip${active ? ' chip-active' : ''}" style="cursor:pointer${active ? ';background:var(--primary);color:#fff;border-color:var(--primary)' : ''}" onclick="_adminUserSetFilter('${val}')">${label}</button>`;
+  };
+
+  const cards = filtered.map(_renderAdminUserCard).join('');
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+      <div style="font-size:14px;font-weight:700">Users (${filtered.length}/${_adminUsersData.length})</div>
+      <button class="btn btn-p btn-sm" onclick="showAdminCreateUserModal()">+ Add User</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <input class="fi" id="adminUserSearch" placeholder="Search name, username, email, phone…"
+        style="flex:1;min-width:180px;max-width:320px;padding:7px 10px;font-size:13px"
+        value="${escHtml(_adminUserSearch)}"
+        oninput="_adminUserSearch=this.value;_renderAdminUsersPage()">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${filterBtn('all','All')}
+        ${filterBtn('active','Active')}
+        ${filterBtn('inactive','Inactive')}
+        ${filterBtn('deleted','Deleted')}
+      </div>
+    </div>
+    <div class="admin-user-grid">${cards || '<div class="card" style="text-align:center;color:var(--t3);padding:30px">No users match</div>'}</div>`;
+}
+
+function _adminUserSetFilter(val) {
+  _adminUserFilter = val;
+  _renderAdminUsersPage();
 }
 
 function showAdminCreateUserModal() {
@@ -5436,6 +5483,7 @@ async function loadAdminPlans() {
           <div style="font-size:12px;margin-top:4px">
             Monthly: <b>${p.price_monthly>0?fmtCur(p.price_monthly):'Free'}</b>
             &nbsp;|&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
+            &nbsp;|&nbsp; AI Queries/day: <b>${p.ai_query_limit===-1||p.ai_query_limit==null?'Unlimited':p.ai_query_limit===0?'None':p.ai_query_limit}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -5463,12 +5511,20 @@ async function showPlanModal(planId) {
       <input type="checkbox" class="plan-page-cb" value="${pg.key}" ${plan?.pages?.includes(pg.key)?'checked':''}> ${pg.label}
     </label>`
   ).join('');
+  const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
   openModal(plan ? `Edit Plan: ${plan.name}` : 'New Plan', `
     <div class="fg">
       <label class="fl full">Plan Name *<input class="fi" id="pName" value="${plan?.name||''}"></label>
       <label class="fl full">Description<input class="fi" id="pDesc" value="${plan?.description||''}" placeholder="Brief description..."></label>
       <label class="fl">Monthly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly||0}"></label>
       <label class="fl">Yearly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly||0}"></label>
+      <label class="fl full">AI Queries per day
+        <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+          <input class="fi" type="number" id="pAiLimit" value="${aiLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateAiLimitHint(this.value)">
+          <span id="pAiLimitHint" style="font-size:12px;color:var(--t3);white-space:nowrap">${aiLimitVal===-1?'Unlimited':aiLimitVal===0?'No AI access':aiLimitVal+' queries/day'}</span>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-top:3px">-1 = Unlimited &nbsp;&middot;&nbsp; 0 = Disable AI &nbsp;&middot;&nbsp; Any positive number = daily cap</div>
+      </label>
     </div>
     <div style="display:flex;gap:16px;margin:12px 0">
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -5491,10 +5547,18 @@ async function showPlanModal(planId) {
     </div>`);
 }
 
+function _updateAiLimitHint(val) {
+  const n = parseInt(val, 10);
+  const hint = document.getElementById('pAiLimitHint');
+  if (!hint) return;
+  hint.textContent = isNaN(n) ? '' : n === -1 ? 'Unlimited' : n === 0 ? 'No AI access' : `${n} queries/day`;
+}
+
 async function adminSavePlan(planId) {
   const name = document.getElementById('pName').value.trim();
   if (!name) { toast('Plan name required', 'warning'); return; }
   const pages = [...document.querySelectorAll('.plan-page-cb:checked')].map(c => c.value);
+  const aiLimit = parseInt(document.getElementById('pAiLimit')?.value ?? '-1', 10);
   const body = {
     name,
     description: document.getElementById('pDesc').value.trim(),
@@ -5503,6 +5567,7 @@ async function adminSavePlan(planId) {
     is_free:   document.getElementById('pFree').checked ? 1 : 0,
     is_active: document.getElementById('pActive').checked ? 1 : 0,
     auto_assign_on_signup: document.getElementById('pSignupDefault').checked ? 1 : 0,
+    ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
     pages,
   };
   const r = planId
@@ -5522,6 +5587,8 @@ async function adminDeletePlan(id) {
 // â”€â”€ Subscriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _adminSubUsers = [];
 let _adminSubPlans = [];
+let _adminSubsData = [];
+let _adminSubSearch = '';
 
 async function loadAdminSubscriptions() {
   const [subData, usersData, plansData] = await Promise.all([
@@ -5529,11 +5596,25 @@ async function loadAdminSubscriptions() {
     api('/api/admin/users'),
     api('/api/admin/plans'),
   ]);
-  const subs = subData?.subscriptions || [];
+  _adminSubsData = subData?.subscriptions || [];
   _adminSubUsers = (usersData?.users || []).map(u => ({ id: u.id, name: u.display_name, username: u.username }));
   _adminSubPlans = (plansData?.plans || []).map(p => ({ id: p.id, name: p.name }));
+  _adminSubSearch = '';
+  _renderAdminSubsPage();
+}
 
-  const rows = subs.length ? subs.map(s => {
+function _renderAdminSubsPage() {
+  const q = _adminSubSearch.toLowerCase();
+  const filtered = q
+    ? _adminSubsData.filter(s =>
+        (s.display_name || '').toLowerCase().includes(q) ||
+        (s.username || '').toLowerCase().includes(q) ||
+        (s.plan_name || '').toLowerCase().includes(q) ||
+        (s.status || '').toLowerCase().includes(q)
+      )
+    : _adminSubsData;
+
+  const rows = filtered.length ? filtered.map(s => {
     const statusColor = s.status==='active' ? 'var(--green)' : s.status==='expired' ? 'var(--red)' : 'var(--t3)';
     return `<tr>
       <td><div style="font-weight:600">${s.display_name}</div><div style="font-size:11px;color:var(--t2)">@${s.username}</div></td>
@@ -5547,12 +5628,18 @@ async function loadAdminSubscriptions() {
         <button class="btn-d" style="color:var(--red)" onclick="adminDeleteSub(${s.id})">Del</button>
       </td>
     </tr>`;
-  }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:20px">No subscriptions yet</td></tr>';
+  }).join('') : `<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:20px">${q ? 'No subscriptions match' : 'No subscriptions yet'}</td></tr>`;
 
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-size:14px;font-weight:700">Subscriptions (${subs.length})</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+      <div style="font-size:14px;font-weight:700">Subscriptions (${filtered.length}/${_adminSubsData.length})</div>
       <button class="btn btn-p btn-sm" onclick="showNewSubModal()">+ Add Subscription</button>
+    </div>
+    <div style="margin-bottom:12px">
+      <input class="fi" id="adminSubSearch" placeholder="Search user, plan, status…"
+        style="width:100%;max-width:340px;padding:7px 10px;font-size:13px"
+        value="${escHtml(_adminSubSearch)}"
+        oninput="_adminSubSearch=this.value;_renderAdminSubsPage()">
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>User</th><th>Plan</th><th>Cycle</th><th>Start</th><th>End</th><th>Status</th><th style="width:100px">Actions</th></tr></thead>
@@ -9044,18 +9131,27 @@ async function deleteDefault(id) {
 
 let _aiHistory = []; // { role: 'user'|'assistant', content: string }
 let _aiStatus = null;
+let _aiPastHistory = []; // from DB
+let _aiHistoryExpanded = false;
 
 async function loadAiLookup() {
   _aiHistory = [];
-  const statusRes = await api('/api/ai/lookup/status');
+  _aiHistoryExpanded = false;
+  const [statusRes, histRes] = await Promise.all([
+    api('/api/ai/lookup/status'),
+    api('/api/ai/lookup/history'),
+  ]);
   _aiStatus = statusRes?.success ? statusRes : null;
+  _aiPastHistory = histRes?.history || [];
   document.getElementById('main').innerHTML = `
     <div class="tab-content" style="display:flex;flex-direction:column;height:calc(100vh - 40px);max-height:900px">
-      <div style="margin-bottom:16px">
+      <div style="margin-bottom:10px">
         <div style="font-size:22px;font-weight:700;color:var(--t1)">AI Lookup</div>
         <div style="font-size:13px;color:var(--t3);margin-top:2px">Ask anything about your expenses, loans, EMIs, credit cards, trips, and more.</div>
         ${_renderAiStatusBanner()}
       </div>
+
+      ${_renderAiHistoryPanel()}
 
       <!-- Chat messages -->
       <div id="aiChat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 0;min-height:0">
@@ -9093,6 +9189,50 @@ async function loadAiLookup() {
         <div style="font-size:11px;color:var(--t3);margin-top:6px">Enter to send &middot; Shift+Enter for new line &middot; Answers are based on your live data</div>
       </div>
     </div>`;
+}
+
+function _renderAiHistoryPanel() {
+  if (!_aiPastHistory.length) return '';
+  const fmtRelTime = (dateStr) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
+  const items = _aiPastHistory.map((h, i) => {
+    const answerHtml = h.response_preview
+      ? escHtml(h.response_preview).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
+      : '<span style="color:var(--t3);font-style:italic">No preview</span>';
+    return `<div style="border-bottom:1px solid var(--border);padding:8px 0;${i===_aiPastHistory.length-1?'border-bottom:none':''}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+        <div style="font-size:13px;font-weight:500;color:var(--t1);flex:1">${escHtml(h.question)}</div>
+        <span style="font-size:11px;color:var(--t3);white-space:nowrap;margin-top:2px">${fmtRelTime(h.created_at)}</span>
+      </div>
+      <div style="display:none;margin-top:6px;font-size:12px;color:var(--t2);line-height:1.5;background:var(--bg2);border-radius:8px;padding:8px 10px">${answerHtml}</div>
+    </div>`;
+  }).join('');
+
+  return `<div id="aiHistoryPanel" style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;cursor:pointer;background:var(--bg2)" onclick="_aiToggleHistory()">
+      <div style="font-size:13px;font-weight:600;color:var(--t1)">Recent History <span style="font-size:11px;color:var(--t3);font-weight:400">(${_aiPastHistory.length})</span></div>
+      <span id="aiHistoryChevron" style="font-size:12px;color:var(--t3)">${_aiHistoryExpanded ? '&#9650;' : '&#9660;'}</span>
+    </div>
+    <div id="aiHistoryList" style="display:${_aiHistoryExpanded ? 'block' : 'none'};padding:0 12px;max-height:260px;overflow-y:auto">
+      ${items}
+    </div>
+  </div>`;
+}
+
+function _aiToggleHistory() {
+  _aiHistoryExpanded = !_aiHistoryExpanded;
+  const list = document.getElementById('aiHistoryList');
+  const chevron = document.getElementById('aiHistoryChevron');
+  if (list) list.style.display = _aiHistoryExpanded ? 'block' : 'none';
+  if (chevron) chevron.innerHTML = _aiHistoryExpanded ? '&#9650;' : '&#9660;';
 }
 
 async function aiAskSuggestion(q) {
@@ -9158,13 +9298,23 @@ function _aiUserBubble(text) {
 
 function _renderAiStatusBanner() {
   if (!_aiStatus) return '';
-  const paid = !!_aiStatus.hasPaidPlan;
-  const sub = paid ? `Plan: <b>${escHtml(_aiStatus.planName || 'Paid')}</b> &middot; ` : '';
+  const isAdmin = !!_aiStatus.isAdmin;
+  const isUnlimited = isAdmin || _aiStatus.dailyFreeLimit === -1 || _aiStatus.remainingFreeQueries === -1;
+  const bgColor = isAdmin ? 'var(--orange-l,#fff3e0)' : isUnlimited ? 'var(--green-l)' : 'var(--blue-l)';
+  const fgColor = isAdmin ? 'var(--orange,#e65100)' : isUnlimited ? 'var(--green)' : 'var(--blue)';
+  const planLabel = _aiStatus.planName ? `Plan: <b>${escHtml(_aiStatus.planName)}</b> &middot; ` : '';
+  const headline = isAdmin
+    ? 'Admin — Unlimited AI queries'
+    : isUnlimited
+      ? 'Unlimited AI enabled'
+      : `${_aiStatus.remainingFreeQueries}/${_aiStatus.dailyFreeLimit} AI queries left today`;
+  const upsell = (!isAdmin && !isUnlimited)
+    ? `<div style="margin-top:4px;color:var(--t2)">Upgrade your plan to unlock more AI lookups per day.</div>` : '';
   return `
-    <div id="aiStatusBanner" style="margin-top:12px;background:${paid ? 'var(--green-l)' : 'var(--blue-l)'};color:${paid ? 'var(--green)' : 'var(--blue)'};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6">
-      <div style="font-weight:700">${paid ? 'Unlimited AI enabled' : `${_aiStatus.remainingFreeQueries}/${_aiStatus.dailyFreeLimit} free AI queries left today`}</div>
-      <div style="margin-top:2px">${sub}${escHtml(_aiStatus.message || '')}</div>
-      ${paid ? '' : '<div style="margin-top:4px;color:var(--t2)">Buy a paid plan to unlock more than 10 AI lookups per day.</div>'}
+    <div id="aiStatusBanner" style="margin-top:12px;background:${bgColor};color:${fgColor};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6">
+      <div style="font-weight:700">${headline}</div>
+      <div style="margin-top:2px">${planLabel}${escHtml(_aiStatus.message || '')}</div>
+      ${upsell}
     </div>`;
 }
 

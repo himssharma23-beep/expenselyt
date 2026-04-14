@@ -44,6 +44,7 @@ function normalizePlan(row) {
     ...row,
     price_monthly: Number(row.price_monthly || 0),
     price_yearly: Number(row.price_yearly || 0),
+    ai_query_limit: row.ai_query_limit != null ? Number(row.ai_query_limit) : -1,
   };
 }
 
@@ -788,8 +789,8 @@ async function createPlan(data) {
       await client.query('UPDATE plans SET auto_assign_on_signup = FALSE');
     }
     const result = await client.query(
-      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
         data.name,
@@ -799,6 +800,7 @@ async function createPlan(data) {
         !!data.is_free,
         data.is_active != null ? !!data.is_active : true,
         !!data.auto_assign_on_signup,
+        data.ai_query_limit != null ? Number(data.ai_query_limit) : -1,
       ]
     );
     const planId = Number(result.rows[0].id);
@@ -843,6 +845,10 @@ async function updatePlan(id, data) {
       }
       params.push(!!data.auto_assign_on_signup);
       fields.push(`auto_assign_on_signup = $${params.length}`);
+    }
+    if (data.ai_query_limit !== undefined) {
+      params.push(Number(data.ai_query_limit));
+      fields.push(`ai_query_limit = $${params.length}`);
     }
     if (fields.length > 0) {
       params.push(id);
