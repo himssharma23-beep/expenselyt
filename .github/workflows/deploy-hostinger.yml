@@ -61,10 +61,19 @@ jobs:
           PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
           set -e
+          if [ -z "$HOST" ]; then echo "ERROR: HOSTINGER_HOST secret is not set."; exit 1; fi
+          if [ -z "$PORT" ]; then echo "ERROR: SSH port could not be determined."; exit 1; fi
+          echo "Scanning host key for $HOST on port $PORT ..."
           mkdir -p ~/.ssh
           touch ~/.ssh/known_hosts
-          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -T 30 -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>&1 | tee /tmp/keyscan.log
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "ERROR: ssh-keyscan returned no host keys. Host may be unreachable."
+            cat /tmp/keyscan.log
+            exit 1
+          fi
           chmod 600 ~/.ssh/known_hosts
+          echo "Host key added successfully."
 
       - name: SSH connectivity check
         env:
