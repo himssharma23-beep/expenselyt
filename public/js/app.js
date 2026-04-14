@@ -138,6 +138,11 @@ function canAccessTab(tab) {
   return _accessiblePages.includes(tab);
 }
 
+function canAccessFeature(featureKey) {
+  if (_userRole === 'admin') return true;
+  return _accessiblePages.includes(featureKey);
+}
+
 function validateFriendNameInput(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
   if (!value) return 'Friend name is required';
@@ -4726,6 +4731,7 @@ const ALL_PAGES = [
   { key: 'divide',      label: 'Split Expenses' },
   { key: 'livesplit',   label: 'Live Split' },
   { key: 'petroldivide', label: 'Divide Petrol' },
+  { key: 'petrol_fake',  label: 'Petrol - Allow Fake Entries' },
   { key: 'trips',       label: 'Trips' },
   { key: 'reports',     label: 'Reports' },
   { key: 'emi',         label: 'EMI Calculator' },

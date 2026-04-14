@@ -502,7 +502,7 @@ async function importHistoricalCycles(userId, cardId, rows) {
         `INSERT INTO cc_cycles (
            user_id, card_id, cycle_start, cycle_end, due_date, total_amount, total_discount, net_payable,
            paid_amount, paid_date, status, manual_total_override, closed_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,$6,$7,'closed',TRUE,$7)`,
+         ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,$6,$7,'closed',TRUE,NOW())`,
         [userId, cardId, cycleStart, cycleEnd, dueDate, row.amount, paidDate]
       );
       count++;

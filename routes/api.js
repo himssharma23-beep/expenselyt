@@ -2282,24 +2282,54 @@ router.post('/admin/notifications/send', requireAdmin, async (req, res) => {
       data: req.body?.data || {},
     });
 
+    const createdNotifications = [];
+    for (const userId of userIds) {
+      const notification = await Promise.resolve(pgDb.createUserNotification(userId, {
+        type: 'admin_broadcast',
+        title: message.title,
+        body: message.body,
+        data: message.data || {},
+      }));
+      if (notification) createdNotifications.push(notification);
+    }
+
+    const notificationByUserId = new Map(
+      createdNotifications.map((item) => [Number(item.user_id), item])
+    );
+
     const tokenRows = await Promise.resolve(pgDb.getPushTokensForUsers(userIds));
-    if (!tokenRows.length) return res.status(400).json({ error: 'No active push devices found for the selected users' });
 
     const tokenUsers = new Set(tokenRows.map((row) => row.user_id));
     const missingUserIds = userIds.filter((id) => !tokenUsers.has(id));
-    const delivery = await sendExpoPushNotifications(tokenRows.map((row) => ({
-      to: row.token,
-      title: message.title,
-      body: message.body,
-      data: {
-        ...message.data,
-        user_id: row.user_id,
-      },
-    })));
+    const delivery = tokenRows.length
+      ? await sendExpoPushNotifications(tokenRows.map((row) => ({
+          to: row.token,
+          title: message.title,
+          body: message.body,
+          user_id: row.user_id,
+          notification_id: notificationByUserId.get(Number(row.user_id))?.id || null,
+          platform: row.platform,
+          data: {
+            ...message.data,
+            user_id: row.user_id,
+            notificationId: notificationByUserId.get(Number(row.user_id))?.id || null,
+          },
+        })))
+      : { ok: true, sent: 0, chunks: [], errors: [], tickets: [], receipts: [] };
+
+    for (const ticketRow of (delivery.tickets || [])) {
+      if (ticketRow?.ticket?.status !== 'ok') continue;
+      const userId = Number(ticketRow?.meta?.user_id || 0);
+      const notificationId = Number(ticketRow?.meta?.notification_id || 0);
+      if (userId > 0 && notificationId > 0) {
+        await Promise.resolve(pgDb.markUserNotificationPushed(userId, notificationId));
+      }
+    }
 
     res.json({
       success: delivery.errors.length === 0,
       requested_user_count: userIds.length,
+      created_count: createdNotifications.length,
       delivered_user_count: tokenUsers.size,
       device_count: tokenRows.length,
       skipped_user_ids: missingUserIds,

@@ -29,13 +29,17 @@ function normalizeOptionalText(value, maxLength = 80) {
 }
 
 async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
+  // Normalize txnDate to a YYYY-MM-DD string (pg may return DATE columns as Date objects inside transactions)
+  const dateStr = txnDate instanceof Date ? _localDate(txnDate) : String(txnDate || '').slice(0, 10);
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+
   const run = client || { query };
   const existing = await run.query(
     `SELECT *
      FROM cc_cycles
      WHERE card_id = $1 AND user_id = $2 AND cycle_start <= $3 AND cycle_end >= $4
      LIMIT 1`,
-    [cardId, userId, txnDate, txnDate]
+    [cardId, userId, dateStr, dateStr]
   );
   if (existing.rows[0]) return existing.rows[0];
 
@@ -43,7 +47,7 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   const card = cardR.rows[0];
   if (!card) return null;
 
-  const dt = new Date(`${txnDate}T00:00:00`);
+  const dt = new Date(`${dateStr}T00:00:00`);
   const billGenDay = Number(card.bill_gen_day || 1);
   let cycleStart;
   let cycleEnd;

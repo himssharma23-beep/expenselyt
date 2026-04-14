@@ -43,7 +43,7 @@ function render(data){
   let html=`
     <div class="card">
       <div class="h1">${esc(data.owner_name||'Owner')} - Petrol Divide</div>
-      <div class="sub">Month ${esc(data.month_key||'')} - ${esc((data.share_type||'entries').toUpperCase())} (${esc((data.view_mode||'real').toUpperCase())})</div>
+      <div class="sub">Month ${esc(data.month_key||'')} - ${esc((data.share_type||'entries').toUpperCase())}</div>
     </div>
     <div class="kpi">
       <div class="k"><div class="kl">Month Total</div><div class="kv">${fmtCur(sum)}</div></div>

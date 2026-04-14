@@ -857,18 +857,32 @@ async function getPetrolDivideShareByToken(token) {
   if (!link) return null;
   if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) return null;
 
+  const ownerName = String(link.owner_name || 'Owner').trim() || 'Owner';
   const data = await getPetrolDivideMonth(Number(link.user_id), String(link.month_key));
   const mode = String(link.view_mode || 'real').toLowerCase();
   const filteredEntries = filterEntriesByMode(data.entries || [], mode);
-  const totals = buildMonthTotals(filteredEntries, data.adjustments || []);
+
+  // Replace "You" (self entries) with the actual owner's display name
+  const namedEntries = filteredEntries.map((entry) => ({
+    ...entry,
+    members: (entry.members || []).map((m) => ({
+      ...m,
+      friend_name: (m.is_self || m.friend_name === 'You') ? ownerName : m.friend_name,
+    })),
+  }));
+
+  const totals = buildMonthTotals(namedEntries, data.adjustments || []).map((row) => ({
+    ...row,
+    friend_name: row.friend_name === 'You' ? ownerName : row.friend_name,
+  }));
 
   return {
-    owner_name: link.owner_name || 'Owner',
+    owner_name: ownerName,
     month_key: link.month_key,
     share_type: link.share_type,
     view_mode: mode,
     petrol_price: data.month?.petrol_price || 0,
-    entries: link.share_type === 'entries' ? filteredEntries : [],
+    entries: link.share_type === 'entries' ? namedEntries : [],
     totals,
   };
 }

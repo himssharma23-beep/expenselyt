@@ -302,7 +302,7 @@ async function getAllUsers() {
 function normalizeExpoPushToken(token) {
   const value = String(token || '').trim();
   if (!value) return null;
-  if (!/^ExponentPushToken\[[A-Za-z0-9_-]+\]$/.test(value)) return null;
+  if (!/^(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/.test(value)) return null;
   return value;
 }
 
@@ -430,10 +430,12 @@ async function getPushTokensForUsers(userIds = []) {
        u.username
      FROM push_device_tokens t
      JOIN users u ON u.id = t.user_id
+     LEFT JOIN user_notification_preferences p ON p.user_id = u.id
      WHERE t.user_id = ANY($1::bigint[])
        AND t.deleted_at IS NULL
        AND u.deleted_at IS NULL
        AND u.is_active = TRUE
+       AND COALESCE(p.push_enabled, TRUE) = TRUE
      ORDER BY u.display_name, t.id`,
     [ids]
   );

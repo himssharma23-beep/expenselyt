@@ -152,6 +152,7 @@
   function renderDetail() {
     const month = petrolData?.month || { month_key: petrolMonth };
     const entries = petrolData?.entries || [];
+    const hasFakePerm = typeof canAccessFeature === 'function' ? canAccessFeature('petrol_fake') : true;
     const realEntries = entries.filter((entry) => !entry.is_fake);
     const fakeEntries = entries.filter((entry) => !!entry.is_fake);
     const realTotal = Number(realEntries.reduce((sum, entry) => sum + n(entry.amount_used), 0).toFixed(2));
@@ -163,9 +164,9 @@
         <button type="button" onclick="petrolOpenAdjustmentModal(${Number(row.friend_id)})" style="border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--white);display:flex;flex-direction:column;align-items:flex-start;gap:3px;cursor:pointer;min-width:200px">
           <span style="font-size:13px;color:var(--t1);font-weight:800">${escHtml(row.friend_name || 'Member')}</span>
           <span style="font-size:12px;color:var(--t2)">Real Amount: <b style="color:var(--t1)">${fmtCur(row.real_total || 0)} <span style="color:var(--t3);font-weight:700">(${fmtCur(n(row.real_total) + n(row.adjustment || 0))})</span></b></span>
-          <span style="font-size:12px;color:var(--t2)">Fake Amount: <b style="color:var(--t1)">${fmtCur(row.fake_total || 0)} <span style="color:var(--t3);font-weight:700">(${fmtCur(n(row.fake_total) + n(row.adjustment || 0))})</span></b></span>
+          ${hasFakePerm ? `<span style="font-size:12px;color:var(--t2)">Fake Amount: <b style="color:var(--t1)">${fmtCur(row.fake_total || 0)} <span style="color:var(--t3);font-weight:700">(${fmtCur(n(row.fake_total) + n(row.adjustment || 0))})</span></b></span>` : ''}
           <span style="font-size:12px;color:var(--t2)">Extra Added: <b style="color:var(--t1)">${fmtCur(row.adjustment || 0)}</b></span>
-          <span style="font-size:12px;color:var(--t2)">Difference of Real and Fake: <b style="color:var(--primary)">${fmtCur(n(row.fake_total) - n(row.real_total))}</b></span>
+          ${hasFakePerm ? `<span style="font-size:12px;color:var(--t2)">Difference of Real and Fake: <b style="color:var(--primary)">${fmtCur(n(row.fake_total) - n(row.real_total))}</b></span>` : ''}
         </button>
       `).join('')
       : '<div style="font-size:12px;color:var(--t3)">No member totals yet.</div>';
@@ -220,7 +221,7 @@
             <div style="display:flex;gap:8px">
               <button class="btn btn-g btn-sm" onclick="petrolDownloadPdf('real')">PDF</button>
               <button class="btn btn-g btn-sm" onclick="petrolOpenShareModal('real')">Share Link</button>
-              <button class="btn btn-g btn-sm" onclick="petrolOpenGenerateFakeModal()">Generate Fake (${fakePct.toFixed(2)}%)</button>
+              ${hasFakePerm ? `<button class="btn btn-g btn-sm" onclick="petrolOpenGenerateFakeModal()">Generate Fake (${fakePct.toFixed(2)}%)</button>` : ''}
               <button class="btn btn-g btn-sm" onclick="petrolOpenImportModal()">Import Excel</button>
               <button class="btn btn-p btn-sm" onclick="petrolOpenEntryModal()">+ Add Entry</button>
             </div>
@@ -233,7 +234,7 @@
           </div>
         </div>
 
-        <div class="card" style="margin-bottom:12px">
+        ${hasFakePerm ? `<div class="card" style="margin-bottom:12px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
             <div>
               <div style="font-size:16px;font-weight:700">Daily Entries - Fake - ${escHtml(month.month_key || petrolMonth)}</div>
@@ -250,7 +251,7 @@
               <tbody>${fakeEntryRows}</tbody>
             </table>
           </div>
-        </div>
+        </div>` : ''}
       </div>`;
   }
 
