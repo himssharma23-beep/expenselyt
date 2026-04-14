@@ -13,19 +13,19 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
+      APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
+      SSH_OPTS: -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
-      - name: Disable host key checking
-        run: |
-          mkdir -p ~/.ssh
-          echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
 
       - name: Resolve SSH port
         id: ssh_port
@@ -55,6 +55,17 @@ jobs:
           echo "Unable to detect SSH port for $HOST. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
           exit 1
 
+      - name: Add host key
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: SSH connectivity check
         env:
           HOST: ${{ secrets.HOSTINGER_HOST }}
@@ -63,7 +74,28 @@ jobs:
         run: |
           set -e
           echo "Testing SSH to $USERNAME@$HOST:$PORT ..."
-          ssh -o ConnectTimeout=15 -p "$PORT" "$USERNAME@$HOST" "echo 'SSH OK'"
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "echo 'SSH OK'"
+
+      - name: Remote runtime check
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
+        run: |
+          set -e
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "
+            set -e
+            echo 'Remote host:' \$(hostname)
+            command -v bash
+            command -v rsync
+            command -v node
+            command -v npm
+            command -v pm2
+            node -v
+            npm -v
+            pm2 -v
+          "
+
       - name: Pack release
         run: |
           tar \
@@ -83,22 +115,19 @@ jobs:
           HOST: ${{ secrets.HOSTINGER_HOST }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
-          APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
           SHA: ${{ github.sha }}
         run: |
-          ssh -p "$PORT" "$USERNAME@$HOST" "mkdir -p '$APP_DIR/incoming/$SHA'"
-          scp -P "$PORT" release.tgz "$USERNAME@$HOST:$APP_DIR/incoming/$SHA/release.tgz"
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "mkdir -p '$APP_DIR/incoming/$SHA'"
+          scp $SSH_OPTS -P "$PORT" release.tgz "$USERNAME@$HOST:$APP_DIR/incoming/$SHA/release.tgz"
 
       - name: Deploy on server
         env:
           HOST: ${{ secrets.HOSTINGER_HOST }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
-          APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
-          APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
           SHA: ${{ github.sha }}
         run: |
-          ssh -p "$PORT" "$USERNAME@$HOST" "
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "
             set -e
             mkdir -p '$APP_DIR/incoming/$SHA/source'
             tar -xzf '$APP_DIR/incoming/$SHA/release.tgz' -C '$APP_DIR/incoming/$SHA/source'

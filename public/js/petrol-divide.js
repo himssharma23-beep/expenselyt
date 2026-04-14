@@ -83,6 +83,13 @@
     Array.from(selectEl.options || []).forEach((opt) => { opt.selected = false; });
   }
 
+  function setPetrolEntryRemark(value) {
+    const input = document.getElementById('petrolEntryRemarks');
+    if (!input) return;
+    input.value = String(value || '');
+    input.focus();
+  }
+
   function monthCardHtml(m) {
     const active = monthOpened && String(m.month_key) === String(petrolMonth);
     return `<div class="cc-tile tracker-tile" data-month-key="${escHtml(m.month_key)}" onclick="petrolOpenMonth('${escHtml(m.month_key)}')" style="cursor:pointer;${active ? 'outline:2px solid rgba(255,255,255,0.75);outline-offset:2px;' : ''}" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); petrolOpenMonth('${escHtml(m.month_key)}'); }">
@@ -405,6 +412,10 @@
       <div class="fg">
         <label class="fl">Date<input id="petrolEntryDate" class="fi" type="date" value="${escHtml(dateVal)}" min="${escHtml(minDate)}" max="${escHtml(maxDate)}"></label>
         <label class="fl">Remarks<input id="petrolEntryRemarks" class="fi" type="text" value="${escHtml(remarksVal)}" placeholder="Office commute"></label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="btn btn-g btn-sm" onclick="setPetrolEntryRemark('Home to office')">Home to office</button>
+          <button type="button" class="btn btn-g btn-sm" onclick="setPetrolEntryRemark('Office to home')">Office to home</button>
+        </div>
         <label class="fl">Distance (km)<input id="petrolEntryDistance" class="fi" type="number" step="0.1" value="${escHtml(distanceVal)}"></label>
         <label class="fl">Average (km/l)<input id="petrolEntryAverage" class="fi" type="number" step="0.1" value="${escHtml(averageVal)}"></label>
         <label class="fl">Members
@@ -790,4 +801,5 @@
   window.petrolOpenImportModal = petrolOpenImportModal;
   window.petrolImportExcelFromModal = petrolImportExcelFromModal;
   window.clearMultiSelect = clearMultiSelect;
+  window.setPetrolEntryRemark = setPetrolEntryRemark;
 })();
