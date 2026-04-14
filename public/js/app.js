@@ -135,9 +135,6 @@ let dividePaidBy = 'self';
 function canAccessTab(tab) {
   if (_userRole === 'admin') return true;
   if (tab === 'admin') return false;
-  if (tab === 'livesplit') return _accessiblePages.includes('livesplit') || _accessiblePages.includes('divide');
-  // Keep Divide Petrol always available for signed-in users.
-  if (tab === 'petroldivide') return true;
   return _accessiblePages.includes(tab);
 }
 
@@ -421,8 +418,7 @@ async function deleteOwnAccount() {
 }
 
 function switchTab(tab) {
-  const isPetrolTab = tab === 'petroldivide';
-  if (!isPetrolTab && !canAccessTab(tab)) {
+  if (!canAccessTab(tab)) {
     toast('You do not have access to this page. Please upgrade your plan.', 'error');
     return;
   }
@@ -4741,6 +4737,7 @@ const ALL_PAGES = [
   { key: 'tracker',     label: 'Daily Tracker' },
   { key: 'recurring',   label: 'Recurring' },
   { key: 'ailookup',    label: 'AI Lookup' },
+  { key: 'notifications', label: 'Notifications' },
 ];
 
 async function loadAdmin() {
