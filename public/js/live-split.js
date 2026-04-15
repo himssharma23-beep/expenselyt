@@ -102,6 +102,15 @@
   function firstNameToken(value) {
     return normalizePersonName(value).split(' ')[0] || '';
   }
+  function _renderAvatar(name, avatarUrl, extraStyle) {
+    const initial = escHtml((String(name || '?')[0]).toUpperCase());
+    const styleAttr = extraStyle ? ` style="${extraStyle}"` : '';
+    if (avatarUrl) {
+      const fallbackStyle = `display:none${extraStyle ? ';' + extraStyle : ''}`;
+      return `<img src="${escHtml(avatarUrl)}" class="avatar" style="object-fit:cover${extraStyle ? ';' + extraStyle : ''}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="avatar" style="${fallbackStyle}">${initial}</div>`;
+    }
+    return `<div class="avatar"${styleAttr}>${initial}</div>`;
+  }
   function isYouLabel(value) {
     return textKey(value) === 'you';
   }
@@ -1303,19 +1312,18 @@
             ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitEditExpenseMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}
           </div>
           ${renderSplitInputRows(form, people).replace(/liveSplitSetValue/g, 'liveSplitEditExpenseValue')}
-          ${progress ? `
-            <div style="margin-top:8px;font-size:12px;color:var(--t2)">
-              ${progress.unit === 'amount'
-                ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} · Remaining: ${fmtCur(progress.remaining)}`
+          <div id="lsSplitProgress" style="margin-top:8px;font-size:12px;color:var(--t2)">
+            ${progress
+              ? (progress.unit === 'amount'
+                ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} \u00b7 Remaining: ${fmtCur(progress.remaining)}`
                 : progress.unit === '%'
-                  ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% · Remaining: ${progress.remaining.toFixed(2)}%`
+                  ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% \u00b7 Remaining: ${progress.remaining.toFixed(2)}%`
                   : progress.unit === 'parts'
                     ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}`
-                    : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 · Remaining: ${progress.remaining.toFixed(4)}`
-              }
-            </div>
-          ` : ''}
-          <div style="margin-top:10px;padding:10px;border-radius:10px;background:var(--green-l2)">
+                    : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 \u00b7 Remaining: ${progress.remaining.toFixed(4)}`)
+              : ''}
+          </div>
+          <div id="lsSplitPreview" style="margin-top:10px;padding:10px;border-radius:10px;background:var(--green-l2)">
             <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">${preview.valid ? 'Split Preview' : 'Fix Split Values'}</div>
             <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:3px">
               ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
@@ -1552,6 +1560,17 @@
       if (!grouped[key]) grouped[key] = [];
       grouped[key].push(event);
     });
+    // Build per-member paid/share summary from events
+    const memberSummaryMap = {};
+    events.forEach((event) => {
+      (event.participants || []).forEach((p) => {
+        if (!p.name) return;
+        if (!memberSummaryMap[p.name]) memberSummaryMap[p.name] = { name: p.name, paid: 0, share: 0 };
+        memberSummaryMap[p.name].share = r2(memberSummaryMap[p.name].share + r2(p.share));
+        if (p.paid) memberSummaryMap[p.name].paid = r2(memberSummaryMap[p.name].paid + r2(event.total));
+      });
+    });
+    const memberSummary = Object.values(memberSummaryMap);
     const status = String(trip.status || 'active').toLowerCase();
     const statusTone = status === 'completed' ? 'var(--t3)' : 'var(--green)';
     openModal(`Trip - ${escHtml(trip.name || 'Trip')}`, `
@@ -1571,16 +1590,43 @@
           </div>
         ` : ''}
         ${memberBalances.length ? `
-          <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
             ${memberBalances.map((item) => {
               const amount = r2(item.amount);
               const tone = amount > 0 ? 'var(--green)' : amount < 0 ? 'var(--red)' : 'var(--t3)';
               const status = amount > 0 ? 'owes you' : amount < 0 ? 'you owe' : 'settled';
               return `
-                <div style="padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#fff;font-size:12px;color:var(--t2)">
-                  <b style="color:var(--t1)">${escHtml(item.name || 'Friend')}</b> · <span style="color:${tone}">${escHtml(status)} ${fmtCur(Math.abs(amount))}</span>
+                <div style="padding:5px 10px;border:1px solid var(--border);border-radius:999px;background:#fff;font-size:12px;color:var(--t2)">
+                  <b style="color:var(--t1)">${escHtml(item.name || 'Friend')}</b> <span style="color:${tone}">${escHtml(status)} ${fmtCur(Math.abs(amount))}</span>
                 </div>
               `;
+            }).join('')}
+          </div>
+        ` : ''}
+        ${memberSummary.length ? `
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            ${memberSummary.map((m) => {
+              const net = r2(m.paid - m.share);
+              const netColor = net > 0.005 ? 'var(--green)' : net < -0.005 ? 'var(--red)' : 'var(--t3)';
+              const netBg = net > 0.005 ? '#edfbf3' : net < -0.005 ? '#fff1f1' : 'var(--bg2)';
+              const netLabel = net > 0.005 ? `+${fmtCur(net)}` : net < -0.005 ? `-${fmtCur(Math.abs(net))}` : 'Settled';
+              return `
+                <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;flex:1;min-width:120px;background:#fff">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg2)">
+                    <span style="font-size:13px;font-weight:700;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1">${escHtml(m.name)}</span>
+                    <span style="font-size:12px;font-weight:700;color:${netColor};background:${netBg};padding:2px 8px;border-radius:20px;flex-shrink:0;white-space:nowrap">${netLabel}</span>
+                  </div>
+                  <div style="display:flex;padding:8px 12px;gap:16px">
+                    <div>
+                      <div style="font-size:10px;color:var(--t3);font-weight:600;text-transform:uppercase;margin-bottom:2px">Paid</div>
+                      <div style="font-size:13px;font-weight:600;color:${m.paid > 0 ? 'var(--green)' : 'var(--t3)'}">${m.paid > 0 ? fmtCur(m.paid) : '&mdash;'}</div>
+                    </div>
+                    <div>
+                      <div style="font-size:10px;color:var(--t3);font-weight:600;text-transform:uppercase;margin-bottom:2px">Share</div>
+                      <div style="font-size:13px;font-weight:600;color:var(--t1)">${fmtCur(m.share)}</div>
+                    </div>
+                  </div>
+                </div>`;
             }).join('')}
           </div>
         ` : ''}
@@ -1661,7 +1707,7 @@
       return `
         <div class="friend-card" style="cursor:pointer" onclick="liveSplitOpenDetails('${rowRef}')">
           <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-            <div class="avatar">${escHtml((row.name || '?')[0].toUpperCase())}</div>
+            ${_renderAvatar(row.name, row.linked_user_avatar_url)}
             <div class="friend-info">
               <div class="friend-name">${escHtml(row.name)}</div>
               <div style="font-size:11px;color:${tone}">${escHtml(label)}</div>
@@ -1809,7 +1855,7 @@
     const id = Number(friendId);
     await Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
     state.create = createInitialForm();
-    state.createInvite = { query: '', results: [], searching: false };
+    state.createInvite = { query: '', results: [], searching: false, searched: false };
     if (id > 0) state.create.selected.add(String(id));
     if ([...state.create.selected].filter((key) => key !== 'self').length > 0) state.create.step = 2;
     closeModal();
@@ -1925,7 +1971,7 @@
           ${pending.map((friend) => `
             <div class="friend-card" style="cursor:default">
               <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-                <div class="avatar" style="background:#f5f7fa;color:var(--t2)">${escHtml((friend.name || '?')[0].toUpperCase())}</div>
+                ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
                 <div class="friend-info">
                   <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
                   <div style="font-size:11px;color:var(--t3)">Invite sent - waiting to join/link</div>
@@ -1955,7 +2001,7 @@
         ${pending.map((friend) => `
           <div class="friend-card" style="cursor:default">
             <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-              <div class="avatar" style="background:#f5f7fa;color:var(--t2)">${escHtml((friend.name || '?')[0].toUpperCase())}</div>
+              ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
               <div class="friend-info">
                 <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
                 <div style="font-size:11px;color:var(--t3)">Invite sent - waiting to join/link</div>
@@ -1983,7 +2029,7 @@
           ${incoming.map((invite) => `
             <div class="friend-card live-split-request-card" style="cursor:default">
               <div class="live-split-request-main" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-                <div class="avatar" style="background:#f5f7fa;color:var(--t2)">${escHtml((invite.inviter_display_name || invite.inviter_username || '?')[0].toUpperCase())}</div>
+                ${_renderAvatar(invite.inviter_display_name || invite.inviter_username, invite.inviter_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
                 <div class="friend-info">
                   <div class="friend-name">${escHtml(invite.inviter_display_name || invite.inviter_username || 'User')}</div>
                   <div style="font-size:11px;color:var(--t3)">Invited you to Live Split</div>
@@ -2117,10 +2163,38 @@
         ${people.map((person) => `
           <label class="fl" style="margin-bottom:0">
             ${escHtml(person.name)}
-            <input class="fi" type="number" step="any" value="${escHtml(String(form.splitValues[person.key] ?? ''))}" onchange="liveSplitSetValue('${escHtml(person.key)}', this.value)">
+            <input class="fi" type="number" step="any" value="${escHtml(String(form.splitValues[person.key] ?? ''))}" oninput="liveSplitSetValue('${escHtml(person.key)}', this.value)">
           </label>
         `).join('')}
       </div>`;
+  }
+
+  function refreshSplitStatus(form, people) {
+    const total = n(form.amount !== undefined ? form.amount : form.total_amount);
+    const preview = computeShares(total, form.splitMode, people, form.splitValues);
+    const progress = splitProgress(total, form.splitMode, people, form.splitValues);
+
+    const progressEl = document.getElementById('lsSplitProgress');
+    if (progressEl) {
+      progressEl.innerHTML = progress
+        ? (progress.unit === 'amount'
+          ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} \u00b7 Remaining: ${fmtCur(progress.remaining)}`
+          : progress.unit === '%'
+            ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% \u00b7 Remaining: ${progress.remaining.toFixed(2)}%`
+            : progress.unit === 'parts'
+              ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}`
+              : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 \u00b7 Remaining: ${progress.remaining.toFixed(4)}`)
+        : '';
+    }
+
+    const previewEl = document.getElementById('lsSplitPreview');
+    if (previewEl) {
+      previewEl.innerHTML = `
+        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">${preview.valid ? 'Split Preview' : 'Fix Split Values'}</div>
+        <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:3px">
+          ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
+        </div>`;
+    }
   }
 
   function renderCreateModal() {
@@ -2155,13 +2229,12 @@
           }).join('')}
           ${Number(form.trip_id || 0) > 0 ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : `
             <div style="margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
-              <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Add App User (Search or Invite)</div>
-              <input class="fi" id="liveSplitCreateInviteQ" value="${escHtml(state.createInvite.query || '')}" placeholder="Name, username, email, or phone..." oninput="liveSplitCreateInviteSearch(this.value)">
-              <div style="font-size:12px;color:var(--t3);margin-top:8px">If user exists, tap Link. If no result, tap Invite using same input.</div>
-              <div id="liveSplitCreateInviteResults" style="margin-top:10px;max-height:180px;overflow:auto"></div>
-              <div class="fa" style="margin-top:10px">
-                <button class="btn btn-s" ${state.createRequestActionBusy ? 'disabled' : ''} onclick="liveSplitCreateInvite()">${state.createRequestActionBusy ? liveSplitBusyLabel('Processing...') : 'Invite Using Input'}</button>
+              <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Add App User</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input class="fi" id="liveSplitCreateInviteQ" value="${escHtml(state.createInvite.query || '')}" placeholder="Name, username, email, or phone..." style="flex:1;margin-bottom:0" onkeydown="if(event.key==='Enter')liveSplitDoCreateInviteSearch()">
+                <button class="btn btn-p btn-sm" style="white-space:nowrap" onclick="liveSplitDoCreateInviteSearch()">Search</button>
               </div>
+              <div id="liveSplitCreateInviteResults" style="margin-top:10px;max-height:180px;overflow:auto"></div>
             </div>
           `}
         </div>
@@ -2206,26 +2279,25 @@
           ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitSetMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}
         </div>
         ${renderSplitInputRows(form, people)}
-        ${progress ? `
-          <div style="margin-top:8px;font-size:12px;color:var(--t2)">
-            ${progress.unit === 'amount'
-              ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} · Remaining: ${fmtCur(progress.remaining)}`
+        <div id="lsSplitProgress" style="margin-top:8px;font-size:12px;color:var(--t2)">
+          ${progress
+            ? (progress.unit === 'amount'
+              ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} \u00b7 Remaining: ${fmtCur(progress.remaining)}`
               : progress.unit === '%'
-                ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% · Remaining: ${progress.remaining.toFixed(2)}%`
+                ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% \u00b7 Remaining: ${progress.remaining.toFixed(2)}%`
                 : progress.unit === 'parts'
                   ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}`
-                  : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 · Remaining: ${progress.remaining.toFixed(4)}`
-            }
-          </div>
-        ` : ''}
+                  : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 \u00b7 Remaining: ${progress.remaining.toFixed(4)}`)
+            : ''}
+        </div>
       </div>
-      <div style="margin-top:10px;padding:10px;border-radius:10px;background:var(--green-l2)">
+      <div id="lsSplitPreview" style="margin-top:10px;padding:10px;border-radius:10px;background:var(--green-l2)">
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">${preview.valid ? 'Split Preview' : 'Fix Split Values'}</div>
         <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:3px">
           ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
         </div>
       </div>
-      <div style="margin-top:12px">
+      <div id="lsAddExpenseBlock" style="margin-top:12px${form.paidBy !== 'self' ? ';display:none' : ''}">
         <label class="fc"><input type="checkbox" ${form.addExpense ? 'checked' : ''} ${form.selected.has('self') ? '' : 'disabled'} onchange="liveSplitSetAddExpense(this.checked)"><span style="font-weight:600">Add my share to expenses${form.selected.has('self') ? '' : ' (select You first)'}</span></label>
         ${form.addExpense ? `
           <div style="margin-top:8px">
@@ -2359,7 +2431,7 @@
     }
     await Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
     state.create = createInitialForm();
-    state.createInvite = { query: '', results: [], searching: false };
+    state.createInvite = { query: '', results: [], searching: false, searched: false };
     state.create.trip_id = id;
     (trip.members || []).forEach((member) => {
       const targetUserId = Number(member?.target_user_id || 0);
@@ -2427,6 +2499,7 @@
             return `
               <div class="friend-card" style="cursor:default;padding:8px 10px;border-radius:10px">
                 <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+                  ${_renderAvatar(member.member_name, member.linked_user_avatar_url, 'width:32px;height:32px;border-radius:16px;font-size:13px')}
                   <div class="friend-info">
                     <div class="friend-name" style="font-size:13px">${escHtml(member.member_name || 'Member')}</div>
                     <div style="font-size:11px;color:var(--t3)">${escHtml(String(member.permission || 'edit'))}${Number(member.target_user_id || 0) > 0 ? ' · app user' : ''}</div>
@@ -2663,7 +2736,7 @@
     if (!box) return;
     const q = String(state.invite.query || '').trim();
     if (!q) {
-      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">Type name, username, email, or phone to search app users.</div>';
+      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">Enter a name, username, email, or phone and tap Search.</div>';
       return;
     }
     if (state.invite.searching) {
@@ -2671,7 +2744,14 @@
       return;
     }
     if (!state.invite.results.length) {
-      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">No matching app user found.</div>';
+      if (!state.invite.searched) { box.innerHTML = ''; return; }
+      const isEmail = q.includes('@');
+      const isPhone = /\d{6,}/.test(q.replace(/\D/g, ''));
+      const canInvite = isEmail || isPhone;
+      box.innerHTML = `<div style="font-size:12px;color:var(--t3);margin-bottom:8px">No app user found for &ldquo;${escHtml(q)}&rdquo;.</div>`
+        + (canInvite
+          ? `<button class="btn btn-p btn-sm" ${state.requestActionBusy ? 'disabled' : ''} onclick="liveSplitSendInvite()">${state.requestActionBusy ? liveSplitBusyLabel('Sending...') : 'Send Invite'}</button>`
+          : '<div style="font-size:12px;color:var(--t3)">To invite someone not on the app, search by their email or phone number.</div>');
       return;
     }
     box.innerHTML = state.invite.results.map((user) => `
@@ -2700,7 +2780,7 @@
     if (!box) return;
     const q = String(state.createInvite.query || '').trim();
     if (!q) {
-      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">Type name, username, email, or phone to search app users.</div>';
+      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">Enter a name, username, email, or phone and tap Search.</div>';
       return;
     }
     if (state.createInvite.searching) {
@@ -2708,7 +2788,14 @@
       return;
     }
     if (!state.createInvite.results.length) {
-      box.innerHTML = '<div style="font-size:12px;color:var(--t3)">No matching app user found.</div>';
+      if (!state.createInvite.searched) { box.innerHTML = ''; return; }
+      const isEmail = q.includes('@');
+      const isPhone = /\d{6,}/.test(q.replace(/\D/g, ''));
+      const canInvite = isEmail || isPhone;
+      box.innerHTML = `<div style="font-size:12px;color:var(--t3);margin-bottom:8px">No app user found for &ldquo;${escHtml(q)}&rdquo;.</div>`
+        + (canInvite
+          ? `<button class="btn btn-p btn-sm" ${state.createRequestActionBusy ? 'disabled' : ''} onclick="liveSplitCreateInvite()">${state.createRequestActionBusy ? liveSplitBusyLabel('Sending...') : 'Send Invite'}</button>`
+          : '<div style="font-size:12px;color:var(--t3)">To invite someone not on the app, search by their email or phone number.</div>');
       return;
     }
     box.innerHTML = state.createInvite.results.map((user) => `
@@ -2733,17 +2820,16 @@
   }
 
   async function openInviteModal() {
-    state.invite = { query: '', results: [], searching: false };
+    state.invite = { query: '', results: [], searching: false, searched: false };
     openModal('Invite To Live Split', `
       <div style="display:grid;gap:14px">
         <div style="padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
-          <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Add App User (Search or Invite)</div>
-          <input class="fi" id="liveSplitInviteQ" placeholder="Name, username, email, or phone..." oninput="liveSplitInviteSearch(this.value)">
-          <div style="font-size:12px;color:var(--t3);margin-top:8px">If user exists, tap Link. If no result, tap Invite using same input.</div>
-          <div id="liveSplitInviteResults" style="margin-top:10px;max-height:220px;overflow:auto"></div>
-          <div class="fa" style="margin-top:10px">
-            <button class="btn btn-s" ${state.requestActionBusy ? 'disabled' : ''} onclick="liveSplitSendInvite()">${state.requestActionBusy ? liveSplitBusyLabel('Processing...') : 'Invite Using Input'}</button>
+          <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Add App User</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="fi" id="liveSplitInviteQ" placeholder="Name, username, email, or phone..." style="flex:1;margin-bottom:0" onkeydown="if(event.key==='Enter')liveSplitDoInviteSearch()">
+            <button class="btn btn-p btn-sm" style="white-space:nowrap" onclick="liveSplitDoInviteSearch()">Search</button>
           </div>
+          <div id="liveSplitInviteResults" style="margin-top:10px;max-height:220px;overflow:auto"></div>
         </div>
         <div class="fa">
           <button class="btn btn-g" onclick="closeModal()">Close</button>
@@ -2775,13 +2861,15 @@
 
   async function searchInviteUsers(query) {
     state.invite.query = String(query || '').trim();
-    if (state.invite.query.length < 2) {
+    if (!state.invite.query) {
       state.invite.results = [];
       state.invite.searching = false;
+      state.invite.searched = false;
       renderInviteResults();
       return;
     }
     state.invite.searching = true;
+    state.invite.searched = false;
     renderInviteResults();
     try {
       const data = await api(`/api/users/search?q=${encodeURIComponent(state.invite.query)}`);
@@ -2790,19 +2878,22 @@
       state.invite.results = [];
     } finally {
       state.invite.searching = false;
+      state.invite.searched = true;
       renderInviteResults();
     }
   }
 
   async function searchCreateInviteUsers(query) {
     state.createInvite.query = String(query || '').trim();
-    if (state.createInvite.query.length < 2) {
+    if (!state.createInvite.query) {
       state.createInvite.results = [];
       state.createInvite.searching = false;
+      state.createInvite.searched = false;
       renderCreateInviteResults();
       return;
     }
     state.createInvite.searching = true;
+    state.createInvite.searched = false;
     renderCreateInviteResults();
     try {
       const data = await api(`/api/users/search?q=${encodeURIComponent(state.createInvite.query)}`);
@@ -2811,6 +2902,7 @@
       state.createInvite.results = [];
     } finally {
       state.createInvite.searching = false;
+      state.createInvite.searched = true;
       renderCreateInviteResults();
     }
   }
@@ -3235,6 +3327,7 @@
       state.createInvite.query = '';
       state.createInvite.results = [];
       state.createInvite.searching = false;
+      state.createInvite.searched = false;
       renderCreateModal();
       toast(result?.message || 'Request sent', 'success');
     } catch (error) {
@@ -3293,7 +3386,7 @@
   window.liveSplitOpenCreate = function liveSplitOpenCreate() {
     Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {}).finally(() => {
       state.create = createInitialForm();
-      state.createInvite = { query: '', results: [], searching: false };
+      state.createInvite = { query: '', results: [], searching: false, searched: false };
       renderCreateModal();
     });
   };
@@ -3327,9 +3420,17 @@
   window.liveSplitTripRemoveMember = removeTripMember;
   window.liveSplitOpenInviteModal = openInviteModal;
   window.liveSplitInviteSearch = searchInviteUsers;
+  window.liveSplitDoInviteSearch = function liveSplitDoInviteSearch() {
+    const q = String(document.getElementById('liveSplitInviteQ')?.value || '').trim();
+    if (q) searchInviteUsers(q);
+  };
   window.liveSplitLinkExistingUser = linkExistingUser;
   window.liveSplitSendInvite = sendInvite;
   window.liveSplitCreateInviteSearch = searchCreateInviteUsers;
+  window.liveSplitDoCreateInviteSearch = function liveSplitDoCreateInviteSearch() {
+    const q = String(document.getElementById('liveSplitCreateInviteQ')?.value || '').trim();
+    if (q) searchCreateInviteUsers(q);
+  };
   window.liveSplitCreateLinkExistingUser = linkCreateExistingUser;
   window.liveSplitCreateInvite = sendCreateInvite;
   window.liveSplitToggleParticipant = toggleParticipant;
@@ -3351,11 +3452,21 @@
     renderCreateModal();
   };
   window.liveSplitSetDetails = function liveSplitSetDetails(value) { if (state.create) state.create.details = value || ''; };
-  window.liveSplitSetPaidBy = function liveSplitSetPaidBy(value) { if (state.create) state.create.paidBy = String(value || 'self'); };
+  window.liveSplitSetPaidBy = function liveSplitSetPaidBy(value) {
+    if (!state.create) return;
+    state.create.paidBy = String(value || 'self');
+    const isSelf = state.create.paidBy === 'self';
+    if (!isSelf) {
+      state.create.addExpense = false;
+      state.create.finance_target = 'none';
+    }
+    const block = document.getElementById('lsAddExpenseBlock');
+    if (block) block.style.display = isSelf ? '' : 'none';
+  };
   window.liveSplitSetValue = function liveSplitSetValue(key, value) {
     if (!state.create) return;
     state.create.splitValues[String(key)] = value;
-    renderCreateModal();
+    refreshSplitStatus(state.create, peopleForForm(state.create));
   };
   window.liveSplitSetAddExpense = function liveSplitSetAddExpense(checked) {
     if (!state.create) return;
@@ -3413,8 +3524,9 @@
         peopleForEditExpense(state.editExpense),
         n(value)
       );
+      renderExpenseEditorModal();
     }
-    renderExpenseEditorModal();
+    // paid_by and details changes: state-only update, no full re-render to avoid DOM race conditions
   };
   window.liveSplitEditExpenseSplit = function liveSplitEditExpenseSplit(index, value) {
     if (!state.editExpense || !state.editExpense.splits?.[index]) return;
@@ -3429,7 +3541,7 @@
   window.liveSplitEditExpenseValue = function liveSplitEditExpenseValue(key, value) {
     if (!state.editExpense) return;
     state.editExpense.splitValues[String(key)] = value;
-    renderExpenseEditorModal();
+    refreshSplitStatus(state.editExpense, peopleForEditExpense(state.editExpense));
   };
   window.liveSplitEditExpenseToggleParticipant = function liveSplitEditExpenseToggleParticipant(key) {
     if (!state.editExpense) return;

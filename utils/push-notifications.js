@@ -4,14 +4,6 @@ function chunkArray(items, size) {
   return out;
 }
 
-async function readJsonSafe(response) {
-  try {
-    return await response.json();
-  } catch (_err) {
-    return null;
-  }
-}
-
 function normalizeMessagePayload(payload = {}) {
   const title = String(payload.title || '').trim();
   const body = String(payload.body || payload.message || '').trim();
@@ -25,6 +17,122 @@ function normalizeMessagePayload(payload = {}) {
     data: payload.data && typeof payload.data === 'object' ? payload.data : {},
     badge: Number.isFinite(Number(payload.badge)) ? Math.max(0, Math.trunc(Number(payload.badge))) : undefined,
   };
+}
+
+function isExpoPushToken(token) {
+  return /^(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/.test(String(token || '').trim());
+}
+
+// Send via Expo (legacy fallback for any remaining Expo tokens)
+async function sendViaExpo(messages) {
+  if (!messages.length) return { sent: 0, errors: [], tickets: [] };
+
+  const expoHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(process.env.EXPO_ACCESS_TOKEN ? { Authorization: `Bearer ${process.env.EXPO_ACCESS_TOKEN}` } : {}),
+  };
+
+  const errors = [];
+  const tickets = [];
+
+  for (const batch of chunkArray(messages, 100)) {
+    let response;
+    try {
+      response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: expoHeaders,
+        body: JSON.stringify(batch.map((item) => item.message)),
+      });
+    } catch (err) {
+      errors.push(err.message || 'Push send request failed');
+      continue;
+    }
+
+    let payload;
+    try { payload = await response.json(); } catch (_) { payload = null; }
+
+    if (!response.ok) {
+      errors.push(payload?.errors?.map((e) => e?.message).filter(Boolean).join(', ') || `Push send failed with HTTP ${response.status}`);
+      continue;
+    }
+
+    const ticketData = Array.isArray(payload?.data) ? payload.data : [];
+    ticketData.forEach((ticket, index) => {
+      tickets.push({ meta: batch[index]?.meta || null, ticket: ticket || null });
+    });
+  }
+
+  const ticketErrors = tickets
+    .filter((e) => e?.ticket?.status === 'error')
+    .map((e) => e?.ticket?.message || e?.ticket?.details?.error)
+    .filter(Boolean);
+
+  return { sent: messages.length, errors: [...errors, ...ticketErrors], tickets };
+}
+
+// Send via Firebase Cloud Messaging directly
+async function sendViaFcm(messages) {
+  if (!messages.length) return { sent: 0, errors: [] };
+
+  let messaging;
+  try {
+    const { getMessaging } = require('./firebase');
+    messaging = getMessaging();
+  } catch (err) {
+    return { sent: 0, errors: [`Firebase not configured: ${err.message}`] };
+  }
+
+  const errors = [];
+  let sent = 0;
+
+  // FCM sendEach supports up to 500 messages per batch
+  for (const batch of chunkArray(messages, 500)) {
+    const fcmMessages = batch.map((item) => {
+      const msg = {
+        token: item.meta.to,
+        notification: {
+          title: item.message.title,
+          body: item.message.body,
+        },
+        data: Object.fromEntries(
+          Object.entries(item.message.data || {}).map(([k, v]) => [k, String(v)])
+        ),
+      };
+
+      if (item.meta.platform === 'android') {
+        msg.android = {
+          priority: 'high',
+          notification: { channelId: 'default', sound: 'default' },
+        };
+      } else if (item.meta.platform === 'ios') {
+        msg.apns = {
+          payload: {
+            aps: {
+              sound: 'default',
+              ...(item.message.badge != null ? { badge: item.message.badge } : {}),
+            },
+          },
+        };
+      }
+
+      return msg;
+    });
+
+    try {
+      const result = await messaging.sendEach(fcmMessages);
+      sent += result.successCount || 0;
+      (result.responses || []).forEach((resp, i) => {
+        if (!resp.success && resp.error) {
+          errors.push(`Token ${batch[i]?.meta?.to?.slice(0, 20)}...: ${resp.error.message}`);
+        }
+      });
+    } catch (err) {
+      errors.push(err.message || 'FCM batch send failed');
+    }
+  }
+
+  return { sent, errors };
 }
 
 async function sendExpoPushNotifications(messages = []) {
@@ -47,107 +155,32 @@ async function sendExpoPushNotifications(messages = []) {
         badge: base.badge,
         sound: 'default',
         priority: 'high',
-        ...(String(entry.platform || '').trim().toLowerCase() === 'android' ? { channelId: 'default' } : {}),
       },
     };
   }).filter(Boolean);
 
   if (!normalized.length) {
-    return { ok: true, sent: 0, chunks: [], errors: [], tickets: [], receipts: [] };
+    return { ok: true, sent: 0, errors: [], tickets: [], receipts: [] };
   }
 
-  const batches = chunkArray(normalized, 100);
-  const chunks = [];
-  const errors = [];
-  const tickets = [];
+  // Route by token type: FCM tokens go directly, Expo tokens go via Expo relay
+  const fcmMessages = normalized.filter((m) => !isExpoPushToken(m.meta.to));
+  const expoMessages = normalized.filter((m) => isExpoPushToken(m.meta.to));
 
-  for (const batch of batches) {
-    let response;
-    try {
-      response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(batch.map((item) => item.message)),
-      });
-    } catch (err) {
-      errors.push(err.message || 'Push send request failed');
-      continue;
-    }
+  const [fcmResult, expoResult] = await Promise.all([
+    sendViaFcm(fcmMessages),
+    sendViaExpo(expoMessages),
+  ]);
 
-    const payload = await readJsonSafe(response);
+  const allErrors = [...(fcmResult.errors || []), ...(expoResult.errors || [])];
+  const totalSent = (fcmResult.sent || 0) + (expoResult.sent || 0);
 
-    if (!response.ok) {
-      errors.push(payload?.errors?.map((entry) => entry?.message).filter(Boolean).join(', ') || `Push send failed with HTTP ${response.status}`);
-      continue;
-    }
-
-    const ticketData = Array.isArray(payload?.data) ? payload.data : [];
-    ticketData.forEach((ticket, index) => {
-      tickets.push({
-        meta: batch[index]?.meta || null,
-        ticket: ticket || null,
-      });
-    });
-
-    chunks.push({
-      request_count: batch.length,
-      data: ticketData,
-      errors: Array.isArray(payload?.errors) ? payload.errors : [],
-    });
-  }
-
-  const receiptIds = tickets
-    .map((entry) => String(entry?.ticket?.id || '').trim())
-    .filter(Boolean);
-  const receipts = [];
-  for (const idBatch of chunkArray(receiptIds, 300)) {
-    let response;
-    try {
-      response = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({ ids: idBatch }),
-      });
-    } catch (err) {
-      errors.push(err.message || 'Push receipt request failed');
-      continue;
-    }
-
-    const payload = await readJsonSafe(response);
-    if (!response.ok) {
-      errors.push(payload?.errors?.map((entry) => entry?.message).filter(Boolean).join(', ') || `Push receipts failed with HTTP ${response.status}`);
-      continue;
-    }
-
-    const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
-    idBatch.forEach((id) => {
-      receipts.push({ id, receipt: data[id] || null });
-    });
-  }
-
-  const sent = chunks.reduce((sum, chunk) => sum + chunk.request_count, 0);
-  const apiErrors = chunks.flatMap((chunk) => (chunk.errors || []).map((entry) => entry?.message).filter(Boolean));
-  const ticketErrors = tickets
-    .filter((entry) => entry?.ticket?.status === 'error')
-    .map((entry) => entry?.ticket?.message || entry?.ticket?.details?.error)
-    .filter(Boolean);
-  const receiptErrors = receipts
-    .filter((entry) => entry?.receipt?.status === 'error')
-    .map((entry) => entry?.receipt?.message || entry?.receipt?.details?.error)
-    .filter(Boolean);
   return {
-    ok: errors.length === 0 && apiErrors.length === 0 && ticketErrors.length === 0 && receiptErrors.length === 0,
-    sent,
-    chunks,
-    tickets,
-    receipts,
-    errors: [...errors, ...apiErrors, ...ticketErrors, ...receiptErrors],
+    ok: allErrors.length === 0,
+    sent: totalSent,
+    errors: allErrors,
+    tickets: expoResult.tickets || [],
+    receipts: [],
   };
 }
 

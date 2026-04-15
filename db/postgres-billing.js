@@ -511,6 +511,14 @@ async function importHistoricalCycles(userId, cardId, rows) {
   });
 }
 
+async function getCcTxnBySource(userId, source, sourceId) {
+  const result = await query(
+    `SELECT id, card_id, discount_pct FROM cc_txns WHERE user_id = $1 AND source = $2 AND source_id = $3 LIMIT 1`,
+    [userId, source, sourceId]
+  );
+  return result.rows[0] || null;
+}
+
 async function getCcDuesForMonth(userId, month, cardId = null) {
   const params = cardId ? [userId, month, cardId] : [userId, month];
   const result = await query(
@@ -555,4 +563,5 @@ module.exports = {
   closeCcCycle,
   importHistoricalCycles,
   getCcDuesForMonth,
+  getCcTxnBySource,
 };

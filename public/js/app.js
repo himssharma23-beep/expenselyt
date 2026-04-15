@@ -12,6 +12,8 @@ let expFilters = { year: new Date().getFullYear(), month: new Date().getMonth(),
 let _expenseCache = [];
 let _expenseCategories = [];
 let _activeExpenseForm = null;
+let _editingExpCcTxnId = null;
+let _editingExpCcLink = null;
 let _expenseCategoryHideTimer = null;
 
 function cleanMojibakeText(value) {
@@ -653,6 +655,8 @@ async function showExpenseForm(id) {
     if (detail?.expense) e = { ...e, ...detail.expense };
   }
   _activeExpenseForm = { ...e, id: id || null };
+  _editingExpCcTxnId = null;
+  _editingExpCcLink = null;
   await getCcCardsForForm();
   if (!_expenseCategories.length) {
     try { await loadExpenseCategories(); } catch (_) {}
@@ -660,6 +664,15 @@ async function showExpenseForm(id) {
   if (!_bankAccounts.length) {
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
+  }
+  let existingCcLink = null;
+  if (id) {
+    const ccData = await api(`/api/cc/txns/by-source?source=expense&source_id=${id}`);
+    if (ccData?.txn) {
+      existingCcLink = ccData.txn;
+      _editingExpCcTxnId = ccData.txn.id;
+      _editingExpCcLink = ccData.txn;
+    }
   }
   const bankOpts = `<option value="">-- Do not deduct from bank --</option>${_bankAccounts.map(a => `<option value="${a.id}" ${e.bank_account_id == a.id ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`).join('')}`;
   openModal(id ? 'Edit Expense' : 'Add Expense', `
@@ -671,7 +684,7 @@ async function showExpenseForm(id) {
       <label class="fc"><input type="checkbox" id="eExtra" ${e.is_extra?'checked':''}><span>Is Extra (non-essential)</span></label>
       <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
     </div>
-    ${!id ? ccFormSection() : ''}
+    ${ccFormSection(existingCcLink)}
     <div class="fa">
       <button class="btn btn-p" onclick="saveExpense(${id||'null'})">${id?'Update':'Save'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -700,6 +713,19 @@ async function saveExpense(id) {
     if (!r?.success) { toast(r?.error || 'Update failed', 'error'); return; }
     const refreshed = await api(`/api/expenses/${id}`);
     if (refreshed?.expense) _activeExpenseForm = refreshed.expense;
+    const ccChecked = document.getElementById('ccLink')?.checked;
+    if (ccChecked) {
+      const cardId = parseInt(document.getElementById('ccLinkCard')?.value);
+      const discPct = parseFloat(document.getElementById('ccLinkDisc')?.value) || 0;
+      if (_editingExpCcTxnId && _editingExpCcLink?.card_id == cardId) {
+        await api(`/api/cc/txns/${_editingExpCcTxnId}`, { method: 'PUT', body: { discount_pct: discPct, txn_date: body.purchase_date, description: body.item_name, amount: amountValue } });
+      } else {
+        if (_editingExpCcTxnId) await api(`/api/cc/txns/${_editingExpCcTxnId}`, { method: 'DELETE' });
+        await saveCcLinkIfChecked(body.item_name, amountValue, body.purchase_date, 'expense', id);
+      }
+    } else if (_editingExpCcTxnId) {
+      await api(`/api/cc/txns/${_editingExpCcTxnId}`, { method: 'DELETE' });
+    }
   }
   else {
     r = await api('/api/expenses', { method: 'POST', body });
@@ -714,6 +740,8 @@ async function saveExpense(id) {
     );
   }
   _activeExpenseForm = null;
+  _editingExpCcTxnId = null;
+  _editingExpCcLink = null;
   closeModal(); loadExpenses();
 }
 
@@ -3804,6 +3832,8 @@ let _tripExpPaidBy = 'self';
 let _tripExpMode = 'equal';
 let _tripExpValues = {};
 let _tripExpEditId = null;
+let _tripEditCcTxnId = null;
+let _tripEditCcLink = null;
 
 function _findTripExpenseById(expenseId) {
   if (!_tripDetail?.expenses?.length || expenseId == null) return null;
@@ -4017,8 +4047,26 @@ async function renderTripDetail() {
         <div style="font-size:20px;font-weight:700;flex:1">${trip.name} ${statusBadgeHtml}</div>
         <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
       </div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">${trip.end_date ? fmtDate(trip.start_date) + ' -> ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
-      <div style="margin-bottom:16px">${memberRows}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px">${trip.end_date ? fmtDate(trip.start_date) + ' -> ' + fmtDate(trip.end_date) : 'From ' + fmtDate(trip.start_date)}</div>
+
+      <!-- Member Summary -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        ${Object.entries(peopleMap).map(([key, p]) => {
+          const net = p.totalGave - p.totalShare;
+          const netColor = net > 0.005 ? 'var(--green)' : net < -0.005 ? 'var(--red)' : 'var(--t3)';
+          const netLabel = net > 0.005 ? `+${fmtCur(net)}` : net < -0.005 ? `-${fmtCur(Math.abs(net))}` : 'Settled';
+          return `<div style="border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:#fff;min-width:130px;flex:1">
+            <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:5px">${p.name}</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <div style="font-size:11px;color:var(--t3)">Paid<div style="font-size:13px;font-weight:600;color:var(--green)">${p.totalGave > 0 ? fmtCur(p.totalGave) : '&#8212;'}</div></div>
+              <div style="font-size:11px;color:var(--t3)">Share<div style="font-size:13px;font-weight:600;color:var(--t1)">${fmtCur(p.totalShare)}</div></div>
+              <div style="font-size:11px;color:var(--t3)">Net<div style="font-size:13px;font-weight:600;color:${netColor}">${netLabel}</div></div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div style="margin-bottom:14px">${memberRows}</div>
 
       <!-- Add Expense Form (only for edit-permission users) -->
       ${canMutateExpenses ? `<div class="card" style="margin-bottom:16px">
@@ -4041,10 +4089,10 @@ async function renderTripDetail() {
           <div style="display:flex;flex-wrap:wrap;gap:6px">${splitChips}</div>
         </div>
         <div id="tripSplitInputs"></div>
-        ${!editingExp ? ccFormSection() : ''}
+        ${ccFormSection(editingExp ? _tripEditCcLink : null)}
         <div style="display:flex;gap:8px;margin-top:10px">
           <button class="btn btn-p" onclick="tripSaveExpense()">${editingExp ? 'Update' : 'Add Expense'}</button>
-          ${editingExp ? `<button class="btn btn-g" onclick="_tripExpEditId=null;_tripExpMode='equal';_tripExpValues={};renderTripDetail()">Cancel</button>` : ''}
+          ${editingExp ? `<button class="btn btn-g" onclick="_tripExpEditId=null;_tripExpMode='equal';_tripExpValues={};_tripEditCcTxnId=null;_tripEditCcLink=null;renderTripDetail()">Cancel</button>` : ''}
         </div>
       </div>` : ''}
 
@@ -4239,6 +4287,19 @@ async function tripSaveExpense() {
 
   if (_tripExpEditId) {
     await api(`/api/trips/${_selectedTripId}/expenses/${_tripExpEditId}`, { method: 'PUT', body });
+    const ccChecked = document.getElementById('ccLink')?.checked;
+    if (ccChecked) {
+      const cardId = parseInt(document.getElementById('ccLinkCard')?.value);
+      const discPct = parseFloat(document.getElementById('ccLinkDisc')?.value) || 0;
+      if (_tripEditCcTxnId && _tripEditCcLink?.card_id == cardId) {
+        await api(`/api/cc/txns/${_tripEditCcTxnId}`, { method: 'PUT', body: { discount_pct: discPct, txn_date: date, description: details, amount: amt } });
+      } else {
+        if (_tripEditCcTxnId) await api(`/api/cc/txns/${_tripEditCcTxnId}`, { method: 'DELETE' });
+        await saveCcLinkIfChecked(details, amt, date, 'trip', _tripExpEditId);
+      }
+    } else if (_tripEditCcTxnId) {
+      await api(`/api/cc/txns/${_tripEditCcTxnId}`, { method: 'DELETE' });
+    }
     toast('Expense updated', 'success');
   } else {
     const r = await api(`/api/trips/${_selectedTripId}/expenses`, { method: 'POST', body });
@@ -4249,10 +4310,12 @@ async function tripSaveExpense() {
   _tripExpEditId = null;
   _tripExpMode = 'equal';
   _tripExpValues = {};
+  _tripEditCcTxnId = null;
+  _tripEditCcLink = null;
   await openTripDetail(_selectedTripId);
 }
 
-function tripEditExpense(expId) {
+async function tripEditExpense(expId) {
   const exp = _findTripExpenseById(expId);
   if (!exp) return;
   _tripExpEditId = exp.id;
@@ -4264,6 +4327,14 @@ function tripEditExpense(expId) {
     (exp.splits || []).map(s => ({ key: s.member_key, share: s.share_amount })),
     parseFloat(exp.amount) || 0
   );
+  _tripEditCcTxnId = null;
+  _tripEditCcLink = null;
+  await getCcCardsForForm();
+  const ccData = await api(`/api/cc/txns/by-source?source=trip&source_id=${expId}`);
+  if (ccData?.txn) {
+    _tripEditCcLink = ccData.txn;
+    _tripEditCcTxnId = ccData.txn.id;
+  }
   renderTripDetail();
   document.getElementById('main').scrollTop = 0;
 }
@@ -7061,8 +7132,8 @@ function renderCcList() {
 
   let totalDue = 0, totalSpentAll = 0;
   cards.forEach(c => {
-    if (c.currentCycle) totalDue += c.currentCycle.net_payable || 0;
-    totalSpentAll += c.totalSpent || 0;
+    if (c.currentCycle) totalDue += Number(c.currentCycle.net_payable) || 0;
+    totalSpentAll += Number(c.totalSpent) || 0;
   });
 
   document.getElementById('main').innerHTML = `
@@ -7605,7 +7676,7 @@ function showImportHistoryModal(cardId) {
   const yearOptions = years.map(y =>
     `<option value="${y}" ${y === currentYear - 1 ? 'selected' : ''}>${y}</option>`
   ).join('');
-  openModal(`Import History â€” ${card.card_name}`, `
+  openModal(`Import History \u2014 ${card.card_name}`, `
     <div style="font-size:12px;color:var(--t2);margin-bottom:14px;background:var(--bg2);border-radius:8px;padding:10px">
       Enter the <strong>total billing cycle amount</strong> for each month. Leave blank to skip that month.
       Existing cycles for the same period will be skipped (no duplicates).
@@ -7753,9 +7824,10 @@ function renderCcMonthly(months, availYears) {
 function renderCcYearly(years) {
   const _ccCardY = _findCcCardById(_ccSelectedCardId);
   const _ccLabelY = _ccCardY ? `${_ccCardY.bank_name} ${_ccCardY.card_name}` : 'Card';
+  const _ccLabelYQ = _ccLabelY.replace(/'/g, "\\'");
   if (!years.length) return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">PDF</button>
+      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelYQ}')">PDF</button>
     </div>
     <div style="color:var(--t3);text-align:center;padding:40px">No historical data yet.</div>`;
 
@@ -7775,15 +7847,15 @@ function renderCcYearly(years) {
   const rows = years.map(y => `<tr>
     <td style="font-weight:700;font-family:var(--mono)">${y.year}</td>
     <td class="td-m">${fmtCur(y.total_amount)}</td>
-    <td class="td-m" style="color:var(--green)">${y.total_discount > 0 ? fmtCur(y.total_discount) : 'â€”'}</td>
-    <td class="td-m" style="font-weight:700">${fmtCur(y.net_payable)}</td>
-    <td class="td-m">${y.txn_count || 'â€”'}</td>
+    <td class=”td-m” style=”color:var(--green)”>${y.total_discount > 0 ? fmtCur(y.total_discount) : '&mdash;'}</td>
+    <td class=”td-m” style=”font-weight:700”>${fmtCur(y.net_payable)}</td>
+    <td class=”td-m”>${y.txn_count || '&mdash;'}</td>
     <td class="td-m">${y.cycle_count}</td>
   </tr>`).join('');
 
   return `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-s btn-sm" onclick="downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelY.replace(/'/g,"\\'")}')">â†“ PDF</button>
+      <button class=”btn btn-s btn-sm” onclick=”downloadCcYearlySummaryPdf(${_ccSelectedCardId},'${_ccLabelYQ}')”>&#8595; PDF</button>
     </div>
     <div class="cc-cycle-summary" style="margin-bottom:16px">
       <div class="cc-cycle-stat"><div class="lbl">All-time Spent</div><div class="val">${fmtCur(grandTotal)}</div></div>
@@ -8096,16 +8168,17 @@ function divCcPreview() {
   else if (el) el.innerHTML = '';
 }
 
-function ccFormSection() {
+function ccFormSection(existingLink = null) {
   const cards = _ccCards;
   if (!cards.length) return '';
   const opts = cards.map(c =>
-    `<option value="${c.id}" data-disc="${c.default_discount_pct}">${escHtml(c.card_name)} (${escHtml(c.bank_name)} **${escHtml(c.last4)})</option>`
+    `<option value="${c.id}" data-disc="${c.default_discount_pct}" ${existingLink?.card_id == c.id ? 'selected' : ''}>${escHtml(c.card_name)} (${escHtml(c.bank_name)} **${escHtml(c.last4)})</option>`
   ).join('');
-  const firstDisc = cards[0]?.default_discount_pct || 0;
+  const firstDisc = existingLink?.discount_pct ?? (cards[0]?.default_discount_pct || 0);
+  const checked = existingLink ? 'checked' : '';
   return `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
-    <label class="fc" style="margin-bottom:8px"><input type="checkbox" id="ccLink" onchange="toggleCcLinkSection()"><span style="font-weight:600">Also charge to Credit Card</span></label>
-    <div id="ccLinkSection" style="display:none">
+    <label class="fc" style="margin-bottom:8px"><input type="checkbox" id="ccLink" ${checked} onchange="toggleCcLinkSection()"><span style="font-weight:600">Also charge to Credit Card</span></label>
+    <div id="ccLinkSection" style="${checked ? '' : 'display:none'}">
       <div class="fg">
         <label class="fl">Card<select class="fi" id="ccLinkCard" onchange="ccLinkCardChanged()">${opts}</select></label>
         <label class="fl">Discount %<input class="fi" type="number" step="0.1" id="ccLinkDisc" value="${firstDisc}" min="0" max="100" oninput="ccLinkPreview()"></label>

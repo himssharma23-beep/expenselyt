@@ -303,13 +303,16 @@ async function getAllUsers() {
 function normalizeExpoPushToken(token) {
   const value = String(token || '').trim();
   if (!value) return null;
-  if (!/^(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/.test(value)) return null;
+  // Accept Expo push tokens (ExponentPushToken[...]) and raw FCM device tokens
+  const isExpoToken = /^(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/.test(value);
+  const isFcmToken = value.length >= 100 && /^[A-Za-z0-9_:%-]+$/.test(value);
+  if (!isExpoToken && !isFcmToken) return null;
   return value;
 }
 
 async function upsertPushDeviceToken(userId, data = {}) {
   const token = normalizeExpoPushToken(data.token || data.expo_push_token);
-  if (!token) throw new Error('Valid Expo push token is required');
+  if (!token) throw new Error('Valid push token is required');
   const platform = String(data.platform || '').trim().toLowerCase().slice(0, 20) || null;
   const deviceName = String(data.device_name || data.deviceLabel || '').trim().slice(0, 120) || null;
   const appVersion = String(data.app_version || '').trim().slice(0, 40) || null;
@@ -331,7 +334,7 @@ async function upsertPushDeviceToken(userId, data = {}) {
 }
 
 async function deactivatePushDeviceToken(userId, token) {
-  const normalized = normalizeExpoPushToken(token);
+  const normalized = String(token || '').trim();
   if (!normalized) return false;
   const result = await query(
     `UPDATE push_device_tokens

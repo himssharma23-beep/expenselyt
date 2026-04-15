@@ -2655,6 +2655,14 @@ router.get('/cc/cards/:id/years', (req, res) => {
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
+router.get('/cc/txns/by-source', (req, res) => {
+  const { source, source_id } = req.query;
+  if (!source || !source_id) return res.status(400).json({ error: 'source and source_id required' });
+  Promise.resolve(getBillingDb().getCcTxnBySource(req.session.userId, source, parseInt(source_id)))
+    .then(txn => res.json({ txn: txn || null }))
+    .catch(err => res.status(500).json({ error: err.message }));
+});
+
 router.post('/cc/txns', (req, res) => {
   Promise.resolve(getBillingDb().addCcTxn(req.session.userId, req.body)).then((id) => {
     res.json({ success: true, id });

@@ -549,7 +549,8 @@ async function getLiveSplitFriends(userId) {
     `SELECT
        f.*,
        u.display_name AS linked_user_display_name,
-       u.username AS linked_user_username
+       u.username AS linked_user_username,
+       u.avatar_url AS linked_user_avatar_url
      FROM live_split_friends f
      LEFT JOIN users u
        ON u.id = f.linked_user_id
@@ -774,8 +775,9 @@ async function getLiveSplitTrips(userId) {
   for (const row of result.rows) {
     const [membersResult, statsResult] = await Promise.all([
       query(
-        `SELECT m.*
+        `SELECT m.*, u.avatar_url AS linked_user_avatar_url
          FROM live_split_trip_members m
+         LEFT JOIN users u ON u.id = m.target_user_id AND u.deleted_at IS NULL
          WHERE m.trip_id = $1
          ORDER BY m.id`,
         [row.id]
@@ -2704,7 +2706,7 @@ async function getIncomingLiveSplitInvites(userId, email = '', mobile = '') {
   const em = String(email || '').trim().toLowerCase();
   const phoneDigits = String(mobile || '').replace(/\D/g, '');
   const result = await query(
-    `SELECT i.*, u.display_name AS inviter_display_name, u.username AS inviter_username
+    `SELECT i.*, u.display_name AS inviter_display_name, u.username AS inviter_username, u.avatar_url AS inviter_avatar_url
      FROM live_split_invites i
      JOIN users u ON u.id = i.inviter_user_id
      WHERE i.status = 'pending'
