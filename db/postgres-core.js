@@ -1358,12 +1358,12 @@ async function addLiveSplitGroup(userId, data) {
     const tripId = Number(data.trip_id || 0) > 0 ? Number(data.trip_id) : null;
     const ownerUserId = Number(userId);
     const normalizedSplits = await normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, data.splits || []);
-    if (!normalizedSplits.length) throw validationError('At least one participant is required');
     if (tripId) {
       const trip = await getLiveSplitTripAccessRow(client, userId, tripId);
       if (!trip) throw validationError('Live split trip not found');
       if (normalizeLiveSplitTripStatus(trip.status) !== 'active') throw validationError('Trip is completed. Re-open it to add expenses.');
       await assertLiveSplitTripParticipants(client, tripId, normalizedSplits);
+      await assertLiveSplitTripPayerAllowed(client, tripId, data.paid_by);
     }
     const groupResult = await client.query(
       `INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id, owner_added_to_expense)
@@ -1439,6 +1439,29 @@ async function normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, splits
     });
   }
   return normalized.filter((split) => split.friend_id > 0 && split.friend_name && split.share_amount >= 0);
+}
+
+function normalizeLiveSplitPayerName(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+async function assertLiveSplitTripPayerAllowed(client, tripId, paidBy) {
+  const tid = Number(tripId || 0);
+  if (!(tid > 0)) return;
+  const payerKey = normalizeLiveSplitPayerName(paidBy);
+  if (!payerKey || payerKey === 'you') return;
+  const membersResult = await client.query(
+    `SELECT member_name
+     FROM live_split_trip_members
+     WHERE trip_id = $1`,
+    [tid]
+  );
+  const allowedNames = new Set(
+    (membersResult.rows || [])
+      .map((member) => normalizeLiveSplitPayerName(member?.member_name))
+      .filter(Boolean)
+  );
+  if (!allowedNames.has(payerKey)) throw validationError('Trip split payer must be you or one of the trip members');
 }
 
 async function assertLiveSplitTripParticipants(client, tripId, normalizedSplits = []) {
@@ -1554,8 +1577,10 @@ async function updateLiveSplitGroup(userId, groupId, data) {
       [gid]
     );
     const normalizedSplits = await normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, data.splits || []);
-    if (!normalizedSplits.length) throw validationError('At least one participant is required');
-    if (nextTripId) await assertLiveSplitTripParticipants(client, nextTripId, normalizedSplits);
+    if (nextTripId) {
+      await assertLiveSplitTripParticipants(client, nextTripId, normalizedSplits);
+      await assertLiveSplitTripPayerAllowed(client, nextTripId, data.paid_by);
+    }
     const previousState = {
       divide_date: group.divide_date,
       details: group.details,
@@ -2407,6 +2432,43 @@ async function getPublicSiteStats() {
   };
 }
 
+async function getAdminExpenseStats() {
+  const [expenseResult, usersResult] = await Promise.all([
+    query(
+      `SELECT COUNT(*)::bigint AS total
+       FROM expenses
+       WHERE deleted_at IS NULL`
+    ),
+    query(
+      `SELECT
+         u.id,
+         u.username,
+         u.display_name,
+         u.email,
+         u.mobile,
+         COUNT(e.id)::bigint AS expense_items
+       FROM users u
+       LEFT JOIN expenses e
+         ON e.user_id = u.id
+        AND e.deleted_at IS NULL
+       WHERE u.deleted_at IS NULL
+       GROUP BY u.id, u.username, u.display_name, u.email, u.mobile
+       ORDER BY COUNT(e.id) DESC, lower(coalesce(u.display_name, u.username, '')) ASC`
+    ),
+  ]);
+  return {
+    expense_items: Number(expenseResult.rows?.[0]?.total || 0),
+    users: (usersResult.rows || []).map((row) => ({
+      id: Number(row.id),
+      username: row.username || '',
+      display_name: row.display_name || '',
+      email: row.email || '',
+      mobile: row.mobile || '',
+      expense_items: Number(row.expense_items || 0),
+    })),
+  };
+}
+
 async function upsertPublicSiteMetrics(data = {}) {
   const entries = Object.entries(data || {})
     .map(([key, value]) => [String(key || '').trim(), Number(value)])
@@ -2522,21 +2584,106 @@ function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}) {
   return peopleMap;
 }
 
+const TRIP_ALLOWED_STATUSES = new Set(['pending', 'upcoming', 'ongoing', 'completed', 'cancelled']);
+
+function normalizeTripStatus(value, fallback = 'upcoming') {
+  const status = String(value || fallback).trim().toLowerCase();
+  if (!TRIP_ALLOWED_STATUSES.has(status)) throw validationError('Trip status is invalid');
+  return status;
+}
+
+function normalizeTripDistance(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const distance = Number(value);
+  if (!Number.isFinite(distance) || distance < 0) throw validationError('Total distance must be 0 or more');
+  return Math.round(distance * 100) / 100;
+}
+
+function normalizeTripMembers(members) {
+  if (!Array.isArray(members)) return [];
+  const cleaned = members
+    .map((member) => normalizeOptionalText(typeof member === 'string' ? member : member?.member_name, 80))
+    .filter(Boolean);
+  return [...new Set(cleaned)];
+}
+
+function normalizeTripExpenseType(value) {
+  return normalizeText(value || 'Other', 'Expense type', 60);
+}
+
+function mapTripExpenseRow(row) {
+  const quantity = row.quantity == null ? null : num(row.quantity);
+  const unitPrice = row.unit_price == null ? null : num(row.unit_price);
+  const amount = num(row.amount);
+  return {
+    id: Number(row.id),
+    trip_id: Number(row.trip_id),
+    expense_type: row.expense_type || 'Other',
+    details: row.details || '',
+    quantity,
+    unit_price: unitPrice,
+    amount,
+    expense_date: row.expense_date,
+    notes: row.notes || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function normalizeTripExpensePayload(data = {}) {
+  const details = normalizeText(data.details || data.item_name, 'Expense detail', 160);
+  const expenseType = normalizeTripExpenseType(data.expense_type);
+  const expenseDate = normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date');
+  const quantity = data.quantity === undefined || data.quantity === null || data.quantity === '' ? null : Number(data.quantity);
+  if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) throw validationError('Quantity must be greater than 0');
+  const unitPrice = data.unit_price === undefined || data.unit_price === null || data.unit_price === '' ? null : Number(data.unit_price);
+  if (unitPrice != null && (!Number.isFinite(unitPrice) || unitPrice < 0)) throw validationError('Price must be 0 or more');
+  const amount = normalizeAmount(
+    data.amount !== undefined && data.amount !== null && data.amount !== ''
+      ? data.amount
+      : (quantity != null && unitPrice != null ? quantity * unitPrice : 0),
+    'Expense total'
+  );
+  return {
+    details,
+    expense_type: expenseType,
+    quantity: quantity == null ? 1 : Math.round(quantity * 100) / 100,
+    unit_price: unitPrice == null ? amount : Math.round(unitPrice * 100) / 100,
+    amount,
+    expense_date: expenseDate,
+    notes: normalizeOptionalText(data.notes, 300),
+  };
+}
+
+async function _assertTripOwner(userId, tripId, client = { query }) {
+  const tripR = await client.query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]);
+  if (!tripR.rows[0]) throw validationError('Trip not found');
+}
+
 async function createTrip(userId, data) {
   return withTransaction(async (client) => {
+    const destination = normalizeText(data.destination || data.name, 'Destination', 120);
+    const startDate = normalizeDateValue(data.start_date, 'Start date');
+    const endDate = data.end_date ? normalizeDateValue(data.end_date, 'End date') : null;
+    if (endDate && endDate < startDate) throw validationError('End date cannot be before start date');
+    const status = normalizeTripStatus(data.status, 'upcoming');
+    const category = normalizeOptionalText(data.category, 60);
+    const transportMode = normalizeOptionalText(data.transport_mode, 60);
+    const totalDistance = normalizeTripDistance(data.total_distance);
+    const notes = normalizeOptionalText(data.notes, 300);
+    const members = normalizeTripMembers(data.members);
     const tripResult = await client.query(
-      `INSERT INTO trips (user_id, name, start_date, end_date)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO trips (user_id, name, destination, start_date, end_date, status, category, transport_mode, total_distance, notes, updated_at)
+       VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
        RETURNING id`,
-      [userId, data.name.trim(), data.start_date, data.end_date || null]
+      [userId, destination, startDate, endDate, status, category, transportMode, totalDistance, notes]
     );
     const tripId = Number(tripResult.rows[0].id);
-    await client.query(`INSERT INTO trip_members (trip_id, friend_id, member_name) VALUES ($1, NULL, $2)`, [tripId, 'You']);
-    for (const member of (data.members || [])) {
+    for (const memberName of members) {
       await client.query(
         `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [tripId, member.friend_id || null, member.member_name, member.linked_user_id || null, member.permission || 'edit']
+         VALUES ($1, NULL, $2, NULL, 'edit')`,
+        [tripId, memberName]
       );
     }
     return tripId;
@@ -2545,80 +2692,135 @@ async function createTrip(userId, data) {
 
 async function getTrips(userId) {
   const tripsResult = await query(
-    `SELECT DISTINCT
+    `SELECT
        t.*,
-       CASE WHEN t.user_id = $1 THEN TRUE ELSE FALSE END AS is_owner
+       COALESCE(t.destination, t.name) AS destination_name,
+       COALESCE(exp.total_expenditure, 0) AS total_expenditure,
+       COALESCE(exp.expense_count, 0) AS expense_count,
+       COALESCE(mem.members_json, '[]'::json) AS members_json
      FROM trips t
-     LEFT JOIN trip_members m ON m.trip_id = t.id AND m.linked_user_id = $2
-     WHERE t.user_id = $3 OR m.linked_user_id IS NOT NULL
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(SUM(amount), 0) AS total_expenditure, COUNT(*) AS expense_count
+       FROM trip_expenses
+       WHERE trip_id = t.id
+     ) exp ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(
+         json_agg(json_build_object('id', id, 'member_name', member_name) ORDER BY id),
+         '[]'::json
+       ) AS members_json
+       FROM trip_members
+       WHERE trip_id = t.id
+     ) mem ON TRUE
+     WHERE t.user_id = $1
      ORDER BY t.start_date DESC, t.id DESC`,
-    [userId, userId, userId]
+    [userId]
   );
 
-  const trips = [];
-  for (const row of tripsResult.rows) {
-    const [membersR, expenses] = await Promise.all([
-      query('SELECT * FROM trip_members WHERE trip_id = $1', [row.id]),
-      _loadNormalizedTripExpenses({ query }, row.id),
-    ]);
-    const members = membersR.rows;
-    let myKey = 'self';
-    if (!row.is_owner) {
-      const myMember = members.find((member) => String(member.linked_user_id) === String(userId));
-      if (myMember) {
-        myKey = myMember.friend_id != null ? String(myMember.friend_id) : myMember.linked_user_id != null ? `u${myMember.linked_user_id}` : 'self';
-      }
-    }
-    let totalExpenses = 0;
-    let selfShare = 0;
-    let selfPaid = 0;
-    for (const expense of expenses) {
-      totalExpenses += num(expense.amount);
-      if (expense.paid_by_key === myKey) selfPaid += num(expense.amount);
-      for (const split of (expense.splits || [])) {
-        if (split.member_key === myKey) selfShare += num(split.share_amount);
-      }
-    }
-    trips.push({
-      ...row,
-      is_owner: bool(row.is_owner),
-      members,
-      totalExpenses: Math.round(totalExpenses * 100) / 100,
-      expenseCount: expenses.length,
-      selfNet: Math.round((selfPaid - selfShare) * 100) / 100,
-    });
-  }
-  return trips;
+  return tripsResult.rows.map((row) => ({
+    ...row,
+    is_owner: true,
+    destination: row.destination_name,
+    total_distance: row.total_distance == null ? null : num(row.total_distance),
+    totalExpenditure: Math.round(num(row.total_expenditure) * 100) / 100,
+    total_expenditure: Math.round(num(row.total_expenditure) * 100) / 100,
+    expenseCount: Number(row.expense_count || 0),
+    expense_count: Number(row.expense_count || 0),
+    members: Array.isArray(row.members_json) ? row.members_json : [],
+  }));
 }
 
 async function getTripById(userId, tripId) {
-  const [ownerR, memberR] = await Promise.all([
-    query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]),
-    query('SELECT * FROM trip_members WHERE trip_id = $1 AND linked_user_id = $2 LIMIT 1', [tripId, userId]),
-  ]);
-  const isOwner = !!ownerR.rows[0];
-  const myMember = memberR.rows[0] || null;
-  if (!isOwner && !myMember) return null;
-
-  const [tripR, membersR, expenses] = await Promise.all([
-    query('SELECT * FROM trips WHERE id = $1 LIMIT 1', [tripId]),
-    query('SELECT * FROM trip_members WHERE trip_id = $1', [tripId]),
-    _loadNormalizedTripExpenses({ query }, tripId),
+  const [tripR, membersR, expensesR] = await Promise.all([
+    query('SELECT * FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]),
+    query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]),
+    query(
+      `SELECT id, trip_id, expense_type, details, quantity, unit_price, amount, expense_date, notes, created_at, updated_at
+       FROM trip_expenses
+       WHERE trip_id = $1
+       ORDER BY expense_date DESC, id DESC`,
+      [tripId]
+    ),
   ]);
   const trip = tripR.rows[0];
-  return { ...trip, members: membersR.rows, expenses, isOwner, userPermission: isOwner ? 'owner' : (myMember?.permission || 'edit') };
+  if (!trip) return null;
+  const expenses = expensesR.rows.map(mapTripExpenseRow);
+  const expenseTypeMap = new Map();
+  for (const expense of expenses) {
+    const key = expense.expense_type || 'Other';
+    if (!expenseTypeMap.has(key)) expenseTypeMap.set(key, { type: key, total: 0, items: [] });
+    const group = expenseTypeMap.get(key);
+    group.total += num(expense.amount);
+    group.items.push(expense);
+  }
+  const expense_groups = Array.from(expenseTypeMap.values()).map((group) => ({
+    ...group,
+    total: Math.round(group.total * 100) / 100,
+  }));
+  const grandTotal = expense_groups.reduce((sum, group) => sum + num(group.total), 0);
+  return {
+    ...trip,
+    destination: trip.destination || trip.name,
+    total_distance: trip.total_distance == null ? null : num(trip.total_distance),
+    members: membersR.rows,
+    expenses,
+    expense_groups,
+    grand_total: Math.round(grandTotal * 100) / 100,
+    isOwner: true,
+    userPermission: 'owner',
+  };
 }
 
 async function updateTrip(userId, id, data) {
-  const fields = [];
-  const params = [];
-  if (data.name !== undefined) { params.push(data.name.trim()); fields.push(`name = $${params.length}`); }
-  if (data.start_date !== undefined) { params.push(data.start_date); fields.push(`start_date = $${params.length}`); }
-  if (data.end_date !== undefined) { params.push(data.end_date || null); fields.push(`end_date = $${params.length}`); }
-  if (data.status !== undefined) { params.push(data.status); fields.push(`status = $${params.length}`); }
-  if (fields.length === 0) return;
-  params.push(id, userId);
-  await query(`UPDATE trips SET ${fields.join(', ')} WHERE id = $${params.length - 1} AND user_id = $${params.length}`, params);
+  await withTransaction(async (client) => {
+    const currentR = await client.query('SELECT * FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
+    const current = currentR.rows[0];
+    if (!current) throw validationError('Trip not found');
+
+    const destination = data.destination !== undefined || data.name !== undefined
+      ? normalizeText(data.destination || data.name, 'Destination', 120)
+      : (current.destination || current.name);
+    const startDate = data.start_date !== undefined
+      ? normalizeDateValue(data.start_date, 'Start date')
+      : current.start_date;
+    const endDate = data.end_date !== undefined
+      ? (data.end_date ? normalizeDateValue(data.end_date, 'End date') : null)
+      : current.end_date;
+    if (endDate && endDate < startDate) throw validationError('End date cannot be before start date');
+    const status = data.status !== undefined ? normalizeTripStatus(data.status) : current.status;
+    const category = data.category !== undefined ? normalizeOptionalText(data.category, 60) : current.category;
+    const transportMode = data.transport_mode !== undefined ? normalizeOptionalText(data.transport_mode, 60) : current.transport_mode;
+    const totalDistance = data.total_distance !== undefined ? normalizeTripDistance(data.total_distance) : (current.total_distance == null ? null : num(current.total_distance));
+    const notes = data.notes !== undefined ? normalizeOptionalText(data.notes, 300) : current.notes;
+
+    await client.query(
+      `UPDATE trips
+       SET name = $1,
+           destination = $1,
+           start_date = $2,
+           end_date = $3,
+           status = $4,
+           category = $5,
+           transport_mode = $6,
+           total_distance = $7,
+           notes = $8,
+           updated_at = NOW()
+       WHERE id = $9 AND user_id = $10`,
+      [destination, startDate, endDate, status, category, transportMode, totalDistance, notes, id, userId]
+    );
+
+    if (data.members !== undefined) {
+      const members = normalizeTripMembers(data.members);
+      await client.query('DELETE FROM trip_members WHERE trip_id = $1', [id]);
+      for (const memberName of members) {
+        await client.query(
+          `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
+           VALUES ($1, NULL, $2, NULL, 'edit')`,
+          [id, memberName]
+        );
+      }
+    }
+  });
 }
 
 async function deleteTrip(userId, id) {
@@ -2631,23 +2833,19 @@ async function deleteTrip(userId, id) {
 }
 
 async function addTripExpense(userId, tripId, data) {
-  await _assertTripExpenseEditable(userId, tripId);
+  await _assertTripOwner(userId, tripId);
+  const payload = normalizeTripExpensePayload(data);
   return withTransaction(async (client) => {
     const expR = await client.query(
-      `INSERT INTO trip_expenses (trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO trip_expenses (
+         trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode,
+         expense_type, quantity, unit_price, notes, updated_at
+       )
+       VALUES ($1, 'self', 'You', $2, $3, $4, 'equal', $5, $6, $7, $8, NOW())
        RETURNING id`,
-      [tripId, data.paid_by_key, data.paid_by_name, data.details, data.amount, data.expense_date, data.split_mode || 'equal']
+      [tripId, payload.details, payload.amount, payload.expense_date, payload.expense_type, payload.quantity, payload.unit_price, payload.notes]
     );
-    const expId = Number(expR.rows[0].id);
-    for (const split of (data.splits || [])) {
-      await client.query(
-        `INSERT INTO trip_expense_splits (expense_id, member_key, member_name, share_amount)
-         VALUES ($1, $2, $3, $4)`,
-        [expId, split.member_key, split.member_name, split.share_amount]
-      );
-    }
-    return expId;
+    return Number(expR.rows[0].id);
   });
 }
 
@@ -2655,30 +2853,28 @@ async function updateTripExpense(userId, expenseId, data) {
   const expR = await query('SELECT id, trip_id FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
   const exp = expR.rows[0];
   if (!exp) throw new Error('Not found');
-  await _assertTripExpenseEditable(userId, exp.trip_id);
-  await withTransaction(async (client) => {
-    await client.query(
-      `UPDATE trip_expenses
-       SET paid_by_key = $1, paid_by_name = $2, details = $3, amount = $4, expense_date = $5, split_mode = $6
-       WHERE id = $7`,
-      [data.paid_by_key, data.paid_by_name, data.details, data.amount, data.expense_date, data.split_mode || 'equal', expenseId]
-    );
-    await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
-    for (const split of (data.splits || [])) {
-      await client.query(
-        `INSERT INTO trip_expense_splits (expense_id, member_key, member_name, share_amount)
-         VALUES ($1, $2, $3, $4)`,
-        [expenseId, split.member_key, split.member_name, split.share_amount]
-      );
-    }
-  });
+  await _assertTripOwner(userId, exp.trip_id);
+  const payload = normalizeTripExpensePayload(data);
+  await query(
+    `UPDATE trip_expenses
+     SET details = $1,
+         amount = $2,
+         expense_date = $3,
+         expense_type = $4,
+         quantity = $5,
+         unit_price = $6,
+         notes = $7,
+         updated_at = NOW()
+     WHERE id = $8`,
+    [payload.details, payload.amount, payload.expense_date, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, expenseId]
+  );
 }
 
 async function deleteTripExpense(userId, expenseId) {
   const expR = await query('SELECT id, trip_id FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
   const exp = expR.rows[0];
   if (!exp) throw new Error('Not found');
-  await _assertTripExpenseEditable(userId, exp.trip_id);
+  await _assertTripOwner(userId, exp.trip_id);
   await withTransaction(async (client) => {
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
     await client.query('DELETE FROM trip_expenses WHERE id = $1', [expenseId]);
@@ -3400,6 +3596,7 @@ module.exports = {
   hideReceivedLiveSplitShare,
   getDashboardData,
   getPublicSiteStats,
+  getAdminExpenseStats,
   upsertPublicSiteMetrics,
   getReportYears,
   getReportMonths,

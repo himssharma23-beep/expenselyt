@@ -15,6 +15,9 @@ let _activeExpenseForm = null;
 let _editingExpCcTxnId = null;
 let _editingExpCcLink = null;
 let _expenseCategoryHideTimer = null;
+let _expenseScanDraft = null;
+let _expenseScanSaving = false;
+let _expenseScanCommonBankId = '';
 
 function cleanMojibakeText(value) {
   const raw = String(value ?? '');
@@ -571,6 +574,7 @@ async function loadExpenses() {
           ${['all','fair','extra'].map(t => `<button class="chip ${f.spendType===t?'active':''}" onclick="expFilters.spendType='${t}';expFilters.page=1;loadExpenses()">${t==='all'?'All':t==='fair'?'Fair':'Extra'}</button>`).join('')}
         </div>
         <button class="btn btn-p btn-sm" onclick="showExpenseForm()">+ Add</button>
+        <button class="btn btn-s btn-sm" onclick="showExpenseScanModal()">Scan Image</button>
         <button class="btn btn-s btn-sm" onclick="showImportForm()">Import CSV</button>
         <button class="btn btn-s btn-sm" onclick="showExcelImport()">Import Excel</button>
       </div>
@@ -743,6 +747,178 @@ async function saveExpense(id) {
   _editingExpCcTxnId = null;
   _editingExpCcLink = null;
   closeModal(); loadExpenses();
+}
+
+async function showExpenseScanModal() {
+  if (!_expenseCategories.length) {
+    try { await loadExpenseCategories(); } catch (_) {}
+  }
+  if (!_bankAccounts.length) {
+    try {
+      const banksData = await api('/api/banks');
+      _bankAccounts = banksData?.accounts || [];
+    } catch (_) {}
+  }
+  _expenseScanDraft = null;
+  _expenseScanCommonBankId = '';
+  openModal('Scan Expense From Image', `
+    <div style="display:grid;gap:14px">
+      <div style="font-size:13px;color:var(--t2)">Upload a receipt, bill, or expense screenshot. We will read the image, extract draft expense rows, and let you review them before anything is saved.</div>
+      <label class="fl full">Receipt Image
+        <input class="fi" id="expenseScanFile" type="file" accept="image/*">
+      </label>
+      <div class="fa">
+        <button class="btn btn-p" onclick="scanExpenseImage()">Scan Image</button>
+        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`);
+}
+
+function expenseScanBankOptionsHtml() {
+  return `<option value="">-- Do not deduct from bank --</option>${(_bankAccounts || []).map((account) => `<option value="${account.id}" ${String(_expenseScanCommonBankId || '') === String(account.id) ? 'selected' : ''}>${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''}${account.is_default ? ' (Default)' : ''}</option>`).join('')}`;
+}
+
+function renderExpenseScanReviewModal() {
+  const draft = _expenseScanDraft || {};
+  const rows = Array.isArray(draft.items) ? draft.items : [];
+  openModal('Review Scanned Expenses', `
+    <div style="display:grid;gap:14px">
+      <div style="display:grid;gap:8px;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--bg)">
+        <div style="display:flex;flex-wrap:wrap;gap:8px 14px;font-size:13px;color:var(--t2)">
+          <div><b style="color:var(--t1)">Merchant:</b> ${escHtml(draft.merchant || 'Scanned receipt')}</div>
+          <div><b style="color:var(--t1)">Date:</b> ${escHtml(draft.purchase_date || 'Not found')}</div>
+          <div><b style="color:var(--t1)">Total:</b> ${draft.total_amount ? fmtCur(draft.total_amount) : 'Not found'}</div>
+          <div><b style="color:var(--t1)">Confidence:</b> ${Math.round(Number(draft.confidence || 0))}%</div>
+        </div>
+        <label class="fl full">Deduct From Bank
+          <select class="fi" id="expenseScanBank" onchange="expenseScanSetCommonBank(this.value)">${expenseScanBankOptionsHtml()}</select>
+        </label>
+      </div>
+      <div style="font-size:12px;color:var(--t3)">Edit anything below. Only checked rows will be saved.</div>
+      <datalist id="expenseCategoryList">${(_expenseCategories || []).map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+      <div style="display:grid;gap:10px;max-height:52vh;overflow:auto;padding-right:2px">
+        ${rows.map((row, index) => `
+          <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--white)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+              <label class="fc" style="margin:0"><input type="checkbox" ${row.selected !== false ? 'checked' : ''} onchange="expenseScanToggleRow(${index}, this.checked)"><span>Save this row</span></label>
+              <div style="font-size:12px;color:var(--t3)">${fmtCur(row.amount || 0)}</div>
+            </div>
+            <div class="fg">
+              <label class="fl">Item Name<input class="fi" value="${escHtml(row.item_name || '')}" oninput="expenseScanSetField(${index}, 'item_name', this.value)"></label>
+              <label class="fl">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(row.amount || ''))}" oninput="expenseScanSetField(${index}, 'amount', this.value)"></label>
+              <label class="fl">Category<input class="fi" list="expenseCategoryList" value="${escHtml(row.category || '')}" maxlength="80" placeholder="Type category" oninput="expenseScanSetField(${index}, 'category', this.value)"></label>
+              <label class="fl">Date<input class="fi" type="date" value="${escHtml(row.purchase_date || draft.purchase_date || todayStr())}" oninput="expenseScanSetField(${index}, 'purchase_date', this.value)"></label>
+            </div>
+            <div class="chip-group" style="margin-top:10px">
+              <button class="chip ${row.is_extra ? '' : 'active'}" onclick="expenseScanSetType(${index}, false)">Fair / Regular</button>
+              <button class="chip ${row.is_extra ? 'active' : ''}" onclick="expenseScanSetType(${index}, true)">Extra / Non-essential</button>
+            </div>
+          </div>`).join('')}
+      </div>
+      <div class="fa">
+        <button class="btn btn-p" ${_expenseScanSaving ? 'disabled' : ''} onclick="saveScannedExpenses()">${_expenseScanSaving ? 'Saving...' : `Save Selected (${rows.filter((row) => row.selected !== false).length})`}</button>
+        <button class="btn btn-g" ${_expenseScanSaving ? 'disabled' : ''} onclick="showExpenseScanModal()">Scan Another</button>
+      </div>
+    </div>`);
+}
+
+async function scanExpenseImage() {
+  const file = document.getElementById('expenseScanFile')?.files?.[0];
+  if (!file) { toast('Please choose an image first', 'warning'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  const scanBtn = document.querySelector('#modalContent .btn.btn-p');
+  if (scanBtn) {
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning...';
+  }
+  try {
+    const res = await fetch('/api/expenses/scan-image', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data?.success || !Array.isArray(data?.draft?.items) || !data.draft.items.length) {
+      throw new Error(data?.error || 'Could not extract any expense rows from this image');
+    }
+    _expenseScanDraft = {
+      ...data.draft,
+      items: data.draft.items.map((row) => ({
+        item_name: String(row.item_name || '').trim(),
+        amount: Number(row.amount || 0),
+        purchase_date: row.purchase_date || data.draft.purchase_date || todayStr(),
+        category: row.category || '',
+        is_extra: !!row.is_extra,
+        selected: row.selected !== false,
+      })),
+    };
+    renderExpenseScanReviewModal();
+  } catch (error) {
+    if (scanBtn) {
+      scanBtn.disabled = false;
+      scanBtn.textContent = 'Scan Image';
+    }
+    toast(error?.message || 'Could not scan image', 'error');
+  }
+}
+
+function expenseScanSetCommonBank(value) {
+  _expenseScanCommonBankId = value || '';
+}
+
+function expenseScanToggleRow(index, checked) {
+  if (!_expenseScanDraft?.items?.[index]) return;
+  _expenseScanDraft.items[index].selected = !!checked;
+}
+
+function expenseScanSetField(index, field, value) {
+  if (!_expenseScanDraft?.items?.[index]) return;
+  if (field === 'amount') {
+    _expenseScanDraft.items[index][field] = value === '' ? '' : Number(value);
+    return;
+  }
+  _expenseScanDraft.items[index][field] = value;
+}
+
+function expenseScanSetType(index, isExtra) {
+  if (!_expenseScanDraft?.items?.[index]) return;
+  _expenseScanDraft.items[index].is_extra = !!isExtra;
+  renderExpenseScanReviewModal();
+}
+
+async function saveScannedExpenses() {
+  const draft = _expenseScanDraft;
+  const rows = (draft?.items || []).filter((row) => row.selected !== false);
+  if (!rows.length) { toast('Select at least one row to save', 'warning'); return; }
+  for (const row of rows) {
+    if (!String(row.item_name || '').trim()) { toast('Each selected row needs an item name', 'warning'); return; }
+    const amount = Number(row.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) { toast('Each selected row needs a valid amount', 'warning'); return; }
+    if (!String(row.purchase_date || '').trim()) { toast('Each selected row needs a date', 'warning'); return; }
+  }
+  _expenseScanSaving = true;
+  renderExpenseScanReviewModal();
+  try {
+    for (const row of rows) {
+      const body = {
+        item_name: String(row.item_name || '').trim(),
+        category: String(row.category || '').trim() || null,
+        amount: Number(row.amount || 0),
+        purchase_date: String(row.purchase_date || '').trim(),
+        is_extra: !!row.is_extra,
+        bank_account_id: _expenseScanCommonBankId ? Number(_expenseScanCommonBankId) : null,
+      };
+      const result = await api('/api/expenses', { method: 'POST', body });
+      if (!result?.id) throw new Error(result?.error || `Could not save "${body.item_name}"`);
+    }
+    _expenseScanSaving = false;
+    _expenseScanDraft = null;
+    _expenseScanCommonBankId = '';
+    closeModal();
+    toast(`Saved ${rows.length} scanned expense${rows.length === 1 ? '' : 's'}`, 'success');
+    loadExpenses();
+  } catch (error) {
+    _expenseScanSaving = false;
+    renderExpenseScanReviewModal();
+    toast(error?.message || 'Could not save scanned expenses', 'error');
+  }
 }
 
 async function deleteExpense(id) {
@@ -4669,6 +4845,622 @@ async function tripGenerateInvite(memberId) {
     </div>`;
 }
 
+// Personal trips override: simple own-trip CRUD with grouped expense details.
+let tripsFilters = { status: 'all', category: 'all', transport: 'all', search: '' };
+const TRIP_STATUS_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'ongoing', label: 'Ongoing' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+const TRIP_CATEGORY_OPTIONS = ['Office Trip', 'Personal Trip', 'Family Trip'];
+const TRIP_TRANSPORT_OPTIONS = ['Car', 'Bike', 'Bus', 'Train', 'Flight', 'Cab', 'Mixed', 'Other'];
+const TRIP_EXPENSE_TYPES = ['Travel', 'Stay', 'Food', 'Shopping', 'Tickets', 'Fuel', 'Tolls', 'Other'];
+
+function tripStatusLabel(status) {
+  const value = String(status || '').toLowerCase();
+  const found = TRIP_STATUS_OPTIONS.find((option) => option.value === value);
+  return found ? found.label : (status || 'Upcoming');
+}
+
+function tripStatusBadge(status) {
+  const value = String(status || '').toLowerCase();
+  const colors = {
+    pending: ['#FFF6DB', '#8A6100'],
+    upcoming: ['#E8F1FF', '#2E63D2'],
+    ongoing: ['#E6F8EF', '#177245'],
+    completed: ['#EAF7F0', '#1C7A4C'],
+    cancelled: ['#FDEBEC', '#C33A3A'],
+  };
+  const [bg, color] = colors[value] || ['var(--bg2)', 'var(--t2)'];
+  return `<span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:${bg};color:${color};font-size:11px;font-weight:700">${tripStatusLabel(value)}</span>`;
+}
+
+function tripMembersPreview(members = []) {
+  return (members || []).map((member) => member.member_name || member).filter(Boolean).join(', ');
+}
+
+function tripParseMembersInput(value) {
+  return [...new Set(String(value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean))];
+}
+
+function tripOptionsHtml(options = [], selected = '', includeAll = false, allLabel = 'All') {
+  const list = [];
+  if (includeAll) list.push(`<option value="all">${allLabel}</option>`);
+  for (const option of options) {
+    const value = typeof option === 'string' ? option : option.value;
+    const label = typeof option === 'string' ? option : option.label;
+    list.push(`<option value="${escHtml(value)}" ${String(selected) === String(value) ? 'selected' : ''}>${escHtml(label)}</option>`);
+  }
+  return list.join('');
+}
+
+function tripExpenseTypeDatalist(selected = '') {
+  return TRIP_EXPENSE_TYPES.map((type) => `<option value="${escHtml(type)}" ${selected === type ? 'selected' : ''}></option>`).join('');
+}
+
+function tripFilteredRows() {
+  return (_trips || []).filter((trip) => {
+    if (tripsFilters.status !== 'all' && String(trip.status || '').toLowerCase() !== tripsFilters.status) return false;
+    if (tripsFilters.category !== 'all' && String(trip.category || '').toLowerCase() !== String(tripsFilters.category).toLowerCase()) return false;
+    if (tripsFilters.transport !== 'all' && String(trip.transport_mode || '').toLowerCase() !== String(tripsFilters.transport).toLowerCase()) return false;
+    if (tripsFilters.search) {
+      const haystack = [
+        trip.destination,
+        trip.category,
+        trip.transport_mode,
+        tripMembersPreview(trip.members),
+      ].join(' ').toLowerCase();
+      if (!haystack.includes(String(tripsFilters.search).trim().toLowerCase())) return false;
+    }
+    return true;
+  });
+}
+
+async function loadTrips() {
+  const data = await api('/api/trips');
+  _trips = data?.trips || [];
+  _selectedTripId = null;
+  _tripDetail = null;
+  renderTripList();
+}
+
+function setTripsFilter(key, value) {
+  tripsFilters[key] = value;
+  tripsPage = 1;
+  renderTripList();
+}
+
+function renderTripList() {
+  const filtered = tripFilteredRows();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TRIPS_PAGE_SIZE));
+  tripsPage = Math.min(tripsPage, totalPages);
+  const start = (tripsPage - 1) * TRIPS_PAGE_SIZE;
+  const pageRows = filtered.slice(start, start + TRIPS_PAGE_SIZE);
+  const totalSpend = filtered.reduce((sum, trip) => sum + Number(trip.total_expenditure || 0), 0);
+
+  const tableRows = pageRows.map((trip) => `
+    <tr>
+      <td><button class="btn-d" style="font-weight:700;color:var(--green)" onclick="openTripDetail(${trip.id})">${escHtml(trip.destination || trip.name || '-')}</button></td>
+      <td>${trip.start_date ? fmtDate(trip.start_date) : '-'}</td>
+      <td>${trip.end_date ? fmtDate(trip.end_date) : '-'}</td>
+      <td class="td-m">${trip.total_distance != null ? escHtml(String(trip.total_distance)) : '-'}</td>
+      <td class="td-m" style="font-weight:700;color:var(--green)">${fmtCur(trip.total_expenditure || 0)}</td>
+      <td>${tripStatusBadge(trip.status)}</td>
+      <td>${escHtml(trip.category || '-')}</td>
+      <td>${escHtml(trip.transport_mode || '-')}</td>
+      <td style="max-width:230px;color:var(--t2)">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-g btn-sm" onclick="openTripDetail(${trip.id})">Details</button>
+          <button class="btn btn-g btn-sm" onclick="showTripModal(${trip.id})">Edit</button>
+          <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDelete(${trip.id})">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  const pagination = totalPages > 1
+    ? `<div class="pag">${Array.from({ length: totalPages }, (_, index) => {
+        const page = index + 1;
+        return `<button class="pag-btn ${page === tripsPage ? 'active' : ''}" onclick="tripsPage=${page};renderTripList()">${page}</button>`;
+      }).join('')}</div>`
+    : '';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <div style="font-size:22px;font-weight:800">My Trips</div>
+          <div style="font-size:13px;color:var(--t2);margin-top:4px">Track only your own trips, members, distance, and total spend.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s" onclick="showTripExcelImport()">Import Excel</button>
+          <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
+        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Total Trips</div><div style="font-size:28px;font-weight:800">${filtered.length}</div></div>
+        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Upcoming / Ongoing</div><div style="font-size:28px;font-weight:800">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div></div>
+        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Completed</div><div style="font-size:28px;font-weight:800">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div></div>
+        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Tracked Spend</div><div style="font-size:28px;font-weight:800;color:var(--green)">${fmtCur(totalSpend)}</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+          <label class="fl" style="margin:0">Search
+            <input class="fi" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
+          </label>
+          <label class="fl" style="margin:0">Status
+            <select class="fi" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
+          </label>
+          <label class="fl" style="margin:0">Category
+            <select class="fi" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
+          </label>
+          <label class="fl" style="margin:0">Transport
+            <select class="fi" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
+          </label>
+        </div>
+      </div>
+
+      ${pageRows.length ? `
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Destination</th>
+                  <th>Start date</th>
+                  <th>End date</th>
+                  <th class="td-m">Total Distance</th>
+                  <th class="td-m">Total Expenditure</th>
+                  <th>Status</th>
+                  <th>Category</th>
+                  <th>Transport</th>
+                  <th>Members</th>
+                  <th style="width:210px">Actions</th>
+                </tr>
+              </thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        </div>
+      ` : `
+        <div class="card" style="text-align:center;padding:36px 20px;color:var(--t3)">
+          <div style="font-size:16px;font-weight:700;color:var(--t2);margin-bottom:6px">No trips yet</div>
+          <div style="font-size:13px;margin-bottom:14px">Create your first trip to track destination, trip status, distance, and expense totals.</div>
+          <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
+        </div>
+      `}
+      ${pagination}
+    </div>
+  `;
+}
+
+async function openTripDetail(tripId) {
+  _selectedTripId = tripId;
+  const data = await api(`/api/trips/${tripId}`);
+  if (!data?.trip) {
+    toast('Trip not found', 'error');
+    return;
+  }
+  _tripDetail = data.trip;
+  renderTripDetail();
+}
+
+function renderTripDetail() {
+  const trip = _tripDetail;
+  if (!trip) return;
+  const members = trip.members || [];
+  const groups = trip.expense_groups || [];
+  const memberChips = members.length
+    ? members.map((member) => `<span style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:var(--bg2);border:1px solid var(--br);font-size:12px;font-weight:600">${escHtml(member.member_name)}</span>`).join('')
+    : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
+  const summaryCards = [
+    ['Status', tripStatusBadge(trip.status)],
+    ['Category', escHtml(trip.category || '-')],
+    ['Transport', escHtml(trip.transport_mode || '-')],
+    ['Distance', trip.total_distance != null ? `${escHtml(String(trip.total_distance))} km` : '-'],
+  ].map(([label, value]) => `<div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">${label}</div><div style="font-size:16px;font-weight:700">${value}</div></div>`).join('');
+
+  const groupHtml = groups.length
+    ? groups.map((group) => `
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="font-size:18px;font-weight:800">${escHtml(group.type)}</div>
+          <div style="font-size:16px;font-weight:800;color:var(--green)">Subtotal: ${fmtCur(group.total || 0)}</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Details</th>
+                <th class="td-m">Qty</th>
+                <th class="td-m">Price</th>
+                <th class="td-m">Total</th>
+                <th>Notes</th>
+                <th style="width:150px">Actions</th>
+              </tr>
+            </thead>
+            <tbody>${(group.items || []).map((item) => `
+              <tr>
+                <td>${item.expense_date ? fmtDate(item.expense_date) : '-'}</td>
+                <td style="font-weight:600">${escHtml(item.details || '-')}</td>
+                <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
+                <td class="td-m">${item.unit_price != null ? fmtCur(item.unit_price) : '-'}</td>
+                <td class="td-m" style="font-weight:700">${fmtCur(item.amount || 0)}</td>
+                <td>${escHtml(item.notes || '-')}</td>
+                <td>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="btn btn-g btn-sm" onclick="showTripExpenseModal(${item.id})">Edit</button>
+                    <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDeleteExpense(${item.id})">Delete</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+    `).join('')
+    : `<div class="card" style="text-align:center;color:var(--t3);padding:28px 18px">No trip expenses yet. Add line items to see grouped totals here.</div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">Back</button>
+          <div style="font-size:24px;font-weight:800">${escHtml(trip.destination || trip.name || '')}</div>
+          <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-g btn-sm" onclick="showTripModal(${trip.id})">Edit Trip</button>
+          <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
+          <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDelete(${trip.id})">Delete Trip</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:16px">
+        <div class="card">
+          <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Trip Members</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">${memberChips}</div>
+          ${trip.notes ? `<div style="margin-top:12px;font-size:13px;color:var(--t2)">${escHtml(trip.notes)}</div>` : ''}
+        </div>
+        <div class="card" style="display:flex;flex-direction:column;justify-content:center">
+          <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Grand Total</div>
+          <div style="font-size:34px;font-weight:900;color:var(--green)">${fmtCur(trip.grand_total || 0)}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:6px">${(trip.expenses || []).length} expense item${(trip.expenses || []).length !== 1 ? 's' : ''}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">${summaryCards}</div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <div style="font-size:18px;font-weight:800">Expense Breakdown</div>
+          <div style="font-size:13px;color:var(--t2)">Subtotals by expense type, with each trip item visible underneath.</div>
+        </div>
+      </div>
+      ${groupHtml}
+    </div>
+  `;
+}
+
+function showTripModal(tripId = null) {
+  const trip = tripId ? (_trips.find((row) => String(row.id) === String(tripId)) || _tripDetail) : null;
+  const memberValue = trip?.members?.map((member) => member.member_name).join('\n') || '';
+  openModal(trip ? 'Edit Trip' : 'Add Trip', `
+    <div class="fg">
+      <label class="fl full">Destination *
+        <input class="fi" id="tripDestination" placeholder="Manali, Shimla, Thailand..." value="${escHtml(trip?.destination || trip?.name || '')}">
+      </label>
+      <label class="fl">Start Date *
+        <input class="fi" type="date" id="tripStartDate" value="${trip?.start_date || todayStr()}">
+      </label>
+      <label class="fl">End Date
+        <input class="fi" type="date" id="tripEndDate" value="${trip?.end_date || ''}">
+      </label>
+      <label class="fl">Status
+        <select class="fi" id="tripStatus">${tripOptionsHtml(TRIP_STATUS_OPTIONS, trip?.status || 'upcoming')}</select>
+      </label>
+      <label class="fl">Category
+        <input class="fi" id="tripCategory" list="tripCategoryList" placeholder="Office Trip, Personal Trip..." value="${escHtml(trip?.category || '')}">
+        <datalist id="tripCategoryList">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS)}</datalist>
+      </label>
+      <label class="fl">Transport Mode
+        <input class="fi" id="tripTransportMode" list="tripTransportList" placeholder="Car, Flight, Train..." value="${escHtml(trip?.transport_mode || '')}">
+        <datalist id="tripTransportList">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS)}</datalist>
+      </label>
+      <label class="fl">Total Distance
+        <input class="fi" id="tripDistance" type="number" min="0" step="0.01" placeholder="800" value="${trip?.total_distance ?? ''}">
+      </label>
+      <label class="fl full">Members
+        <textarea class="fi" id="tripMembers" rows="4" placeholder="One name per line or comma separated">${escHtml(memberValue)}</textarea>
+      </label>
+      <label class="fl full">Notes
+        <textarea class="fi" id="tripNotes" rows="3" placeholder="Any useful details">${escHtml(trip?.notes || '')}</textarea>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTripModal(${trip?.id || 'null'})">${trip ? 'Save Changes' : 'Create Trip'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function saveTripModal(tripId = null) {
+  const body = {
+    destination: document.getElementById('tripDestination')?.value.trim(),
+    start_date: document.getElementById('tripStartDate')?.value,
+    end_date: document.getElementById('tripEndDate')?.value || null,
+    status: document.getElementById('tripStatus')?.value || 'upcoming',
+    category: document.getElementById('tripCategory')?.value.trim() || null,
+    transport_mode: document.getElementById('tripTransportMode')?.value.trim() || null,
+    total_distance: document.getElementById('tripDistance')?.value || null,
+    members: tripParseMembersInput(document.getElementById('tripMembers')?.value),
+    notes: document.getElementById('tripNotes')?.value.trim() || null,
+  };
+  if (!body.destination) {
+    toast('Enter destination', 'warning');
+    return;
+  }
+  if (!body.start_date) {
+    toast('Select a start date', 'warning');
+    return;
+  }
+  const result = await api(tripId ? `/api/trips/${tripId}` : '/api/trips', {
+    method: tripId ? 'PUT' : 'POST',
+    body,
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  closeModal();
+  toast(tripId ? 'Trip updated' : 'Trip created', 'success');
+  await loadTrips();
+  if (tripId) await openTripDetail(tripId);
+  if (!tripId && result?.id) await openTripDetail(result.id);
+}
+
+function _findTripExpenseById(expenseId) {
+  return (_tripDetail?.expenses || []).find((expense) => String(expense.id) === String(expenseId)) || null;
+}
+
+function showTripExpenseModal(expenseId = null) {
+  if (!_tripDetail) return;
+  const expense = expenseId ? _findTripExpenseById(expenseId) : null;
+  openModal(expense ? 'Edit Trip Expense' : 'Add Trip Expense', `
+    <div class="fg">
+      <label class="fl">Expense Type *
+        <input class="fi" id="tripExpenseType" list="tripExpenseTypeList" placeholder="Travel, Stay, Food..." value="${escHtml(expense?.expense_type || '')}">
+        <datalist id="tripExpenseTypeList">${tripExpenseTypeDatalist(expense?.expense_type || '')}</datalist>
+      </label>
+      <label class="fl">Expense Date *
+        <input class="fi" type="date" id="tripExpenseDate" value="${expense?.expense_date || todayStr()}">
+      </label>
+      <label class="fl full">Details *
+        <input class="fi" id="tripExpenseDetails" placeholder="Hotel advance, petrol, dinner..." value="${escHtml(expense?.details || '')}">
+      </label>
+      <label class="fl">Quantity
+        <input class="fi" id="tripExpenseQty" type="number" min="0" step="0.01" value="${expense?.quantity ?? 1}" oninput="tripExpenseAutoTotal()">
+      </label>
+      <label class="fl">Price
+        <input class="fi" id="tripExpensePrice" type="number" min="0" step="0.01" value="${expense?.unit_price ?? expense?.amount ?? ''}" oninput="tripExpenseAutoTotal()">
+      </label>
+      <label class="fl">Total *
+        <input class="fi" id="tripExpenseAmount" type="number" min="0" step="0.01" value="${expense?.amount ?? ''}">
+      </label>
+      <label class="fl full">Notes
+        <textarea class="fi" id="tripExpenseNotes" rows="3" placeholder="Optional notes">${escHtml(expense?.notes || '')}</textarea>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTripExpenseModal(${expense?.id || 'null'})">${expense ? 'Save Expense' : 'Add Expense'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function tripExpenseAutoTotal() {
+  const qty = parseFloat(document.getElementById('tripExpenseQty')?.value || 0);
+  const price = parseFloat(document.getElementById('tripExpensePrice')?.value || 0);
+  const totalInput = document.getElementById('tripExpenseAmount');
+  if (!totalInput) return;
+  if (qty > 0 && price >= 0) totalInput.value = (Math.round(qty * price * 100) / 100).toFixed(2);
+}
+
+async function saveTripExpenseModal(expenseId = null) {
+  if (!_selectedTripId) return;
+  const body = {
+    expense_type: document.getElementById('tripExpenseType')?.value.trim(),
+    details: document.getElementById('tripExpenseDetails')?.value.trim(),
+    expense_date: document.getElementById('tripExpenseDate')?.value,
+    quantity: document.getElementById('tripExpenseQty')?.value || null,
+    unit_price: document.getElementById('tripExpensePrice')?.value || null,
+    amount: document.getElementById('tripExpenseAmount')?.value || null,
+    notes: document.getElementById('tripExpenseNotes')?.value.trim() || null,
+  };
+  if (!body.expense_type || !body.details || !body.expense_date) {
+    toast('Type, detail, and date are required', 'warning');
+    return;
+  }
+  const result = await api(expenseId ? `/api/trips/${_selectedTripId}/expenses/${expenseId}` : `/api/trips/${_selectedTripId}/expenses`, {
+    method: expenseId ? 'PUT' : 'POST',
+    body,
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  closeModal();
+  toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  await openTripDetail(_selectedTripId);
+}
+
+async function tripDeleteExpense(expenseId) {
+  if (!await confirmDialog('Delete this trip expense?')) return;
+  const result = await api(`/api/trips/${_selectedTripId}/expenses/${expenseId}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Expense deleted', 'success');
+  await openTripDetail(_selectedTripId);
+}
+
+async function tripDelete(tripId) {
+  const targetId = tripId || _selectedTripId;
+  const trip = (_tripDetail && String(_tripDetail.id) === String(targetId))
+    ? _tripDetail
+    : (_trips.find((row) => String(row.id) === String(targetId)) || null);
+  if (!targetId || !trip) return;
+  if (!await confirmDialog(`Delete trip "${trip.destination || trip.name}" and all its expenses?`)) return;
+  const result = await api(`/api/trips/${targetId}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Trip deleted', 'success');
+  await loadTrips();
+}
+
+function showTripExcelImport() {
+  openModal('Import Trips From Excel', `
+    <div style="background:var(--green-l);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--t2)">
+      <div style="font-weight:700;color:var(--green);margin-bottom:6px">Supported Excel styles</div>
+      <div>1. Summary sheet with columns like Destination, Start date, End date, Total Distance, Total Expenditure, Status, Category, Members, Transport Mode.</div>
+      <div style="margin-top:4px">2. Detailed trip sheet like your travel workbook with Location, Start Date, End Date, Total Distance Travelled, Persons, and grouped expense tables.</div>
+    </div>
+    <div class="fg" style="margin-bottom:14px">
+      <label class="fl full">File (.xlsx / .xls / .ods)
+        <input type="file" accept=".xlsx,.xls,.ods" id="tripXlsxFile" class="fi">
+      </label>
+      <label class="fl">Password (if protected)
+        <input type="password" id="tripXlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
+      </label>
+      <label class="fl" style="justify-content:flex-end;padding-top:20px">
+        <button class="btn btn-p" onclick="loadTripExcelSheets()">Load Sheets &rarr;</button>
+      </label>
+    </div>
+    <div id="tripXlsxSheetArea"></div>
+    <div id="tripXlsxPreview"></div>
+  `);
+}
+
+function getSelectedTripSheets() {
+  return [...document.querySelectorAll('.trip-xlsx-sheet-cb:checked')].map((checkbox) => checkbox.value);
+}
+
+async function loadTripExcelSheets() {
+  const file = document.getElementById('tripXlsxFile')?.files?.[0];
+  if (!file) {
+    toast('Please select a file first', 'warning');
+    return;
+  }
+  const password = document.getElementById('tripXlsxPass')?.value || '';
+  document.getElementById('tripXlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file...</div>`;
+  document.getElementById('tripXlsxPreview').innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  if (password) fd.append('password', password);
+  const res = await fetch('/api/trips/import-excel/sheets', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById('tripXlsxSheetArea').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`;
+    return;
+  }
+  const checkboxes = (data.sheets || []).map((sheet, index) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:7px;cursor:pointer;background:var(--bg);margin-bottom:4px">
+      <input type="checkbox" class="trip-xlsx-sheet-cb" value="${sheet}" ${index === 0 ? 'checked' : ''} onchange="document.getElementById('tripXlsxPreview').innerHTML=''">
+      <span style="font-size:13px">${sheet}</span>
+    </label>
+  `).join('');
+  document.getElementById('tripXlsxSheetArea').innerHTML = `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600;color:var(--t2)">SELECT SHEETS</span>
+        <span style="font-size:11px;color:var(--t3);cursor:pointer" onclick="document.querySelectorAll('.trip-xlsx-sheet-cb').forEach(c=>c.checked=true)">Select all</span>
+      </div>
+      ${checkboxes}
+    </div>
+    <button class="btn btn-s" onclick="previewTripExcelImport()">Preview &rarr;</button>
+  `;
+  if ((data.sheets || []).length === 1) previewTripExcelImport();
+}
+
+async function previewTripExcelImport() {
+  const file = document.getElementById('tripXlsxFile')?.files?.[0];
+  const sheets = getSelectedTripSheets();
+  const password = document.getElementById('tripXlsxPass')?.value || '';
+  if (!file) return;
+  if (!sheets.length) {
+    toast('Select at least one sheet', 'warning');
+    return;
+  }
+  document.getElementById('tripXlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheets', JSON.stringify(sheets));
+  if (password) fd.append('password', password);
+  const res = await fetch('/api/trips/import-excel/preview', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById('tripXlsxPreview').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`;
+    return;
+  }
+  if (!data.count) {
+    document.getElementById('tripXlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid trips found. Try another sheet selection or adjust the workbook layout.</p>`;
+    return;
+  }
+  document.getElementById('tripXlsxPreview').innerHTML = `
+    <p style="font-size:13px;margin-bottom:10px">Found <b>${data.count}</b> valid trip${data.count !== 1 ? 's' : ''} <span style="color:var(--t3)">(${data.skipped} sheet${data.skipped !== 1 ? 's' : ''} skipped)</span></p>
+    <div style="max-height:260px;overflow:auto;margin-bottom:14px">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Destination</th><th>Dates</th><th>Status</th><th>Category</th><th class="td-m">Distance</th><th class="td-m">Spend</th><th>Items</th></tr></thead>
+        <tbody>${(data.preview || []).map((trip) => `<tr>
+          <td>${escHtml(trip.destination || '-')}</td>
+          <td>${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}</td>
+          <td>${tripStatusBadge(trip.status)}</td>
+          <td>${escHtml(trip.category || '-')}</td>
+          <td class="td-m">${trip.total_distance != null ? escHtml(String(trip.total_distance)) : '-'}</td>
+          <td class="td-m">${fmtCur(trip.total_expenditure || 0)}</td>
+          <td>${trip.expense_count || 0} expense item${Number(trip.expense_count || 0) !== 1 ? 's' : ''}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="doTripExcelImport()">Import ${data.count} Trip${data.count !== 1 ? 's' : ''}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `;
+}
+
+async function doTripExcelImport() {
+  const file = document.getElementById('tripXlsxFile')?.files?.[0];
+  const sheets = getSelectedTripSheets();
+  const password = document.getElementById('tripXlsxPass')?.value || '';
+  if (!file || !sheets.length) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheets', JSON.stringify(sheets));
+  if (password) fd.append('password', password);
+  const res = await fetch('/api/trips/import-excel', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.success) {
+    toast(`Imported ${data.imported_trips} trips and ${data.imported_expenses} expense items`, 'success');
+    closeModal();
+    await loadTrips();
+  } else {
+    toast(`Trip import failed: ${data.error || 'Unknown error'}`, 'error');
+  }
+}
+
 async function checkTripInvite(token) {
   const data = await api(`/api/trips/invite/${token}`);
   if (!data?.invite) { toast('Invalid or expired invite link', 'error'); return; }
@@ -4759,7 +5551,7 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | public_stats | plans | subscriptions | notifications | ai
+let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | ai
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
@@ -4769,6 +5561,7 @@ let _adminAiReport = null;
 let _adminAiTestResult = null;
 let _adminAiTestError = '';
 let _adminPublicStats = null;
+let _adminExpenseStats = null;
 
 const ADMIN_AI_INTENTS = [
   { key: 'top_expenses', label: 'Most Expensive Item', description: 'Find the highest recent expense or top expense list.', examples: ['what is the most expensive item', 'what are my top expenses'] },
@@ -4825,6 +5618,7 @@ async function loadAdmin() {
   }
   renderAdminShell();
   if (adminSection === 'users') await loadAdminUsers();
+  else if (adminSection === 'expense_stats') await loadAdminExpenseStats();
   else if (adminSection === 'public_stats') await loadAdminPublicStats();
   else if (adminSection === 'plans') await loadAdminPlans();
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
@@ -4833,7 +5627,7 @@ async function loadAdmin() {
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
+  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -4842,6 +5636,73 @@ function renderAdminShell() {
       <div style="font-size:20px;font-weight:700;margin-bottom:16px">Admin Panel</div>
       <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
       <div id="adminContent"></div>
+    </div>`;
+}
+
+async function loadAdminExpenseStats() {
+  const data = await api('/api/admin/expense-stats');
+  _adminExpenseStats = data?.stats || null;
+  renderAdminExpenseStats();
+}
+
+function renderAdminExpenseStats() {
+  const stats = _adminExpenseStats || {};
+  const totalExpenseItems = Number(stats.expense_items || 0);
+  const userRows = Array.isArray(stats.users) ? stats.users : [];
+  const rowsHtml = userRows.length
+    ? userRows.map((user, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td style="font-weight:700;color:var(--t1)">@${escHtml(user.username || '-')}</td>
+          <td>${escHtml(user.display_name || '-')}</td>
+          <td>${escHtml(user.email || '-')}</td>
+          <td>${escHtml(user.mobile || '-')}</td>
+          <td style="text-align:right;font-weight:700">${Number(user.expense_items || 0).toLocaleString('en-IN')}</td>
+        </tr>`)
+        .join('')
+    : `<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:24px">No users found.</td></tr>`;
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:grid;gap:16px">
+      <div class="card" style="padding:18px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div>
+            <div class="card-title">Expense Items Added By Users</div>
+            <div style="font-size:12px;color:var(--t3)">Live total of all saved expense rows across users.</div>
+          </div>
+          <button class="btn btn-s btn-sm" onclick="loadAdminExpenseStats()">Refresh</button>
+        </div>
+      </div>
+      <div class="card" style="padding:22px;max-width:420px">
+        <div style="font-size:12px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.05em">Total Expense Items</div>
+        <div style="font-size:40px;font-weight:800;color:var(--t1);margin-top:10px;font-family:'JetBrains Mono',monospace">${totalExpenseItems.toLocaleString('en-IN')}</div>
+        <div style="font-size:13px;color:var(--t2);margin-top:8px">This is the sum of expense items users have saved in the app.</div>
+      </div>
+      <div class="card" style="padding:18px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+          <div>
+            <div class="card-title">User-wise Expense Items</div>
+            <div style="font-size:12px;color:var(--t3)">Shows each user and how many expense items they have added.</div>
+          </div>
+          <div style="font-size:12px;color:var(--t3)">Users: ${userRows.length}</div>
+        </div>
+        <div style="overflow:auto">
+          <table style="width:100%;border-collapse:collapse;min-width:760px">
+            <thead>
+              <tr style="background:var(--bg2);color:var(--t2)">
+                <th style="text-align:left;padding:10px 12px;font-size:12px">#</th>
+                <th style="text-align:left;padding:10px 12px;font-size:12px">Username</th>
+                <th style="text-align:left;padding:10px 12px;font-size:12px">Name</th>
+                <th style="text-align:left;padding:10px 12px;font-size:12px">Email</th>
+                <th style="text-align:left;padding:10px 12px;font-size:12px">Phone Number</th>
+                <th style="text-align:right;padding:10px 12px;font-size:12px">Total Expense Items</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>`;
 }
 

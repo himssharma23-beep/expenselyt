@@ -1,6 +1,10 @@
-# Expense Lite AI
+# Expenselyt
 
-> Expense Lite AI is a personal finance platform for expense tracking, EMI and loan management, monthly planning, split expenses, bank accounts, credit cards, and AI-assisted financial lookup.
+> Expenselyt, also branded as Expense Lite AI, is a personal finance and bookkeeping platform for expense tracking, split bills, EMI and loan management, monthly planning, bank accounts, credit cards, recurring payments, daily trackers, trip expenses, and AI-assisted financial lookup.
+
+## Brand Names
+- Expenselyt
+- Expense Lite AI
 
 ## Canonical Site
 - https://expenselyt.com/
@@ -12,11 +16,16 @@
 - Terms and Conditions: https://expenselyt.com/terms-and-conditions
 
 ## Product Summary
-- Track personal expenses and categorize spending
-- Manage EMIs, recurring payments, and monthly due planning
-- Monitor bank accounts and credit cards
-- Split expenses with friends
-- Use AI-powered financial lookup features
+- Track personal expenses and bookkeeping records
+- Manage EMIs, recurring payments, loans, and monthly due planning
+- Monitor bank accounts, spendable balances, and credit cards
+- Split expenses with friends, trips, and live shared balances
+- Use daily trackers and petrol divide workflows
+- Use AI-powered financial lookup features based on saved app data
+
+## Search Summary
+- Category: expense tracker, bookkeeping app, personal finance app
+- Key use cases: expense tracking, split bills, EMI tracker, loan tracker, bank balance tracker, credit card tracker, monthly planner, AI finance lookup
 
 ## Crawl Guidance
 - Public marketing and policy pages may be indexed and summarized

@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const Tesseract = require('tesseract.js');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
 const pgPetrolDb = require('../db/postgres-petrol');
@@ -31,6 +32,125 @@ const {
   notifyLiveSplitTripCreated,
   notifyLiveSplitSessionShared,
 } = require('../utils/live-split-notifications');
+
+function normalizeOcrAmount(value) {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value)
+    .replace(/[,\s]/g, '')
+    .replace(/[^0-9.-]/g, '');
+  if (!normalized) return null;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
+}
+
+function normalizeOcrLine(line) {
+  return String(line || '')
+    .replace(/[|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseReceiptDateFromText(text) {
+  const source = String(text || '');
+  const patterns = [
+    /\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/,
+    /\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    if (pattern === patterns[0]) {
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      if (year >= 2000 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+      continue;
+    }
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    let year = Number(match[3]);
+    if (year < 100) year += 2000;
+    if (year >= 2000 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  return null;
+}
+
+function parseReceiptDraftFromText(text) {
+  const rawLines = String(text || '').split(/\r?\n/).map(normalizeOcrLine).filter(Boolean);
+  const lines = rawLines.filter((line) => !/^[\W_]+$/.test(line));
+  const receiptDate = parseReceiptDateFromText(lines.join('\n'));
+  const merchant = lines.find((line) => (
+    line.length >= 3 &&
+    line.length <= 48 &&
+    /[a-z]/i.test(line) &&
+    !/\b(invoice|bill|date|time|cash|gst|total|receipt|tax)\b/i.test(line)
+  )) || 'Scanned receipt';
+
+  let totalAmount = null;
+  for (const line of lines) {
+    if (!/\b(total|grand total|net total|amount due|bill total|balance due)\b/i.test(line)) continue;
+    const amountMatch = line.match(/([0-9]+(?:[.,][0-9]{2})?)\s*$/);
+    const amount = normalizeOcrAmount(amountMatch ? amountMatch[1] : line);
+    if (amount) {
+      totalAmount = amount;
+      break;
+    }
+  }
+
+  const itemRows = [];
+  const seen = new Set();
+  for (const line of lines) {
+    if (/\b(total|subtotal|gst|cgst|sgst|tax|round off|cash|change|invoice|receipt|date|time|phone|upi|card|amount due|balance due)\b/i.test(line)) continue;
+    const match = line.match(/^(.+?)\s+([0-9]+(?:[.,][0-9]{2})?)$/);
+    if (!match) continue;
+    const itemName = String(match[1] || '').replace(/^[^a-z0-9]+/i, '').trim();
+    const amount = normalizeOcrAmount(match[2]);
+    if (!itemName || itemName.length < 2 || !amount) continue;
+    if (/^\d+$/.test(itemName) || itemName.length > 80) continue;
+    const key = `${itemName.toLowerCase()}|${amount.toFixed(2)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    itemRows.push({
+      item_name: itemName,
+      amount,
+      purchase_date: receiptDate,
+      category: null,
+      is_extra: false,
+      selected: true,
+    });
+  }
+
+  let items = itemRows.filter((row) => row.amount < 100000);
+  if (totalAmount && items.length > 1) {
+    const sum = items.reduce((acc, row) => acc + row.amount, 0);
+    if (sum > totalAmount * 1.6) {
+      items = items.filter((row) => row.amount <= totalAmount);
+    }
+  }
+
+  if (!items.length && totalAmount) {
+    items = [{
+      item_name: merchant,
+      amount: totalAmount,
+      purchase_date: receiptDate,
+      category: null,
+      is_extra: false,
+      selected: true,
+    }];
+  }
+
+  return {
+    merchant,
+    purchase_date: receiptDate,
+    total_amount: totalAmount,
+    items,
+    raw_text: lines.join('\n'),
+  };
+}
 
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
@@ -183,6 +303,33 @@ const XLSX = require('xlsx');
 const XlsxPopulate = require('xlsx-populate');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    if (!String(req.file.mimetype || '').startsWith('image/')) {
+      return res.status(400).json({ error: 'Only image files are supported right now' });
+    }
+
+    const result = await Tesseract.recognize(req.file.buffer, 'eng', {
+      logger: () => {},
+    });
+    const text = String(result?.data?.text || '').trim();
+    if (!text) return res.status(422).json({ error: 'Could not read text from this image' });
+
+    const draft = parseReceiptDraftFromText(text);
+    res.json({
+      success: true,
+      draft: {
+        ...draft,
+        confidence: Number(result?.data?.confidence || 0),
+      },
+    });
+  } catch (err) {
+    console.error('[expenses/scan-image]', err);
+    res.status(500).json({ error: err.message || 'Could not scan image' });
+  }
+});
+
 router.post('/expenses/import', upload.single('file'), async (req, res) => {
   try {
     const coreDb = getCoreDb();
@@ -277,6 +424,256 @@ router.post('/expenses/import-excel', withUpload, async (req, res) => {
 function parseSheetParam(param) {
   if (!param) return null;
   try { return JSON.parse(param); } catch { return [param]; }
+}
+
+function normalizeExcelHeader(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function parseExcelAmount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
+  const cleaned = String(value).replace(/[^0-9.-]/g, '');
+  const amount = parseFloat(cleaned);
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : null;
+}
+
+function excelCellText(sheet, row, col) {
+  return String(sheet.cell(row, col).value() || '').trim();
+}
+
+function titleCaseWords(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function parseTripMembersCell(value) {
+  return [...new Set(String(value || '')
+    .split(/\r?\n|,|&/)
+    .map((item) => item.trim())
+    .filter(Boolean))];
+}
+
+function inferImportedTripStatus(startDate, endDate, rawStatus) {
+  const normalizedStatus = String(rawStatus || '').trim().toLowerCase();
+  if (['pending', 'upcoming', 'ongoing', 'completed', 'cancelled'].includes(normalizedStatus)) {
+    return normalizedStatus;
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
+  const end = endDate ? new Date(`${endDate}T00:00:00`) : null;
+  if (end && end < today) return 'completed';
+  if (start && start > today) return 'upcoming';
+  if (start && start <= today && (!end || end >= today)) return 'ongoing';
+  return 'upcoming';
+}
+
+function buildTripSummaryFromRow(row, cols) {
+  const destination = String(row[cols.destination] || '').trim();
+  const startDate = parseExcelDate(row[cols.start_date]);
+  if (!destination || !startDate) return null;
+  const endDate = cols.end_date != null ? parseExcelDate(row[cols.end_date]) : null;
+  return {
+    destination,
+    start_date: startDate,
+    end_date: endDate,
+    total_distance: cols.total_distance != null ? parseExcelAmount(row[cols.total_distance]) : null,
+    total_expenditure: cols.total_expenditure != null ? parseExcelAmount(row[cols.total_expenditure]) || 0 : 0,
+    status: inferImportedTripStatus(startDate, endDate, cols.status != null ? row[cols.status] : ''),
+    category: cols.category != null ? String(row[cols.category] || '').trim() || null : null,
+    transport_mode: cols.transport_mode != null ? String(row[cols.transport_mode] || '').trim() || null : null,
+    members: cols.members != null ? parseTripMembersCell(row[cols.members]) : [],
+    expenses: [],
+  };
+}
+
+function parseTripSummarySheet(sheet) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return [];
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  const aliases = {
+    destination: ['destination', 'trip', 'trip destination', 'location'],
+    start_date: ['start date', 'trip start date', 'from date'],
+    end_date: ['end date', 'trip end date', 'to date'],
+    total_distance: ['total distance', 'distance', 'total distance travelled', 'distance travelled'],
+    total_expenditure: ['total expenditure', 'expenditure', 'total expenses', 'expense total', 'total spent'],
+    status: ['status', 'trip status'],
+    category: ['category', 'trip category'],
+    members: ['members', 'persons', 'people'],
+    transport_mode: ['transport mode', 'mode', 'vehicle', 'travel mode'],
+  };
+
+  for (let row = 1; row <= Math.min(lastRow, 8); row++) {
+    const headers = [];
+    for (let col = 1; col <= lastCol; col++) headers.push(normalizeExcelHeader(sheet.cell(row, col).value()));
+    const cols = {};
+    for (const [key, names] of Object.entries(aliases)) {
+      const index = headers.findIndex((header) => names.includes(header));
+      if (index >= 0) cols[key] = index;
+    }
+    if (cols.destination != null && cols.start_date != null) {
+      const trips = [];
+      for (let r = row + 1; r <= lastRow; r++) {
+        const values = [];
+        for (let c = 1; c <= lastCol; c++) values.push(sheet.cell(r, c).value());
+        const trip = buildTripSummaryFromRow(values, cols);
+        if (trip) trips.push(trip);
+      }
+      return trips;
+    }
+  }
+  return [];
+}
+
+function findLabelValue(sheet, labels) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return null;
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  for (let row = 1; row <= Math.min(lastRow, 25); row++) {
+    for (let col = 1; col <= lastCol; col++) {
+      const normalized = normalizeExcelHeader(sheet.cell(row, col).value());
+      if (labels.includes(normalized)) {
+        const right = sheet.cell(row, col + 1).value();
+        if (right !== undefined && right !== null && String(right).trim()) return right;
+        const below = sheet.cell(row + 1, col).value();
+        if (below !== undefined && below !== null && String(below).trim()) return below;
+      }
+    }
+  }
+  return null;
+}
+
+function parsePersonsColumn(sheet) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return [];
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  for (let row = 1; row <= Math.min(lastRow, 40); row++) {
+    for (let col = 1; col <= lastCol; col++) {
+      const normalized = normalizeExcelHeader(sheet.cell(row, col).value());
+      if (['persons', 'members', 'people'].includes(normalized)) {
+        const names = [];
+        for (let r = row + 1; r <= lastRow; r++) {
+          const value = excelCellText(sheet, r, col);
+          const nextNorm = normalizeExcelHeader(value);
+          if (!value) break;
+          if (nextNorm.includes('expenses') || nextNorm === 'total') break;
+          names.push(value);
+        }
+        return [...new Set(names)];
+      }
+    }
+  }
+  return [];
+}
+
+function parseTripDetailExpenses(sheet) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return [];
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  const expenses = [];
+  for (let row = 1; row <= lastRow; row++) {
+    for (let col = 1; col <= lastCol; col++) {
+      const title = excelCellText(sheet, row, col);
+      const normalizedTitle = normalizeExcelHeader(title);
+      if (!normalizedTitle || normalizedTitle === 'total expenses' || !normalizedTitle.endsWith('expenses')) continue;
+      const type = titleCaseWords(normalizedTitle.replace(/\bexpenses\b/, '').trim() || 'Other');
+      let blanks = 0;
+      for (let r = row + 2; r <= lastRow; r++) {
+        const label = excelCellText(sheet, r, col);
+        const qtyVal = sheet.cell(r, col + 1).value();
+        const priceVal = sheet.cell(r, col + 2).value();
+        const totalVal = sheet.cell(r, col + 3).value();
+        const normalizedLabel = normalizeExcelHeader(label);
+        if (!label && !qtyVal && !priceVal && !totalVal) {
+          blanks++;
+          if (blanks >= 2) break;
+          continue;
+        }
+        blanks = 0;
+        if (normalizedLabel === 'things' || normalizedLabel === 'item' || normalizedLabel === 'items') continue;
+        if (normalizedLabel === 'total') break;
+        const amount = parseExcelAmount(totalVal) || (() => {
+          const qty = parseExcelAmount(qtyVal);
+          const price = parseExcelAmount(priceVal);
+          return qty != null && price != null ? Math.round(qty * price * 100) / 100 : null;
+        })();
+        if (!label || !amount || amount <= 0) continue;
+        expenses.push({
+          expense_type: type,
+          details: label,
+          quantity: parseExcelAmount(qtyVal) || 1,
+          unit_price: parseExcelAmount(priceVal) || amount,
+          amount,
+          expense_date: null,
+          notes: null,
+        });
+      }
+    }
+  }
+  return expenses;
+}
+
+function parseTripDetailSheet(sheet) {
+  const destinationRaw = findLabelValue(sheet, ['location', 'destination', 'trip destination']);
+  const startRaw = findLabelValue(sheet, ['start date']);
+  const endRaw = findLabelValue(sheet, ['end date']);
+  const distanceRaw = findLabelValue(sheet, ['total distance travelled', 'total distance', 'distance travelled', 'distance']);
+  if (!destinationRaw || !startRaw) return null;
+  const destination = String(destinationRaw).trim().split(',')[0].trim();
+  const start_date = parseExcelDate(startRaw);
+  if (!destination || !start_date) return null;
+  const expenses = parseTripDetailExpenses(sheet).map((expense) => ({
+    ...expense,
+    expense_date: start_date,
+  }));
+  const total = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  return {
+    destination,
+    start_date,
+    end_date: parseExcelDate(endRaw),
+    total_distance: parseExcelAmount(distanceRaw),
+    total_expenditure: Math.round(total * 100) / 100,
+    status: inferImportedTripStatus(start_date, parseExcelDate(endRaw), ''),
+    category: null,
+    transport_mode: null,
+    members: parsePersonsColumn(sheet),
+    expenses,
+    notes: 'Imported from detailed trip sheet',
+  };
+}
+
+async function parseTripsExcelBuffer(buffer, sheetNames, password) {
+  const opts = password ? { password } : {};
+  const wb = await XlsxPopulate.fromDataAsync(buffer, opts);
+  const allSheets = wb.sheets().map((sheet) => sheet.name());
+  const targets = (Array.isArray(sheetNames) && sheetNames.length > 0)
+    ? sheetNames.filter((name) => allSheets.includes(name))
+    : [allSheets[0]];
+  const trips = [];
+  let skipped = 0;
+  for (const sheetName of targets) {
+    const sheet = wb.sheet(sheetName);
+    const summaryTrips = parseTripSummarySheet(sheet);
+    if (summaryTrips.length) {
+      for (const trip of summaryTrips) trips.push(trip);
+      continue;
+    }
+    const detailTrip = parseTripDetailSheet(sheet);
+    if (detailTrip) {
+      trips.push(detailTrip);
+      continue;
+    }
+    skipped++;
+  }
+  return { trips, skipped };
 }
 
 async function parseExcelBuffer(buffer, sheetNames, password) {
@@ -1275,7 +1672,7 @@ router.delete('/live-split/trips/:id(\\d+)/members/:mid(\\d+)', async (req, res)
 router.post('/live-split/groups', async (req, res) => {
   try {
     const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id, owner_added_to_expense } = req.body;
-    if (!details || !total_amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
+    if (!details || !total_amount || !Array.isArray(splits)) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(
       getCoreDb().addLiveSplitGroup(req.session.userId, {
         divide_date,
@@ -1299,7 +1696,7 @@ router.post('/live-split/groups', async (req, res) => {
 router.put('/live-split/groups/:id(\\d+)', async (req, res) => {
   try {
     const { divide_date, details, paid_by, total_amount, splits, heading, split_mode, trip_id } = req.body;
-    if (!details || !total_amount || !splits || !splits.length) {
+    if (!details || !total_amount || !Array.isArray(splits)) {
       return res.status(400).json({ error: 'Missing fields' });
     }
     await Promise.resolve(
@@ -1495,16 +1892,21 @@ router.get('/trips', async (req, res) => {
 
 router.post('/trips', async (req, res) => {
   try {
-    const { name, start_date, end_date, members } = req.body;
-    if (!name || !start_date) return res.status(400).json({ error: 'Name and start date required' });
-    const id = await Promise.resolve(getCoreDb().createTrip(req.session.userId, { name, start_date, end_date, members: members || [] }));
-    for (const member of (members || [])) {
-      if (member?.linked_user_id) {
-        sendTripLinkedEmailToUser(req.session.userId, id, member.linked_user_id, member.permission || 'edit').catch(() => {});
-      }
-    }
+    const { destination, start_date, end_date, status, category, transport_mode, total_distance, notes, members } = req.body;
+    if (!destination || !start_date) return res.status(400).json({ error: 'Destination and start date required' });
+    const id = await Promise.resolve(getCoreDb().createTrip(req.session.userId, {
+      destination,
+      start_date,
+      end_date,
+      status,
+      category,
+      transport_mode,
+      total_distance,
+      notes,
+      members: members || [],
+    }));
     res.json({ success: true, id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
 router.get('/trips/:id', async (req, res) => {
@@ -1519,7 +1921,7 @@ router.put('/trips/:id', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().updateTrip(req.session.userId, req.params.id, req.body));
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
 router.delete('/trips/:id', async (req, res) => {
@@ -1531,17 +1933,116 @@ router.delete('/trips/:id', async (req, res) => {
 
 router.post('/trips/:id/expenses', async (req, res) => {
   try {
-    const { paid_by_key, paid_by_name, details, amount, expense_date, split_mode, splits } = req.body;
-    if (!details || !amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
-    const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
+    const { expense_type, details, quantity, unit_price, amount, expense_date, notes } = req.body;
+    if (!expense_type || !details) return res.status(400).json({ error: 'Expense type and detail are required' });
+    const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, {
+      expense_type,
+      details,
+      quantity,
+      unit_price,
+      amount,
+      expense_date,
+      notes,
+    }));
     res.json({ success: true, id });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
+router.post('/trips/import-excel/sheets', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const password = req.body.password || '';
+    const opts = password ? { password } : {};
+    const wb = await XlsxPopulate.fromDataAsync(req.file.buffer, opts);
+    res.json({ sheets: wb.sheets().map((sheet) => sheet.name()) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to read file' });
+  }
+});
+
+router.post('/trips/import-excel/preview', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const sheets = parseSheetParam(req.body.sheets);
+    const parsed = await parseTripsExcelBuffer(req.file.buffer, sheets, req.body.password);
+    res.json({
+      count: parsed.trips.length,
+      skipped: parsed.skipped,
+      preview: parsed.trips.slice(0, 10).map((trip) => ({
+        destination: trip.destination,
+        start_date: trip.start_date,
+        end_date: trip.end_date,
+        status: trip.status,
+        category: trip.category,
+        transport_mode: trip.transport_mode,
+        total_distance: trip.total_distance,
+        members: trip.members,
+        expense_count: (trip.expenses || []).length,
+        total_expenditure: trip.total_expenditure || 0,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to preview file' });
+  }
+});
+
+router.post('/trips/import-excel', withUpload, async (req, res) => {
+  try {
+    const coreDb = getCoreDb();
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const sheets = parseSheetParam(req.body.sheets);
+    const parsed = await parseTripsExcelBuffer(req.file.buffer, sheets, req.body.password);
+    if (!parsed.trips.length) return res.status(400).json({ error: 'No valid trips found in the selected sheet(s).' });
+    let importedTrips = 0;
+    let importedExpenses = 0;
+    for (const trip of parsed.trips) {
+      const tripId = await Promise.resolve(coreDb.createTrip(req.session.userId, {
+        destination: trip.destination,
+        start_date: trip.start_date,
+        end_date: trip.end_date,
+        status: trip.status,
+        category: trip.category,
+        transport_mode: trip.transport_mode,
+        total_distance: trip.total_distance,
+        members: trip.members || [],
+        notes: trip.notes || null,
+      }));
+      importedTrips++;
+      for (const expense of (trip.expenses || [])) {
+        await Promise.resolve(coreDb.addTripExpense(req.session.userId, tripId, expense));
+        importedExpenses++;
+      }
+      if ((!trip.expenses || trip.expenses.length === 0) && Number(trip.total_expenditure || 0) > 0) {
+        await Promise.resolve(coreDb.addTripExpense(req.session.userId, tripId, {
+          expense_type: 'Imported Total',
+          details: 'Imported trip total',
+          quantity: 1,
+          unit_price: Number(trip.total_expenditure || 0),
+          amount: Number(trip.total_expenditure || 0),
+          expense_date: trip.end_date || trip.start_date,
+          notes: 'Created from Excel summary import',
+        }));
+        importedExpenses++;
+      }
+    }
+    res.json({ success: true, imported_trips: importedTrips, imported_expenses: importedExpenses, skipped: parsed.skipped });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Trip import failed' });
+  }
+});
+
 router.put('/trips/:id/expenses/:eid', async (req, res) => {
   try {
-    const { paid_by_key, paid_by_name, details, amount, expense_date, split_mode, splits } = req.body;
-    await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, { paid_by_key, paid_by_name, details, amount: parseFloat(amount), expense_date, split_mode, splits }));
+    const { expense_type, details, quantity, unit_price, amount, expense_date, notes } = req.body;
+    await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, {
+      expense_type,
+      details,
+      quantity,
+      unit_price,
+      amount,
+      expense_date,
+      notes,
+    }));
     res.json({ success: true });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
@@ -2191,6 +2692,15 @@ const { requireAdmin } = require('../middleware/auth');
 router.get('/admin/public-stats', requireAdmin, async (req, res) => {
   try {
     const stats = await Promise.resolve(getCoreDb().getPublicSiteStats());
+    res.json({ stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/expense-stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.resolve(getCoreDb().getAdminExpenseStats());
     res.json({ stats });
   } catch (err) {
     res.status(500).json({ error: err.message });

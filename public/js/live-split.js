@@ -648,6 +648,22 @@
     }).filter(Boolean);
   }
 
+  function payerPeopleForForm(form) {
+    if (!form) return [];
+    if (Number(form.trip_id || 0) > 0) {
+      const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
+      const people = [{ key: 'self', name: 'You' }];
+      (state.friends || []).forEach((friend) => {
+        const friendId = Number(friend?.id || 0);
+        if (!(friendId > 0)) return;
+        if (scopedFriendIds && !scopedFriendIds.has(friendId)) return;
+        people.push({ key: String(friendId), name: String(friend?.name || '').trim() || 'Friend' });
+      });
+      return people.filter((person) => person.name);
+    }
+    return peopleForForm(form);
+  }
+
   function getTripScopedFriendIds(tripId) {
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return null;
@@ -709,6 +725,12 @@
       });
     });
     return people.filter((person) => person.name);
+  }
+
+  function editPayerPeople(form) {
+    if (!form) return [];
+    if (Number(form.trip_id || 0) > 0) return editSelectablePeople(form);
+    return peopleForEditExpense(form);
   }
 
   function autoFillValues(mode, people, amount) {
@@ -1335,12 +1357,13 @@
     if (!form) return;
     const people = peopleForEditExpense(form);
     const selectablePeople = editSelectablePeople(form);
+    const payerPeople = editPayerPeople(form);
     const selectedKeys = new Set((form.selected_keys || []).map((key) => String(key)));
     const ownerKey = String(form.owner_key || 'owner');
     const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
     const preview = computeShares(n(form.total_amount), form.splitMode, people, form.splitValues);
     const progress = splitProgress(n(form.total_amount), form.splitMode, people, form.splitValues);
-    const payerOptions = people.map((person) => person.name)
+    const payerOptions = payerPeople.map((person) => person.name)
       .filter((value, index, arr) => value && arr.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index)
       .map((name) => `<option value="${escHtml(name)}" ${String(form.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`)
       .join('');
@@ -1363,7 +1386,7 @@
               </label>
             `).join('')}
           </div>
-          ${scopedFriendIds ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : ''}
+          ${scopedFriendIds ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be participants. Payer can still be you or any trip member.</div>' : ''}
         </div>
         <div>
           <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Split Mode</div>
@@ -2249,9 +2272,9 @@
     }
     if (state.create.selected.has(key)) state.create.selected.delete(key);
     else state.create.selected.add(key);
-    if (!state.create.selected.has(state.create.paidBy)) {
-      const nextPeople = peopleForForm(state.create);
-      state.create.paidBy = nextPeople[0]?.key || 'self';
+    const allowedPayers = payerPeopleForForm(state.create);
+    if (!allowedPayers.some((person) => String(person.key) === String(state.create.paidBy))) {
+      state.create.paidBy = allowedPayers[0]?.key || 'self';
     }
     if (!state.create.selected.has('self')) state.create.addExpense = false;
     state.create.splitValues = autoFillValues(state.create.splitMode, peopleForForm(state.create), n(state.create.amount));
@@ -2309,13 +2332,14 @@
     const form = state.create;
     if (!form) return;
     const people = peopleForForm(form);
+    const payerPeople = payerPeopleForForm(form);
     const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
     const stepTwoSelectableFriends = (state.friends || [])
       .filter((friend) => !scopedFriendIds || scopedFriendIds.has(Number(friend.id)));
     const preview = computeShares(n(form.amount), form.splitMode, people, form.splitValues);
     const progress = splitProgress(n(form.amount), form.splitMode, people, form.splitValues);
     const friendPeople = people.filter((person) => person.key !== 'self');
-    const payerOptions = people.map((person) => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('');
+    const payerOptions = payerPeople.map((person) => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('');
     if (form.step === 1) {
       const outgoingNames = new Set((state.outgoingInvites || []).map((invite) => String(invite.target_name || invite.target_display_name || invite.target_username || '').trim().toLowerCase()).filter(Boolean));
       const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
@@ -2324,7 +2348,7 @@
         .filter((friend) => !scopedFriendIds || scopedFriendIds.has(Number(friend.id)));
       openModal('Live Split - Select Friends', `
         <div style="display:grid;gap:10px">
-          <div style="font-size:12px;color:var(--t3)">${Number(form.trip_id || 0) > 0 ? 'Pick participants from this trip members list.' : 'Pick people for this split. You are selected by default.'}</div>
+          <div style="font-size:12px;color:var(--t3)">${Number(form.trip_id || 0) > 0 ? 'Pick any trip members you want in this split. You can also keep only yourself selected.' : 'Pick people for this split. You are selected by default.'}</div>
           <label class="fc"><input type="checkbox" checked disabled><span>You</span></label>
           ${selectableFriends.map((friend) => {
             const isPending = !Number(friend?.linked_user_id) && outgoingNames.has(String(friend?.name || '').trim().toLowerCase());
@@ -2379,7 +2403,7 @@
           `).join('')}
           ${!stepTwoSelectableFriends.length ? '<div style="font-size:12px;color:var(--t3)">No selectable members.</div>' : ''}
         </div>
-        ${Number(form.trip_id || 0) > 0 ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : ''}
+        ${Number(form.trip_id || 0) > 0 ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be participants. Payer can be you or any trip member.</div>' : ''}
       </div>
       <div style="margin-top:10px">
         <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Split Mode</div>
@@ -2719,16 +2743,17 @@
   async function saveLiveSplit() {
     const form = state.create;
     const people = peopleForForm(form);
+    const payerPeople = payerPeopleForForm(form);
     const preview = computeShares(n(form.amount), form.splitMode, people, form.splitValues);
     if (!preview.valid) {
       toast(preview.error || 'Invalid split values', 'warning');
       return;
     }
-    if (!friendPeopleCount()) {
+    if (!(Number(form.trip_id || 0) > 0) && !friendPeopleCount()) {
       toast('Select at least one friend', 'warning');
       return;
     }
-    const payerPerson = people.find((person) => person.key === form.paidBy);
+    const payerPerson = payerPeople.find((person) => person.key === form.paidBy);
     if (!payerPerson) {
       toast('Choose who paid', 'warning');
       return;
@@ -2841,7 +2866,7 @@
 
   function nextStep() {
     if (!state.create) return;
-    if (!friendPeopleCount()) {
+    if (!(Number(state.create.trip_id || 0) > 0) && !friendPeopleCount()) {
       toast('Select at least one friend to continue', 'warning');
       return;
     }
@@ -3320,7 +3345,8 @@
       return;
     }
     const people = peopleForEditExpense(form);
-    if (!people.filter((person) => String(person.key) !== String(form.owner_key || 'owner')).length) {
+    const payerPeople = editPayerPeople(form);
+    if (!(Number(form.trip_id || 0) > 0) && !people.filter((person) => String(person.key) !== String(form.owner_key || 'owner')).length) {
       toast('At least one participant is required', 'warning');
       return;
     }
@@ -3329,11 +3355,16 @@
       toast(preview.error || 'Invalid split values', 'warning');
       return;
     }
+    const payerName = String(form.paid_by || '').trim();
+    if (!payerPeople.some((person) => String(person.name || '').trim().toLowerCase() === payerName.toLowerCase())) {
+      toast('Choose who paid', 'warning');
+      return;
+    }
     const payload = {
       divide_date: toLocalIsoDate(form.divide_date, todayLocalIso()),
       details: String(form.details || '').trim(),
       heading: String(form.heading || form.details || '').trim(),
-      paid_by: String(form.paid_by || '').trim(),
+       paid_by: payerName,
       total_amount: Number(form.total_amount),
       split_mode: String(form.splitMode || 'equal'),
       trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,
@@ -3739,7 +3770,7 @@
     const selected = new Set((form.selected_keys || []).map((item) => String(item)));
     if (selected.has(nextKey)) {
       const nonOwnerCount = [...selected].filter((item) => item !== ownerKey).length;
-      if (nextKey !== ownerKey && nonOwnerCount <= 1) {
+      if (nextKey !== ownerKey && nonOwnerCount <= 1 && !(Number(form.trip_id || 0) > 0)) {
         toast('At least one participant is required', 'warning');
         return;
       }
@@ -3749,8 +3780,9 @@
     }
     form.selected_keys = [...selected];
     const people = peopleForEditExpense(form);
-    const paidExists = people.some((person) => String(person.name || '').trim().toLowerCase() === String(form.paid_by || '').trim().toLowerCase());
-    if (!paidExists) form.paid_by = people[0]?.name || '';
+    const payerPeople = editPayerPeople(form);
+    const paidExists = payerPeople.some((person) => String(person.name || '').trim().toLowerCase() === String(form.paid_by || '').trim().toLowerCase());
+    if (!paidExists) form.paid_by = payerPeople[0]?.name || '';
     form.splitValues = autoFillValues(form.splitMode, people, n(form.total_amount));
     renderExpenseEditorModal();
   };
