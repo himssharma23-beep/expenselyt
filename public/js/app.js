@@ -10942,6 +10942,7 @@ async function renderTrackerDetail() {
         <button class="btn btn-g btn-sm" style="margin-left:auto" onclick="showTrackerModal(${tracker.id})">Edit</button>
       </div>
 
+      
       <div class="filter-row" style="gap:8px;overflow:auto;margin-bottom:12px">${monthTiles}</div>
 
       <div class="summary-card" style="margin-bottom:16px">
