@@ -922,6 +922,15 @@ router.get('/live-split/friends', async (req, res) => {
   }
 });
 
+router.get('/live-split/friends/:id/activity', async (req, res) => {
+  try {
+    const activities = await Promise.resolve(getCoreDb().getLiveSplitFriendActivities(req.session.userId, req.params.id, req.query?.limit));
+    res.json({ activities });
+  } catch (err) {
+    res.status(err.message === 'Live split friend not found' ? 404 : 500).json({ error: err.message });
+  }
+});
+
 router.post('/live-split/friends', async (req, res) => {
   try {
     const id = await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, req.body?.name));

@@ -1049,6 +1049,49 @@ async function logLiveSplitGroupActivity(client, { groupId, actorUserId = null, 
   );
 }
 
+async function logLiveSplitFriendActivities(client, {
+  ownerUserId,
+  groupId = null,
+  actorUserId = null,
+  action,
+  summary = null,
+  expenseDetails = null,
+  divideDate = null,
+  totalAmount = null,
+  splits = [],
+}) {
+  const uniqueSplits = [];
+  const seen = new Set();
+  for (const split of (splits || [])) {
+    const friendId = Number(split?.friend_id || 0);
+    if (!(friendId > 0) || seen.has(friendId)) continue;
+    seen.add(friendId);
+    uniqueSplits.push({
+      friend_id: friendId,
+      friend_name: String(split?.friend_name || '').trim() || 'Friend',
+    });
+  }
+  for (const split of uniqueSplits) {
+    await client.query(
+      `INSERT INTO live_split_friend_activity
+         (owner_user_id, friend_id, group_id, actor_user_id, action, summary, expense_details, divide_date, total_amount, friend_name_snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        Number(ownerUserId),
+        split.friend_id,
+        groupId ? Number(groupId) : null,
+        actorUserId || null,
+        String(action || '').trim() || 'updated',
+        summary || null,
+        expenseDetails ? String(expenseDetails).trim() : null,
+        divideDate || null,
+        totalAmount != null ? num(totalAmount) : null,
+        split.friend_name,
+      ]
+    );
+  }
+}
+
 function liveSplitShareMap(splits = []) {
   const map = new Map();
   (splits || []).forEach((split) => {
@@ -1223,6 +1266,42 @@ async function getLiveSplitGroupDetailForUser(userId, groupId) {
   };
 }
 
+async function getLiveSplitFriendActivities(userId, friendId, limit = 60) {
+  const uid = Number(userId);
+  const fid = Number(friendId);
+  const cappedLimit = Math.max(1, Math.min(200, Number(limit) || 60));
+  const friendResult = await query(
+    `SELECT id, name
+     FROM live_split_friends
+     WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL
+     LIMIT 1`,
+    [uid, fid]
+  );
+  if (!friendResult.rows[0]) throw new Error('Live split friend not found');
+
+  const result = await query(
+    `SELECT a.id, a.owner_user_id, a.friend_id, a.group_id, a.actor_user_id, a.action, a.summary,
+            a.expense_details, a.divide_date, a.total_amount, a.friend_name_snapshot, a.created_at,
+            u.display_name AS actor_name, u.username AS actor_username
+     FROM live_split_friend_activity a
+     LEFT JOIN users u ON u.id = a.actor_user_id
+     WHERE a.owner_user_id = $1
+       AND a.friend_id = $2
+     ORDER BY a.created_at DESC, a.id DESC
+     LIMIT $3`,
+    [uid, fid, cappedLimit]
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    id: Number(row.id),
+    owner_user_id: Number(row.owner_user_id),
+    friend_id: Number(row.friend_id),
+    group_id: row.group_id ? Number(row.group_id) : null,
+    actor_user_id: row.actor_user_id ? Number(row.actor_user_id) : null,
+    total_amount: row.total_amount == null ? null : num(row.total_amount),
+  }));
+}
+
 async function addLiveSplitGroup(userId, data) {
   return withTransaction(async (client) => {
     const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
@@ -1255,6 +1334,17 @@ async function addLiveSplitGroup(userId, data) {
       actorUserId: userId,
       action: 'created',
       summary: buildLiveSplitActivitySentence('created', String(data.details || data.heading || 'Live Split expense').trim()),
+    });
+    await logLiveSplitFriendActivities(client, {
+      ownerUserId,
+      groupId,
+      actorUserId: userId,
+      action: 'created',
+      summary: buildLiveSplitActivitySentence('created', String(data.details || data.heading || 'Live Split expense').trim()),
+      expenseDetails: String(data.details || data.heading || 'Live Split expense').trim(),
+      divideDate,
+      totalAmount: data.total_amount,
+      splits: normalizedSplits,
     });
     return groupId;
   });
@@ -1435,7 +1525,11 @@ async function updateLiveSplitGroup(userId, groupId, data) {
       splits: normalizedSplits,
       split_mode: String(data.split_mode || 'amount'),
     };
-    const changeList = describeLiveSplitChanges(previousState, nextState);
+    const activitySummary = `updated the "${String(data.details || group.details || 'Live Split expense').trim()}"\nnew amount="${num(data.total_amount).toFixed(2)}"\nsplit type="${inferLiveSplitModeLabel(data.split_mode || 'amount', normalizedSplits)}"`;
+    const activitySplits = [
+      ...previousState.splits,
+      ...normalizedSplits,
+    ];
 
     await client.query(
       `UPDATE live_split_groups
@@ -1477,7 +1571,18 @@ async function updateLiveSplitGroup(userId, groupId, data) {
       groupId: gid,
       actorUserId: uid,
       action: 'edited',
-      summary: `updated the "${String(data.details || group.details || 'Live Split expense').trim()}"\nnew amount="${num(data.total_amount).toFixed(2)}"\nsplit type="${inferLiveSplitModeLabel(data.split_mode || 'amount', normalizedSplits)}"`,
+      summary: activitySummary,
+    });
+    await logLiveSplitFriendActivities(client, {
+      ownerUserId,
+      groupId: gid,
+      actorUserId: uid,
+      action: 'edited',
+      summary: activitySummary,
+      expenseDetails: String(data.details || group.details || 'Live Split expense').trim(),
+      divideDate,
+      totalAmount: data.total_amount,
+      splits: activitySplits,
     });
     return gid;
   });
@@ -1486,7 +1591,7 @@ async function updateLiveSplitGroup(userId, groupId, data) {
 async function deleteLiveSplitGroup(userId, id) {
   await withTransaction(async (client) => {
     const own = await client.query(
-      `SELECT g.id, g.details
+      `SELECT g.id, g.user_id, g.details, g.divide_date, g.total_amount
        FROM live_split_groups g
        WHERE g.id = $2
          AND (
@@ -1504,11 +1609,34 @@ async function deleteLiveSplitGroup(userId, id) {
       [userId, id]
     );
     if (!own.rows[0]) throw new Error('Not found');
+    const splitsResult = await client.query(
+      `SELECT friend_id, friend_name, share_amount
+       FROM live_split_splits
+       WHERE group_id = $1
+       ORDER BY id`,
+      [id]
+    );
+    const activitySummary = buildLiveSplitActivitySentence('deleted', String(own.rows[0].details || 'Live Split expense').trim());
     await logLiveSplitGroupActivity(client, {
       groupId: Number(id),
       actorUserId: userId,
       action: 'deleted',
-      summary: buildLiveSplitActivitySentence('deleted', String(own.rows[0].details || 'Live Split expense').trim()),
+      summary: activitySummary,
+    });
+    await logLiveSplitFriendActivities(client, {
+      ownerUserId: Number(own.rows[0].user_id || userId),
+      groupId: Number(id),
+      actorUserId: userId,
+      action: 'deleted',
+      summary: activitySummary,
+      expenseDetails: String(own.rows[0].details || 'Live Split expense').trim(),
+      divideDate: own.rows[0].divide_date,
+      totalAmount: own.rows[0].total_amount,
+      splits: splitsResult.rows.map((split) => ({
+        friend_id: Number(split.friend_id),
+        friend_name: String(split.friend_name || '').trim(),
+        share_amount: num(split.share_amount),
+      })),
     });
     await client.query('DELETE FROM live_split_group_shares WHERE group_id = $1', [id]);
     await client.query('DELETE FROM live_split_splits WHERE group_id = $1', [id]);
@@ -3122,6 +3250,7 @@ module.exports = {
   linkFriendToUser,
   deleteFriend,
   getLiveSplitFriends,
+  getLiveSplitFriendActivities,
   addLiveSplitFriend,
   updateLiveSplitFriend,
   linkLiveSplitFriendToUser,

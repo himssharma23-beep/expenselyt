@@ -731,26 +731,43 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   40% { transform: translateY(-6px); opacity: 1; }
 }
 .live-split-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: #fff;
   color: var(--t2);
   padding: 0;
   cursor: pointer;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+  transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease, color .14s ease;
 }
 .live-split-icon-btn svg {
   width: 14px;
   height: 14px;
   fill: currentColor;
 }
+.live-split-icon-btn.soft {
+  background: #fff;
+  color: var(--t2);
+}
 .live-split-icon-btn.danger {
   color: var(--red);
   border-color: #f3c5c5;
+  background: #fff6f5;
+}
+.live-split-icon-btn.success {
+  color: #fff;
+  border-color: var(--em);
+  background: var(--em);
+}
+.live-split-icon-btn.success.emphasize {
+  width: 34px;
+  height: 34px;
+  box-shadow: 0 8px 18px rgba(20, 90, 60, 0.22);
 }
 .live-split-icon-btn.hero {
   color: #fff;
@@ -763,8 +780,35 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 }
 .live-split-icon-btn:hover {
   background: #f8fafc;
+  border-color: #cfd6df;
+  transform: translateY(-1px);
+}
+.live-split-icon-btn.success:hover {
+  background: var(--em-l);
+  border-color: var(--em-l);
 }
 .live-split-icon-btn.hero:hover {
   background: rgba(255,255,255,0.14);
+}
+.live-split-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfa 100%);
+  border: 1px solid #e5ece8;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+}
+@media(max-width:768px) {
+  .live-split-row-actions {
+    gap: 6px;
+    padding: 3px 4px;
+  }
+  .live-split-icon-btn.success.emphasize {
+    width: 32px;
+    height: 32px;
+  }
 }
 </style>

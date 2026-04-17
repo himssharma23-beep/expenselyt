@@ -298,6 +298,22 @@ CREATE TABLE IF NOT EXISTS live_split_group_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_live_split_group_activity_group ON live_split_group_activity(group_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS live_split_friend_activity (
+  id BIGSERIAL PRIMARY KEY,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  friend_id BIGINT NOT NULL REFERENCES live_split_friends(id) ON DELETE CASCADE,
+  group_id BIGINT,
+  actor_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  summary TEXT,
+  expense_details TEXT,
+  divide_date DATE,
+  total_amount NUMERIC(14,2),
+  friend_name_snapshot TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_live_split_friend_activity_friend ON live_split_friend_activity(owner_user_id, friend_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS live_split_trips (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
