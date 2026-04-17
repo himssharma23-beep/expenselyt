@@ -1010,6 +1010,7 @@ async function getLiveSplitGroups(userId) {
   return result.rows.map((row) => ({
     ...row,
     total_amount: num(row.total_amount),
+    owner_added_to_expense: bool(row.owner_added_to_expense),
     shared_targets: (row.shared_targets || []).map((item) => ({
       friend_id: Number(item.friend_id),
       target_user_id: Number(item.target_user_id),
@@ -1203,6 +1204,16 @@ async function getLiveSplitGroupDetailForUser(userId, groupId) {
     `SELECT g.*,
             owner.display_name AS owner_name,
             owner.username AS owner_username,
+            CASE
+              WHEN g.user_id = $1 THEN g.owner_added_to_expense
+              ELSE COALESCE((
+                SELECT share.added_to_expense
+                FROM live_split_group_shares share
+                WHERE share.group_id = g.id
+                  AND share.target_user_id = $1
+                LIMIT 1
+              ), FALSE)
+            END AS added_to_expense,
             EXISTS (
               SELECT 1
               FROM live_split_group_shares share
@@ -1260,10 +1271,49 @@ async function getLiveSplitGroupDetailForUser(userId, groupId) {
     can_edit: true,
     can_delete: true,
     is_owner: Number(row.user_id) === uid,
+    added_to_expense: bool(row.added_to_expense),
     owner_name: String(row.owner_name || row.owner_username || 'Owner').trim(),
     splits,
     activities,
   };
+}
+
+async function markLiveSplitExpenseAdded(userId, groupId, added = true) {
+  const uid = Number(userId);
+  const gid = Number(groupId);
+  if (!(gid > 0)) throw validationError('Group not found');
+  return withTransaction(async (client) => {
+    const ownResult = await client.query(
+      `SELECT id
+       FROM live_split_groups
+       WHERE id = $2
+         AND user_id = $1
+       LIMIT 1`,
+      [uid, gid]
+    );
+    if (ownResult.rows[0]) {
+      await client.query(
+        `UPDATE live_split_groups
+         SET owner_added_to_expense = $1,
+             updated_at = NOW(),
+             updated_by = $2
+         WHERE id = $3`,
+        [!!added, uid, gid]
+      );
+      return { success: true, scope: 'owner' };
+    }
+    const shareResult = await client.query(
+      `UPDATE live_split_group_shares
+       SET added_to_expense = $1,
+           updated_at = NOW()
+       WHERE group_id = $2
+         AND target_user_id = $3
+       RETURNING id`,
+      [!!added, gid, uid]
+    );
+    if (!shareResult.rows[0]) throw new Error('Not found');
+    return { success: true, scope: 'shared' };
+  });
 }
 
 async function getLiveSplitFriendActivities(userId, friendId, limit = 60) {
@@ -1316,10 +1366,10 @@ async function addLiveSplitGroup(userId, data) {
       await assertLiveSplitTripParticipants(client, tripId, normalizedSplits);
     }
     const groupResult = await client.query(
-      `INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id, owner_added_to_expense)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
-      [userId, divideDate, data.details, data.paid_by, data.total_amount, data.heading || null, data.session_id || null, String(data.split_mode || 'equal'), tripId]
+      [userId, divideDate, data.details, data.paid_by, data.total_amount, data.heading || null, data.session_id || null, String(data.split_mode || 'equal'), tripId, !!data.owner_added_to_expense]
     );
     const groupId = Number(groupResult.rows[0].id);
     for (const split of normalizedSplits) {
@@ -1540,6 +1590,7 @@ async function updateLiveSplitGroup(userId, groupId, data) {
            heading = $5,
            split_mode = $6,
            trip_id = $7,
+           owner_added_to_expense = FALSE,
            updated_at = NOW(),
            updated_by = $8
        WHERE id = $9`,
@@ -1554,6 +1605,13 @@ async function updateLiveSplitGroup(userId, groupId, data) {
         uid,
         gid,
       ]
+    );
+    await client.query(
+      `UPDATE live_split_group_shares
+       SET added_to_expense = FALSE,
+           updated_at = NOW()
+       WHERE group_id = $1`,
+      [gid]
     );
     await client.query('DELETE FROM live_split_splits WHERE group_id = $1', [gid]);
     for (const split of normalizedSplits) {
@@ -1783,6 +1841,8 @@ async function getReceivedLiveSplitShares(userId) {
     trip_id: row.trip_id ? Number(row.trip_id) : null,
     total_amount: num(row.total_amount),
     friend_share_amount: num(row.friend_share_amount),
+    owner_added_to_expense: bool(row.owner_added_to_expense),
+    added_to_expense: bool(row.added_to_expense),
     splits: normalizeSplits(row.splits).map((split) => ({
       ...split,
       linked_user_id: split.linked_user_id ? Number(split.linked_user_id) : null,
@@ -1802,10 +1862,12 @@ async function getReceivedLiveSplitShares(userId) {
          g.total_amount,
          g.heading,
          g.session_id,
+         g.owner_added_to_expense,
          owner.id AS owner_user_id,
          owner.display_name AS owner_name,
          share.friend_id,
          share.target_user_id,
+         share.added_to_expense,
          fs.friend_name,
          fs.share_amount AS friend_share_amount,
          COALESCE(
@@ -1876,10 +1938,12 @@ async function getReceivedLiveSplitShares(userId) {
          g.total_amount,
          g.heading,
          g.session_id,
+         g.owner_added_to_expense,
          owner.id AS owner_user_id,
          owner.display_name AS owner_name,
          share.friend_id,
          share.target_user_id,
+         share.added_to_expense,
          fs.friend_name,
          fs.share_amount AS friend_share_amount,
          '[]'::json AS splits
@@ -2307,6 +2371,60 @@ async function getDashboardData(userId, year) {
     years,
     selectedYear: yearStr,
   };
+}
+
+async function getPublicSiteStats() {
+  const [usersResult, expensesResult, metricsResult] = await Promise.all([
+    query(
+      `SELECT COUNT(*)::bigint AS total
+       FROM users
+       WHERE deleted_at IS NULL
+         AND is_active = TRUE`
+    ),
+    query(
+      `SELECT COUNT(*)::bigint AS total
+       FROM expenses
+       WHERE deleted_at IS NULL`
+    ),
+    query(
+      `SELECT metric_key, metric_value, updated_at
+       FROM public_site_metrics`
+    ),
+  ]);
+  const metricMap = new Map((metricsResult.rows || []).map((row) => [
+    String(row.metric_key || '').trim(),
+    {
+      value: Number(row.metric_value || 0),
+      updated_at: row.updated_at || null,
+    },
+  ]));
+  return {
+    unique_users: Number(usersResult.rows?.[0]?.total || 0),
+    expense_items: Number(expensesResult.rows?.[0]?.total || 0),
+    app_downloads: Number(metricMap.get('app_downloads')?.value || 0),
+    daily_visitors: Number(metricMap.get('daily_visitors')?.value || 0),
+    updated_at: metricMap.get('daily_visitors')?.updated_at || metricMap.get('app_downloads')?.updated_at || null,
+  };
+}
+
+async function upsertPublicSiteMetrics(data = {}) {
+  const entries = Object.entries(data || {})
+    .map(([key, value]) => [String(key || '').trim(), Number(value)])
+    .filter(([key, value]) => key && Number.isFinite(value) && value >= 0);
+  if (!entries.length) return getPublicSiteStats();
+  await withTransaction(async (client) => {
+    for (const [key, value] of entries) {
+      await client.query(
+        `INSERT INTO public_site_metrics (metric_key, metric_value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (metric_key)
+         DO UPDATE SET metric_value = EXCLUDED.metric_value,
+                       updated_at = NOW()`,
+        [key, Math.round(value)]
+      );
+    }
+  });
+  return getPublicSiteStats();
 }
 
 async function getReportYears(userId) {
@@ -3273,6 +3391,7 @@ module.exports = {
   hideReceivedDivideShare,
   getLiveSplitGroups,
   getLiveSplitGroupDetailForUser,
+  markLiveSplitExpenseAdded,
   addLiveSplitGroup,
   updateLiveSplitGroup,
   deleteLiveSplitGroup,
@@ -3280,6 +3399,8 @@ module.exports = {
   getReceivedLiveSplitShares,
   hideReceivedLiveSplitShare,
   getDashboardData,
+  getPublicSiteStats,
+  upsertPublicSiteMetrics,
   getReportYears,
   getReportMonths,
   createTrip,

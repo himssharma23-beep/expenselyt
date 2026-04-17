@@ -1194,6 +1194,17 @@ router.get('/live-split/groups/:id(\\d+)', async (req, res) => {
   }
 });
 
+router.post('/live-split/groups/:id(\\d+)/expense-status', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().markLiveSplitExpenseAdded(req.session.userId, req.params.id, req.body?.added !== false)
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || (err.message === 'Not found' ? 404 : 500)).json({ error: err.message });
+  }
+});
+
 router.get('/live-split/trips', async (req, res) => {
   try {
     const trips = await Promise.resolve(getCoreDb().getLiveSplitTrips(req.session.userId));
@@ -1263,7 +1274,7 @@ router.delete('/live-split/trips/:id(\\d+)/members/:mid(\\d+)', async (req, res)
 
 router.post('/live-split/groups', async (req, res) => {
   try {
-    const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id } = req.body;
+    const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id, owner_added_to_expense } = req.body;
     if (!details || !total_amount || !splits || splits.length === 0) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(
       getCoreDb().addLiveSplitGroup(req.session.userId, {
@@ -1276,6 +1287,7 @@ router.post('/live-split/groups', async (req, res) => {
         splits,
         heading,
         session_id,
+        owner_added_to_expense: !!owner_added_to_expense,
       })
     );
     res.json({ success: true, id });
@@ -2175,6 +2187,27 @@ router.get('/auth/me/access', (req, res) => {
 
 // ─── ADMIN ROUTES ────────────────────────────────────────────
 const { requireAdmin } = require('../middleware/auth');
+
+router.get('/admin/public-stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.resolve(getCoreDb().getPublicSiteStats());
+    res.json({ stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/admin/public-stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.resolve(getCoreDb().upsertPublicSiteMetrics({
+      app_downloads: req.body?.app_downloads,
+      daily_visitors: req.body?.daily_visitors,
+    }));
+    res.json({ success: true, stats });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
 
 router.get('/admin/users', requireAdmin, async (req, res) => {
   try {

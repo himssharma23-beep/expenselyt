@@ -101,6 +101,14 @@ app.get('/api/public/plans', (req, res) => {
   });
 });
 
+app.get('/api/public/stats', (req, res) => {
+  Promise.resolve(pgCoreDb.getPublicSiteStats()).then((stats) => {
+    res.json({ stats });
+  }).catch((err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
 // Public share page — no auth required
 app.get('/s/:token', (req, res) => {
   res.sendFile('share.html', { root: './views' });

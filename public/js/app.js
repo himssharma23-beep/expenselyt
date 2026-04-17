@@ -4759,7 +4759,7 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | plans | subscriptions | notifications | ai
+let adminSection = 'users'; // users | public_stats | plans | subscriptions | notifications | ai
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
@@ -4768,6 +4768,7 @@ let _adminAiDays = 30;
 let _adminAiReport = null;
 let _adminAiTestResult = null;
 let _adminAiTestError = '';
+let _adminPublicStats = null;
 
 const ADMIN_AI_INTENTS = [
   { key: 'top_expenses', label: 'Most Expensive Item', description: 'Find the highest recent expense or top expense list.', examples: ['what is the most expensive item', 'what are my top expenses'] },
@@ -4824,6 +4825,7 @@ async function loadAdmin() {
   }
   renderAdminShell();
   if (adminSection === 'users') await loadAdminUsers();
+  else if (adminSection === 'public_stats') await loadAdminPublicStats();
   else if (adminSection === 'plans') await loadAdminPlans();
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
   else if (adminSection === 'notifications') await loadAdminNotifications();
@@ -4831,7 +4833,7 @@ async function loadAdmin() {
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
+  const tabs = [['users','Users'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -4847,10 +4849,83 @@ function _adminNotifSelectedUsers() {
   return _adminNotifUsers.filter((user) => _adminNotifSelected.has(user.id));
 }
 
+async function loadAdminPublicStats() {
+  const data = await api('/api/admin/public-stats');
+  _adminPublicStats = data?.stats || null;
+  renderAdminPublicStats();
+}
+
+function renderAdminPublicStats() {
+  const stats = _adminPublicStats || {};
+  const readonlyCard = (label, value, hint) => `
+    <div class="card" style="padding:16px">
+      <div style="font-size:12px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${label}</div>
+      <div style="font-size:30px;font-weight:800;color:var(--t1);margin-top:8px;font-family:'JetBrains Mono',monospace">${Number(value || 0).toLocaleString('en-IN')}</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:6px">${hint}</div>
+    </div>`;
+
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:grid;gap:16px">
+      <div class="card" style="padding:18px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div>
+            <div class="card-title">Landing Page Public Stats</div>
+            <div style="font-size:12px;color:var(--t3)">Users and expense items come from live database counts. Downloads and daily visitors can be updated here for the public homepage circles.</div>
+          </div>
+          <button class="btn btn-s btn-sm" onclick="loadAdminPublicStats()">Refresh</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+        ${readonlyCard('Unique Users', stats.unique_users, 'Live count from active registered users')}
+        ${readonlyCard('Expense Items', stats.expense_items, 'Live count from saved expense rows')}
+      </div>
+
+      <div class="card" style="padding:18px">
+        <div class="card-title">Editable Public Counters</div>
+        <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Update the numbers shown on the landing page for app downloads and daily visitors.</div>
+        <div class="fg">
+          <label class="fl">App Downloads
+            <input class="fi" id="adminPublicAppDownloads" type="number" min="0" step="1" value="${Number(stats.app_downloads || 0)}">
+          </label>
+          <label class="fl">Daily Visitors
+            <input class="fi" id="adminPublicDailyVisitors" type="number" min="0" step="1" value="${Number(stats.daily_visitors || 0)}">
+          </label>
+        </div>
+        <div class="fa" style="margin-top:14px">
+          <button class="btn btn-p" onclick="adminSavePublicStats()">Save Public Stats</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function _adminNotifToggleUser(userId) {
   if (_adminNotifSelected.has(userId)) _adminNotifSelected.delete(userId);
   else _adminNotifSelected.add(userId);
   renderAdminNotifications();
+}
+
+async function adminSavePublicStats() {
+  try {
+    const appDownloads = Number(document.getElementById('adminPublicAppDownloads')?.value || 0);
+    const dailyVisitors = Number(document.getElementById('adminPublicDailyVisitors')?.value || 0);
+    if (!Number.isFinite(appDownloads) || appDownloads < 0 || !Number.isFinite(dailyVisitors) || dailyVisitors < 0) {
+      toast('Enter valid non-negative values', 'error');
+      return;
+    }
+    const result = await api('/api/admin/public-stats', {
+      method: 'PUT',
+      body: {
+        app_downloads: Math.round(appDownloads),
+        daily_visitors: Math.round(dailyVisitors),
+      },
+    });
+    _adminPublicStats = result?.stats || _adminPublicStats;
+    toast('Public stats updated', 'success');
+    renderAdminPublicStats();
+  } catch (err) {
+    toast(err?.message || 'Could not update public stats', 'error');
+  }
 }
 
 function _adminNotifToggleVisible(selectAll) {

@@ -78,6 +78,12 @@ ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS push_enabled 
 ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE user_notification_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
+CREATE TABLE IF NOT EXISTS public_site_metrics (
+  metric_key TEXT PRIMARY KEY,
+  metric_value BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS user_notifications (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -257,11 +263,13 @@ CREATE TABLE IF NOT EXISTS live_split_groups (
   total_amount NUMERIC(14,2) NOT NULL,
   heading TEXT,
   session_id TEXT,
+  owner_added_to_expense BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS split_mode TEXT NOT NULL DEFAULT 'equal';
+ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS owner_added_to_expense BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS live_split_splits (
   id BIGSERIAL PRIMARY KEY,
@@ -279,12 +287,14 @@ CREATE TABLE IF NOT EXISTS live_split_group_shares (
   friend_id BIGINT NOT NULL REFERENCES live_split_friends(id) ON DELETE CASCADE,
   target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   shared_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  added_to_expense BOOLEAN NOT NULL DEFAULT FALSE,
   owner_hidden_at TIMESTAMPTZ,
   target_hidden_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (group_id, target_user_id)
 );
+ALTER TABLE live_split_group_shares ADD COLUMN IF NOT EXISTS added_to_expense BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_live_split_group_shares_owner ON live_split_group_shares(owner_user_id, friend_id);
 CREATE INDEX IF NOT EXISTS idx_live_split_group_shares_target ON live_split_group_shares(target_user_id);
 

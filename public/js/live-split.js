@@ -44,6 +44,8 @@
       searching: false,
     },
     activeTripDetail: null,
+    rowDetailRef: '',
+    eventDetailContext: null,
     sort: 'az',
     friendFilter: 'all',
     tripCreate: null,
@@ -580,6 +582,7 @@
       splitValues: {},
       trip_id: null,
       addExpense: true,
+      expense_type: 'fair',
       category: '',
       finance_target: 'none',
       bank_account_id: null,
@@ -875,6 +878,7 @@
           payer: payer || '-',
           total,
           delta,
+          added_to_expense: !!group?.owner_added_to_expense,
           participants,
         });
       }
@@ -972,6 +976,7 @@
           payer: payer || ownerName || '-',
           total,
           delta,
+          added_to_expense: !!group?.added_to_expense,
           participants: eventParticipants,
         });
       }
@@ -1009,6 +1014,18 @@
       };
     });
     return [...directEvents, ...tripSummaryEvents].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }
+
+  async function refreshActiveLiveSplitModal() {
+    if (state.eventDetailContext?.rowRef && state.eventDetailContext?.eventKey) {
+      await openEventDetails(state.eventDetailContext.rowRef, state.eventDetailContext.eventKey);
+      return;
+    }
+    if (state.rowDetailRef) {
+      await openRowDetails(state.rowDetailRef);
+      return;
+    }
+    closeModal();
   }
 
   function computeTripMemberBalances(tripId) {
@@ -1192,12 +1209,14 @@
               <div style="font-size:11px;color:var(--t3);margin-top:4px">${escHtml(fmtDate(item.created_at))}</div>
             </div>
           `;
-        }).join(' | ')}
+        }).join('')}
       </div>`;
   }
 
   function friendActivityHtml(activities = []) {
-    if (!activities.length) return '<div style="font-size:12px;color:var(--t3)">No friend activity yet.</div>';
+    if (!activities.length) {
+      return '<div style="border:1px solid var(--border);border-radius:12px;background:#fbfcfb;padding:12px 14px;font-size:12px;color:var(--t3)">No friend activity yet.</div>';
+    }
     const formatActivityTime = (value) => {
       const parsed = new Date(value);
       if (Number.isNaN(parsed.getTime())) return String(value || '');
@@ -1223,10 +1242,12 @@
             details && !summary.toLowerCase().includes(details.toLowerCase()) ? details : '',
           ].filter(Boolean);
           return `
-            <div style="border:1px solid var(--border);border-radius:12px;background:#fff;padding:12px 14px">
-              <div style="font-size:13px;font-weight:700;color:var(--t1)">${escHtml(actor)} ${escHtml(summary)}</div>
-              ${meta.length ? `<div style="font-size:12px;color:var(--t2);margin-top:6px">${meta.map((line) => escHtml(line)).join(' | ')}</div>` : ''}
-              <div style="font-size:11px;color:var(--t3);margin-top:6px">${escHtml(formatActivityTime(item.created_at))}</div>
+            <div style="border:1px solid #e5ece8;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#fbfcfb 100%);padding:11px 12px;box-shadow:0 4px 14px rgba(15,23,42,.04)">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+                <div style="font-size:13px;font-weight:700;color:var(--t1);line-height:1.38;flex:1">${escHtml(actor)} ${escHtml(summary)}</div>
+                <div style="font-size:10px;color:var(--t3);white-space:nowrap;padding-top:1px">${escHtml(formatActivityTime(item.created_at))}</div>
+              </div>
+              ${meta.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${meta.map((line) => `<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#f2f6f4;color:var(--t2);font-size:11px;font-weight:600">${escHtml(line)}</span>`).join('')}</div>` : ''}
             </div>
           `;
         }).join('')}
@@ -1322,7 +1343,7 @@
     const payerOptions = people.map((person) => person.name)
       .filter((value, index, arr) => value && arr.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index)
       .map((name) => `<option value="${escHtml(name)}" ${String(form.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`)
-      .join(' | ');
+      .join('');
     window.__modalHeaderActionsHTML = `<button class="live-split-icon-btn" title="Update expense" aria-label="Update expense" onclick="liveSplitSaveEditedExpense()">${state.saveBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\"/></svg>'}</button>`;
     openModal('Edit Live Split Expense', `
       <div style="display:grid;gap:12px;margin-top:-8px">
@@ -1340,14 +1361,14 @@
                 <input type="checkbox" ${selectedKeys.has(String(person.key)) ? 'checked' : ''} onchange="liveSplitEditExpenseToggleParticipant('${escHtml(String(person.key))}')">
                 <span>${escHtml(person.name)}${String(person.key) === ownerKey ? ' (You)' : ''}</span>
               </label>
-            `).join(' | ')}
+            `).join('')}
           </div>
           ${scopedFriendIds ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : ''}
         </div>
         <div>
           <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Split Mode</div>
           <div style="display:flex;flex-wrap:wrap;gap:8px">
-            ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitEditExpenseMode('${mode.key}')">${escHtml(mode.label)}</button>`).join(' | ')}
+            ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitEditExpenseMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}
           </div>
           ${renderSplitInputRows(form, people).replace(/liveSplitSetValue/g, 'liveSplitEditExpenseValue')}
           <div id="lsSplitProgress" style="margin-top:8px;font-size:12px;color:var(--t2)">
@@ -1380,6 +1401,8 @@
     const rawEventKey = String(eventKeyOrGroupId || '');
     let decodedEventKey = rawEventKey;
     try { decodedEventKey = decodeURIComponent(rawEventKey); } catch (_) { decodedEventKey = rawEventKey; }
+    state.rowDetailRef = rowRefToken;
+    state.eventDetailContext = { rowRef: rowRefToken, eventKey: rawEventKey || decodedEventKey };
     const numericToken = Number(decodedEventKey || rawEventKey);
     let event = null;
     if (numericToken > 0) {
@@ -1411,6 +1434,7 @@
             payer: payer || '-',
             total,
             delta: 0,
+            added_to_expense: !!groupFromId?.added_to_expense,
             participants: [
               { name: 'You', share: selfShare, paid: selfPayer },
               ...splits.map((split) => ({
@@ -1437,6 +1461,7 @@
       try {
         const detail = await api(`/api/live-split/groups/${Number(event.group_id)}`);
         group = detail?.group || null;
+        if (group) event.added_to_expense = !!group.added_to_expense;
       } catch (error) {
         const fallback = [...(state.groups || []), ...(state.sharedGroups || [])]
           .find((item) => Number(item?.id) === Number(event.group_id));
@@ -1472,7 +1497,7 @@
     const exists = rawName.toLowerCase() === 'you' || (state.friends || []).some((friend) => String(friend?.name || '').trim().toLowerCase() === String(displayName || '').trim().toLowerCase());
     const encodedName = encodeURIComponent(String(displayName || '').trim());
     const statusHtml = p.contextOnly
-      ? `Also in this split Ã‚Â· ${p.paid ? `Paid ${fmtCur(p.share)}` : `Owes ${fmtCur(p.share)}`}${exists ? ' (already in your list)' : ` <button class="btn btn-s btn-sm" style="margin-left:8px" onclick="liveSplitAddFriendFromDetails('${encodedName}')">Add to my list</button>`}`
+      ? `Also in this split | ${p.paid ? `Paid ${fmtCur(p.share)}` : `Owes ${fmtCur(p.share)}`}${exists ? ' (already in your list)' : ` <button class="btn btn-s btn-sm" style="margin-left:8px" onclick="liveSplitAddFriendFromDetails('${encodedName}')">Add to my list</button>`}`
       : (p.paid ? `Paid ${fmtCur(p.share)}` : `Owes ${fmtCur(p.share)}`);
     const statusColor = p.contextOnly ? 'var(--t2)' : (p.paid ? 'var(--t2)' : 'var(--red)');
     return `
@@ -1481,17 +1506,17 @@
                   <td style="color:${statusColor}">${statusHtml}</td>
                 </tr>
               `;
-  }).join(' | ')}
+  }).join('')}
             </tbody>
           </table>
         </div>
-        ${event.delta < 0 && Math.abs(event.delta) > 0 ? `
+        ${event.delta < 0 && Math.abs(event.delta) > 0 && !event.added_to_expense ? `
           <button
             id="lsAddToExpenseBtn"
             class="btn btn-p btn-sm"
             style="margin-top:4px"
             data-default-label="Add My Share (${fmtCur(Math.abs(event.delta))}) to Expenses"
-            onclick="liveSplitAddToExpense(${Math.abs(event.delta)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', 'lsAddToExpenseBtn')"
+            onclick="liveSplitAddToExpense(${Math.abs(event.delta)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', 'lsAddToExpenseBtn', ${Number(event.group_id) || 0})"
           >
             Add My Share (${fmtCur(Math.abs(event.delta))}) to Expenses
           </button>
@@ -1509,6 +1534,8 @@
   async function openRowDetails(rowRef) {
     state.activeTripDetail = null;
     const refToken = String(rowRef ?? '');
+    state.rowDetailRef = refToken;
+    state.eventDetailContext = null;
     let row = findVisibleRow(refToken);
     if (!row) return;
     let rowFriendId = resolveFriendIdForRow(row);
@@ -1565,7 +1592,7 @@
                       const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                       const canManage = Number(event.group_id) > 0;
                       const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
-                      const canAddMyShare = !isTripSummary && Number(event.delta) < 0 && Math.abs(Number(event.delta)) > 0;
+                      const canAddMyShare = !isTripSummary && !event.added_to_expense && Number(event.delta) < 0 && Math.abs(Number(event.delta)) > 0;
                       const openCall = isTripSummary
                         ? `liveSplitOpenTripDetails(${Number(event.trip_id)})`
                         : `liveSplitOpenEvent('${rowRefToken}', '${Number(event.group_id) || 0}')`;
@@ -1596,7 +1623,7 @@
                                   title="${escHtml(`${addShareLabel} to Expenses`)}"
                                   aria-label="${escHtml(`${addShareLabel} to Expenses`)}"
                                   data-default-label="icon"
-                                  onclick="liveSplitAddToExpense(${Math.abs(Number(event.delta) || 0)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${addShareBtnId}')"
+                                  onclick="liveSplitAddToExpense(${Math.abs(Number(event.delta) || 0)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${addShareBtnId}', ${Number(event.group_id) || 0})"
                                 >
                                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-7-7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                                 </button>
@@ -1607,17 +1634,17 @@
                           <td class="td-m" style="color:${tone};cursor:pointer" onclick="${openCall}">${fmtCur(event.delta)}</td>
                         </tr>
                       `;
-                    }).join(' | ')}
+                    }).join('')}
                   </tbody>
                 </table>
               </div>
             </div>
-          `).join(' | ') : '<div class="empty-td">No split details yet.</div>'}
+          `).join('') : '<div class="empty-td">No split details yet.</div>'}
         </div>
         ${rowFriendId > 0 ? `
           <div style="margin-top:6px">
             <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Friend Activity</div>
-            ${friendActivityHtml(friendActivities)}
+            <div style="max-height:240px;overflow:auto;padding-right:4px">${friendActivityHtml(friendActivities)}</div>
           </div>
         ` : ''}
       </div>
@@ -1659,7 +1686,7 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
           <div style="font-size:13px;color:var(--t2)">
             <b style="color:${statusTone};text-transform:capitalize">${escHtml(status)}</b>
-            Ã‚Â· ${fmtCur(trip.total_amount || 0)} Ã‚Â· ${(trip.members || []).length} members Ã‚Â· ${Number(trip.expense_count || 0)} expenses
+            | ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
           </div>
           <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="liveSplitUseTrip(${tid})">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
@@ -1681,7 +1708,7 @@
                   <b style="color:var(--t1)">${escHtml(item.name || 'Friend')}</b> <span style="color:${tone}">${escHtml(status)} ${fmtCur(Math.abs(amount))}</span>
                 </div>
               `;
-            }).join(' | ')}
+            }).join('')}
           </div>
         ` : ''}
         ${memberSummary.length ? `
@@ -1708,7 +1735,7 @@
                     </div>
                   </div>
                 </div>`;
-            }).join(' | ')}
+            }).join('')}
           </div>
         ` : ''}
         <div>
@@ -1744,12 +1771,12 @@
                           <td class="td-m" style="color:var(--t1);cursor:pointer" onclick="${openCall}">${fmtCur(event.total)}</td>
                         </tr>
                       `;
-                    }).join(' | ')}
+                    }).join('')}
                   </tbody>
                 </table>
               </div>
             </div>
-          `).join(' | ') : '<div class="empty-td">No trip split details yet.</div>'}
+          `).join('') : '<div class="empty-td">No trip split details yet.</div>'}
         </div>
       </div>
     `);
@@ -1801,7 +1828,7 @@
             <div class="friend-bal" style="color:${tone}">${fmtCur(amount)}</div>
           </div>
         </div>`;
-    }).join(' | ');
+    }).join('');
   }
 
   function renderTripsSection() {
@@ -1834,7 +1861,7 @@
                   <div class="friend-info">
                     <div class="friend-name">${escHtml(trip.name || 'Trip')}</div>
                     <div style="font-size:11px;color:var(--t3)">
-                      ${fmtCur(trip.total_amount || 0)} Ã‚Â· ${(trip.members || []).length} members Ã‚Â· ${Number(trip.expense_count || 0)} expenses
+            | ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
                     </div>
                   </div>
                 </div>
@@ -1846,7 +1873,7 @@
                   ${trip.is_owner ? `<button class="btn btn-g btn-sm" ${busy ? 'disabled' : ''} onclick="liveSplitToggleTripStatus(${Number(trip.id)}, '${status === 'completed' ? 'active' : 'completed'}')">${busy ? liveSplitBusyLabel('Saving...') : (status === 'completed' ? 'Reopen' : 'Complete')}</button>` : ''}
                 </div>
               </div>`;
-          }).join(' | ')}
+          }).join('')}
         </div>
       </div>`;
   }
@@ -1886,14 +1913,14 @@
             <label class="fl">Deduct From Bank (optional)
               <select class="fi" onchange="liveSplitSettleField('bank_account_id', this.value)">
                 <option value="">Do not deduct</option>
-                ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(settle.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join(' | ')}
+                ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(settle.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join('')}
               </select>
             </label>
           ` : settle.finance_target === 'card' ? `
             <label class="fl">Credit Card
               <select class="fi" onchange="liveSplitSettleField('card_id', this.value)">
                 <option value="">None</option>
-                ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(settle.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join(' | ')}
+                ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(settle.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join('')}
               </select>
             </label>
             <label class="fl">Discount % (optional)
@@ -2065,7 +2092,7 @@
                 <div style="font-size:11px;color:var(--orange);font-weight:700">Pending</div>
               </div>
             </div>
-          `).join(' | ')}
+          `).join('')}
         </div>
       </div>
     `;
@@ -2095,7 +2122,7 @@
               <div style="font-size:11px;color:var(--orange);font-weight:700">Pending</div>
             </div>
           </div>
-        `).join(' | ')}
+        `).join('')}
       </div>
     `);
   }
@@ -2121,7 +2148,7 @@
                 <button class="btn btn-g btn-sm" ${state.inviteActionBusy.has(Number(invite.id)) ? 'disabled' : ''} onclick="liveSplitRejectInvite(${Number(invite.id)})">Reject</button>
               </div>
             </div>
-          `).join(' | ')}
+          `).join('')}
         </div>
       </div>
     `;
@@ -2246,7 +2273,7 @@
             ${escHtml(person.name)}
             <input class="fi" type="number" step="any" value="${escHtml(String(form.splitValues[person.key] ?? ''))}" oninput="liveSplitSetValue('${escHtml(person.key)}', this.value)">
           </label>
-        `).join(' | ')}
+        `).join('')}
       </div>`;
   }
 
@@ -2288,7 +2315,7 @@
     const preview = computeShares(n(form.amount), form.splitMode, people, form.splitValues);
     const progress = splitProgress(n(form.amount), form.splitMode, people, form.splitValues);
     const friendPeople = people.filter((person) => person.key !== 'self');
-    const payerOptions = people.map((person) => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join(' | ');
+    const payerOptions = people.map((person) => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('');
     if (form.step === 1) {
       const outgoingNames = new Set((state.outgoingInvites || []).map((invite) => String(invite.target_name || invite.target_display_name || invite.target_username || '').trim().toLowerCase()).filter(Boolean));
       const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
@@ -2307,7 +2334,7 @@
               <input type="checkbox" ${form.selected.has(String(friend.id)) ? 'checked' : ''} onchange="liveSplitToggleParticipant('${friend.id}')">
               <span>${escHtml(friend.name)}${suffix}</span>
             </label>`;
-          }).join(' | ')}
+          }).join('')}
           ${Number(form.trip_id || 0) > 0 ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : `
             <div style="margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
               <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Add App User</div>
@@ -2349,7 +2376,7 @@
               <input type="checkbox" ${form.selected.has(String(friend.id)) ? 'checked' : ''} onchange="liveSplitToggleParticipant('${friend.id}')">
               <span>${escHtml(String(friend.name || 'Friend').trim())}${Number(friend?.linked_user_id) > 0 ? ' <span style="color:var(--t3);font-size:11px">(app user)</span>' : ''}</span>
             </label>
-          `).join(' | ')}
+          `).join('')}
           ${!stepTwoSelectableFriends.length ? '<div style="font-size:12px;color:var(--t3)">No selectable members.</div>' : ''}
         </div>
         ${Number(form.trip_id || 0) > 0 ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be part of this split.</div>' : ''}
@@ -2357,7 +2384,7 @@
       <div style="margin-top:10px">
         <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Split Mode</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitSetMode('${mode.key}')">${escHtml(mode.label)}</button>`).join(' | ')}
+          ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitSetMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}
         </div>
         ${renderSplitInputRows(form, people)}
         <div id="lsSplitProgress" style="margin-top:8px;font-size:12px;color:var(--t2)">
@@ -2381,6 +2408,13 @@
       <div id="lsAddExpenseBlock" style="margin-top:12px">
         <label class="fc"><input type="checkbox" ${form.addExpense ? 'checked' : ''} ${form.selected.has('self') ? '' : 'disabled'} onchange="liveSplitSetAddExpense(this.checked)"><span style="font-weight:600">Add my share to expenses${form.selected.has('self') ? '' : ' (select You first)'}</span></label>
         ${form.addExpense ? `
+          <div style="margin-top:8px">
+            <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Expense Type</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="chip ${form.expense_type !== 'extra' ? 'active' : ''}" onclick="liveSplitSetExpenseType('fair')">Fair / Regular</button>
+              <button class="chip ${form.expense_type === 'extra' ? 'active' : ''}" onclick="liveSplitSetExpenseType('extra')">Extra / Non-essential</button>
+            </div>
+          </div>
           <label class="fl" style="margin-top:8px">Expense Category (optional)
             <input class="fi" value="${escHtml(form.category)}" placeholder="Food, travel..." onchange="liveSplitSetCategory(this.value)">
           </label>
@@ -2397,14 +2431,14 @@
               <label class="fl" style="margin-top:8px">Deduct From Bank (optional)
                 <select class="fi" onchange="liveSplitSetFinanceBank(this.value)">
                   <option value="">Do not deduct</option>
-                  ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(form.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join(' | ')}
+                  ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(form.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join('')}
                 </select>
               </label>
             ` : form.finance_target === 'card' ? `
               <label class="fl" style="margin-top:8px">Credit Card
                 <select class="fi" onchange="liveSplitSetFinanceCard(this.value)">
                   <option value="">None</option>
-                  ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(form.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join(' | ')}
+                  ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(form.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join('')}
                 </select>
               </label>
               <label class="fl">Discount % (optional)
@@ -2450,7 +2484,7 @@
               <input type="checkbox" ${form.selected.has(String(friend.id)) ? 'checked' : ''} onchange="liveSplitTripToggleMember('${String(friend.id)}')">
               <span>${escHtml(String(friend.name || 'Friend').trim())}${Number(friend?.linked_user_id) > 0 ? ' <span style="color:var(--t3);font-size:11px">(app user)</span>' : ''}</span>
             </label>
-          `).join(' | ')}
+          `).join('')}
         </div>
       </div>
       <div class="fa" style="margin-top:14px">
@@ -2585,12 +2619,12 @@
                   ${_renderAvatar(member.member_name, member.linked_user_avatar_url, 'width:32px;height:32px;border-radius:16px;font-size:13px')}
                   <div class="friend-info">
                     <div class="friend-name" style="font-size:13px">${escHtml(member.member_name || 'Member')}</div>
-                    <div style="font-size:11px;color:var(--t3)">${escHtml(String(member.permission || 'edit'))}${Number(member.target_user_id || 0) > 0 ? ' Ã‚Â· app user' : ''}</div>
+                    <div style="font-size:11px;color:var(--t3)">${escHtml(String(member.permission || 'edit'))}${Number(member.target_user_id || 0) > 0 ? ' | app user' : ''}</div>
                   </div>
                 </div>
                 ${canRemove ? `<button class="btn btn-g btn-sm" ${state.tripMemberBusy ? 'disabled' : ''} onclick="liveSplitTripRemoveMember(${Number(trip.id)}, ${Number(member.id)})">Remove</button>` : `<div style="font-size:11px;color:var(--t3)">${escHtml(String(member.permission || 'view'))}</div>`}
               </div>`;
-          }).join(' | ')}
+          }).join('')}
         </div>
         ${canManage ? `
           <div style="font-size:12px;color:var(--t2);font-weight:700;margin-top:4px">Add Members</div>
@@ -2600,7 +2634,7 @@
                 <input type="checkbox" ${form.selected.has(String(friend.id)) ? 'checked' : ''} onchange="liveSplitTripToggleAdd('${String(friend.id)}')">
                 <span>${escHtml(String(friend.name || 'Friend').trim())}${Number(friend?.linked_user_id) > 0 ? ' <span style="color:var(--t3);font-size:11px">(app user)</span>' : ''}</span>
               </label>
-            `).join(' | ')}
+            `).join('')}
             ${!selectableFriends.length ? '<div style="font-size:12px;color:var(--t3)">No more friends to add.</div>' : ''}
           </div>
         ` : ''}
@@ -2731,6 +2765,7 @@
           splits: splitsPayload,
           heading: form.details.trim(),
           session_id: sessionKey,
+          owner_added_to_expense: !!(form.addExpense && selfShare > 0),
         },
       });
 
@@ -2753,7 +2788,7 @@
             category: form.category ? form.category.trim() : null,
             amount: selfShare,
             purchase_date: normalizedDate,
-            is_extra: false,
+            is_extra: String(form.expense_type || 'fair') === 'extra',
             bank_account_id: null,
           },
         });
@@ -2855,7 +2890,7 @@
         ${actionHtml}
       </div>`;
       })()}
-    `).join(' | ');
+    `).join('');
   }
 
   function renderCreateInviteResults() {
@@ -2899,7 +2934,7 @@
         ${actionHtml}
       </div>`;
       })()}
-    `).join(' | ');
+    `).join('');
   }
 
   async function openInviteModal() {
@@ -3553,6 +3588,11 @@
     state.create.addExpense = !!checked;
     renderCreateModal();
   };
+  window.liveSplitSetExpenseType = function liveSplitSetExpenseType(value) {
+    if (!state.create) return;
+    state.create.expense_type = value === 'extra' ? 'extra' : 'fair';
+    renderCreateModal();
+  };
   window.liveSplitSetCategory = function liveSplitSetCategory(value) { if (state.create) state.create.category = value || ''; };
   window.liveSplitSetFinanceTarget = function liveSplitSetFinanceTarget(value) {
     if (!state.create) return;
@@ -3587,10 +3627,29 @@
   window.liveSplitResendInvite = resendPendingInvite;
   window.liveSplitResendInviteByName = resendPendingInviteByName;
   window.liveSplitAddFriendFromDetails = addFriendFromDetails;
-  window.liveSplitAddToExpense = async function liveSplitAddToExpense(amount, details, date, buttonId) {
+  window.refreshActiveLiveSplitModal = refreshActiveLiveSplitModal;
+  window.liveSplitAddToExpense = function liveSplitAddToExpense(amount, details, date, buttonId, groupId) {
+    const resolvedAmount = Number(amount || 0);
+    if (!(resolvedAmount > 0)) {
+      toast('No share amount found for this split', 'error');
+      return;
+    }
+    openModal('Add To Expenses', `
+      <div style="display:grid;gap:12px">
+        <div style="font-size:13px;color:var(--t2)">Choose how to record <b style="color:var(--t1)">${fmtCur(resolvedAmount)}</b> for <b style="color:var(--t1)">${escHtml(String(details || 'Shared split').trim() || 'Shared split')}</b>.</div>
+        <div style="display:grid;gap:8px">
+          <button class="btn btn-p" onclick="liveSplitConfirmAddToExpense('fair', ${resolvedAmount}, decodeURIComponent('${encodeURIComponent(String(details || ''))}'), '${String(date || '')}', '${String(buttonId || 'lsAddToExpenseBtn')}', ${Number(groupId) || 0})">Fair / Regular</button>
+          <button class="btn btn-s" onclick="liveSplitConfirmAddToExpense('extra', ${resolvedAmount}, decodeURIComponent('${encodeURIComponent(String(details || ''))}'), '${String(date || '')}', '${String(buttonId || 'lsAddToExpenseBtn')}', ${Number(groupId) || 0})">Extra / Non-essential</button>
+        </div>
+        <div class="fa" style="margin-top:2px">
+          <button class="btn btn-g" onclick="refreshActiveLiveSplitModal()">Cancel</button>
+        </div>
+      </div>
+    `);
+  };
+  window.liveSplitConfirmAddToExpense = async function liveSplitConfirmAddToExpense(type, amount, details, date, buttonId, groupId) {
     const btn = document.getElementById(String(buttonId || 'lsAddToExpenseBtn'));
-    const renderPlusIcon = () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-7-7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
-    const renderCheckIcon = () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>';
+    const defaultLabel = btn?.dataset?.defaultLabel || '';
     if (btn) {
       btn.disabled = true;
       btn.innerHTML = '<span style="font-size:11px;line-height:1">...</span>';
@@ -3602,20 +3661,32 @@
           item_name: String(details || 'Shared split').trim(),
           amount: Number(amount),
           purchase_date: String(date || todayLocalIso()),
-          is_extra: false,
+          is_extra: String(type || '').toLowerCase() === 'extra',
           bank_account_id: null,
         },
       });
-      if (btn) {
-        btn.textContent = 'Ã¢Å“â€œ Added to Expenses';
-        btn.classList.remove('btn-p');
-        btn.classList.add('btn-g');
-        btn.disabled = true;
+      if (Number(groupId) > 0) {
+        await api(`/api/live-split/groups/${Number(groupId)}/expense-status`, {
+          method: 'POST',
+          body: { added: true },
+        });
       }
-      toast('Your share has been added to expenses', 'success');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>';
+      }
+      await loadLiveSplit();
+      toast(`Your share has been added to expenses as ${String(type || '').toLowerCase() === 'extra' ? 'Extra' : 'Fair'}`, 'success');
+      await refreshActiveLiveSplitModal();
     } catch (error) {
-      if (btn) { btn.disabled = false; btn.textContent = defaultLabel; }
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = defaultLabel === 'icon'
+          ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-7-7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+          : escHtml(defaultLabel);
+      }
       toast(error?.message || 'Could not add to expenses', 'error');
+      await refreshActiveLiveSplitModal();
     }
   };
   window.liveSplitEditExpense = openEditExpense;
