@@ -366,12 +366,18 @@ function confirmDialog(message) {
 // Modal Helper
 function openModal(title, bodyHTML) {
   const headerActions = window.__modalHeaderActionsHTML || '';
+  const extraModalClass = String(window.__modalClassName || '').trim();
   window.__modalHeaderActionsHTML = '';
-  document.getElementById('modalContent').innerHTML = `
+  const modal = document.getElementById('modalContent');
+  modal.className = `modal${extraModalClass ? ` ${extraModalClass}` : ''}`;
+  modal.innerHTML = `
     <div class="modal-head"><h3>${title}</h3><div class="modal-head-actions">${headerActions}<button onclick="closeModal()">x</button></div></div>
     <div class="modal-body">${bodyHTML}</div>`;
-  document.getElementById('modalOverlay').style.display = 'flex';
-  repairMojibakeInNode(document.getElementById('modalContent'));
+  document.body.classList.add('modal-open');
+  const overlay = document.getElementById('modalOverlay');
+  overlay.style.display = 'flex';
+  overlay.scrollTop = 0;
+  repairMojibakeInNode(modal);
 }
 
 function bindModalSubmit(handler) {
@@ -388,14 +394,24 @@ function bindModalSubmit(handler) {
 
 // showModal: places raw HTML inside a padded modal wrapper
 function showModal(html) {
-  document.getElementById('modalContent').innerHTML = '<div class="modal-inner">' + html + '</div>';
-  document.getElementById('modalOverlay').style.display = 'flex';
-  repairMojibakeInNode(document.getElementById('modalContent'));
+  const extraModalClass = String(window.__modalClassName || '').trim();
+  const modal = document.getElementById('modalContent');
+  modal.className = `modal${extraModalClass ? ` ${extraModalClass}` : ''}`;
+  modal.innerHTML = '<div class="modal-inner">' + html + '</div>';
+  document.body.classList.add('modal-open');
+  const overlay = document.getElementById('modalOverlay');
+  overlay.style.display = 'flex';
+  overlay.scrollTop = 0;
+  repairMojibakeInNode(modal);
 }
 
 function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   window.__modalHeaderActionsHTML = '';
+  window.__modalClassName = '';
+  document.body.classList.remove('modal-open');
+  const modal = document.getElementById('modalContent');
+  modal.className = 'modal';
   document.getElementById('modalOverlay').style.display = 'none';
 }
 setCurrencyPrefs(window.__currencyPrefs);
