@@ -4078,9 +4078,19 @@ function renderTripList() {
   // Pagination
   let pagHtml = '';
   if (totalPages > 1) {
-    const pages = [];
-    for (let i = 1; i <= totalPages; i++) pages.push(`<button class="pag-btn ${i === tripsPage ? 'active' : ''}" onclick="tripsPage=${i};renderTripList()">${i}</button>`);
-    pagHtml = `<div class="pag">${pages.join('')}</div>`;
+    pagHtml = `<div class="pagination" style="margin-top:14px">
+      <button class="pg-btn" ${tripsPage <= 1 ? 'disabled' : ''} onclick="tripsPage=${tripsPage - 1};renderTripList()">&larr; Prev</button>
+      <div class="pg-info">
+        <span class="pg-range">${start + 1}&ndash;${Math.min(start + TRIPS_PAGE_SIZE, total)} of ${total}</span>
+        <div class="pg-pages">
+          ${paginationPages(tripsPage, totalPages).map((page) => page === '...'
+            ? `<span class="pg-ellipsis">...</span>`
+            : `<button class="pg-num ${page === tripsPage ? 'active' : ''}" onclick="tripsPage=${page};renderTripList()">${page}</button>`
+          ).join('')}
+        </div>
+      </div>
+      <button class="pg-btn" ${tripsPage >= totalPages ? 'disabled' : ''} onclick="tripsPage=${tripsPage + 1};renderTripList()">Next &rarr;</button>
+    </div>`;
   }
 
   document.getElementById('main').innerHTML = `
@@ -5196,7 +5206,7 @@ async function tripGenerateInvite(memberId) {
 }
 
 // Personal trips override: simple own-trip CRUD with grouped expense details.
-let tripsFilters = { status: 'all', category: 'all', transport: 'all', search: '' };
+let tripsFilters = { status: 'all', category: 'all', transport: 'all', search: '', member: 'all' };
 const TRIP_STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'upcoming', label: 'Upcoming' },
@@ -5381,6 +5391,20 @@ function tripMembersPreview(members = [], maxVisible = 2) {
   return `${names.slice(0, maxVisible).join(', ')} +${names.length - maxVisible} more`;
 }
 
+function tripMemberOptions(rows = []) {
+  const names = [...new Set((rows || [])
+    .flatMap((trip) => (trip.member_share_totals || trip.members || []).map((member) => String(member?.member_name || '').trim()))
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  return names;
+}
+
+function tripDisplayAmount(trip, selectedMember = 'all') {
+  if (!trip || selectedMember === 'all') return Number(trip?.total_expenditure || 0);
+  const match = (trip.member_share_totals || []).find((member) => String(member?.member_name || '').trim().toLowerCase() === String(selectedMember || '').trim().toLowerCase());
+  return Number(match?.share_total || 0);
+}
+
 function tripParseMembersInput(value) {
   return [...new Set(String(value || '')
     .split(/\r?\n|,/)
@@ -5436,6 +5460,15 @@ function setTripsFilter(key, value) {
 }
 
 function renderTripList() {
+  const activeEl = document.activeElement;
+  const preserveTripSearchFocus = activeEl?.id === 'tripsSearchInput';
+  const preservedTripSearchSelection = preserveTripSearchFocus
+    ? {
+        start: Number(activeEl.selectionStart || 0),
+        end: Number(activeEl.selectionEnd || 0),
+      }
+    : null;
+  const memberOptions = tripMemberOptions(_trips || []);
   const filtered = tripFilteredRows().sort((a, b) => {
     const aTime = a?.start_date ? new Date(normalizeInputDate(a.start_date)).getTime() : 0;
     const bTime = b?.start_date ? new Date(normalizeInputDate(b.start_date)).getTime() : 0;
@@ -5446,7 +5479,8 @@ function renderTripList() {
   tripsPage = Math.min(tripsPage, totalPages);
   const start = (tripsPage - 1) * TRIPS_PAGE_SIZE;
   const pageRows = filtered.slice(start, start + TRIPS_PAGE_SIZE);
-  const totalSpend = filtered.reduce((sum, trip) => sum + Number(trip.total_expenditure || 0), 0);
+  const displayMember = tripsFilters.member || 'all';
+  const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
 
   const tripActionButtons = (trip) => `
     <div class="trip-table-actions" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
@@ -5470,6 +5504,7 @@ function renderTripList() {
     const datesText = trip.start_date && trip.end_date
       ? `${startText} to ${endText}`
       : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
+    const displayAmount = tripDisplayAmount(trip, displayMember);
     return `
       <tr>
         <td class="trip-actions-cell" style="width:1%;white-space:nowrap">${tripActionButtons(trip)}</td>
@@ -5477,7 +5512,7 @@ function renderTripList() {
           <button class="btn-d" style="font-weight:700;color:var(--green);text-align:left">${escHtml(trip.destination || trip.name || '-')}</button>
         </td>
         <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}</td>
-        <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(trip.total_expenditure || 0)}</td>
+        <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(displayAmount)}</td>
         <td style="min-width:120px">${tripStatusBadge(trip.status)}</td>
         <td style="min-width:180px;max-width:220px;color:var(--t2);white-space:normal;line-height:1.35">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
       </tr>
@@ -5485,10 +5520,19 @@ function renderTripList() {
   }).join('');
 
   const pagination = totalPages > 1
-    ? `<div class="pag">${Array.from({ length: totalPages }, (_, index) => {
-        const page = index + 1;
-        return `<button class="pag-btn ${page === tripsPage ? 'active' : ''}" onclick="tripsPage=${page};renderTripList()">${page}</button>`;
-      }).join('')}</div>`
+    ? `<div class="pagination" style="margin-top:14px">
+        <button class="pg-btn" ${tripsPage <= 1 ? 'disabled' : ''} onclick="tripsPage=${tripsPage - 1};renderTripList()">&larr; Prev</button>
+        <div class="pg-info">
+          <span class="pg-range">${start + 1}&ndash;${Math.min(start + TRIPS_PAGE_SIZE, filtered.length)} of ${filtered.length}</span>
+          <div class="pg-pages">
+            ${paginationPages(tripsPage, totalPages).map((page) => page === '...'
+              ? `<span class="pg-ellipsis">...</span>`
+              : `<button class="pg-num ${page === tripsPage ? 'active' : ''}" onclick="tripsPage=${page};renderTripList()">${page}</button>`
+            ).join('')}
+          </div>
+        </div>
+        <button class="pg-btn" ${tripsPage >= totalPages ? 'disabled' : ''} onclick="tripsPage=${tripsPage + 1};renderTripList()">Next &rarr;</button>
+      </div>`
     : '';
 
   document.getElementById('main').innerHTML = `
@@ -5524,9 +5568,9 @@ function renderTripList() {
       </div>
 
       <div class="card" style="margin-bottom:14px;padding:14px 16px">
-        <div style="display:grid;grid-template-columns:1.2fr repeat(3,minmax(160px,.9fr));gap:10px;align-items:end">
+        <div style="display:grid;grid-template-columns:1.2fr repeat(4,minmax(160px,.9fr));gap:10px;align-items:end">
           <label class="fl" style="margin:0;font-size:12px">Search
-            <input class="fi" style="height:44px" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
+            <input id="tripsSearchInput" class="fi" style="height:44px" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
           </label>
           <label class="fl" style="margin:0;font-size:12px">Status
             <select class="fi" style="height:44px" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
@@ -5536,6 +5580,9 @@ function renderTripList() {
           </label>
           <label class="fl" style="margin:0;font-size:12px">Transport
             <select class="fi" style="height:44px" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
+          </label>
+          <label class="fl" style="margin:0;font-size:12px">Member share
+            <select class="fi" style="height:44px" onchange="setTripsFilter('member', this.value)">${tripOptionsHtml(memberOptions, tripsFilters.member, true, 'All members')}</select>
           </label>
         </div>
       </div>
@@ -5782,6 +5829,19 @@ function renderTripDetail() {
       ${groupHtml}
     </div>
   `;
+  if (preserveTripSearchFocus) {
+    requestAnimationFrame(() => {
+      const searchInput = document.getElementById('tripsSearchInput');
+      if (!searchInput) return;
+      searchInput.focus();
+      if (preservedTripSearchSelection) {
+        const nextLength = String(searchInput.value || '').length;
+        const start = Math.min(preservedTripSearchSelection.start, nextLength);
+        const end = Math.min(preservedTripSearchSelection.end, nextLength);
+        searchInput.setSelectionRange(start, end);
+      }
+    });
+  }
 }
 
 async function showTripModal(tripId = null) {

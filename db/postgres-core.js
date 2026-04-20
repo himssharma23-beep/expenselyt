@@ -3137,7 +3137,8 @@ async function getTrips(userId) {
        COALESCE(t.destination, t.name) AS destination_name,
        COALESCE(exp.total_expenditure, 0) AS total_expenditure,
        COALESCE(exp.expense_count, 0) AS expense_count,
-       COALESCE(mem.members_json, '[]'::json) AS members_json
+       COALESCE(mem.members_json, '[]'::json) AS members_json,
+       COALESCE(share.member_share_totals_json, '[]'::json) AS member_share_totals_json
      FROM trips t
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(amount), 0) AS total_expenditure, COUNT(*) AS expense_count
@@ -3148,10 +3149,34 @@ async function getTrips(userId) {
        SELECT COALESCE(
          json_agg(json_build_object('id', id, 'member_name', member_name) ORDER BY id),
          '[]'::json
-       ) AS members_json
-       FROM trip_members
-       WHERE trip_id = t.id
-     ) mem ON TRUE
+        ) AS members_json
+        FROM trip_members
+        WHERE trip_id = t.id
+      ) mem ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(
+         json_agg(
+           json_build_object(
+             'member_key', tm.id::text,
+             'member_name', tm.member_name,
+             'share_total', COALESCE(share_totals.share_total, 0)
+           )
+           ORDER BY tm.id
+         ),
+         '[]'::json
+       ) AS member_share_totals_json
+       FROM trip_members tm
+       LEFT JOIN (
+         SELECT tes.member_key, SUM(tes.share_amount) AS share_total
+         FROM trip_expenses te
+         JOIN trip_expense_splits tes ON tes.expense_id = te.id
+         WHERE te.trip_id = t.id
+         GROUP BY tes.member_key
+       ) share_totals
+         ON share_totals.member_key = tm.id::text
+         OR share_totals.member_key = ('m' || tm.id::text)
+       WHERE tm.trip_id = t.id
+     ) share ON TRUE
      WHERE t.user_id = $1
      ORDER BY t.start_date DESC, t.id DESC`,
     [userId]
@@ -3167,6 +3192,13 @@ async function getTrips(userId) {
     expenseCount: Number(row.expense_count || 0),
     expense_count: Number(row.expense_count || 0),
     members: Array.isArray(row.members_json) ? row.members_json : [],
+    member_share_totals: Array.isArray(row.member_share_totals_json)
+      ? row.member_share_totals_json.map((item) => ({
+          member_key: String(item?.member_key || ''),
+          member_name: item?.member_name || '',
+          share_total: Math.round(num(item?.share_total) * 100) / 100,
+        }))
+      : [],
   }));
 }
 
