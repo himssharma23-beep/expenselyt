@@ -3154,29 +3154,30 @@ async function getTrips(userId) {
         WHERE trip_id = t.id
       ) mem ON TRUE
      LEFT JOIN LATERAL (
-       SELECT COALESCE(
-         json_agg(
-           json_build_object(
-             'member_key', tm.id::text,
-             'member_name', tm.member_name,
-             'share_total', COALESCE(share_totals.share_total, 0)
-           )
-           ORDER BY tm.id
-         ),
-         '[]'::json
-       ) AS member_share_totals_json
-       FROM trip_members tm
-       LEFT JOIN (
-         SELECT tes.member_key, SUM(tes.share_amount) AS share_total
-         FROM trip_expenses te
-         JOIN trip_expense_splits tes ON tes.expense_id = te.id
-         WHERE te.trip_id = t.id
-         GROUP BY tes.member_key
-       ) share_totals
-         ON share_totals.member_key = tm.id::text
-         OR share_totals.member_key = ('m' || tm.id::text)
-       WHERE tm.trip_id = t.id
-     ) share ON TRUE
+        SELECT COALESCE(
+          json_agg(
+            json_build_object(
+              'member_key', tm.id::text,
+              'member_name', tm.member_name,
+              'share_total', COALESCE((
+                SELECT SUM(tes.share_amount)
+                FROM trip_expenses te
+                JOIN trip_expense_splits tes ON tes.expense_id = te.id
+                WHERE te.trip_id = t.id
+                  AND (
+                    tes.member_key = tm.id::text
+                    OR tes.member_key = ('m' || tm.id::text)
+                    OR LOWER(BTRIM(COALESCE(tes.member_name, ''))) = LOWER(BTRIM(COALESCE(tm.member_name, '')))
+                  )
+              ), 0)
+            )
+            ORDER BY tm.id
+          ),
+          '[]'::json
+        ) AS member_share_totals_json
+        FROM trip_members tm
+        WHERE tm.trip_id = t.id
+      ) share ON TRUE
      WHERE t.user_id = $1
      ORDER BY t.start_date DESC, t.id DESC`,
     [userId]

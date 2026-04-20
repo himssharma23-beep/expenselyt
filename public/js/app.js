@@ -5631,6 +5631,24 @@ async function openTripDetail(tripId) {
 
 function syncTripListRowFromDetail(trip) {
   if (!trip?.id || !Array.isArray(_trips)) return;
+  const members = Array.isArray(trip.members) ? trip.members : [];
+  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
+  const memberShareTotals = members.map((member) => {
+    const stableKey = memberShareKey(member);
+    const total = (trip.expenses || []).reduce((sum, expense) => (
+      sum + (expense.splits || []).reduce((splitSum, split) => {
+        const sameKey = String(split?.member_key || '') === stableKey || String(split?.member_key || '') === String(_memberKey(member));
+        const sameName = memberNameKey(split?.member_name) === memberNameKey(member?.member_name);
+        return splitSum + ((sameKey || sameName) ? Number(split?.share_amount || 0) : 0);
+      }, 0)
+    ), 0);
+    return {
+      member_key: stableKey,
+      member_name: member?.member_name || '',
+      share_total: Math.round(total * 100) / 100,
+    };
+  });
   _trips = _trips.map((row) => {
     if (String(row?.id) !== String(trip.id)) return row;
     return {
@@ -5641,7 +5659,8 @@ function syncTripListRowFromDetail(trip) {
       total_expenditure: Number(trip.grand_total ?? trip.total_expenditure ?? row.total_expenditure ?? 0),
       grand_total: Number(trip.grand_total ?? trip.total_expenditure ?? row.grand_total ?? 0),
       expense_count: Array.isArray(trip.expenses) ? trip.expenses.length : Number(trip.expense_count ?? row.expense_count ?? 0),
-      members: Array.isArray(trip.members) ? trip.members : (row.members || []),
+      members,
+      member_share_totals: memberShareTotals,
     };
   });
 }
