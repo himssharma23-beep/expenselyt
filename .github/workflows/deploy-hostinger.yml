@@ -35,6 +35,20 @@ jobs:
           PORT_SECRET: ${{ secrets.HOSTINGER_SSH_PORT }}
         run: |
           set -e
+          RAW_HOST="${HOST:-}"
+          RAW_HOST="${RAW_HOST#ssh://}"
+          RAW_HOST="${RAW_HOST#http://}"
+          RAW_HOST="${RAW_HOST#https://}"
+          RAW_HOST="${RAW_HOST##*@}"
+          RAW_HOST="${RAW_HOST%%/*}"
+          if [[ "$RAW_HOST" == *:* && "$RAW_HOST" != \[*\] ]]; then
+            RAW_HOST="${RAW_HOST%%:*}"
+          fi
+          if [ -z "$RAW_HOST" ]; then
+            echo "HOSTINGER_HOST secret is empty or invalid."
+            exit 1
+          fi
+          echo "host=$RAW_HOST" >> "$GITHUB_OUTPUT"
           PORT="${PORT_VAR:-}"
           if [ -z "$PORT" ]; then PORT="${PORT_SECRET:-}"; fi
           if [ -n "$PORT" ]; then
@@ -42,22 +56,22 @@ jobs:
             echo "port=$PORT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
+ 
           echo "No SSH port configured. Probing common ports (22, 65002)..."
           for p in 22 65002; do
-            if timeout 5 bash -lc "cat < /dev/null > /dev/tcp/$HOST/$p" 2>/dev/null; then
+            if timeout 5 bash -lc "cat < /dev/null > /dev/tcp/$RAW_HOST/$p" 2>/dev/null; then
               echo "Detected reachable SSH port: $p"
               echo "port=$p" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
-
-          echo "Unable to detect SSH port for $HOST. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
+ 
+          echo "Unable to detect SSH port for configured host. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
           exit 1
-
+ 
       - name: Add host key
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
           PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
           set -e
@@ -66,18 +80,24 @@ jobs:
           echo "Scanning host key for $HOST on port $PORT ..."
           mkdir -p ~/.ssh
           touch ~/.ssh/known_hosts
-          ssh-keyscan -T 30 -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>&1 | tee /tmp/keyscan.log
-          if [ ! -s ~/.ssh/known_hosts ]; then
+          : > /tmp/keyscan.log
+          : > /tmp/keyscan.out
+          ssh-keyscan -4 -T 30 -p "$PORT" -H "$HOST" > /tmp/keyscan.out 2> /tmp/keyscan.log || true
+          if [ ! -s /tmp/keyscan.out ]; then
+            ssh-keyscan -T 30 -p "$PORT" -H "$HOST" > /tmp/keyscan.out 2>> /tmp/keyscan.log || true
+          fi
+          if [ ! -s /tmp/keyscan.out ]; then
             echo "ERROR: ssh-keyscan returned no host keys. Host may be unreachable."
             cat /tmp/keyscan.log
             exit 1
           fi
+          cat /tmp/keyscan.out >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           echo "Host key added successfully."
-
+ 
       - name: SSH connectivity check
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
@@ -87,7 +107,7 @@ jobs:
 
       - name: Remote runtime check
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
@@ -121,7 +141,7 @@ jobs:
 
       - name: Upload release
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
           SHA: ${{ github.sha }}
@@ -131,7 +151,7 @@ jobs:
 
       - name: Deploy on server
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
           USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ steps.ssh_port.outputs.port }}
           SHA: ${{ github.sha }}

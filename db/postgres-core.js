@@ -543,6 +543,8 @@ function yearGuardSql(alias = '') {
 function normalizeTripMemberKeyValue(value) {
   const key = String(value || '').trim();
   if (!key) return key;
+  const memberMatch = key.match(/^m(.+)$/);
+  if (memberMatch) return String(memberMatch[1]);
   const friendMatch = key.match(/^friend_(.+)$/);
   if (friendMatch) return String(friendMatch[1]);
   const userMatch = key.match(/^user_(.+)$/);
@@ -557,6 +559,61 @@ function normalizeTripSplitModeValue(value) {
   if (mode === 'parts_ratio' || mode === 'ratio' || mode === 'partsratio') return 'parts';
   if (mode === 'percentage') return 'percent';
   return mode;
+}
+
+function _finalizeSplitAmounts(amount, rows = []) {
+  const normalizedAmount = Math.round(num(amount) * 100) / 100;
+  const rounded = rows.map((row) => ({
+    ...row,
+    share_amount: Math.round(num(row.share_amount) * 100) / 100,
+  }));
+  if (!rounded.length) return rounded;
+  const total = Math.round(rounded.reduce((sum, row) => sum + num(row.share_amount), 0) * 100) / 100;
+  const diff = Math.round((normalizedAmount - total) * 100) / 100;
+  rounded[0].share_amount = Math.round((num(rounded[0].share_amount) + diff) * 100) / 100;
+  return rounded;
+}
+
+function _computeBulkTripShares(amount, mode, members, values = {}) {
+  const amt = Math.round(num(amount) * 100) / 100;
+  if (!Array.isArray(members) || !members.length) throw validationError('Select at least one member');
+  if (mode === 'amount') throw validationError('Bulk share update does not support Direct Rs. Use Equal, Percent, Fraction, or Parts/Ratio.');
+  if (mode === 'equal') {
+    const base = Math.floor((amt / members.length) * 100) / 100;
+    return _finalizeSplitAmounts(amt, members.map((member) => ({
+      member_key: member.member_key,
+      member_name: member.member_name,
+      share_amount: base,
+    })));
+  }
+  if (mode === 'percent') {
+    const total = members.reduce((sum, member) => sum + num(values[member.member_key]), 0);
+    if (Math.abs(total - 100) > 0.01) throw validationError(`Percent total must be 100. Current total is ${total.toFixed(2)}.`);
+    return _finalizeSplitAmounts(amt, members.map((member) => ({
+      member_key: member.member_key,
+      member_name: member.member_name,
+      share_amount: amt * (num(values[member.member_key]) / 100),
+    })));
+  }
+  if (mode === 'fraction') {
+    const total = members.reduce((sum, member) => sum + num(values[member.member_key]), 0);
+    if (Math.abs(total - 1) > 0.001) throw validationError(`Fractions must total 1.0. Current total is ${total.toFixed(4)}.`);
+    return _finalizeSplitAmounts(amt, members.map((member) => ({
+      member_key: member.member_key,
+      member_name: member.member_name,
+      share_amount: amt * num(values[member.member_key]),
+    })));
+  }
+  if (mode === 'parts') {
+    const totalParts = members.reduce((sum, member) => sum + num(values[member.member_key]), 0);
+    if (totalParts <= 0) throw validationError('Parts total must be greater than 0');
+    return _finalizeSplitAmounts(amt, members.map((member) => ({
+      member_key: member.member_key,
+      member_name: member.member_name,
+      share_amount: amt * (num(values[member.member_key]) / totalParts),
+    })));
+  }
+  throw validationError('Unsupported split mode');
 }
 
 async function _loadNormalizedTripExpenses(client, tripId) {
@@ -3298,6 +3355,60 @@ async function deleteTripExpense(userId, expenseId) {
   });
 }
 
+async function deleteAllTripExpenses(userId, tripId) {
+  await _assertTripOwner(userId, tripId);
+  await withTransaction(async (client) => {
+    await client.query(
+      'DELETE FROM trip_expense_splits WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id = $1)',
+      [tripId]
+    );
+    await client.query('DELETE FROM trip_expenses WHERE trip_id = $1', [tripId]);
+  });
+}
+
+async function bulkUpdateTripExpenseShares(userId, tripId, data = {}) {
+  await _assertTripOwner(userId, tripId);
+  const splitMode = normalizeTripSplitModeValue(data.split_mode || 'equal');
+  const requestedKeys = Array.isArray(data.member_keys) ? data.member_keys.map((key) => normalizeTripMemberKeyValue(key)).filter(Boolean) : [];
+  const rawValues = data.split_values && typeof data.split_values === 'object' ? data.split_values : {};
+  await withTransaction(async (client) => {
+    const membersR = await client.query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]);
+    const memberRows = membersR.rows.map((member) => ({
+      member_key: String(member.id),
+      member_name: member.member_name,
+    }));
+    const selectedMembers = requestedKeys.length
+      ? memberRows.filter((member) => requestedKeys.includes(String(member.member_key)))
+      : memberRows;
+    if (!selectedMembers.length) throw validationError('Select at least one member');
+    const values = selectedMembers.reduce((acc, member) => {
+      const key = String(member.member_key);
+      acc[key] = num(rawValues[key]);
+      return acc;
+    }, {});
+    const expenses = await _loadNormalizedTripExpenses(client, tripId);
+    if (!expenses.length) return;
+    for (const expense of expenses) {
+      const splits = _computeBulkTripShares(expense.amount, splitMode, selectedMembers, values);
+      await client.query(
+        `UPDATE trip_expenses
+         SET split_mode = $1,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [splitMode, expense.id]
+      );
+      await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expense.id]);
+      for (const split of splits) {
+        await client.query(
+          `INSERT INTO trip_expense_splits (expense_id, member_key, member_name, share_amount)
+           VALUES ($1, $2, $3, $4)`,
+          [expense.id, split.member_key, split.member_name, split.share_amount]
+        );
+      }
+    }
+  });
+}
+
 async function finalizeTrip(userId, tripId, data = {}) {
   return withTransaction(async (client) => {
     const trip = await _loadTripFinalizeData(userId, tripId, client);
@@ -4091,6 +4202,8 @@ module.exports = {
   addTripExpense,
   updateTripExpense,
   deleteTripExpense,
+  deleteAllTripExpenses,
+  bulkUpdateTripExpenseShares,
   finalizeTrip,
   toggleMemberLock,
   linkTripMember,

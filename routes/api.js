@@ -2368,6 +2368,24 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
+router.delete('/trips/:id/expenses', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteAllTripExpenses(req.session.userId, req.params.id));
+    res.json({ success: true });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.post('/trips/:id/expenses/bulk-share', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().bulkUpdateTripExpenseShares(req.session.userId, req.params.id, {
+      split_mode: req.body?.split_mode,
+      member_keys: req.body?.member_keys,
+      split_values: req.body?.split_values,
+    }));
+    res.json({ success: true });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
 router.delete('/trips/:id/expenses/:eid', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().deleteTripExpense(req.session.userId, req.params.eid));

@@ -4012,6 +4012,10 @@ let _tripEditCcTxnId = null;
 let _tripEditCcLink = null;
 let _tripFinalizePreview = [];
 let _tripFinalizeLiveFriends = [];
+let _tripBulkSel = new Set();
+let _tripBulkMode = 'equal';
+let _tripBulkValues = {};
+const TRIP_BULK_SPLIT_MODES = SPLIT_MODES.filter((mode) => mode.key !== 'amount');
 
 function _findTripExpenseById(expenseId) {
   if (!_tripDetail?.expenses?.length || expenseId == null) return null;
@@ -4341,6 +4345,38 @@ function tripSetSplitMode(mode) {
   tripUpdateSplitInputs();
 }
 
+function tripBulkToggleMember(key) {
+  if (_tripBulkSel.has(key)) _tripBulkSel.delete(key);
+  else _tripBulkSel.add(key);
+  const container = document.getElementById('tripBulkDivChips');
+  if (container) {
+    container.querySelectorAll('.fr-chip').forEach((btn) => {
+      const match = btn.getAttribute('onclick')?.match(/tripBulkToggleMember\('(.+?)'\)/);
+      if (!match) return;
+      const chipKey = match[1];
+      const selected = _tripBulkSel.has(chipKey);
+      btn.classList.toggle('sel', selected);
+      const cbox = btn.querySelector('.cbox');
+      if (cbox) { cbox.classList.toggle('chk', selected); cbox.innerHTML = selected ? '&#10003;' : ''; }
+    });
+  }
+  _tripBulkValues = {};
+  const people = _tripBulkSelectedPeople();
+  const baseAmount = _tripBulkMode === 'fraction' ? 1 : 100;
+  if (people.length > 0 && _tripBulkMode !== 'equal') _tripBulkValues = _autoFillSplitValues(_tripBulkMode, people, baseAmount);
+  tripBulkUpdateInputs();
+}
+
+function tripBulkSetSplitMode(mode) {
+  _tripBulkMode = mode;
+  _tripBulkValues = {};
+  const people = _tripBulkSelectedPeople();
+  const baseAmount = mode === 'fraction' ? 1 : 100;
+  if (people.length > 0 && mode !== 'equal') _tripBulkValues = _autoFillSplitValues(mode, people, baseAmount);
+  document.querySelectorAll('.trip-bulk-split-mode-chip').forEach((chip) => chip.classList.toggle('active', chip.dataset.mode === mode));
+  tripBulkUpdateInputs();
+}
+
 function tripHandleAmountChange() {
   const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
@@ -4352,16 +4388,24 @@ function tripHandleAmountChange() {
 }
 
 function _tripSelectedPeople() {
+  return _tripSelectedPeopleFrom(_tripExpSel);
+}
+
+function _tripSelectedPeopleFrom(selection) {
   if (!_tripDetail) return [];
   return _tripDetail.members
     .filter(m => {
       const key = _memberKey(m);
-      return _tripExpSel.has(key);
+      return selection.has(key);
     })
     .map(m => {
       const key = _memberKey(m);
       return { key, name: m.member_name };
     });
+}
+
+function _tripBulkSelectedPeople() {
+  return _tripSelectedPeopleFrom(_tripBulkSel);
 }
 
 function tripUpdateSplitInputs() {
@@ -4435,6 +4479,128 @@ function tripSetRemaining(pkey, remaining) {
   statusRow.querySelector('td').innerHTML = valid
     ? `<span style="color:var(--green);font-weight:600">Valid split</span>`
     : `<span style="color:var(--red)">${error}</span>`;
+}
+
+function tripBulkUpdateInputs() {
+  const el = document.getElementById('tripBulkSplitInputs');
+  if (!el) return;
+  const people = _tripBulkSelectedPeople();
+  if (people.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--t3)">Select at least one member to update trip shares.</div>';
+    return;
+  }
+  if (_tripBulkMode === 'equal') {
+    const sample = computeShares(100, 'equal', people, {});
+    const preview = sample.valid && sample.shares.length
+      ? sample.shares.map((share) => `${share.name}: ${share.share.toFixed(2)}%`).join(' | ')
+      : '';
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">Every trip expense will be split equally among <b>${people.length}</b> members.${preview ? `<div style="margin-top:6px;color:var(--t2)">${preview}</div>` : ''}</div>`;
+    return;
+  }
+  const baseAmount = _tripBulkMode === 'fraction' ? 1 : 100;
+  const hints = { percent: '(%, total must be 100)', fraction: '(fraction, total must be 1.0)', parts: '(ratio, proportional)' };
+  const rows = people.map((person) => {
+    const val = _tripBulkValues[person.key] !== undefined ? _tripBulkValues[person.key] : '';
+    return `<tr>
+      <td style="padding:4px 8px">${person.name}</td>
+      <td style="padding:4px 8px"><input type="number" step="any" data-pkey="${person.key}" style="width:90px;padding:4px 6px;border:1px solid var(--br);border-radius:4px;background:var(--bg2);color:var(--t1)" value="${val}" oninput="tripBulkOnSplitInput(this,'${person.key}')"></td>
+    </tr>`;
+  }).join('');
+  const { valid, error } = computeShares(baseAmount, _tripBulkMode, people, _tripBulkValues);
+  const statusHtml = valid
+    ? '<span style="color:var(--green);font-weight:600">Valid bulk share rule</span>'
+    : `<span style="color:var(--red)">${error}</span>`;
+  el.innerHTML = `<div style="margin-bottom:12px">
+    <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Enter values per person ${hints[_tripBulkMode] || ''}</div>
+    <table style="border-collapse:collapse"><tbody>${rows}</tbody>
+      <tr id="tripBulkSplitStatusRow"><td colspan="2" style="padding:6px 8px">${statusHtml}</td></tr>
+    </table>
+  </div>`;
+}
+
+function tripBulkOnSplitInput(input, pkey) {
+  _tripBulkValues[pkey] = parseFloat(input.value) || 0;
+  const statusRow = document.getElementById('tripBulkSplitStatusRow');
+  if (!statusRow) return;
+  const people = _tripBulkSelectedPeople();
+  const baseAmount = _tripBulkMode === 'fraction' ? 1 : 100;
+  const { valid, error } = computeShares(baseAmount, _tripBulkMode, people, _tripBulkValues);
+  statusRow.querySelector('td').innerHTML = valid
+    ? '<span style="color:var(--green);font-weight:600">Valid bulk share rule</span>'
+    : `<span style="color:var(--red)">${error}</span>`;
+}
+
+function showTripBulkShareModal() {
+  if (!_tripDetail) return;
+  const members = _tripDetail.members || [];
+  if (!members.length) {
+    toast('Add trip members first', 'warning');
+    return;
+  }
+  if (!(_tripDetail.expenses || []).length) {
+    toast('No trip expenses to update', 'warning');
+    return;
+  }
+  _tripBulkSel = new Set(members.map((member) => _memberKey(member)));
+  _tripBulkMode = 'equal';
+  _tripBulkValues = {};
+  const participantChips = members.map((member) => {
+    const key = _memberKey(member);
+    const selected = _tripBulkSel.has(key);
+    return `<button type="button" class="fr-chip ${selected ? 'sel' : ''}" onclick="tripBulkToggleMember('${key}')">
+      <span class="cbox ${selected ? 'chk' : ''}">${selected ? '&#10003;' : ''}</span>${escHtml(member.member_name)}
+    </button>`;
+  }).join('');
+  const splitModeChips = TRIP_BULK_SPLIT_MODES.map((mode) =>
+    `<button class="chip trip-bulk-split-mode-chip ${_tripBulkMode === mode.key ? 'active' : ''}" data-mode="${mode.key}" onclick="tripBulkSetSplitMode('${mode.key}')">${mode.label}</button>`
+  ).join('');
+  openModal('Bulk Update Trip Shares', `
+    <div style="font-size:12px;color:var(--t2);line-height:1.5;margin-bottom:14px">
+      Apply one split rule to <b>${(_tripDetail.expenses || []).length}</b> expenses in this trip. This updates only the split mode and member shares for every expense. Amount, details, date, and paid by stay unchanged.
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">Share Expense With Members</div>
+      <div id="tripBulkDivChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${participantChips}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Split Mode</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${splitModeChips}</div>
+      <div id="tripBulkSplitInputs"></div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTripBulkShareModal()">Update All Expenses</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+  tripBulkUpdateInputs();
+}
+
+async function saveTripBulkShareModal() {
+  if (!_selectedTripId) return;
+  const people = _tripBulkSelectedPeople();
+  if (!people.length) {
+    toast('Select at least one member', 'warning');
+    return;
+  }
+  const baseAmount = _tripBulkMode === 'fraction' ? 1 : 100;
+  const { valid, error } = computeShares(baseAmount, _tripBulkMode, people, _tripBulkValues);
+  if (!valid) {
+    toast(error || 'Invalid bulk share rule', 'warning');
+    return;
+  }
+  const result = await api(`/api/trips/${_selectedTripId}/expenses/bulk-share`, {
+    method: 'POST',
+    body: {
+      split_mode: _tripBulkMode,
+      member_keys: people.map((person) => person.key),
+      split_values: _tripBulkValues,
+    },
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  closeModal();
+  toast('Trip shares updated for all expenses', 'success');
+  await openTripDetail(_selectedTripId);
 }
 
 async function tripSaveExpense() {
@@ -5146,10 +5312,10 @@ function toggleTripExpenseGroupSort(groupType, field) {
   if (!_selectedTripId) return;
   const typeKey = tripGroupTypeKey(groupType);
   const sorts = getTripGroupSorts(_selectedTripId);
-  const current = sorts[typeKey] || { field: 'date', dir: 'desc' };
+  const current = sorts[typeKey] || { field: 'date', dir: 'asc' };
   const next = current.field === field
     ? { field, dir: current.dir === 'asc' ? 'desc' : 'asc' }
-    : { field, dir: field === 'details' || field === 'notes' ? 'asc' : 'desc' };
+    : { field, dir: field === 'date' || field === 'details' || field === 'notes' ? 'asc' : 'desc' };
   sorts[typeKey] = next;
   setTripGroupSorts(_selectedTripId, sorts);
   renderTripDetail();
@@ -5158,7 +5324,7 @@ function toggleTripExpenseGroupSort(groupType, field) {
 function getTripExpenseGroupSort(tripId, groupType) {
   const typeKey = tripGroupTypeKey(groupType);
   const sorts = getTripGroupSorts(tripId);
-  return sorts[typeKey] || { field: 'date', dir: 'desc' };
+  return sorts[typeKey] || { field: 'date', dir: 'asc' };
 }
 
 function compareTripGroupItems(a, b, field, dir) {
@@ -5179,7 +5345,7 @@ function compareTripGroupItems(a, b, field, dir) {
   return 0;
 }
 
-function sortTripGroupItems(items = [], sortState = { field: 'date', dir: 'desc' }) {
+function sortTripGroupItems(items = [], sortState = { field: 'date', dir: 'asc' }) {
   return [...(items || [])].sort((a, b) => compareTripGroupItems(a, b, sortState.field, sortState.dir));
 }
 
@@ -5208,8 +5374,11 @@ function tripStatusBadge(status) {
   return `<span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:${bg};color:${color};font-size:11px;font-weight:700">${tripStatusLabel(value)}</span>`;
 }
 
-function tripMembersPreview(members = []) {
-  return (members || []).map((member) => member.member_name || member).filter(Boolean).join(', ');
+function tripMembersPreview(members = [], maxVisible = 2) {
+  const names = (members || []).map((member) => member.member_name || member).filter(Boolean);
+  if (!names.length) return '';
+  if (names.length <= maxVisible) return names.join(', ');
+  return `${names.slice(0, maxVisible).join(', ')} +${names.length - maxVisible} more`;
 }
 
 function tripParseMembersInput(value) {
@@ -5280,35 +5449,40 @@ function renderTripList() {
   const totalSpend = filtered.reduce((sum, trip) => sum + Number(trip.total_expenditure || 0), 0);
 
   const tripActionButtons = (trip) => `
-    <div class="trip-table-actions" role="group" aria-label="Trip actions">
-      <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})">
-        <span class="trip-icon-btn-glyph">&#128065;</span>
+    <div class="trip-table-actions" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
+      <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128065;</span>
       </button>
-      <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})">
-        <span class="trip-icon-btn-glyph">&#8644;</span>
+      <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:13px">&#8644;</span>
       </button>
-      <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
-        <span class="trip-icon-btn-glyph">&#9998;</span>
+      <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:13px">&#9998;</span>
       </button>
-      <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
-        <span class="trip-icon-btn-glyph">&#128465;</span>
+      <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128465;</span>
       </button>
     </div>`;
 
-  const tableRows = pageRows.map((trip) => `
-    <tr>
-      <td class="trip-actions-cell">${tripActionButtons(trip)}</td>
-      <td><button class="btn-d" style="font-weight:700;color:var(--green)" onclick="openTripDetail(${trip.id})">${escHtml(trip.destination || trip.name || '-')}</button></td>
-      <td>${trip.start_date ? fmtDate(trip.start_date) : '-'}</td>
-      <td>${trip.end_date ? fmtDate(trip.end_date) : '-'}</td>
-      <td class="td-m">${trip.total_distance != null ? escHtml(String(trip.total_distance)) : '-'}</td>
-      <td class="td-m" style="font-weight:700;color:var(--green)">${fmtCur(trip.total_expenditure || 0)}</td>
-      <td>${tripStatusBadge(trip.status)}</td>
-      <td>${escHtml(trip.category || '-')}</td>
-      <td>${escHtml(trip.transport_mode || '-')}</td>
-      <td style="max-width:230px;color:var(--t2)">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
-    </tr>
-  `).join('');
+  const tableRows = pageRows.map((trip) => {
+    const startText = trip.start_date ? fmtDate(trip.start_date) : '-';
+    const endText = trip.end_date ? fmtDate(trip.end_date) : '-';
+    const datesText = trip.start_date && trip.end_date
+      ? `${startText} to ${endText}`
+      : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
+    return `
+      <tr>
+        <td class="trip-actions-cell" style="width:1%;white-space:nowrap">${tripActionButtons(trip)}</td>
+        <td style="min-width:150px">
+          <button class="btn-d" style="font-weight:700;color:var(--green);text-align:left">${escHtml(trip.destination || trip.name || '-')}</button>
+        </td>
+        <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}</td>
+        <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(trip.total_expenditure || 0)}</td>
+        <td style="min-width:120px">${tripStatusBadge(trip.status)}</td>
+        <td style="min-width:180px;max-width:220px;color:var(--t2);white-space:normal;line-height:1.35">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
+      </tr>
+    `;
+  }).join('');
 
   const pagination = totalPages > 1
     ? `<div class="pag">${Array.from({ length: totalPages }, (_, index) => {
@@ -5372,15 +5546,11 @@ function renderTripList() {
             <table>
               <thead>
                 <tr>
-                  <th style="width:132px;min-width:132px">Actions</th>
+                  <th style="width:94px;min-width:94px">Actions</th>
                   <th>Destination</th>
-                  <th>Start date</th>
-                  <th>End date</th>
-                  <th class="td-m">Total Distance</th>
+                  <th>Dates</th>
                   <th class="td-m">Total Expenditure</th>
                   <th>Status</th>
-                  <th>Category</th>
-                  <th>Transport</th>
                   <th>Members</th>
                 </tr>
               </thead>
@@ -5580,7 +5750,9 @@ function renderTripDetail() {
           </button>
           <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
           <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
+          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
           <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
+          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
           <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
             <span class="trip-icon-btn-glyph">&#128465;</span>
           </button>
@@ -5707,21 +5879,40 @@ function _findTripExpenseById(expenseId) {
   return (_tripDetail?.expenses || []).find((expense) => String(expense.id) === String(expenseId)) || null;
 }
 
+function _resolveTripExpenseMemberUiKey(rawKey, rawName, members = []) {
+  const byName = (members || []).find((member) => tripSettlementNameKey(member?.member_name || '') === tripSettlementNameKey(rawName || ''));
+  if (byName) return String(_memberKey(byName));
+  const byKey = (members || []).find((member) => {
+    const fallbackKey = String(_memberKey(member));
+    const uiKey = String(member?.id ?? fallbackKey);
+    return String(rawKey || '') === uiKey || String(rawKey || '') === fallbackKey;
+  });
+  return byKey ? String(_memberKey(byKey)) : String(rawKey || '');
+}
+
 function showTripExpenseModal(expenseId = null) {
   if (!_tripDetail) return;
   const expense = expenseId ? _findTripExpenseById(expenseId) : null;
   const members = _tripDetail.members || [];
-  const fallbackPaidByKey = expense?.paid_by_key || (members[0] ? _memberKey(members[0]) : 'self');
-  const selectedKeys = expense?.splits?.length
-    ? new Set(expense.splits.map((split) => split.member_key))
+  const fallbackPaidByKey = expense
+    ? _resolveTripExpenseMemberUiKey(expense?.paid_by_key, expense?.paid_by_name, members)
+    : (members[0] ? _memberKey(members[0]) : 'self');
+  const resolvedSplitShares = expense?.splits?.length
+    ? (expense.splits || []).map((split) => ({
+        key: _resolveTripExpenseMemberUiKey(split?.member_key, split?.member_name, members),
+        share: split?.share_amount,
+      }))
+    : [];
+  const selectedKeys = resolvedSplitShares.length
+    ? new Set(resolvedSplitShares.map((split) => split.key))
     : new Set([fallbackPaidByKey]);
   _tripExpSel = selectedKeys;
   _tripExpPaidBy = selectedKeys.has(fallbackPaidByKey) ? fallbackPaidByKey : [...selectedKeys][0] || fallbackPaidByKey;
   _tripExpMode = expense?.split_mode || 'equal';
-  _tripExpValues = expense?.splits?.length
+  _tripExpValues = resolvedSplitShares.length
     ? _restoreSplitValues(
         _tripExpMode,
-        (expense.splits || []).map((split) => ({ key: split.member_key, share: split.share_amount })),
+        resolvedSplitShares,
         parseFloat(expense.amount) || 0
       )
     : {};
@@ -5742,7 +5933,7 @@ function showTripExpenseModal(expenseId = null) {
         <datalist id="tripExpenseTypeList">${tripExpenseTypeDatalist(expense?.expense_type || '')}</datalist>
       </label>
       <label class="fl">Expense Date *
-        <input class="fi" type="date" id="tripExpenseDate" value="${expense?.expense_date || todayStr()}">
+        <input class="fi" type="date" id="tripExpenseDate" value="${normalizeInputDate(expense?.expense_date) || todayStr()}">
       </label>
       <label class="fl full">Details *
         <input class="fi" id="tripExpenseDetails" placeholder="Hotel advance, petrol, dinner..." value="${escHtml(expense?.details || '')}">
@@ -5875,6 +6066,24 @@ async function tripDeleteExpense(expenseId) {
     return;
   }
   toast('Expense deleted', 'success');
+  await openTripDetail(_selectedTripId);
+}
+
+async function tripDeleteAllExpenses() {
+  if (!_selectedTripId || !_tripDetail) return;
+  const count = Array.isArray(_tripDetail.expenses) ? _tripDetail.expenses.length : 0;
+  if (!count) {
+    toast('No expenses to delete', 'warning');
+    return;
+  }
+  const tripName = _tripDetail.destination || _tripDetail.name || 'this trip';
+  if (!await confirmDialog(`Delete all ${count} expenses inside "${tripName}"?`)) return;
+  const result = await api(`/api/trips/${_selectedTripId}/expenses`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('All trip expenses deleted', 'success');
   await openTripDetail(_selectedTripId);
 }
 
@@ -6746,6 +6955,7 @@ function renderAdminAiLearning() {
       </div>`).join('')
     : '<div style="color:var(--t3);font-size:13px">No saved AI questions yet.</div>';
 
+    
   const unresolvedHtml = unresolvedQueries.length
     ? unresolvedQueries.map((item) => {
         const question = item.question || item.normalized_question || '';
