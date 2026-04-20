@@ -5408,7 +5408,25 @@ async function openTripDetail(tripId) {
     return;
   }
   _tripDetail = data.trip;
+  syncTripListRowFromDetail(_tripDetail);
   renderTripDetail();
+}
+
+function syncTripListRowFromDetail(trip) {
+  if (!trip?.id || !Array.isArray(_trips)) return;
+  _trips = _trips.map((row) => {
+    if (String(row?.id) !== String(trip.id)) return row;
+    return {
+      ...row,
+      ...trip,
+      name: trip.name || row.name,
+      destination: trip.destination || trip.name || row.destination || row.name,
+      total_expenditure: Number(trip.grand_total ?? trip.total_expenditure ?? row.total_expenditure ?? 0),
+      grand_total: Number(trip.grand_total ?? trip.total_expenditure ?? row.grand_total ?? 0),
+      expense_count: Array.isArray(trip.expenses) ? trip.expenses.length : Number(trip.expense_count ?? row.expense_count ?? 0),
+      members: Array.isArray(trip.members) ? trip.members : (row.members || []),
+    };
+  });
 }
 
 function renderTripDetail() {
@@ -5651,6 +5669,7 @@ async function showTripModal(tripId = null) {
 }
 
 async function saveTripModal(tripId = null) {
+  const wasDetailView = !!_tripDetail && !!tripId && String(_tripDetail.id) === String(tripId);
   const body = {
     destination: document.getElementById('tripDestination')?.value.trim(),
     start_date: document.getElementById('tripStartDate')?.value,
@@ -5681,8 +5700,7 @@ async function saveTripModal(tripId = null) {
   closeModal();
   toast(tripId ? 'Trip updated' : 'Trip created', 'success');
   await loadTrips();
-  if (tripId) await openTripDetail(tripId);
-  if (!tripId && result?.id) await openTripDetail(result.id);
+  if (tripId && wasDetailView) await openTripDetail(tripId);
 }
 
 function _findTripExpenseById(expenseId) {
