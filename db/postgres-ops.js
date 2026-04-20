@@ -423,11 +423,11 @@ async function getAiLearningReport(days = 30) {
             COUNT(*) FILTER (WHERE was_fallback = TRUE)::int AS fallback_count
      FROM ai_query_logs
      WHERE created_at >= NOW() - ($1::text || ' days')::interval
-       AND deleted_at IS NULL
+        AND deleted_at IS NULL
      GROUP BY created_at::date
      ORDER BY created_at::date DESC
-     LIMIT $1`,
-    [safeDays]
+     LIMIT $2`,
+    [safeDays, safeDays]
   );
   const topIntentR = await query(
     `SELECT detected_intent, COUNT(*)::int AS ask_count
@@ -438,6 +438,51 @@ async function getAiLearningReport(days = 30) {
      GROUP BY detected_intent
      ORDER BY COUNT(*) DESC, detected_intent ASC
      LIMIT 20`,
+    [safeDays]
+  );
+  const recentQueriesR = await query(
+    `SELECT
+       q.id,
+       q.question,
+       q.normalized_question,
+       q.detected_intent,
+       q.answer_type,
+       q.was_fallback,
+       q.response_preview,
+       q.created_at,
+       q.user_id,
+       COALESCE(NULLIF(u.display_name, ''), NULLIF(u.username, ''), NULLIF(u.email, ''), ('User #' || q.user_id::text)) AS user_label
+     FROM ai_query_logs q
+     LEFT JOIN users u ON u.id = q.user_id
+     WHERE q.created_at >= NOW() - ($1::text || ' days')::interval
+       AND q.deleted_at IS NULL
+     ORDER BY q.created_at DESC
+     LIMIT 50`,
+    [safeDays]
+  );
+  const unresolvedQueriesR = await query(
+    `SELECT
+       q.id,
+       q.question,
+       q.normalized_question,
+       q.detected_intent,
+       q.answer_type,
+       q.was_fallback,
+       q.response_preview,
+       q.created_at,
+       q.user_id,
+       COALESCE(NULLIF(u.display_name, ''), NULLIF(u.username, ''), NULLIF(u.email, ''), ('User #' || q.user_id::text)) AS user_label
+     FROM ai_query_logs q
+     LEFT JOIN users u ON u.id = q.user_id
+     WHERE q.created_at >= NOW() - ($1::text || ' days')::interval
+       AND q.deleted_at IS NULL
+       AND (
+         q.was_fallback = TRUE
+         OR COALESCE(q.detected_intent, '') IN ('', 'unknown')
+         OR COALESCE(q.answer_type, '') IN ('fallback')
+       )
+     ORDER BY q.created_at DESC
+     LIMIT 50`,
     [safeDays]
   );
   return {
@@ -466,6 +511,30 @@ async function getAiLearningReport(days = 30) {
       detected_intent: row.detected_intent,
       ask_count: Number(row.ask_count || 0),
     })),
+    recent_queries: recentQueriesR.rows.map((row) => ({
+      id: Number(row.id || 0),
+      user_id: Number(row.user_id || 0),
+      user_label: row.user_label || `User #${row.user_id || ''}`,
+      question: row.question || '',
+      normalized_question: row.normalized_question || '',
+      detected_intent: row.detected_intent || 'unknown',
+      answer_type: row.answer_type || '',
+      was_fallback: !!row.was_fallback,
+      response_preview: row.response_preview || '',
+      created_at: row.created_at || null,
+    })),
+    unresolved_queries: unresolvedQueriesR.rows.map((row) => ({
+      id: Number(row.id || 0),
+      user_id: Number(row.user_id || 0),
+      user_label: row.user_label || `User #${row.user_id || ''}`,
+      question: row.question || '',
+      normalized_question: row.normalized_question || '',
+      detected_intent: row.detected_intent || 'unknown',
+      answer_type: row.answer_type || '',
+      was_fallback: !!row.was_fallback,
+      response_preview: row.response_preview || '',
+      created_at: row.created_at || null,
+    })),
   };
 }
 
@@ -486,6 +555,96 @@ async function teachAiIntent(normalizedQuestion, detectedIntent, adminUserId) {
     [normalized, intent, adminUserId]
   );
   return { updated_count: Number(result.rowCount || 0) };
+}
+
+async function ensureAiTrainingExamplesTable() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS ai_training_examples (
+      id BIGSERIAL PRIMARY KEY,
+      normalized_question TEXT NOT NULL UNIQUE,
+      original_question TEXT,
+      detected_intent TEXT,
+      ideal_answer TEXT NOT NULL,
+      notes TEXT,
+      training_payload JSONB,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      deleted_at TIMESTAMPTZ
+    )
+  `);
+  await query('CREATE INDEX IF NOT EXISTS idx_ai_training_examples_active ON ai_training_examples(is_active, updated_at DESC)');
+}
+
+async function saveAiTrainingExample(payload = {}, adminUserId) {
+  await ensureAiTrainingExamplesTable();
+  const originalQuestion = String(payload.question || '').trim();
+  const normalizedQuestion = String(payload.normalized_question || originalQuestion || '').trim().toLowerCase();
+  const detectedIntent = payload.detected_intent ? String(payload.detected_intent).trim() : null;
+  const idealAnswer = String(payload.ideal_answer || '').trim();
+  const notes = payload.notes ? String(payload.notes).trim() : null;
+  const trainingPayload = payload.training_payload && typeof payload.training_payload === 'object'
+    ? payload.training_payload
+    : null;
+
+  if (!normalizedQuestion) throw new Error('normalized_question is required');
+  if (!idealAnswer) throw new Error('ideal_answer is required');
+
+  const result = await query(
+    `INSERT INTO ai_training_examples (
+       normalized_question, original_question, detected_intent, ideal_answer, notes, training_payload, is_active, created_by, updated_by, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $7, NOW())
+     ON CONFLICT (normalized_question)
+     DO UPDATE SET
+       original_question = EXCLUDED.original_question,
+       detected_intent = EXCLUDED.detected_intent,
+       ideal_answer = EXCLUDED.ideal_answer,
+       notes = EXCLUDED.notes,
+       training_payload = EXCLUDED.training_payload,
+       is_active = TRUE,
+       updated_at = NOW(),
+       updated_by = EXCLUDED.updated_by
+     RETURNING id, normalized_question, detected_intent, ideal_answer, updated_at`,
+    [normalizedQuestion, originalQuestion || null, detectedIntent, idealAnswer, notes, trainingPayload ? JSON.stringify(trainingPayload) : null, adminUserId]
+  );
+
+  const row = result.rows[0] || {};
+  return {
+    id: Number(row.id || 0),
+    normalized_question: row.normalized_question || normalizedQuestion,
+    detected_intent: row.detected_intent || detectedIntent,
+    ideal_answer: row.ideal_answer || idealAnswer,
+    updated_at: row.updated_at || null,
+  };
+}
+
+async function findAiTrainingExample(normalizedQuestion) {
+  await ensureAiTrainingExamplesTable();
+  const normalized = String(normalizedQuestion || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const result = await query(
+    `SELECT id, normalized_question, original_question, detected_intent, ideal_answer, notes, training_payload, updated_at
+     FROM ai_training_examples
+     WHERE normalized_question = $1
+       AND is_active = TRUE
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [normalized]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id || 0),
+    normalized_question: row.normalized_question,
+    original_question: row.original_question || null,
+    detected_intent: row.detected_intent || null,
+    ideal_answer: row.ideal_answer || '',
+    notes: row.notes || null,
+    training_payload: row.training_payload || null,
+    updated_at: row.updated_at || null,
+  };
 }
 
 async function getBankAccounts(userId) {
@@ -1115,6 +1274,8 @@ module.exports = {
   getAiIntentLearningExamples,
   getAiLearningReport,
   teachAiIntent,
+  saveAiTrainingExample,
+  findAiTrainingExample,
   getAiQueryHistory,
   getBankAccounts,
   addBankAccount,

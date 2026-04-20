@@ -134,18 +134,18 @@
           </div>
         </div>
 
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-          <div>
+        <div class="petrol-list-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div class="petrol-list-head-copy">
             <div style="font-size:16px;font-weight:700;color:var(--t1)">My Petrol Months</div>
             <div style="font-size:12px;color:var(--t3);margin-top:2px">Tap month tile to open daily entries table</div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
+          <div class="petrol-list-head-actions" style="display:flex;gap:8px;align-items:center">
             <input id="petrolMonthKey" type="month" class="fi" style="max-width:180px" value="${escHtml(petrolMonth)}">
             <button class="btn btn-p btn-sm" onclick="petrolCreateMonth()">+ Add Month</button>
           </div>
         </div>
 
-        <div class="cc-card-grid">${renderGrid()}</div>
+        <div class="cc-card-grid petrol-month-grid">${renderGrid()}</div>
       </div>`;
   }
 
@@ -161,7 +161,7 @@
     const fakePct = n(month.fake_increase_pct || 0);
     const memberTotalsHtml = memberTotals.length
       ? memberTotals.map((row) => `
-        <button type="button" onclick="petrolOpenAdjustmentModal(${Number(row.friend_id)})" style="border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--white);display:flex;flex-direction:column;align-items:flex-start;gap:3px;cursor:pointer;min-width:200px">
+        <button type="button" class="petrol-member-total-card" onclick="petrolOpenAdjustmentModal(${Number(row.friend_id)})" style="border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--white);display:flex;flex-direction:column;align-items:flex-start;gap:3px;cursor:pointer;min-width:200px">
           <span style="font-size:13px;color:var(--t1);font-weight:800">${escHtml(row.friend_name || 'Member')}</span>
           <span style="font-size:12px;color:var(--t2)">Real Amount: <b style="color:var(--t1)">${fmtCur(row.real_total || 0)} <span style="color:var(--t3);font-weight:700">(${fmtCur(n(row.real_total) + n(row.adjustment || 0))})</span></b></span>
           ${hasFakePerm ? `<span style="font-size:12px;color:var(--t2)">Fake Amount: <b style="color:var(--t1)">${fmtCur(row.fake_total || 0)} <span style="color:var(--t3);font-weight:700">(${fmtCur(n(row.fake_total) + n(row.adjustment || 0))})</span></b></span>` : ''}
@@ -192,33 +192,65 @@
         </tr>`;
       }).join('')
       : '<tr><td colspan="8" style="text-align:center;color:var(--t3);padding:16px">No daily entries yet.</td></tr>';
+    const buildEntryCards = (list) => list.length
+      ? list.map((entry) => {
+        const shareLines = (entry.members || []).length
+          ? (entry.members || []).map((m) => `<div>${escHtml(m.friend_name)}: <span style="font-weight:700">${fmtCur(m.share_amount)}</span></div>`).join('')
+          : '<div>-</div>';
+        return `
+          <div class="petrol-entry-card">
+            <div class="petrol-entry-card-head">
+              <div>
+                <div class="petrol-entry-card-title">${escHtml(cleanFakeSuffix(entry.remarks) || '-')}</div>
+                <div class="petrol-entry-card-date">${escHtml(entry.entry_date)}</div>
+              </div>
+              <div class="petrol-entry-card-amount">${fmtCur(entry.amount_used)}</div>
+            </div>
+            <div class="petrol-entry-card-meta">
+              <span>Distance: <b>${n(entry.distance_km).toFixed(1)} km</b></span>
+              <span>Average: <b>${n(entry.average_kmpl).toFixed(1)}</b></span>
+              <span>Petrol: <b>${n(entry.petrol_used_litre).toFixed(2)} L</b></span>
+            </div>
+            <div class="petrol-entry-card-share">
+              <div class="petrol-entry-card-share-label">Per person share</div>
+              <div class="petrol-entry-card-share-lines">${shareLines}</div>
+            </div>
+            <div class="petrol-entry-card-actions">
+              ${entry.is_fake ? '' : `<button class="btn btn-g btn-sm" onclick="petrolOpenEntryModal(${entry.id})">Edit</button>`}
+              <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="petrolDeleteEntry(${entry.id})">Delete</button>
+            </div>
+          </div>`;
+      }).join('')
+      : '<div class="petrol-empty-card">No daily entries yet.</div>';
     const realEntryRows = buildEntryRows(realEntries);
     const fakeEntryRows = buildEntryRows(fakeEntries);
+    const realEntryCards = buildEntryCards(realEntries);
+    const fakeEntryCards = buildEntryCards(fakeEntries);
 
     document.getElementById('main').innerHTML = `
       <div class="tab-content">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px">
+        <div class="petrol-detail-head" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px">
           <button class="btn btn-g btn-sm" onclick="petrolBackToList()"><- Back</button>
-          <div style="font-size:18px;font-weight:700;color:var(--t1);flex:1;text-align:center">${escHtml(month.month_key || petrolMonth)}</div>
+          <div class="petrol-detail-title" style="font-size:18px;font-weight:700;color:var(--t1);flex:1;text-align:center">${escHtml(month.month_key || petrolMonth)}</div>
           <button class="btn btn-g btn-sm" onclick="petrolEditMonth('${escHtml(month.month_key || petrolMonth)}')">Edit</button>
         </div>
 
-        <div class="card" style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="card petrol-member-card" style="margin-bottom:12px">
+          <div class="petrol-section-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
             <div style="font-size:14px;font-weight:700;color:var(--t1)">Total of each member for this month</div>
           </div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <div class="petrol-member-total-list" style="display:flex;flex-wrap:wrap;gap:8px">
             ${memberTotalsHtml}
           </div>
         </div>
 
-        <div class="card" style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="card petrol-entry-section" style="margin-bottom:12px">
+          <div class="petrol-section-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
             <div>
               <div style="font-size:16px;font-weight:700">Daily Entries - Original - ${escHtml(month.month_key || petrolMonth)}</div>
               <div style="font-size:12px;color:var(--t3)">Total: ${fmtCur(realTotal)}</div>
             </div>
-            <div style="display:flex;gap:8px">
+            <div class="petrol-action-row" style="display:flex;gap:8px">
               <button class="btn btn-g btn-sm" onclick="petrolDownloadPdf('real')">PDF</button>
               <button class="btn btn-g btn-sm" onclick="petrolOpenShareModal('real')">Share Link</button>
               ${hasFakePerm ? `<button class="btn btn-g btn-sm" onclick="petrolOpenGenerateFakeModal()">Generate Fake (${fakePct.toFixed(2)}%)</button>` : ''}
@@ -226,31 +258,33 @@
               <button class="btn btn-p btn-sm" onclick="petrolOpenEntryModal()">+ Add Entry</button>
             </div>
           </div>
-          <div style="margin-top:10px">
+          <div class="petrol-table-wrap" style="margin-top:10px">
             <table class="tbl">
               <thead><tr><th style="min-width:90px">Date</th><th style="min-width:140px">Remarks</th><th style="min-width:86px">Distance</th><th style="min-width:86px">Average</th><th style="min-width:82px">Petrol</th><th style="min-width:90px">Amount</th><th style="min-width:160px">Per person share</th><th style="min-width:76px">Action</th></tr></thead>
               <tbody>${realEntryRows}</tbody>
             </table>
           </div>
+          <div class="petrol-entry-card-list">${realEntryCards}</div>
         </div>
 
-        ${hasFakePerm ? `<div class="card" style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        ${hasFakePerm ? `<div class="card petrol-entry-section" style="margin-bottom:12px">
+          <div class="petrol-section-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
             <div>
               <div style="font-size:16px;font-weight:700">Daily Entries - Fake - ${escHtml(month.month_key || petrolMonth)}</div>
               <div style="font-size:12px;color:var(--t3)">Total: ${fmtCur(fakeTotal)}</div>
             </div>
-            <div style="display:flex;gap:8px">
+            <div class="petrol-action-row" style="display:flex;gap:8px">
               <button class="btn btn-g btn-sm" onclick="petrolDownloadPdf('fake')">PDF</button>
               <button class="btn btn-g btn-sm" onclick="petrolOpenShareModal('fake')">Share Link</button>
             </div>
           </div>
-          <div style="margin-top:10px">
+          <div class="petrol-table-wrap" style="margin-top:10px">
             <table class="tbl">
               <thead><tr><th style="min-width:90px">Date</th><th style="min-width:140px">Remarks</th><th style="min-width:86px">Distance</th><th style="min-width:86px">Average</th><th style="min-width:82px">Petrol</th><th style="min-width:90px">Amount</th><th style="min-width:160px">Per person share</th><th style="min-width:76px">Action</th></tr></thead>
               <tbody>${fakeEntryRows}</tbody>
             </table>
           </div>
+          <div class="petrol-entry-card-list">${fakeEntryCards}</div>
         </div>` : ''}
       </div>`;
   }

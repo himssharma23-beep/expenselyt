@@ -95,6 +95,39 @@ tr:hover { background:#FAFBFC; }
 .badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:11px; font-weight:600; }
 .b-extra { background:var(--purple-l); color:var(--purple); }
 .b-fair { background:var(--blue-l); color:var(--blue); }
+.trip-actions-cell { white-space:nowrap; }
+.trip-table-actions { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; }
+.trip-icon-btn {
+  width:34px;
+  height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:var(--white);
+  color:var(--em);
+  box-shadow:0 4px 12px rgba(20, 90, 60, 0.08);
+  transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.trip-icon-btn:hover {
+  border-color:var(--em);
+  background:var(--em-xl);
+  box-shadow:0 8px 18px rgba(20, 90, 60, 0.14);
+  transform:translateY(-1px);
+}
+.trip-icon-btn.danger {
+  color:var(--red);
+}
+.trip-icon-btn.danger:hover {
+  border-color:#efb8b8;
+  background:#fff5f5;
+  box-shadow:0 8px 18px rgba(201, 68, 68, 0.12);
+}
+.trip-icon-btn-glyph {
+  font-size:15px;
+  line-height:1;
+}
 
 /* Reports */
 .rpt-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:20px; }
@@ -186,6 +219,84 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .modal-body { padding:24px; min-width:0; }
 .modal-inner { padding:24px; min-width:0; }
 .modal-title { font-size:17px; font-weight:700; color:var(--t1); margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+.trip-settlement-modal { max-width:min(980px, calc(100vw - 40px)); }
+.trip-settlement-shell,
+.trip-settlement-mobile-list,
+.trip-settlement-person-card,
+.trip-settlement-person-top,
+.trip-settlement-person-stats { min-width:0; }
+.trip-settlement-table-wrap table { min-width:780px; }
+.trip-settlement-mobile-list { display:none; }
+.trip-settlement-toggle {
+  display:flex;
+  align-items:flex-start;
+  gap:8px;
+  margin:0 0 14px 0;
+  padding:10px 12px;
+  border:1px solid var(--br);
+  border-radius:14px;
+  background:var(--bg2);
+}
+.trip-settlement-person-card {
+  border:1px solid var(--br);
+  border-radius:16px;
+  background:var(--white);
+  padding:12px;
+  box-shadow:0 8px 20px rgba(16,24,40,.06);
+}
+.trip-settlement-person-card + .trip-settlement-person-card { margin-top:10px; }
+.trip-settlement-person-top {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+.trip-settlement-person-name {
+  font-size:15px;
+  font-weight:800;
+  color:var(--t1);
+}
+.trip-settlement-person-net {
+  font-size:13px;
+  font-weight:800;
+  color:var(--t3);
+  white-space:nowrap;
+}
+.trip-settlement-person-net.positive { color:var(--green); }
+.trip-settlement-person-net.negative { color:var(--red); }
+.trip-settlement-person-stats {
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:8px;
+  margin-bottom:10px;
+}
+.trip-settlement-stat-chip {
+  border:1px solid var(--br);
+  border-radius:12px;
+  background:var(--bg2);
+  padding:8px 10px;
+}
+.trip-settlement-stat-chip span {
+  display:block;
+  font-size:11px;
+  color:var(--t3);
+  margin-bottom:3px;
+}
+.trip-settlement-stat-chip strong {
+  display:block;
+  font-size:13px;
+  font-weight:800;
+  color:var(--t1);
+  font-family:var(--mono);
+}
+.trip-settlement-person-action {
+  font-size:12px;
+  line-height:1.45;
+  color:var(--t2);
+  margin-bottom:10px;
+}
+.trip-settlement-friend-field { margin-bottom:0; }
 .fg { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px; }
 .fl { display:flex; flex-direction:column; gap:5px; font-size:13px; font-weight:500; color:var(--t2); }
 .fl.full { grid-column:1/-1; }
@@ -207,6 +318,9 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .live-split-request-actions { flex-shrink:0; }
 .live-split-card { justify-content:space-between; }
 .live-split-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; min-width:0; }
+.live-split-trip-action-wrap { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.live-split-trip-status { font-size:11px; font-weight:700; text-transform:capitalize; }
+.live-split-trip-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .live-split-modal-shell,
 .live-split-modal-top,
 .live-split-summary-chips,
@@ -220,6 +334,100 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .live-split-event-table .live-split-amount-col { width:96px; min-width:96px; white-space:nowrap; }
 .live-split-inline-actions { display:none; margin-top:8px; }
 .live-split-mobile-meta { display:none; }
+.ls-mobile-event-list { display:none; }
+.ls-mobile-event-card {
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px 16px;
+  box-shadow:0 4px 14px rgba(15,23,42,0.05);
+}
+.ls-mobile-event-card + .ls-mobile-event-card { margin-top:10px; }
+.ls-mobile-event-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.ls-mobile-event-title {
+  flex:1;
+  min-width:0;
+  font-size:15px;
+  font-weight:700;
+  line-height:1.4;
+  word-break:break-word;
+}
+.ls-mobile-event-amount {
+  flex-shrink:0;
+  font-family:var(--mono);
+  font-size:15px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.ls-mobile-event-sub {
+  margin-top:6px;
+  font-size:12.5px;
+  color:var(--t3);
+  line-height:1.45;
+}
+.ls-mobile-event-foot {
+  margin-top:12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.ls-mobile-event-date {
+  font-size:11px;
+  color:var(--t3);
+  font-weight:600;
+}
+.ls-mobile-event-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-shrink:0;
+}
+.ls-expense-participant-list { display:none; }
+.ls-expense-participant-card {
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:#fff;
+  padding:12px 14px;
+  box-shadow:0 3px 12px rgba(15,23,42,0.04);
+}
+.ls-expense-participant-card + .ls-expense-participant-card { margin-top:8px; }
+.ls-expense-participant-name {
+  font-size:14px;
+  font-weight:700;
+  color:var(--t1);
+  line-height:1.35;
+}
+.ls-expense-participant-status {
+  margin-top:6px;
+  font-size:13px;
+  line-height:1.45;
+  word-break:break-word;
+}
+.ls-expense-activity-card {
+  word-break:break-word;
+  box-shadow:0 3px 12px rgba(15,23,42,0.04);
+}
+
+/* ── Live split expense card (detail modal) ── */
+.ls-card-top { display:flex; width:100%; align-items:flex-start; justify-content:space-between; gap:10px; }
+.ls-card-name { font-weight:700; font-size:14px; min-width:0; flex:1; line-height:1.4; word-break:break-word; }
+.ls-card-delta { font-family:var(--mono); font-weight:700; font-size:14px; flex-shrink:0; white-space:nowrap; }
+.ls-card-info { font-size:12px; color:var(--t3); margin-top:5px; line-height:1.4; }
+.ls-card-bottom { display:flex; width:100%; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; }
+.ls-card-date { font-size:11px; color:var(--t3); font-weight:600; }
+.ls-card-actions { flex-shrink:0; }
+.ls-card-bottom .live-split-inline-actions { display:flex !important; margin-top:0 !important; }
+/* Desktop: hide mobile-specific card elements (amount & footer are in their own table columns) */
+@media(min-width:769px) {
+  .ls-card-delta { display:none; }
+  .ls-card-bottom { display:none; }
+}
 .live-split-activity-list { overflow:auto; -webkit-overflow-scrolling:touch; }
 .live-split-detail-actions { flex-wrap:wrap; }
 .back-btn { background:none; border:none; color:var(--em); font-size:14px; font-weight:600; margin-bottom:16px; padding:0; cursor:pointer; }
@@ -327,6 +535,148 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .cc-action-btn:hover { background:rgba(255,255,255,0.22); }
 .cc-action-del { border-color:rgba(201,68,68,0.5); color:#FF8A8A; }
 .cc-action-del:hover { background:rgba(201,68,68,0.3); }
+.cc-txn-card-list { display:none; }
+.cc-txn-card {
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px 16px;
+  box-shadow:0 4px 14px rgba(15,23,42,0.05);
+}
+.cc-txn-card + .cc-txn-card { margin-top:10px; }
+.cc-txn-card-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.cc-txn-card-copy { flex:1; min-width:0; }
+.cc-txn-card-title {
+  font-size:14px;
+  font-weight:700;
+  color:var(--t1);
+  line-height:1.4;
+  word-break:break-word;
+}
+.cc-txn-card-date {
+  margin-top:4px;
+  font-size:11px;
+  color:var(--t3);
+  font-weight:600;
+}
+.cc-txn-card-amount {
+  flex-shrink:0;
+  font-family:var(--mono);
+  font-size:15px;
+  font-weight:700;
+  color:var(--t1);
+  white-space:nowrap;
+}
+.cc-txn-card-meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px 12px;
+  margin-top:10px;
+  font-size:12px;
+  color:var(--t2);
+}
+.cc-txn-card-actions {
+  margin-top:12px;
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.cc-empty-card {
+  border:1px dashed var(--border);
+  border-radius:14px;
+  background:#fbfcfb;
+  color:var(--t3);
+  font-size:12px;
+  text-align:center;
+  padding:18px 14px;
+}
+.petrol-entry-card-list { display:none; }
+.petrol-member-total-card {
+  width:min(100%, 240px);
+  min-width:0 !important;
+  text-align:left;
+}
+.petrol-entry-card {
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px 16px;
+  box-shadow:0 4px 14px rgba(15,23,42,0.05);
+}
+.petrol-entry-card + .petrol-entry-card { margin-top:10px; }
+.petrol-entry-card-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.petrol-entry-card-title {
+  font-size:15px;
+  font-weight:700;
+  color:var(--t1);
+  line-height:1.4;
+  word-break:break-word;
+}
+.petrol-entry-card-date {
+  margin-top:4px;
+  font-size:11px;
+  color:var(--t3);
+  font-weight:600;
+}
+.petrol-entry-card-amount {
+  flex-shrink:0;
+  font-family:var(--mono);
+  font-size:16px;
+  font-weight:700;
+  color:var(--t1);
+  white-space:nowrap;
+}
+.petrol-entry-card-meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px 12px;
+  margin-top:10px;
+  font-size:12px;
+  color:var(--t2);
+}
+.petrol-entry-card-share {
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid var(--border-l);
+}
+.petrol-entry-card-share-label {
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--t3);
+  margin-bottom:6px;
+}
+.petrol-entry-card-share-lines {
+  font-size:12px;
+  color:var(--t2);
+  line-height:1.5;
+}
+.petrol-entry-card-actions {
+  margin-top:12px;
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.petrol-empty-card {
+  border:1px dashed var(--border);
+  border-radius:14px;
+  background:#fbfcfb;
+  color:var(--t3);
+  font-size:12px;
+  text-align:center;
+  padding:18px 14px;
+}
 
 .cc-cycle-summary { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; margin-bottom:16px; }
 .cc-cycle-stat { background:var(--white); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
@@ -668,14 +1018,19 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   }
   .overlay {
     align-items:flex-start;
-    padding:calc(12px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
+    padding:12px 10px;
   }
   .modal {
     width:100%;
+    max-width:100%;
+    border-radius:16px;
     max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    margin:auto;
+    overflow-x:hidden;
   }
   .modal-wide { max-width:100%; }
-  .modal-head, .modal-body, .modal-inner { padding-left:16px; padding-right:16px; }
+  .modal-head { padding:14px 16px; }
+  .modal-body, .modal-inner { padding-left:14px; padding-right:14px; }
   .modal-head { align-items:flex-start; }
   .modal-head button { min-width:36px; min-height:36px; }
   .fa .btn { flex:1 1 100%; }
@@ -703,47 +1058,35 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     display:grid !important;
     grid-template-columns:1fr;
   }
+  /* ── Mobile event table: flat card layout ── */
   .live-split-table-wrap {
     overflow:visible !important;
+    border:none !important;
+    border-radius:0 !important;
+    background:transparent !important;
+    box-shadow:none !important;
   }
-  .live-split-event-table,
-  .live-split-event-table tbody,
-  .live-split-event-table tr,
-  .live-split-event-table td {
-    display:block;
-    width:100%;
-  }
-  .live-split-event-table {
-    min-width:0 !important;
-    table-layout:auto !important;
-    border-collapse:separate;
-    border-spacing:0 10px;
-  }
-  .live-split-event-table thead {
-    display:none;
-  }
-  .live-split-event-table tbody {
-    display:grid;
-    gap:10px;
-  }
+  .live-split-event-table { display:block !important; width:100% !important; min-width:0 !important; }
+  .live-split-event-table thead { display:none !important; }
+  .live-split-event-table tbody { display:flex !important; flex-direction:column; gap:10px; }
   .live-split-event-table tr {
+    display:block !important;
+    width:100% !important;
+    box-sizing:border-box;
     background:#fff;
     border:1px solid var(--border);
-    border-radius:16px;
-    padding:12px 14px;
-    box-shadow:0 6px 18px rgba(15,23,42,0.05);
+    border-radius:14px;
+    padding:14px 16px;
+    box-shadow:0 2px 8px rgba(15,23,42,0.05);
   }
-  .live-split-event-table td {
-    border-bottom:none;
-    padding:0;
-  }
-  .live-split-event-table .live-split-date-col,
-  .live-split-event-table .live-split-action-col,
-  .live-split-event-table .live-split-amount-col {
-    display:none;
-  }
+  /* Hide ALL td by default, then selectively show details-col */
+  .live-split-event-table td { display:none !important; }
   .live-split-event-table .live-split-details-col {
-    display:block;
+    display:block !important;
+    width:100% !important;
+    padding:0 !important;
+    border:none !important;
+    box-sizing:border-box;
   }
   .live-split-mobile-meta {
     display:flex;
@@ -777,6 +1120,11 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     padding:6px;
     gap:8px;
   }
+  /* ── New expense card layout (mobile-specific overrides) ── */
+  .ls-card-name { font-size:15px; }
+  .ls-card-delta { font-size:15px; }
+  .ls-card-info { font-size:12.5px; }
+  .ls-card-bottom .live-split-inline-actions { display:flex !important; margin-top:0 !important; justify-content:flex-end; }
   .live-split-member-stats {
     flex-wrap:wrap;
     gap:10px;
@@ -787,6 +1135,116 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .live-split-detail-actions {
     grid-column:1 / -1;
     justify-content:flex-end;
+  }
+  .ls-expense-detail-title {
+    text-align:left !important;
+    font-size:15px !important;
+  }
+  .ls-expense-detail-amount {
+    font-size:34px !important;
+    text-align:left !important;
+  }
+  .ls-expense-detail-meta {
+    text-align:left !important;
+    line-height:1.45;
+  }
+  .ls-expense-participant-table {
+    display:none !important;
+  }
+  .ls-expense-participant-list {
+    display:block !important;
+  }
+  .ls-expense-add-btn {
+    width:100%;
+    justify-content:center;
+  }
+  .ls-expense-activity-heading {
+    margin-bottom:10px !important;
+  }
+  .ls-expense-activity-card {
+    padding:12px 14px !important;
+    border-radius:14px !important;
+  }
+  .ls-expense-activity-title {
+    font-size:13px !important;
+    line-height:1.45 !important;
+  }
+  .ls-expense-activity-line {
+    font-size:12px !important;
+    line-height:1.45 !important;
+  }
+  .petrol-list-head,
+  .petrol-detail-head,
+  .petrol-section-head {
+    flex-direction:column;
+    align-items:stretch !important;
+  }
+  .petrol-list-head-actions,
+  .petrol-action-row {
+    width:100%;
+    flex-wrap:wrap;
+  }
+  .petrol-list-head-actions .fi,
+  .petrol-list-head-actions .btn,
+  .petrol-action-row .btn {
+    width:100%;
+    max-width:none;
+    justify-content:center;
+  }
+  .petrol-detail-title {
+    text-align:left !important;
+  }
+  .petrol-member-total-list {
+    display:grid !important;
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+  .petrol-member-total-card {
+    width:100%;
+  }
+  .petrol-table-wrap {
+    display:none;
+  }
+  .petrol-entry-card-list {
+    display:block;
+    margin-top:10px;
+  }
+  .cc-list-head,
+  .cc-detail-head,
+  .cc-current-cycle-head {
+    flex-direction:column;
+    align-items:stretch !important;
+  }
+  .cc-list-head-actions,
+  .cc-current-cycle-actions {
+    width:100%;
+    flex-wrap:wrap;
+  }
+  .cc-list-head-actions .btn,
+  .cc-current-cycle-actions .btn {
+    width:100%;
+    max-width:none;
+    justify-content:center;
+  }
+  .cc-detail-copy {
+    width:100%;
+  }
+  .cc-detail-head > .btn {
+    width:100%;
+    justify-content:center;
+  }
+  .cc-cycle-summary {
+    grid-template-columns:1fr !important;
+  }
+  .cc-cycle-stat .val {
+    white-space:normal;
+    overflow-wrap:anywhere;
+  }
+  .cc-txn-table-wrap {
+    display:none;
+  }
+  .cc-txn-card-list {
+    display:block;
   }
   #toastContainer {
     right:12px;
@@ -832,13 +1290,10 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     flex:1 1 0;
   }
   .live-split-card-actions .btn {
-    flex:1 1 calc(50% - 6px);
+    flex:0 0 auto;
   }
-  .live-split-card-actions .friend-bal,
-  .live-split-card-actions > div[style*="font-size:11px"] {
-    width:100%;
-    text-align:left;
-    margin-left:0;
+  .live-split-card-actions .friend-bal {
+    margin-left:auto;
   }
   .live-split-member-card {
     width:100%;
@@ -958,6 +1413,364 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .live-split-icon-btn.success.emphasize {
     width: 32px;
     height: 32px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* MOBILE RESPONSIVE POLISH                                    */
+/* ═══════════════════════════════════════════════════════════ */
+
+@media(max-width:768px) {
+  /* ── Friend & Split cards ── */
+  .friend-card {
+    padding:12px 14px;
+    border-radius:14px;
+    gap:10px;
+  }
+  .friend-name { font-size:14px; }
+  .friend-bal { font-size:14px; }
+
+  /* ── Card action buttons: compact row, don't stretch ── */
+  .live-split-card-actions {
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  .live-split-card-actions .btn {
+    flex:0 0 auto;
+    min-width:0;
+    white-space:nowrap;
+  }
+  .live-split-card-actions .btn.btn-p { background:var(--em); color:#fff; }
+  .live-split-card-actions .friend-bal {
+    margin-left:auto;
+    font-size:15px;
+    font-weight:700;
+  }
+
+  /* ── Trip card actions: tidy 2-up grid inside card ── */
+  .live-split-trip-action-wrap {
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:8px;
+    width:100%;
+  }
+  .live-split-trip-status {
+    display:inline-block;
+    padding:2px 10px;
+    background:var(--em-xl);
+    color:var(--em);
+    border-radius:99px;
+    font-size:11px;
+    font-weight:700;
+    text-transform:capitalize;
+  }
+  .live-split-trip-actions {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:7px;
+    width:100%;
+  }
+  .live-split-trip-actions .btn {
+    width:100%;
+    justify-content:center;
+    text-align:center;
+  }
+
+  /* ── Buttons in modals / forms ── */
+  .fa { flex-direction:column; gap:8px; }
+  .fa .btn {
+    width:100%;
+    justify-content:center;
+    padding:12px 20px;
+    font-size:14.5px;
+    border-radius:12px;
+  }
+  .fa .btn.btn-g {
+    padding:10px 20px;
+    font-size:13.5px;
+    background:var(--bg);
+    border-color:var(--border);
+    color:var(--t2);
+  }
+
+  /* ── Form fields ── */
+  .fi { padding:11px 14px; font-size:15px; border-radius:12px; }
+  select.fi { padding:10px 12px; }
+  .fg { gap:12px; }
+
+  /* ── Chips ── */
+  .chip { padding:6px 12px; font-size:12px; }
+  .chip-group { gap:6px; }
+
+  /* ── Cards & sections ── */
+  .card { padding:16px; border-radius:14px; }
+  .dash-box { border-radius:14px; }
+
+  /* ── Summary card ── */
+  .summary-card { padding:16px 18px; }
+  .summary-amount { font-size:24px; }
+
+  /* ── Modal ── */
+  .modal { border-radius:16px; }
+  .modal-title { font-size:16px; }
+
+  /* ── Search bar ── */
+  .search-input { font-size:15px; padding:10px 14px; border-radius:12px; }
+
+  /* ── Pagination ── */
+  .pg-btn { padding:7px 12px; font-size:12px; }
+  .pg-num { width:30px; height:30px; font-size:12px; }
+
+  /* ── Topbar shadow refinement ── */
+  .app-mobile-topbar {
+    box-shadow:0 1px 0 var(--border), 0 2px 12px rgba(0,0,0,0.06);
+  }
+}
+
+@media(max-width:480px) {
+  /* ── Tab content: slightly tighter ── */
+  .tab-content { padding:76px 10px 28px; }
+
+  /* ── Dashboard stats: 2-col even on small phones ── */
+  .dash-cards { grid-template-columns:repeat(2,1fr); gap:8px; }
+  .dash-card { padding:12px 14px; }
+  .dc-amount { font-size:17px; }
+  .dc-label { font-size:9px; letter-spacing:0.8px; }
+  .dc-sub { font-size:11px; }
+
+  /* ── Friend cards: tighter ── */
+  .friend-card { padding:10px 12px; gap:8px; }
+
+  /* ── Filter row ── */
+  .filter-row { gap:8px; }
+  .chip { padding:5px 10px; font-size:11.5px; }
+
+  /* ── Modal: more height on phone ── */
+  .modal { max-height:calc(97dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+
+  /* ── Toast: full-width on small phones ── */
+  #toastContainer { right:8px; left:8px; bottom:10px; }
+  .toast { border-radius:14px; }
+
+  /* ── Summary card compact ── */
+  .summary-card { padding:14px 16px; border-radius:16px; }
+  .summary-amount { font-size:22px; }
+
+  /* ── Total bar ── */
+  .total-bar { padding:12px 16px; }
+
+  /* ── Confirm dialog ── */
+  .confirm-box { border-radius:20px; padding:22px 16px 18px; }
+}
+@media(min-width:769px) {
+  .ls-hide-desktop { display:none !important; }
+}
+
+/* Final mobile overrides: keep phone layout full-width and consistent across pages */
+@media(max-width:768px) {
+  .tab-content {
+    width:100% !important;
+    max-width:none !important;
+    padding:76px 10px 24px !important;
+  }
+  .overlay {
+    padding:4px !important;
+    align-items:flex-start !important;
+  }
+  .modal,
+  .modal-wide,
+  .live-split-detail-modal {
+    width:calc(100vw - 8px) !important;
+    max-width:calc(100vw - 8px) !important;
+    border-radius:18px !important;
+  }
+  .modal-body,
+  .modal-inner {
+    padding:14px !important;
+  }
+  .card,
+  .dash-box,
+  .summary-card,
+  .bank-card,
+  .admin-user-card,
+  .cc-cycle-stat,
+  .pl-stat,
+  .bank-stat,
+  .confirm-box {
+    border-radius:14px !important;
+  }
+  .card,
+  .dash-box,
+  .bank-card,
+  .admin-user-card,
+  .cc-cycle-stat,
+  .pl-stat,
+  .bank-stat {
+    padding:14px !important;
+  }
+  .dash-two-col,
+  .bank-grid,
+  .cc-card-grid,
+  .planner-summary,
+  .bank-summary-bar,
+  .admin-user-grid,
+  .admin-ai-grid,
+  .admin-ai-directory {
+    grid-template-columns:1fr !important;
+  }
+  .table-wrap,
+  .live-split-table-wrap {
+    width:100%;
+    max-width:100%;
+    -webkit-overflow-scrolling:touch;
+  }
+  .table-wrap table {
+    min-width:560px;
+  }
+  .btn,
+  .btn-sm {
+    max-width:100%;
+  }
+  .trip-settlement-modal {
+    max-width:calc(100vw - 8px) !important;
+  }
+  .trip-settlement-table-wrap { display:none; }
+  .trip-settlement-mobile-list { display:block; }
+  .trip-settlement-person-stats {
+    grid-template-columns:1fr 1fr;
+  }
+}
+
+@media(max-width:480px) {
+  .tab-content {
+    padding:72px 8px 24px !important;
+  }
+  .overlay {
+    padding:2px !important;
+  }
+  .modal,
+  .modal-wide,
+  .live-split-detail-modal {
+    width:calc(100vw - 4px) !important;
+    max-width:calc(100vw - 4px) !important;
+    border-radius:16px !important;
+  }
+  .modal-head {
+    padding:12px 14px !important;
+  }
+  .modal-body,
+  .modal-inner {
+    padding:12px !important;
+  }
+  .trip-settlement-person-top {
+    flex-direction:column;
+    align-items:flex-start;
+  }
+  .trip-settlement-person-net {
+    white-space:normal;
+  }
+  .trip-settlement-person-stats {
+    grid-template-columns:1fr;
+  }
+  .trip-settlement-toggle {
+    padding:10px;
+  }
+}
+
+/* Mobile-first full-screen treatment for Live Split detail popups */
+@media(max-width:768px) {
+  .ls-desktop-event-wrap { display:none !important; }
+  .ls-mobile-event-list { display:block !important; }
+  .overlay.live-split-detail-overlay,
+  .overlay:has(.live-split-detail-modal) {
+    padding:0 !important;
+    align-items:stretch !important;
+    justify-content:stretch !important;
+    background:rgba(15,23,42,0.18) !important;
+  }
+  .live-split-detail-modal {
+    width:100vw !important;
+    max-width:100vw !important;
+    min-height:100dvh;
+    height:100dvh;
+    max-height:100dvh !important;
+    border-radius:0 !important;
+    margin:0 !important;
+    box-shadow:none !important;
+    display:flex;
+    flex-direction:column;
+  }
+  .live-split-detail-modal .modal-head {
+    position:sticky;
+    top:0;
+    z-index:2;
+    background:rgba(255,255,255,0.98);
+    backdrop-filter:blur(10px);
+  }
+  .live-split-detail-modal .modal-body {
+    padding:12px !important;
+    flex:1 1 auto;
+    overflow:auto;
+    overscroll-behavior:contain;
+  }
+  .live-split-detail-modal .summary-card {
+    border-radius:16px !important;
+    padding:16px 18px !important;
+    margin-bottom:14px !important;
+  }
+  .live-split-detail-modal .summary-amount {
+    font-size:24px !important;
+  }
+  .live-split-detail-modal .live-split-event-table tbody {
+    gap:8px !important;
+  }
+  .live-split-detail-modal .live-split-event-table tr {
+    padding:12px 14px !important;
+    border-radius:14px !important;
+  }
+  .live-split-detail-modal .ls-mobile-event-card {
+    border-radius:14px !important;
+    padding:14px !important;
+  }
+  .live-split-detail-modal .live-split-mobile-meta {
+    margin-top:8px !important;
+  }
+  .live-split-detail-modal .live-split-inline-actions {
+    margin-top:8px !important;
+  }
+  .live-split-detail-modal .live-split-inline-actions .live-split-row-actions {
+    padding:5px !important;
+    gap:6px !important;
+  }
+  .live-split-detail-modal .live-split-activity-list {
+    max-height:none !important;
+    overflow:visible !important;
+  }
+  .live-split-detail-modal .ls-expense-detail-summary {
+    padding:16px !important;
+  }
+  .live-split-detail-modal .ls-expense-detail-hero {
+    margin-bottom:12px !important;
+  }
+  .live-split-detail-modal .ls-expense-detail-title {
+    font-size:15px !important;
+    text-align:left !important;
+  }
+  .live-split-detail-modal .ls-expense-detail-amount {
+    font-size:32px !important;
+    text-align:left !important;
+  }
+  .live-split-detail-modal .ls-expense-detail-meta {
+    text-align:left !important;
+  }
+  .live-split-detail-modal .ls-expense-participant-card {
+    border-radius:14px !important;
+    padding:13px 14px !important;
+  }
+  .live-split-detail-modal .ls-expense-activity-card {
+    border-radius:14px !important;
+    padding:12px 14px !important;
   }
 }
 </style>

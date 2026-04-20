@@ -573,6 +573,22 @@ function parsePersonsColumn(sheet) {
   return [];
 }
 
+function findTripExpenseHeaderRow(sheet, titleRow, startCol, lastRow) {
+  const lookAheadRows = Math.min(lastRow, titleRow + 4);
+  for (let row = titleRow + 1; row <= lookAheadRows; row++) {
+    const c1 = normalizeExcelHeader(sheet.cell(row, startCol).value());
+    const c2 = normalizeExcelHeader(sheet.cell(row, startCol + 1).value());
+    const c3 = normalizeExcelHeader(sheet.cell(row, startCol + 2).value());
+    const c4 = normalizeExcelHeader(sheet.cell(row, startCol + 3).value());
+    const hasItem = ['things', 'thing', 'item', 'items', 'details', 'description', 'particulars'].includes(c1);
+    const hasQty = ['quantity', 'qty', 'count', 'units'].includes(c2);
+    const hasPrice = ['price', 'rate', 'unit price', 'cost'].includes(c3);
+    const hasTotal = ['total', 'amount', 'amt'].includes(c4);
+    if (hasItem && (hasQty || hasPrice || hasTotal)) return row;
+  }
+  return titleRow + 1;
+}
+
 function parseTripDetailExpenses(sheet) {
   const usedRange = sheet.usedRange();
   if (!usedRange) return [];
@@ -585,20 +601,26 @@ function parseTripDetailExpenses(sheet) {
       const normalizedTitle = normalizeExcelHeader(title);
       if (!normalizedTitle || normalizedTitle === 'total expenses' || !normalizedTitle.endsWith('expenses')) continue;
       const type = titleCaseWords(normalizedTitle.replace(/\bexpenses\b/, '').trim() || 'Other');
+      const headerRow = findTripExpenseHeaderRow(sheet, row, col, lastRow);
       let blanks = 0;
-      for (let r = row + 2; r <= lastRow; r++) {
+      for (let r = headerRow + 1; r <= lastRow; r++) {
         const label = excelCellText(sheet, r, col);
         const qtyVal = sheet.cell(r, col + 1).value();
         const priceVal = sheet.cell(r, col + 2).value();
         const totalVal = sheet.cell(r, col + 3).value();
         const normalizedLabel = normalizeExcelHeader(label);
+        const isNextExpenseSection = normalizedLabel
+          && normalizedLabel !== 'total expenses'
+          && normalizedLabel.endsWith('expenses')
+          && !['things', 'thing', 'item', 'items', 'details', 'description', 'particulars'].includes(normalizedLabel);
+        if (isNextExpenseSection) break;
         if (!label && !qtyVal && !priceVal && !totalVal) {
           blanks++;
           if (blanks >= 2) break;
           continue;
         }
         blanks = 0;
-        if (normalizedLabel === 'things' || normalizedLabel === 'item' || normalizedLabel === 'items') continue;
+        if (['things', 'thing', 'item', 'items', 'details', 'description', 'particulars'].includes(normalizedLabel)) continue;
         if (normalizedLabel === 'total') break;
         const amount = parseExcelAmount(totalVal) || (() => {
           const qty = parseExcelAmount(qtyVal);
@@ -621,13 +643,125 @@ function parseTripDetailExpenses(sheet) {
   return expenses;
 }
 
+function buildTripInitialMemberMap(members = []) {
+  const map = new Map();
+  (members || []).forEach((member) => {
+    const name = String(member?.member_name || member?.name || member || '').trim();
+    if (!name) return;
+    const token = normalizeExcelHeader(name).split(' ')[0] || '';
+    const initial = token ? token.charAt(0).toUpperCase() : '';
+    if (!initial) return;
+    if (!map.has(initial)) map.set(initial, []);
+    map.get(initial).push(name);
+  });
+  return map;
+}
+
+function expandEqualDivideMembers(rawValue, memberMap) {
+  const raw = String(rawValue || '').trim().toUpperCase();
+  if (!raw) return [];
+  const letters = [...raw].filter((char) => /[A-Z]/.test(char));
+  const picked = [];
+  const usedNames = new Set();
+  letters.forEach((letter) => {
+    const matches = memberMap.get(letter) || [];
+    const next = matches.find((name) => !usedNames.has(name));
+    if (next) {
+      picked.push(next);
+      usedNames.add(next);
+    }
+  });
+  return picked;
+}
+
+function findSpecialTripSplitHeaderRow(sheet) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return null;
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  for (let row = 1; row <= Math.min(lastRow, 25); row++) {
+    const headers = [];
+    for (let col = 1; col <= lastCol; col++) headers.push(normalizeExcelHeader(sheet.cell(row, col).value()));
+    const dateIndex = headers.findIndex((header) => header === 'date');
+    const thingIndex = headers.findIndex((header) => ['thing', 'things', 'item', 'details'].includes(header));
+    const equalDivideIndex = headers.findIndex((header) => header === 'equal divide');
+    const perPersonIndex = headers.findIndex((header) => header === 'per person');
+    const amountIndexes = headers
+      .map((header, index) => ({ header, index }))
+      .filter((entry) => entry.header === 'amount' || entry.header.startsWith('amount '))
+      .map((entry) => entry.index);
+    let amountIndex = amountIndexes.length ? amountIndexes[amountIndexes.length - 1] : -1;
+    if (perPersonIndex >= 0) {
+      const beforePerPerson = amountIndexes.filter((index) => index < perPersonIndex);
+      if (beforePerPerson.length) amountIndex = beforePerPerson[beforePerPerson.length - 1];
+    }
+    if (dateIndex >= 0 && thingIndex >= 0 && equalDivideIndex >= 0 && amountIndex >= 0) {
+      return {
+        row,
+        dateCol: dateIndex + 1,
+        thingCol: thingIndex + 1,
+        amountCol: amountIndex + 1,
+        equalDivideCol: equalDivideIndex + 1,
+      };
+    }
+  }
+  return null;
+}
+
+function parseTripSharedSplitSheet(sheet, tripMembers = [], sheetName = '') {
+  const header = findSpecialTripSplitHeaderRow(sheet);
+  if (!header) return [];
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return [];
+  const lastRow = usedRange.endCell().rowNumber();
+  const memberMap = buildTripInitialMemberMap(tripMembers);
+  const fallbackMemberNames = (tripMembers || []).map((member) => String(member?.member_name || '').trim()).filter(Boolean);
+  const expenses = [];
+  for (let row = header.row + 1; row <= lastRow; row++) {
+    const dateVal = sheet.cell(row, header.dateCol).value();
+    const thingVal = sheet.cell(row, header.thingCol).value();
+    const amountVal = sheet.cell(row, header.amountCol).value();
+    const equalDivideVal = sheet.cell(row, header.equalDivideCol).value();
+    const details = String(thingVal || '').trim();
+    const amount = parseExcelAmount(amountVal);
+    const expenseDate = parseExcelDate(dateVal);
+    if (!details && !amount && !equalDivideVal) continue;
+    if (!details || !amount || amount <= 0 || !expenseDate) continue;
+    let memberNames = expandEqualDivideMembers(equalDivideVal, memberMap);
+    if (!memberNames.length && fallbackMemberNames.length) memberNames = [fallbackMemberNames[0]];
+    const splitCount = memberNames.length || 1;
+    const baseShare = Math.round((amount / splitCount) * 100) / 100;
+    const splits = memberNames.map((memberName, index) => ({
+      member_name: memberName,
+      share_amount: index === 0
+        ? Math.round((amount - baseShare * (splitCount - 1)) * 100) / 100
+        : baseShare,
+    }));
+    const noteMembers = memberNames.length ? `Shared with ${memberNames.join(', ')}` : 'Imported shared split';
+    expenses.push({
+      expense_type: 'Imported',
+      details,
+      quantity: 1,
+      unit_price: amount,
+      amount,
+      expense_date: expenseDate,
+      notes: `Imported from shared split sheet (${sheetName}) · ${noteMembers}`,
+      split_mode: 'equal',
+      split_member_names: memberNames,
+      split_code: String(equalDivideVal || '').trim().toUpperCase(),
+      splits,
+    });
+  }
+  return expenses;
+}
+
 function parseTripDetailSheet(sheet) {
   const destinationRaw = findLabelValue(sheet, ['location', 'destination', 'trip destination']);
   const startRaw = findLabelValue(sheet, ['start date']);
   const endRaw = findLabelValue(sheet, ['end date']);
   const distanceRaw = findLabelValue(sheet, ['total distance travelled', 'total distance', 'distance travelled', 'distance']);
   if (!destinationRaw || !startRaw) return null;
-  const destination = String(destinationRaw).trim().split(',')[0].trim();
+  const destination = String(destinationRaw).trim();
   const start_date = parseExcelDate(startRaw);
   if (!destination || !start_date) return null;
   const expenses = parseTripDetailExpenses(sheet).map((expense) => ({
@@ -674,6 +808,94 @@ async function parseTripsExcelBuffer(buffer, sheetNames, password) {
     skipped++;
   }
   return { trips, skipped };
+}
+
+async function parseTripExpenseExcelBuffer(buffer, sheetNames, password, tripMembers = []) {
+  const opts = password ? { password } : {};
+  const wb = await XlsxPopulate.fromDataAsync(buffer, opts);
+  const allSheets = wb.sheets().map((sheet) => sheet.name());
+  const targets = (Array.isArray(sheetNames) && sheetNames.length > 0)
+    ? sheetNames.filter((name) => allSheets.includes(name))
+    : [allSheets[0]];
+
+  const expenses = [];
+  let skipped = 0;
+
+  for (const sheetName of targets) {
+    const sheet = wb.sheet(sheetName);
+    const sharedSplitExpenses = parseTripSharedSplitSheet(sheet, tripMembers, sheetName);
+    if (sharedSplitExpenses.length) {
+      for (const expense of sharedSplitExpenses) {
+        expenses.push({
+          expense_type: expense.expense_type || 'Imported',
+          details: expense.details,
+          quantity: expense.quantity != null ? Number(expense.quantity) : 1,
+          unit_price: expense.unit_price != null ? Number(expense.unit_price) : Number(expense.amount || 0),
+          amount: Number(expense.amount || 0),
+          expense_date: expense.expense_date || null,
+          notes: expense.notes || `Imported from shared split sheet (${sheetName})`,
+          split_mode: expense.split_mode || 'equal',
+          split_member_names: expense.split_member_names || [],
+          split_code: expense.split_code || '',
+          splits: expense.splits || [],
+        });
+      }
+      continue;
+    }
+
+    const directExpenses = parseTripDetailExpenses(sheet);
+    if (directExpenses.length) {
+      for (const expense of directExpenses) {
+        expenses.push({
+          expense_type: expense.expense_type || 'Imported',
+          details: expense.details,
+          quantity: expense.quantity != null ? Number(expense.quantity) : 1,
+          unit_price: expense.unit_price != null ? Number(expense.unit_price) : Number(expense.amount || 0),
+          amount: Number(expense.amount || 0),
+          expense_date: expense.expense_date || null,
+          notes: expense.notes || `Imported from trip expense sheet (${sheetName})`,
+        });
+      }
+      continue;
+    }
+
+    const detailTrip = parseTripDetailSheet(sheet);
+    if (detailTrip?.expenses?.length) {
+      for (const expense of detailTrip.expenses) {
+        expenses.push({
+          expense_type: expense.expense_type || 'Imported',
+          details: expense.details,
+          quantity: expense.quantity != null ? Number(expense.quantity) : 1,
+          unit_price: expense.unit_price != null ? Number(expense.unit_price) : Number(expense.amount || 0),
+          amount: Number(expense.amount || 0),
+          expense_date: expense.expense_date || detailTrip.start_date || null,
+          notes: expense.notes || `Imported from detailed trip sheet (${sheetName})`,
+        });
+      }
+      continue;
+    }
+
+    const generic = await parseExcelBuffer(buffer, [sheetName], password);
+    if (generic.rows.length) {
+      for (const row of generic.rows) {
+        expenses.push({
+          expense_type: 'Imported',
+          details: row.item_name,
+          quantity: 1,
+          unit_price: Number(row.amount || 0),
+          amount: Number(row.amount || 0),
+          expense_date: row.purchase_date,
+          notes: row.is_extra ? `Imported from Excel sheet "${sheetName}" · Extra` : `Imported from Excel sheet "${sheetName}"`,
+        });
+      }
+      skipped += Number(generic.skipped || 0);
+      continue;
+    }
+
+    skipped++;
+  }
+
+  return { expenses, skipped };
 }
 
 async function parseExcelBuffer(buffer, sheetNames, password) {
@@ -1618,6 +1840,7 @@ router.post('/live-split/trips', async (req, res) => {
         name: req.body?.name,
         start_date: req.body?.start_date,
         end_date: req.body?.end_date,
+        show_add_to_expense_option: req.body?.show_add_to_expense_option !== false,
         notes: req.body?.notes,
         members: req.body?.members || [],
       })
@@ -1642,6 +1865,19 @@ router.delete('/live-split/trips/:id(\\d+)', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().deleteLiveSplitTrip(req.session.userId, req.params.id));
     res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/live-split/trips/:id(\\d+)/add-to-expense', async (req, res) => {
+  try {
+    const result = await Promise.resolve(
+      getCoreDb().addLiveSplitTripToExpense(req.session.userId, req.params.id, {
+        expense_type: req.body?.expense_type,
+      })
+    );
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1933,7 +2169,7 @@ router.delete('/trips/:id', async (req, res) => {
 
 router.post('/trips/:id/expenses', async (req, res) => {
   try {
-    const { expense_type, details, quantity, unit_price, amount, expense_date, notes } = req.body;
+    const { expense_type, details, quantity, unit_price, amount, expense_date, notes, paid_by_key, paid_by_name, split_mode, splits } = req.body;
     if (!expense_type || !details) return res.status(400).json({ error: 'Expense type and detail are required' });
     const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, {
       expense_type,
@@ -1943,9 +2179,90 @@ router.post('/trips/:id/expenses', async (req, res) => {
       amount,
       expense_date,
       notes,
+      paid_by_key,
+      paid_by_name,
+      split_mode,
+      splits,
     }));
     res.json({ success: true, id });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.post('/trips/:id/expenses/import-excel/sheets', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const password = req.body.password || '';
+    const opts = password ? { password } : {};
+    const wb = await XlsxPopulate.fromDataAsync(req.file.buffer, opts);
+    res.json({ sheets: wb.sheets().map((sheet) => sheet.name()) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to read file' });
+  }
+});
+
+router.post('/trips/:id/expenses/import-excel/preview', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const trip = await Promise.resolve(getCoreDb().getTripById(req.session.userId, req.params.id));
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+    const sheets = parseSheetParam(req.body.sheets);
+    const parsed = await parseTripExpenseExcelBuffer(req.file.buffer, sheets, req.body.password, trip.members || []);
+    res.json({
+      count: parsed.expenses.length,
+      skipped: parsed.skipped,
+      preview: parsed.expenses.slice(0, 20).map((expense) => ({
+        expense_type: expense.expense_type,
+        details: expense.details,
+        quantity: expense.quantity,
+        unit_price: expense.unit_price,
+        amount: expense.amount,
+        expense_date: expense.expense_date,
+        notes: expense.notes,
+        split_member_names: expense.split_member_names || [],
+        split_code: expense.split_code || '',
+      })),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Failed to preview file' });
+  }
+});
+
+router.post('/trips/:id/expenses/import-excel', withUpload, async (req, res) => {
+  try {
+    const coreDb = getCoreDb();
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const trip = await Promise.resolve(coreDb.getTripById(req.session.userId, req.params.id));
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+    const sheets = parseSheetParam(req.body.sheets);
+    const parsed = await parseTripExpenseExcelBuffer(req.file.buffer, sheets, req.body.password, trip.members || []);
+    if (!parsed.expenses.length) return res.status(400).json({ error: 'No valid trip expenses found in the selected sheet(s).' });
+    let imported = 0;
+    for (const expense of parsed.expenses) {
+      const tripMemberMap = new Map((trip.members || []).map((member) => [String(member.member_name || '').trim().toLowerCase(), member]));
+      const splits = Array.isArray(expense.splits) && expense.splits.length
+        ? expense.splits.map((split) => {
+            const matchedMember = tripMemberMap.get(String(split.member_name || '').trim().toLowerCase());
+            return matchedMember ? {
+              member_key: String(matchedMember.id),
+              member_name: matchedMember.member_name,
+              share_amount: split.share_amount,
+            } : null;
+          }).filter(Boolean)
+        : [];
+      const paidBySplit = splits[0] || null;
+      await Promise.resolve(coreDb.addTripExpense(req.session.userId, req.params.id, {
+        ...expense,
+        paid_by_key: paidBySplit?.member_key || (trip.members?.[0] ? String(trip.members[0].id) : 'self'),
+        paid_by_name: paidBySplit?.member_name || (trip.members?.[0]?.member_name || 'You'),
+        split_mode: splits.length > 1 ? (expense.split_mode || 'equal') : 'equal',
+        splits: splits.length ? splits : undefined,
+      }));
+      imported++;
+    }
+    res.json({ success: true, imported, skipped: parsed.skipped });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Trip expense import failed' });
+  }
 });
 
 router.post('/trips/import-excel/sheets', withUpload, async (req, res) => {
@@ -2033,7 +2350,7 @@ router.post('/trips/import-excel', withUpload, async (req, res) => {
 
 router.put('/trips/:id/expenses/:eid', async (req, res) => {
   try {
-    const { expense_type, details, quantity, unit_price, amount, expense_date, notes } = req.body;
+    const { expense_type, details, quantity, unit_price, amount, expense_date, notes, paid_by_key, paid_by_name, split_mode, splits } = req.body;
     await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, {
       expense_type,
       details,
@@ -2042,6 +2359,10 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
       amount,
       expense_date,
       notes,
+      paid_by_key,
+      paid_by_name,
+      split_mode,
+      splits,
     }));
     res.json({ success: true });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
@@ -2060,7 +2381,10 @@ router.post('/trips/:id/finalize', async (req, res) => {
       is_extra: !!req.body?.is_extra,
       txn_date: req.body?.txn_date,
       category: req.body?.category,
+      self_member_key: req.body?.self_member_key || null,
       friend_ids: req.body?.friend_ids || {},
+      live_split_friend_ids: req.body?.live_split_friend_ids || {},
+      add_self_expense: req.body?.add_self_expense !== false,
     }));
     sendTripFinalizedEmails(req.session.userId, req.params.id).catch(() => {});
     res.json(result || { success: true });
@@ -2989,6 +3313,25 @@ router.post('/admin/ai-learning/test', requireAdmin, async (req, res) => {
     ]);
 
     const normalizedQuestion = aiNormalizeQuestion(question);
+    const trainedAnswer = await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
+    if (trainedAnswer?.ideal_answer) {
+      return res.json({
+        success: true,
+        question,
+        normalized_question: normalizedQuestion,
+        answer: trainedAnswer.ideal_answer,
+        ai_meta: {
+          detected_intent: trainedAnswer.detected_intent || 'trained_answer',
+          detected_confidence: 1,
+          resolved_intent: trainedAnswer.detected_intent || 'trained_answer',
+          resolved_confidence: 1,
+          resolution_method: 'admin_training_store',
+          learned_match: null,
+          answer_type: 'admin_trained_answer',
+        },
+      });
+    }
+
     const detectedResolution = aiResolveIntent(question, summary);
     const detectedIntent = detectedResolution.intent;
     let resolvedIntent = detectedIntent;
@@ -3030,6 +3373,39 @@ router.post('/admin/ai-learning/test', requireAdmin, async (req, res) => {
         answer_type: answerType,
       },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ai-learning/training-example', requireAdmin, async (req, res) => {
+  try {
+    const question = String(req.body?.question || '').trim();
+    const normalizedQuestion = aiNormalizeQuestion(req.body?.normalized_question || question);
+    const detectedIntent = String(req.body?.detected_intent || '').trim();
+    const idealAnswer = String(req.body?.ideal_answer || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+    const trainingPayload = req.body?.training_payload && typeof req.body.training_payload === 'object'
+      ? req.body.training_payload
+      : null;
+
+    if (!normalizedQuestion) {
+      return res.status(400).json({ error: 'Question is required' });
+    }
+    if (!idealAnswer) {
+      return res.status(400).json({ error: 'Ideal answer is required' });
+    }
+
+    const result = await Promise.resolve(getOpsDb().saveAiTrainingExample({
+      question,
+      normalized_question: normalizedQuestion,
+      detected_intent: detectedIntent || null,
+      ideal_answer: idealAnswer,
+      notes,
+      training_payload: trainingPayload,
+    }, req.session.userId));
+
+    res.json({ success: true, training_example: result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3385,6 +3761,77 @@ function aiExtractMonthKey(question, summary) {
   return '';
 }
 
+function aiDateLabel(value) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || 'that day';
+  const date = new Date(`${raw}T00:00:00Z`);
+  try {
+    return new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+  } catch (_err) {
+    return raw;
+  }
+}
+
+function aiExtractDateKey(question, summary) {
+  const raw = String(question || '').trim();
+  const normalized = raw.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+  const today = String(summary?.as_of || new Date().toISOString().slice(0, 10));
+
+  if (/\btoday\b/.test(normalized)) return today;
+  if (/\byesterday\b/.test(normalized)) {
+    const date = new Date(`${today}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() - 1);
+    return date.toISOString().slice(0, 10);
+  }
+
+  const isoMatch = normalized.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const monthNames = {
+    january: 1, jan: 1,
+    february: 2, feb: 2,
+    march: 3, mar: 3,
+    april: 4, apr: 4,
+    may: 5,
+    june: 6, jun: 6,
+    july: 7, jul: 7,
+    august: 8, aug: 8,
+    september: 9, sep: 9, sept: 9,
+    october: 10, oct: 10,
+    november: 11, nov: 11,
+    december: 12, dec: 12,
+  };
+
+  const dayMonthYearMatch = normalized.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\s+(20\d{2})\b/);
+  if (dayMonthYearMatch) {
+    const [, day, monthName, year] = dayMonthYearMatch;
+    return `${year}-${String(monthNames[monthName]).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const monthDayYearMatch = normalized.match(/\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(20\d{2})\b/);
+  if (monthDayYearMatch) {
+    const [, monthName, day, year] = monthDayYearMatch;
+    return `${year}-${String(monthNames[monthName]).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const dayMonthMatch = normalized.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\b/);
+  if (dayMonthMatch) {
+    const [, day, monthName] = dayMonthMatch;
+    const fallbackYear = aiExtractYear(question, summary?.current_month);
+    return `${fallbackYear}-${String(monthNames[monthName]).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  return '';
+}
+
+function aiFindDayRow(summary, dateKey) {
+  const rows = Array.isArray(summary?.expense_by_day) ? summary.expense_by_day : [];
+  return rows.find((row) => String(row.day) === String(dateKey)) || null;
+}
+
 function aiFindMonthRow(summary, monthKey) {
   const rows = Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : [];
   return rows.find((row) => String(row.month) === String(monthKey)) || null;
@@ -3512,6 +3959,7 @@ function aiResolveIntent(question, summary) {
     normalized,
     tokens,
     concepts,
+    dateKey: aiExtractDateKey(q, summary),
     monthKey: aiExtractMonthKey(q, summary),
     namedFriend: aiFindFriendByName(summary, q),
     namedTrip: aiFindTrip(summary, q),
@@ -3705,6 +4153,8 @@ function aiAnswerFromSummary(question, summary, currentUser) {
   const planner = Array.isArray(summary?.current_month_planner) ? summary.current_month_planner : [];
   const banks = Array.isArray(summary?.bank_accounts) ? summary.bank_accounts : [];
   const monthKey = aiExtractMonthKey(q, summary);
+  const dateKey = aiExtractDateKey(q, summary);
+  const dayRow = aiFindDayRow(summary, dateKey);
   const monthRow = aiFindMonthRow(summary, monthKey);
   const previousMonthKey = monthKey ? aiMonthShift(monthKey, -1) : aiMonthShift(currentMonth, -1);
   const previousMonthRow = aiFindMonthRow(summary, previousMonthKey);
@@ -3713,6 +4163,26 @@ function aiAnswerFromSummary(question, summary, currentUser) {
   const namedTrip = aiFindTrip(summary, q);
   const namedCard = aiFindCard(summary, q);
   const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
+  const today = summary?.as_of || new Date().toISOString().slice(0, 10);
+  const todayExpenses = recentExpenses.filter((row) => String(row?.purchase_date || '') === String(today));
+  const dayExpenses = dateKey ? recentExpenses.filter((row) => String(row?.purchase_date || '') === String(dateKey)) : [];
+
+  if (asksAboutExpense && dateKey && dateKey !== today) {
+    if (!dayRow) return `You do not have any saved expenses for ${aiDateLabel(dateKey)}.`;
+    return aiLines([
+      `Your total expenses for ${aiDateLabel(dateKey)} are ${aiCurrency(summary, currentUser, dayRow.total)} across ${Number(dayRow.count) || 0} transaction(s).`,
+      ...dayExpenses.slice(0, 5).map((row) => `- ${row.item_name}: ${aiCurrency(summary, currentUser, row.amount)}${row.is_extra ? ' (extra)' : ''}`),
+    ]);
+  }
+
+  if (asksAboutExpense && (normalized.includes('today') || tokens.includes('today'))) {
+    if (!todayExpenses.length) return `You do not have any saved expenses for ${today}.`;
+    const todayTotal = todayExpenses.reduce((sum, row) => sum + aiNum(row.amount), 0);
+    return aiLines([
+      `Your total expenses for ${today} are ${aiCurrency(summary, currentUser, todayTotal)} across ${todayExpenses.length} transaction(s).`,
+      ...todayExpenses.slice(0, 5).map((row) => `- ${row.item_name}: ${aiCurrency(summary, currentUser, row.amount)}${row.is_extra ? ' (extra)' : ''}`),
+    ]);
+  }
 
   if ((normalized.includes('last 3 month') || normalized.includes('last three month')) && (normalized.includes('expense') || normalized.includes('spent'))) {
     const total = aiRecentMonthsTotal(summary, 3);
@@ -3967,6 +4437,33 @@ router.post('/ai/lookup', async (req, res) => {
     ]);
 
     const normalizedQuestion = aiNormalizeQuestion(question);
+    const trainedAnswer = await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
+    if (trainedAnswer?.ideal_answer) {
+      await Promise.resolve(getOpsDb().logAiLookupQuery(req.session.userId, {
+        question,
+        normalized_question: normalizedQuestion,
+        detected_intent: trainedAnswer.detected_intent || 'trained_answer',
+        answer_type: 'admin_trained_answer',
+        was_fallback: false,
+        response_preview: trainedAnswer.ideal_answer,
+      }));
+      const nextStatus = await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId));
+      return res.json({
+        success: true,
+        answer: trainedAnswer.ideal_answer,
+        ai_status: nextStatus,
+        ai_meta: {
+          detected_intent: trainedAnswer.detected_intent || 'trained_answer',
+          detected_confidence: 1,
+          resolved_intent: trainedAnswer.detected_intent || 'trained_answer',
+          resolved_confidence: 1,
+          resolution_method: 'admin_training_store',
+          learned_match: null,
+          answer_type: 'admin_trained_answer',
+        },
+      });
+    }
+
     const detectedResolution = aiResolveIntent(question, summary);
     const detectedIntent = detectedResolution.intent;
     let resolvedIntent = detectedIntent;

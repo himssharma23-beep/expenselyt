@@ -113,6 +113,263 @@ function buildLiveSplitNameCandidates(inviteRow = {}) {
   return { normalized, firstTokens };
 }
 
+function r2(value) {
+  return Math.round(num(value) * 100) / 100;
+}
+
+function liveSplitTextKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function liveSplitNormalizePersonName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function liveSplitFirstNameToken(value) {
+  return liveSplitNormalizePersonName(value).split(' ')[0] || '';
+}
+
+function liveSplitEnsureRow(map, name, extra = {}) {
+  const key = liveSplitNormalizePersonName(name);
+  if (!key) return null;
+  if (!map.has(key)) {
+    map.set(key, { key, name: String(name || '').trim(), amount: 0, linked_user_id: null, friend_id: null, ...extra });
+  }
+  return map.get(key);
+}
+
+function liveSplitEnsureLinkedRow(map, linkedUserId, name, extra = {}) {
+  const uid = Number(linkedUserId || 0);
+  if (!(uid > 0)) return liveSplitEnsureRow(map, name, extra);
+  const key = `u:${uid}`;
+  if (!map.has(key)) {
+    map.set(key, { key, name: String(name || '').trim(), amount: 0, linked_user_id: uid, friend_id: null, ...extra });
+  }
+  const row = map.get(key);
+  if (!row.name && name) row.name = String(name).trim();
+  if (!row.friend_id && extra.friend_id) row.friend_id = Number(extra.friend_id) || null;
+  return row;
+}
+
+function liveSplitFindExistingLinkedRowByUserId(map, linkedUserId) {
+  const uid = Number(linkedUserId || 0);
+  if (!(uid > 0)) return null;
+  return map.get(`u:${uid}`) || null;
+}
+
+function liveSplitFindExistingLinkedRowByName(map, name) {
+  const key = liveSplitNormalizePersonName(name);
+  if (!key) return null;
+  for (const row of map.values()) {
+    const rowKey = liveSplitNormalizePersonName(row?.name);
+    if (!rowKey) continue;
+    if (rowKey === key) return row;
+    if (liveSplitFirstNameToken(rowKey) && liveSplitFirstNameToken(rowKey) === liveSplitFirstNameToken(key)) return row;
+  }
+  return null;
+}
+
+function liveSplitFindLinkedFriendByName(friends = [], friendName = '') {
+  const nameKey = liveSplitNormalizePersonName(friendName);
+  if (!nameKey) return null;
+  const token = liveSplitFirstNameToken(nameKey);
+  return friends.find((friend) => {
+    const friendKey = liveSplitNormalizePersonName(
+      friend?.linked_user_display_name || friend?.linked_user_username || friend?.name || ''
+    );
+    return friendKey === nameKey || (token && liveSplitFirstNameToken(friendKey) === token);
+  }) || null;
+}
+
+function liveSplitIsLikelySelfPayerForOwnGroup(payer, splits = []) {
+  const payerKey = liveSplitTextKey(payer);
+  if (!payerKey) return false;
+  const hasMatchInParticipants = (splits || []).some((split) => liveSplitTextKey(split?.friend_name) === payerKey);
+  return !hasMatchInParticipants;
+}
+
+function computeLiveSplitDashboardSummary(userId, friends = [], groups = [], sharedGroups = []) {
+  const meId = Number(userId || 0);
+  const appFriends = (friends || []).filter((friend) => {
+    const linkedId = Number(friend?.linked_user_id || 0);
+    return linkedId > 0 && linkedId !== meId;
+  });
+  const friendById = new Map((friends || []).map((friend) => [Number(friend.id), friend]));
+  const map = new Map();
+
+  appFriends.forEach((friend) => {
+    const linkedUserId = Number(friend?.linked_user_id || 0);
+    const preferredName = String(friend?.linked_user_display_name || friend?.linked_user_username || friend?.name || '').trim();
+    if (linkedUserId > 0) liveSplitEnsureLinkedRow(map, linkedUserId, preferredName, { friend_id: Number(friend.id) || null });
+    else liveSplitEnsureRow(map, friend?.name || preferredName, { linked_user_id: linkedUserId || null, friend_id: Number(friend.id) || null });
+  });
+
+  (groups || []).forEach((group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const groupMode = String(group?.split_mode || '').trim().toLowerCase();
+    const shareTargetByFriendId = new Map(
+      (Array.isArray(group?.shared_targets) ? group.shared_targets : []).map((item) => [Number(item?.friend_id), Number(item?.target_user_id)])
+    );
+    const total = r2(group?.total_amount);
+    const totalFriends = r2(splits.reduce((sum, split) => sum + num(split.share_amount), 0));
+    const selfShare = r2(total - totalFriends);
+    const payerName = String(group?.paid_by || '').trim();
+    const payerNameKey = liveSplitTextKey(payerName);
+    const selfIsPayer = liveSplitIsLikelySelfPayerForOwnGroup(payerName, splits);
+
+    splits.forEach((split) => {
+      const friendName = String(split?.friend_name || '').trim();
+      const friendNameKey = liveSplitTextKey(friendName);
+      const linkedFriend = friendById.get(Number(split?.friend_id));
+      const linkedFriendLinkedUserId = Number(linkedFriend?.linked_user_id || 0);
+      const shareTargetLinkedUserId = Number(shareTargetByFriendId.get(Number(split?.friend_id)) || 0);
+      const splitLinkedUserIdRaw = Number(split?.linked_user_id || 0);
+      const normalizedLinkedFriendUserId = linkedFriendLinkedUserId === meId ? 0 : linkedFriendLinkedUserId;
+      let splitLinkedUserId = splitLinkedUserIdRaw;
+      if (splitLinkedUserId === meId && shareTargetLinkedUserId > 0 && shareTargetLinkedUserId !== meId) {
+        splitLinkedUserId = shareTargetLinkedUserId;
+      }
+      if (splitLinkedUserId === meId) splitLinkedUserId = 0;
+      const linkedByUser = splitLinkedUserId > 0 ? liveSplitFindExistingLinkedRowByUserId(map, splitLinkedUserId) : null;
+      let fallbackFriendByUser = splitLinkedUserId > 0
+        ? appFriends.find((friend) => Number(friend?.linked_user_id) === splitLinkedUserId) || null
+        : null;
+      if (!fallbackFriendByUser) fallbackFriendByUser = liveSplitFindLinkedFriendByName(appFriends, friendName);
+      if (!linkedFriend && !fallbackFriendByUser && !linkedByUser) return;
+      const preferredLinkedName = String(
+        linkedFriend?.linked_user_display_name
+        || linkedFriend?.linked_user_username
+        || fallbackFriendByUser?.linked_user_display_name
+        || fallbackFriendByUser?.linked_user_username
+        || linkedByUser?.name
+        || friendName
+        || fallbackFriendByUser?.name
+        || ''
+      ).trim();
+      const row = (linkedFriend && normalizedLinkedFriendUserId > 0)
+        ? liveSplitEnsureLinkedRow(map, normalizedLinkedFriendUserId, preferredLinkedName, { friend_id: Number(linkedFriend.id) || null })
+        : linkedByUser
+          || (fallbackFriendByUser
+            ? liveSplitEnsureLinkedRow(map, splitLinkedUserId, preferredLinkedName, { friend_id: Number(fallbackFriendByUser?.id) || null })
+            : liveSplitFindExistingLinkedRowByName(map, friendName));
+      if (!row) return;
+      const rowNameKey = liveSplitTextKey(row?.name || '');
+      const linkedFriendNameKey = liveSplitTextKey(linkedFriend?.name || '');
+      const fallbackNameKey = liveSplitTextKey(fallbackFriendByUser?.name || '');
+      const splitIsPayer = !!payerNameKey && (
+        payerNameKey === friendNameKey
+        || (rowNameKey && payerNameKey === rowNameKey)
+        || (linkedFriendNameKey && payerNameKey === linkedFriendNameKey)
+        || (fallbackNameKey && payerNameKey === fallbackNameKey)
+      );
+      if (groupMode === 'settlement') {
+        if (selfIsPayer) row.amount = r2(row.amount + num(split.share_amount));
+        else if (splitIsPayer) row.amount = r2(row.amount - num(split.share_amount));
+        return;
+      }
+      if (selfIsPayer) row.amount = r2(row.amount + num(split.share_amount));
+      else if (splitIsPayer && selfShare > 0) row.amount = r2(row.amount - selfShare);
+    });
+  });
+
+  (sharedGroups || []).forEach((group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = r2(group?.total_amount);
+    const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
+    const ownerUserId = Number(group?.owner_user_id || 0);
+    const targetUserId = Number(group?.target_user_id || meId || 0);
+    const sumSplit = r2(splits.reduce((sum, split) => sum + num(split.share_amount), 0));
+    const ownerShare = r2(total - sumSplit);
+    const participants = [
+      {
+        key: `owner:${ownerUserId || liveSplitTextKey(ownerName)}`,
+        name: ownerName,
+        share: ownerShare,
+        linked_user_id: ownerUserId > 0 ? ownerUserId : null,
+        friend_id: null,
+      },
+      ...splits.map((split, index) => ({
+        key: `split:${Number(split?.id || 0) || index + 1}`,
+        name: String(split?.friend_name || '').trim(),
+        share: r2(split?.share_amount),
+        linked_user_id: Number(split?.linked_user_id || 0) || null,
+        friend_id: Number(split?.friend_id || 0) || null,
+      })),
+    ].filter((participant) => participant.name);
+    if (!participants.length) return;
+
+    const targetNameNorm = liveSplitNormalizePersonName(group?.friend_name || '');
+    let selfParticipant = null;
+    if (targetUserId > 0) selfParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === targetUserId) || null;
+    if (!selfParticipant && Number(group?.friend_id || 0) > 0) {
+      selfParticipant = participants.find((participant) => Number(participant?.friend_id || 0) === Number(group.friend_id)) || null;
+    }
+    if (!selfParticipant && targetNameNorm) {
+      selfParticipant = participants.find((participant) => {
+        const nameNorm = liveSplitNormalizePersonName(participant?.name || '');
+        return nameNorm && (nameNorm === targetNameNorm || (liveSplitFirstNameToken(nameNorm) && liveSplitFirstNameToken(nameNorm) === liveSplitFirstNameToken(targetNameNorm)));
+      }) || null;
+    }
+    if (!selfParticipant && targetUserId > 0 && ownerUserId > 0 && ownerUserId === targetUserId) selfParticipant = participants[0];
+    if (!selfParticipant) return;
+
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payer = liveSplitTextKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerNorm = liveSplitNormalizePersonName(payer);
+    const payerParticipant = participants.find((participant) => {
+      const nameNorm = liveSplitNormalizePersonName(participant?.name || '');
+      return nameNorm && payerNorm && (nameNorm === payerNorm || (liveSplitFirstNameToken(nameNorm) && liveSplitFirstNameToken(nameNorm) === liveSplitFirstNameToken(payerNorm)));
+    }) || null;
+    const selfShare = r2(selfParticipant.share);
+    const selfIsPayer = !!(payerParticipant && payerParticipant.key === selfParticipant.key);
+
+    participants.forEach((participant) => {
+      if (participant.key === selfParticipant.key) return;
+      const participantLinkedId = Number(participant?.linked_user_id || 0);
+      if (participantLinkedId > 0 && participantLinkedId === targetUserId) return;
+      if (!(participantLinkedId > 0)) return;
+      const linkedFriend = (friends || []).find((friend) => Number(friend?.linked_user_id || 0) === participantLinkedId) || null;
+      if (!linkedFriend) return;
+      const preferredName = String(
+        linkedFriend?.linked_user_display_name
+        || linkedFriend?.linked_user_username
+        || participant?.name
+        || linkedFriend?.name
+        || ''
+      ).trim();
+      const row = liveSplitEnsureLinkedRow(map, participantLinkedId, preferredName, {
+        friend_id: Number(linkedFriend?.id || participant?.friend_id || 0) || null,
+      });
+      if (!row || Number(row?.linked_user_id || 0) === meId) return;
+
+      let delta = 0;
+      if (selfIsPayer) delta = r2(participant.share);
+      else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) delta = r2(0 - selfShare);
+      if (delta !== 0) row.amount = r2(row.amount + delta);
+    });
+  });
+
+  const rows = [...map.values()]
+    .map((row) => ({ ...row, amount: r2(row.amount) }))
+    .filter((row) => Number(row?.linked_user_id || 0) > 0 && Number(row?.linked_user_id || 0) !== meId)
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount) || String(a.name || '').localeCompare(String(b.name || '')));
+
+  return {
+    rows,
+    totals: {
+      oweToMe: r2(rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0)),
+      iOwe: r2(rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0)),
+      owedCount: rows.filter((row) => row.amount > 0.004).length,
+      oweCount: rows.filter((row) => row.amount < -0.004).length,
+    },
+  };
+}
+
 async function reconcileLiveSplitLinksForOwner(ownerUserId, targetUserId = null) {
   const ownerId = Number(ownerUserId);
   if (!(ownerId > 0)) return;
@@ -730,14 +987,15 @@ async function createLiveSplitTrip(userId, data) {
     const startDate = normalizeDateValue(data?.start_date, 'Start date');
     const endDate = data?.end_date ? normalizeDateValue(data.end_date, 'End date') : null;
     if (endDate && endDate < startDate) throw validationError('End date cannot be before start date');
+    const showAddToExpenseOption = data?.show_add_to_expense_option !== false;
     const notes = data?.notes ? normalizeOptionalText(data.notes, 300) : null;
     const members = await normalizeLiveSplitTripMembersForOwner(client, userId, data?.members || []);
 
     const tripResult = await client.query(
-      `INSERT INTO live_split_trips (user_id, name, start_date, end_date, status, notes, updated_by)
-       VALUES ($1, $2, $3, $4, 'active', $5, $1)
+      `INSERT INTO live_split_trips (user_id, name, start_date, end_date, status, show_add_to_expense_option, notes, updated_by)
+       VALUES ($1, $2, $3, $4, 'active', $5, $6, $1)
        RETURNING id`,
-      [userId, name, startDate, endDate, notes]
+      [userId, name, startDate, endDate, showAddToExpenseOption, notes]
     );
     const tripId = Number(tripResult.rows[0].id);
 
@@ -763,6 +1021,24 @@ async function getLiveSplitTrips(userId) {
   const result = await query(
     `SELECT DISTINCT
        t.*,
+       EXISTS (
+         SELECT 1
+         FROM expenses e
+         WHERE e.user_id = $1
+           AND e.source = 'live_split_trip'
+           AND e.source_id = t.id
+           AND e.deleted_at IS NULL
+       ) AS added_to_expense,
+       COALESCE((
+         SELECT e.is_extra
+         FROM expenses e
+         WHERE e.user_id = $1
+           AND e.source = 'live_split_trip'
+           AND e.source_id = t.id
+           AND e.deleted_at IS NULL
+         ORDER BY e.id DESC
+         LIMIT 1
+       ), FALSE) AS added_to_expense_is_extra,
        CASE WHEN t.user_id = $1 THEN TRUE ELSE FALSE END AS is_owner
      FROM live_split_trips t
      LEFT JOIN live_split_trip_members m ON m.trip_id = t.id AND m.target_user_id = $1
@@ -798,6 +1074,9 @@ async function getLiveSplitTrips(userId) {
       user_id: Number(row.user_id),
       is_owner: bool(row.is_owner),
       status: normalizeLiveSplitTripStatus(row.status),
+      added_to_expense: bool(row.added_to_expense),
+      added_to_expense_is_extra: bool(row.added_to_expense_is_extra),
+      show_add_to_expense_option: bool(row.show_add_to_expense_option),
       members: (membersResult.rows || []).map((member) => ({
         ...member,
         id: Number(member.id),
@@ -845,6 +1124,10 @@ async function updateLiveSplitTrip(userId, tripId, data = {}) {
     if (data.notes !== undefined) {
       params.push(data.notes ? normalizeOptionalText(data.notes, 300) : null);
       fields.push(`notes = $${params.length}`);
+    }
+    if (data.show_add_to_expense_option !== undefined) {
+      params.push(data.show_add_to_expense_option !== false);
+      fields.push(`show_add_to_expense_option = $${params.length}`);
     }
 
     if (!fields.length) return;
@@ -939,6 +1222,61 @@ async function removeLiveSplitTripMember(userId, tripId, memberId) {
 
     await client.query('DELETE FROM live_split_trip_members WHERE id = $1', [mid]);
     return { removed: true };
+  });
+}
+
+async function addLiveSplitTripToExpense(userId, tripId, data = {}) {
+  const uid = Number(userId);
+  const tid = Number(tripId);
+  if (!(tid > 0)) throw validationError('Trip not found');
+  return withTransaction(async (client) => {
+    const access = await getLiveSplitTripAccessRow(client, uid, tid);
+    if (!access) throw validationError('Trip not found');
+    if (Number(access.user_id) !== uid) throw validationError('Only trip owner can add trip totals to expenses');
+    const statsR = await client.query(
+      `SELECT COALESCE(SUM(total_amount), 0) AS total_amount
+       FROM live_split_groups
+       WHERE trip_id = $1`,
+      [tid]
+    );
+    const totalAmount = normalizeAmount(statsR.rows[0]?.total_amount || 0);
+    if (!(totalAmount > 0)) throw validationError('Trip total is zero, so nothing can be added to expenses');
+    const tripName = String(access.name || 'Live Split Trip').trim() || 'Live Split Trip';
+    const purchaseDate = access.end_date || access.start_date || new Date().toISOString().slice(0, 10);
+    const isExtra = String(data?.expense_type || '').trim().toLowerCase() === 'extra';
+    const existingR = await client.query(
+      `SELECT id
+       FROM expenses
+       WHERE user_id = $1
+         AND source = 'live_split_trip'
+         AND source_id = $2
+         AND deleted_at IS NULL
+       ORDER BY id DESC
+       LIMIT 1`,
+      [uid, tid]
+    );
+    if (existingR.rows[0]?.id) {
+      await client.query(
+        `UPDATE expenses
+         SET item_name = $1,
+             category = $2,
+             amount = $3,
+             purchase_date = $4,
+             is_extra = $5,
+             updated_at = NOW(),
+             updated_by = $6
+         WHERE id = $7`,
+        [tripName, 'Live Split Trip', totalAmount, purchaseDate, isExtra, uid, Number(existingR.rows[0].id)]
+      );
+      return { id: Number(existingR.rows[0].id), total_amount: totalAmount, updated: true, is_extra: isExtra };
+    }
+    const insertR = await client.query(
+      `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, 'live_split_trip', $7, $1, $1)
+       RETURNING id`,
+      [uid, tripName, 'Live Split Trip', totalAmount, purchaseDate, isExtra, tid]
+    );
+    return { id: Number(insertR.rows[0].id), total_amount: totalAmount, updated: false, is_extra: isExtra };
   });
 }
 
@@ -2315,7 +2653,7 @@ async function getDashboardData(userId, year) {
   const currentYear = String(new Date().getFullYear());
   const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
 
-  const [monthlyTotalsR, monthlyByTypeR, topItemsR, spendBreakdownR, yearTotalR, monthTotalR, recentExpensesR, yearsR, friends] = await Promise.all([
+  const [monthlyTotalsR, monthlyByTypeR, topItemsR, spendBreakdownR, yearTotalR, monthTotalR, recentExpensesR, yearsR, liveSplitFriends, liveSplitGroups, liveSplitSharedGroups] = await Promise.all([
     query(
       `SELECT to_char(purchase_date, 'MM') AS month, SUM(amount) AS total, COUNT(*) AS count
        FROM expenses
@@ -2374,11 +2712,14 @@ async function getDashboardData(userId, year) {
        ORDER BY year DESC`,
       [userId, new Date().getFullYear() + 1]
     ),
-    getFriends(userId),
+    getLiveSplitFriends(userId),
+    getLiveSplitGroups(userId),
+    getReceivedLiveSplitShares(userId),
   ]);
 
-  const totalOwed = friends.reduce((sum, friend) => sum + (friend.balance > 0 ? friend.balance : 0), 0);
-  const totalOwe = friends.reduce((sum, friend) => sum + (friend.balance < 0 ? Math.abs(friend.balance) : 0), 0);
+  const liveSplitSummary = computeLiveSplitDashboardSummary(userId, liveSplitFriends, liveSplitGroups, liveSplitSharedGroups);
+  const totalOwed = liveSplitSummary.totals.oweToMe;
+  const totalOwe = liveSplitSummary.totals.iOwe;
   const years = yearsR.rows.map((row) => row.year);
   if (!years.includes(yearStr)) years.unshift(yearStr);
 
@@ -2391,7 +2732,10 @@ async function getDashboardData(userId, year) {
     monthTotal: { total: num(monthTotalR.rows[0]?.total), count: Number(monthTotalR.rows[0]?.count || 0) },
     totalOwed: Math.round(totalOwed * 100) / 100,
     totalOwe: Math.round(totalOwe * 100) / 100,
-    friendCount: friends.length,
+    owedCount: Number(liveSplitSummary.totals.owedCount || 0),
+    oweCount: Number(liveSplitSummary.totals.oweCount || 0),
+    friendCount: Number(liveSplitSummary.rows.length || 0),
+    balanceSource: 'live_split',
     recentExpenses: recentExpensesR.rows.map((row) => ({ ...row, amount: num(row.amount) })),
     years,
     selectedYear: yearStr,
@@ -2561,24 +2905,42 @@ async function _loadTripFinalizeData(userId, tripId, client) {
   return { ...trip, members: membersR.rows, expenses };
 }
 
-function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}) {
+function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}, selfMemberKey = null) {
   const peopleMap = {};
+  const explicitSelfKey = String(selfMemberKey || '').trim();
+  const aliasToCanonical = new Map();
   for (const member of (trip.members || [])) {
-    const key = member.friend_id != null ? String(member.friend_id) : member.linked_user_id != null ? `u${member.linked_user_id}` : 'self';
+    const memberKey = member.friend_id != null
+      ? String(member.friend_id)
+      : member.linked_user_id != null
+        ? `u${member.linked_user_id}`
+        : member.id != null
+          ? `m${member.id}`
+          : 'self';
+    const stableIdKey = member.id != null ? String(member.id) : '';
+    const key = explicitSelfKey && memberKey === explicitSelfKey ? 'self' : memberKey;
     peopleMap[key] = {
       key,
       name: member.member_name,
-      friendId: member.friend_id || friendIdOverrides[key] || null,
+      friendId: member.friend_id || friendIdOverrides[memberKey] || friendIdOverrides[key] || null,
       totalShare: 0,
       totalGave: 0,
     };
+    aliasToCanonical.set(String(memberKey), key);
+    if (stableIdKey) aliasToCanonical.set(stableIdKey, key);
   }
 
   for (const expense of (trip.expenses || [])) {
     for (const split of (expense.splits || [])) {
-      if (peopleMap[split.member_key]) peopleMap[split.member_key].totalShare += num(split.share_amount);
+      const rawSplitKey = String(split.member_key || '');
+      const splitKey = aliasToCanonical.get(rawSplitKey)
+        || (explicitSelfKey && rawSplitKey === explicitSelfKey ? 'self' : rawSplitKey);
+      if (peopleMap[splitKey]) peopleMap[splitKey].totalShare += num(split.share_amount);
     }
-    if (peopleMap[expense.paid_by_key]) peopleMap[expense.paid_by_key].totalGave += num(expense.amount);
+    const rawPaidByKey = String(expense.paid_by_key || '');
+    const paidByKey = aliasToCanonical.get(rawPaidByKey)
+      || (explicitSelfKey && rawPaidByKey === explicitSelfKey ? 'self' : rawPaidByKey);
+    if (peopleMap[paidByKey]) peopleMap[paidByKey].totalGave += num(expense.amount);
   }
 
   return peopleMap;
@@ -2644,6 +3006,23 @@ function normalizeTripExpensePayload(data = {}) {
       : (quantity != null && unitPrice != null ? quantity * unitPrice : 0),
     'Expense total'
   );
+  const paidByKey = normalizeTripMemberKeyValue(data.paid_by_key || 'self') || 'self';
+  const paidByName = normalizeText(data.paid_by_name || 'You', 'Paid by', 80);
+  const splitMode = normalizeTripSplitModeValue(data.split_mode || 'equal');
+  const rawSplits = Array.isArray(data.splits) ? data.splits : [];
+  const splits = rawSplits.length
+    ? rawSplits.map((split) => ({
+        member_key: normalizeTripMemberKeyValue(split?.member_key || ''),
+        member_name: normalizeText(split?.member_name || 'Member', 'Member name', 80),
+        share_amount: normalizeAmount(split?.share_amount, 'Share amount'),
+      }))
+    : [{
+        member_key: paidByKey,
+        member_name: paidByName,
+        share_amount: amount,
+      }];
+  const totalShares = Math.round(splits.reduce((sum, split) => sum + num(split.share_amount), 0) * 100) / 100;
+  if (Math.abs(totalShares - amount) > 0.05) throw validationError('Split total must match expense total');
   return {
     details,
     expense_type: expenseType,
@@ -2652,6 +3031,10 @@ function normalizeTripExpensePayload(data = {}) {
     amount,
     expense_date: expenseDate,
     notes: normalizeOptionalText(data.notes, 300),
+    paid_by_key: paidByKey,
+    paid_by_name: paidByName,
+    split_mode: splitMode,
+    splits,
   };
 }
 
@@ -2731,27 +3114,40 @@ async function getTrips(userId) {
 }
 
 async function getTripById(userId, tripId) {
-  const [tripR, membersR, expensesR] = await Promise.all([
+  const [tripR, membersR, expenses] = await Promise.all([
     query('SELECT * FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]),
     query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]),
-    query(
-      `SELECT id, trip_id, expense_type, details, quantity, unit_price, amount, expense_date, notes, created_at, updated_at
-       FROM trip_expenses
-       WHERE trip_id = $1
-       ORDER BY expense_date DESC, id DESC`,
-      [tripId]
-    ),
+    _loadNormalizedTripExpenses({ query }, tripId),
   ]);
   const trip = tripR.rows[0];
   if (!trip) return null;
-  const expenses = expensesR.rows.map(mapTripExpenseRow);
   const expenseTypeMap = new Map();
   for (const expense of expenses) {
     const key = expense.expense_type || 'Other';
     if (!expenseTypeMap.has(key)) expenseTypeMap.set(key, { type: key, total: 0, items: [] });
     const group = expenseTypeMap.get(key);
     group.total += num(expense.amount);
-    group.items.push(expense);
+    group.items.push({
+      id: Number(expense.id),
+      trip_id: Number(expense.trip_id),
+      expense_type: expense.expense_type || 'Other',
+      details: expense.details || '',
+      quantity: expense.quantity == null ? null : num(expense.quantity),
+      unit_price: expense.unit_price == null ? null : num(expense.unit_price),
+      amount: num(expense.amount),
+      expense_date: expense.expense_date,
+      notes: expense.notes || null,
+      created_at: expense.created_at,
+      updated_at: expense.updated_at,
+      paid_by_key: normalizeTripMemberKeyValue(expense.paid_by_key),
+      paid_by_name: expense.paid_by_name || 'You',
+      split_mode: normalizeTripSplitModeValue(expense.split_mode),
+      splits: (expense.splits || []).map((split) => ({
+        member_key: normalizeTripMemberKeyValue(split.member_key),
+        member_name: split.member_name,
+        share_amount: num(split.share_amount),
+      })),
+    });
   }
   const expense_groups = Array.from(expenseTypeMap.values()).map((group) => ({
     ...group,
@@ -2840,12 +3236,20 @@ async function addTripExpense(userId, tripId, data) {
       `INSERT INTO trip_expenses (
          trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode,
          expense_type, quantity, unit_price, notes, updated_at
-       )
-       VALUES ($1, 'self', 'You', $2, $3, $4, 'equal', $5, $6, $7, $8, NOW())
+        )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
        RETURNING id`,
-      [tripId, payload.details, payload.amount, payload.expense_date, payload.expense_type, payload.quantity, payload.unit_price, payload.notes]
+      [tripId, payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes]
     );
-    return Number(expR.rows[0].id);
+    const expenseId = Number(expR.rows[0].id);
+    for (const split of payload.splits) {
+      await client.query(
+        `INSERT INTO trip_expense_splits (expense_id, member_key, member_name, share_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [expenseId, split.member_key, split.member_name, split.share_amount]
+      );
+    }
+    return expenseId;
   });
 }
 
@@ -2855,19 +3259,32 @@ async function updateTripExpense(userId, expenseId, data) {
   if (!exp) throw new Error('Not found');
   await _assertTripOwner(userId, exp.trip_id);
   const payload = normalizeTripExpensePayload(data);
-  await query(
-    `UPDATE trip_expenses
-     SET details = $1,
-         amount = $2,
-         expense_date = $3,
-         expense_type = $4,
-         quantity = $5,
-         unit_price = $6,
-         notes = $7,
-         updated_at = NOW()
-     WHERE id = $8`,
-    [payload.details, payload.amount, payload.expense_date, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, expenseId]
-  );
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE trip_expenses
+       SET paid_by_key = $1,
+           paid_by_name = $2,
+           details = $3,
+           amount = $4,
+           expense_date = $5,
+           split_mode = $6,
+           expense_type = $7,
+           quantity = $8,
+           unit_price = $9,
+           notes = $10,
+           updated_at = NOW()
+       WHERE id = $11`,
+      [payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, expenseId]
+    );
+    await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
+    for (const split of payload.splits) {
+      await client.query(
+        `INSERT INTO trip_expense_splits (expense_id, member_key, member_name, share_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [expenseId, split.member_key, split.member_name, split.share_amount]
+      );
+    }
+  });
 }
 
 async function deleteTripExpense(userId, expenseId) {
@@ -2886,7 +3303,13 @@ async function finalizeTrip(userId, tripId, data = {}) {
     const trip = await _loadTripFinalizeData(userId, tripId, client);
     const today = normalizeDateValue(data.txn_date || new Date().toISOString().slice(0, 10), 'Trip finalization date');
     const expenseCategory = normalizeOptionalText(data.category, 80);
-    const peopleMap = _buildTripSettlementSnapshot(trip, data.friend_ids || {});
+    const peopleMap = _buildTripSettlementSnapshot(trip, data.friend_ids || {}, data.self_member_key || null);
+    const liveSplitFriendIds = Object.entries(data.live_split_friend_ids || {}).reduce((acc, [key, value]) => {
+      const friendId = Number(value || 0);
+      if (friendId > 0) acc[String(key)] = friendId;
+      return acc;
+    }, {});
+    const settlementSessionPrefix = `trip-finalize-${Number(tripId)}-`;
 
     await client.query(
       `UPDATE expenses
@@ -2900,9 +3323,16 @@ async function finalizeTrip(userId, tripId, data = {}) {
        WHERE user_id = $1 AND source = 'trip' AND source_id = $2 AND deleted_at IS NULL`,
       [userId, tripId]
     );
+    await client.query(
+      `DELETE FROM live_split_groups
+       WHERE user_id = $1
+         AND split_mode = 'settlement'
+         AND session_id LIKE $2`,
+      [userId, `${settlementSessionPrefix}%`]
+    );
 
     const self = peopleMap.self;
-    if (self && self.totalShare > 0) {
+    if (data.add_self_expense !== false && self && self.totalShare > 0) {
       await client.query(
         `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'trip', $7, $1, $1)`,
@@ -2912,12 +3342,64 @@ async function finalizeTrip(userId, tripId, data = {}) {
 
     for (const [key, person] of Object.entries(peopleMap)) {
       if (key === 'self') continue;
+      const net = person.totalGave - person.totalShare;
+      const settlementAmount = Math.round(Math.abs(net) * 100) / 100;
+      if (!(settlementAmount > 0.005)) continue;
+
+      const liveSplitFriendId = Number(liveSplitFriendIds[key] || 0);
+      if (liveSplitFriendId > 0) {
+        const friendResult = await client.query(
+          `SELECT id, name, linked_user_id
+           FROM live_split_friends
+           WHERE user_id = $1
+             AND id = $2
+             AND deleted_at IS NULL
+           LIMIT 1`,
+          [userId, liveSplitFriendId]
+        );
+        const liveFriend = friendResult.rows[0];
+        if (!liveFriend) throw validationError(`Live Split friend mapping is invalid for ${person.name}`);
+
+        const groupResult = await client.query(
+          `INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id, owner_added_to_expense)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'settlement', NULL, FALSE)
+           RETURNING id`,
+          [
+            userId,
+            today,
+            `Trip settlement: ${trip.name}`,
+            net < 0 ? 'You' : String(liveFriend.name || person.name || 'Friend').trim(),
+            settlementAmount,
+            `Trip ${trip.name}`,
+            `${settlementSessionPrefix}${key}`,
+          ]
+        );
+        const groupId = Number(groupResult.rows[0].id);
+        await client.query(
+          `INSERT INTO live_split_splits (group_id, friend_id, friend_name, share_amount)
+           VALUES ($1, $2, $3, $4)`,
+          [groupId, Number(liveFriend.id), String(liveFriend.name || person.name || 'Friend').trim(), settlementAmount]
+        );
+        if (Number(liveFriend.linked_user_id || 0) > 0 && Number(liveFriend.linked_user_id || 0) !== Number(userId)) {
+          await client.query(
+            `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id, owner_hidden_at, target_hidden_at, updated_at)
+             VALUES ($1, $2, $3, $4, $2, NULL, NULL, NOW())
+             ON CONFLICT (group_id, target_user_id)
+             DO UPDATE SET friend_id = EXCLUDED.friend_id,
+                           shared_by_user_id = EXCLUDED.shared_by_user_id,
+                           owner_hidden_at = NULL,
+                           target_hidden_at = NULL,
+                           updated_at = NOW()`,
+            [groupId, userId, Number(liveFriend.id), Number(liveFriend.linked_user_id)]
+          );
+        }
+        continue;
+      }
+
       const friendId = Number(person.friendId || 0);
       if (!friendId) continue;
-      const net = person.totalGave - person.totalShare;
-      const paid = net < -0.005 ? Math.round(Math.abs(net) * 100) / 100 : 0;
-      const received = net > 0.005 ? Math.round(net * 100) / 100 : 0;
-      if (paid === 0 && received === 0) continue;
+      const paid = net < -0.005 ? settlementAmount : 0;
+      const received = net > 0.005 ? settlementAmount : 0;
       await client.query(
         `INSERT INTO loan_transactions (user_id, friend_id, txn_date, details, paid, received, source, source_id, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'trip', $7, $1, $1)`,
@@ -3575,6 +4057,7 @@ module.exports = {
   deleteLiveSplitTrip,
   addLiveSplitTripMembers,
   removeLiveSplitTripMember,
+  addLiveSplitTripToExpense,
   getLoanTransactions,
   addLoanTransaction,
   updateLoanTransaction,

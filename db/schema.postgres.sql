@@ -331,12 +331,14 @@ CREATE TABLE IF NOT EXISTS live_split_trips (
   start_date DATE NOT NULL,
   end_date DATE,
   status TEXT NOT NULL DEFAULT 'active',
+  show_add_to_expense_option BOOLEAN NOT NULL DEFAULT TRUE,
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_live_split_trips_user ON live_split_trips(user_id, status, start_date DESC);
+ALTER TABLE live_split_trips ADD COLUMN IF NOT EXISTS show_add_to_expense_option BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS live_split_trip_members (
   id BIGSERIAL PRIMARY KEY,
@@ -719,6 +721,22 @@ CREATE TABLE IF NOT EXISTS ai_query_logs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS ai_training_examples (
+  id BIGSERIAL PRIMARY KEY,
+  normalized_question TEXT NOT NULL UNIQUE,
+  original_question TEXT,
+  detected_intent TEXT,
+  ideal_answer TEXT NOT NULL,
+  notes TEXT,
+  training_payload JSONB,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  deleted_at TIMESTAMPTZ
+);
+
 DO $$
 DECLARE
   tbl TEXT;
@@ -759,7 +777,8 @@ BEGIN
     'otps',
     'password_resets',
     'ai_lookup_usage',
-    'ai_query_logs'
+    'ai_query_logs',
+    'ai_training_examples'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS created_by BIGINT REFERENCES users(id) ON DELETE SET NULL', tbl);
@@ -775,6 +794,7 @@ ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category TEXT;
 CREATE INDEX IF NOT EXISTS idx_ai_query_logs_user_created_at ON ai_query_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_query_logs_intent_created_at ON ai_query_logs(detected_intent, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_training_examples_active ON ai_training_examples(is_active, updated_at DESC);
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE friends ADD COLUMN IF NOT EXISTS linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;

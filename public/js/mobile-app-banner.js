@@ -1,5 +1,8 @@
 (function initMobileInstallBanner() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  var path = String(window.location && window.location.pathname || '').toLowerCase();
+  if (document.body && document.body.classList.contains('app-page')) return;
+  if (path === '/app' || path.indexOf('/app/') === 0) return;
 
   var RUNTIME = window.__appRuntimeConfig || {};
   var playUrl = RUNTIME.androidPlayStoreUrl || 'https://play.google.com/store/apps/details?id=com.expenselyt.app';
@@ -19,6 +22,10 @@
     'body.has-mobile-install-banner{padding-top:var(--install-banner-h) !important;}',
     'body.has-mobile-install-banner nav{top:var(--install-banner-h) !important;}',
     'body.has-mobile-install-banner .app-mobile-topbar{top:var(--install-banner-h) !important;}',
+    'body.modal-open .mobile-install-banner{display:none !important;}',
+    'body.modal-open.has-mobile-install-banner{padding-top:0 !important;}',
+    'body.modal-open.has-mobile-install-banner nav{top:0 !important;}',
+    'body.modal-open.has-mobile-install-banner .app-mobile-topbar{top:0 !important;}',
     '}'
   ].join('');
   document.head.appendChild(style);

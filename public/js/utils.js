@@ -233,6 +233,7 @@ function getCurrencyPrefsForCode(currencyCode, localeCode) {
 function _memberKey(m) {
   if (m.friend_id != null) return String(m.friend_id);
   if (m.linked_user_id != null) return 'u' + m.linked_user_id;
+  if (m.id != null) return 'm' + m.id;
   return 'self';
 }
 
@@ -303,10 +304,30 @@ async function api(url, opts = {}) {
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (res.status === 401) { window.location.href = '/login'; return; }
-    return await res.json();
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+      const text = await res.text();
+      return {
+        success: false,
+        error: res.status === 404
+          ? 'API route not found. The server may need a restart.'
+          : (text?.trim() || `Request failed with status ${res.status}`),
+        status: res.status,
+      };
+    }
+    const data = await res.json();
+    if (res.ok) return data;
+    return {
+      success: false,
+      status: res.status,
+      ...data,
+    };
   } catch (err) {
     console.error('[api] Error calling', url, err);
-    return null;
+    return {
+      success: false,
+      error: err?.message || 'Network request failed',
+    };
   }
 }
 
@@ -367,6 +388,7 @@ function confirmDialog(message) {
 function openModal(title, bodyHTML) {
   const headerActions = window.__modalHeaderActionsHTML || '';
   const extraModalClass = String(window.__modalClassName || '').trim();
+  const extraOverlayClass = String(window.__modalOverlayClassName || '').trim();
   window.__modalHeaderActionsHTML = '';
   const modal = document.getElementById('modalContent');
   modal.className = `modal${extraModalClass ? ` ${extraModalClass}` : ''}`;
@@ -375,6 +397,7 @@ function openModal(title, bodyHTML) {
     <div class="modal-body">${bodyHTML}</div>`;
   document.body.classList.add('modal-open');
   const overlay = document.getElementById('modalOverlay');
+  overlay.className = `overlay${extraOverlayClass ? ` ${extraOverlayClass}` : ''}`;
   overlay.style.display = 'flex';
   overlay.scrollTop = 0;
   repairMojibakeInNode(modal);
@@ -395,11 +418,13 @@ function bindModalSubmit(handler) {
 // showModal: places raw HTML inside a padded modal wrapper
 function showModal(html) {
   const extraModalClass = String(window.__modalClassName || '').trim();
+  const extraOverlayClass = String(window.__modalOverlayClassName || '').trim();
   const modal = document.getElementById('modalContent');
   modal.className = `modal${extraModalClass ? ` ${extraModalClass}` : ''}`;
   modal.innerHTML = '<div class="modal-inner">' + html + '</div>';
   document.body.classList.add('modal-open');
   const overlay = document.getElementById('modalOverlay');
+  overlay.className = `overlay${extraOverlayClass ? ` ${extraOverlayClass}` : ''}`;
   overlay.style.display = 'flex';
   overlay.scrollTop = 0;
   repairMojibakeInNode(modal);
@@ -409,10 +434,13 @@ function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   window.__modalHeaderActionsHTML = '';
   window.__modalClassName = '';
+  window.__modalOverlayClassName = '';
   document.body.classList.remove('modal-open');
   const modal = document.getElementById('modalContent');
   modal.className = 'modal';
-  document.getElementById('modalOverlay').style.display = 'none';
+  const overlay = document.getElementById('modalOverlay');
+  overlay.className = 'overlay';
+  overlay.style.display = 'none';
 }
 setCurrencyPrefs(window.__currencyPrefs);
 startMojibakeRepairObserver();

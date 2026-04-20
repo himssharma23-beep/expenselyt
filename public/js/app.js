@@ -3862,12 +3862,12 @@ async function loadDashboard() {
         <div class="dash-card dash-card-green">
           <div class="dc-label">You Are Owed</div>
           <div class="dc-amount" style="color:var(--green)">${fmtCur(data.totalOwed)}</div>
-          <div class="dc-sub">${data.friendCount} friend${data.friendCount !== 1 ? 's' : ''}</div>
+          <div class="dc-sub">${Number(data.owedCount || 0)} live split ${Number(data.owedCount || 0) === 1 ? 'friend' : 'friends'}</div>
         </div>
         <div class="dash-card dash-card-red">
           <div class="dc-label">You Owe</div>
           <div class="dc-amount" style="color:var(--red)">${fmtCur(data.totalOwe)}</div>
-          <div class="dc-sub">net outstanding</div>
+          <div class="dc-sub">${Number(data.oweCount || 0)} live split ${Number(data.oweCount || 0) === 1 ? 'friend' : 'friends'}</div>
         </div>
       </div>
 
@@ -4010,6 +4010,8 @@ let _tripExpValues = {};
 let _tripExpEditId = null;
 let _tripEditCcTxnId = null;
 let _tripEditCcLink = null;
+let _tripFinalizePreview = [];
+let _tripFinalizeLiveFriends = [];
 
 function _findTripExpenseById(expenseId) {
   if (!_tripDetail?.expenses?.length || expenseId == null) return null;
@@ -4332,7 +4334,7 @@ function tripToggleMember(key) {
 function tripSetSplitMode(mode) {
   _tripExpMode = mode;
   _tripExpValues = {};
-  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   if (people.length > 0 && amt > 0) _tripExpValues = _autoFillSplitValues(mode, people, amt);
   document.querySelectorAll('.split-mode-chip').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
@@ -4340,7 +4342,7 @@ function tripSetSplitMode(mode) {
 }
 
 function tripHandleAmountChange() {
-  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   if (_tripExpMode !== 'equal') {
     _tripExpValues = {};
@@ -4363,9 +4365,9 @@ function _tripSelectedPeople() {
 }
 
 function tripUpdateSplitInputs() {
-  const el = document.getElementById('tripSplitInputs');
+  const el = document.getElementById('tripSplitInputs') || document.getElementById('tripExpenseSplitInputs');
   if (!el) return;
-  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   if (people.length === 0 || amt <= 0) { el.innerHTML = ''; return; }
 
@@ -4401,7 +4403,7 @@ function tripOnSplitInput(input, pkey) {
   _tripExpValues[pkey] = parseFloat(input.value) || 0;
   const statusRow = document.getElementById('tripSplitStatusRow');
   if (!statusRow) return;
-  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
 
@@ -4427,7 +4429,7 @@ function tripSetRemaining(pkey, remaining) {
   if (input) input.value = remaining;
   const statusRow = document.getElementById('tripSplitStatusRow');
   if (!statusRow) return;
-  const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
+  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   const { valid, error } = computeShares(amt, _tripExpMode, people, _tripExpValues);
   statusRow.querySelector('td').innerHTML = valid
@@ -4550,43 +4552,105 @@ async function tripDelete() {
 async function tripFinalizeModal() {
   if (!_expenseCategories.length) await loadExpenseCategories();
   const trip = _tripDetail;
-  // Compute settlement for preview
-  const peopleMap = {};
-  trip.members.forEach(m => {
-    const key = _memberKey(m);
-    peopleMap[key] = { name: m.member_name, friendId: m.friend_id, totalShare: 0, totalGave: 0 };
-  });
-  trip.expenses.forEach(e => {
-    e.splits.forEach(s => { if (peopleMap[s.member_key]) peopleMap[s.member_key].totalShare += s.share_amount; });
-    if (peopleMap[e.paid_by_key]) peopleMap[e.paid_by_key].totalGave += e.amount;
-  });
+  const liveFriendsData = await api('/api/live-split/friends');
+  _tripFinalizeLiveFriends = liveFriendsData?.friends || [];
+  _tripFinalizePreview = buildTripSettlementPreview(trip, _tripFinalizeLiveFriends);
 
-  const previewRows = Object.entries(peopleMap).map(([key, p]) => {
-    const net = p.totalGave - p.totalShare;
-    const action = key === 'self'
-      ? (p.totalShare > 0 ? `Add ${fmtCur(p.totalShare)} to my expenses` : 'No personal expense')
-      : (net > 0.005 ? `Loan: ${fmtCur(net)} (they owe me)` : net < -0.005 ? `Loan: ${fmtCur(Math.abs(net))} (I owe them)` : 'Settled');
+  const previewRows = _tripFinalizePreview.map((person) => {
+    const isSelf = !!person.isSelf;
+    const needsSettlement = Math.abs(person.net) > 0.005;
+    const alreadyPaidText = person.totalGave > 0.005 ? fmtCur(person.totalGave) : fmtCur(0);
+    const action = isSelf
+      ? (person.totalShare > 0 ? `Only your share ${fmtCur(person.totalShare)} will go to Expenses` : 'No expense to add')
+      : !needsSettlement
+        ? 'Already settled'
+        : person.net < -0.005
+          ? `${person.name} owes you ${fmtCur(Math.abs(person.net))}`
+          : `You owe ${person.name} ${fmtCur(person.net)}`;
+    const liveFriendOptions = ['<option value="">Skip Live Split</option>']
+      .concat(_tripFinalizeLiveFriends.map((friend) => `<option value="${friend.id}" ${Number(person.liveSplitFriendId || 0) === Number(friend.id) ? 'selected' : ''}>${escHtml(friend.name || '')}</option>`))
+      .join('');
     return `<tr>
-      <td style="padding:4px 8px;font-weight:600">${p.name}</td>
-      <td style="padding:4px 8px;font-size:12px;color:var(--t2);font-family:var(--mono)">${fmtCur(p.totalShare)}</td>
-      <td style="padding:4px 8px;font-size:12px;color:var(--t2)">${action}</td>
+      <td style="padding:8px 8px;font-weight:700">${escHtml(person.name)}</td>
+      <td style="padding:8px 8px;font-size:12px;color:var(--t2);font-family:var(--mono)">${fmtCur(person.totalShare)}</td>
+      <td style="padding:8px 8px;font-size:12px;color:var(--t2);font-family:var(--mono)">${alreadyPaidText}</td>
+      <td style="padding:8px 8px;font-size:12px;color:${person.net < -0.005 ? 'var(--green)' : person.net > 0.005 ? 'var(--red)' : 'var(--t3)'};font-weight:700">${needsSettlement ? fmtCur(Math.abs(person.net)) : 'Settled'}</td>
+      <td style="padding:8px 8px;font-size:12px;color:var(--t2)">${action}</td>
+      <td style="padding:8px 8px">
+        ${isSelf || !needsSettlement ? '<span style="font-size:12px;color:var(--t3)">-</span>' : `<select class="fi" id="tfLiveFriend_${escHtml(person.key)}" style="min-width:180px;padding:8px 10px" onchange='updateTripFinalizeLiveFriend(${JSON.stringify(person.key)}, this.value)'>${liveFriendOptions}</select>`}
+      </td>
     </tr>`;
   }).join('');
+  const mobileRows = _tripFinalizePreview.map((person) => {
+    const isSelf = !!person.isSelf;
+    const needsSettlement = Math.abs(person.net) > 0.005;
+    const action = isSelf
+      ? (person.totalShare > 0 ? `Your share ${fmtCur(person.totalShare)} will go to Expenses` : 'No expense to add')
+      : !needsSettlement
+        ? 'Already settled'
+        : person.net < -0.005
+          ? `${person.name} owes you ${fmtCur(Math.abs(person.net))}`
+          : `You owe ${person.name} ${fmtCur(person.net)}`;
+    const liveFriendOptions = ['<option value="">Skip Live Split</option>']
+      .concat(_tripFinalizeLiveFriends.map((friend) => `<option value="${friend.id}" ${Number(person.liveSplitFriendId || 0) === Number(friend.id) ? 'selected' : ''}>${escHtml(friend.name || '')}</option>`))
+      .join('');
+    return `
+      <div class="trip-settlement-person-card">
+        <div class="trip-settlement-person-top">
+          <div class="trip-settlement-person-name">${escHtml(person.name)}</div>
+          <div class="trip-settlement-person-net ${person.net < -0.005 ? 'positive' : person.net > 0.005 ? 'negative' : ''}">
+            ${needsSettlement ? fmtCur(Math.abs(person.net)) : 'Settled'}
+          </div>
+        </div>
+        <div class="trip-settlement-person-stats">
+          <div class="trip-settlement-stat-chip">
+            <span>Share</span>
+            <strong>${fmtCur(person.totalShare)}</strong>
+          </div>
+          <div class="trip-settlement-stat-chip">
+            <span>Paid</span>
+            <strong>${fmtCur(person.totalGave)}</strong>
+          </div>
+        </div>
+        <div class="trip-settlement-person-action">${escHtml(action)}</div>
+        ${isSelf || !needsSettlement ? '' : `
+          <label class="fl trip-settlement-friend-field">
+            Live Split Friend
+            <select class="fi" onchange='updateTripFinalizeLiveFriend(${JSON.stringify(person.key)}, this.value)'>${liveFriendOptions}</select>
+          </label>
+        `}
+      </div>`;
+  }).join('');
 
+  window.__modalClassName = 'modal-wide trip-settlement-modal';
   openModal('Finalize Trip', `
+    <div class="trip-settlement-shell">
     <div style="font-size:13px;color:var(--t2);margin-bottom:12px">
-      This will add your expense and create loan transactions for all friends.
+      This will add only your share to Expenses and can send each selected member's remaining trip balance to Live Split. Any amount a member already paid is automatically adjusted in the net.
     </div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:14px">
-      <thead>
-        <tr>
-          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Member</th>
-          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Share</th>
-          <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Action</th>
-        </tr>
-      </thead>
-      <tbody>${previewRows}</tbody>
-    </table>
+    <div class="table-wrap trip-settlement-table-wrap">
+      <table style="border-collapse:collapse;width:100%;margin-bottom:0">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Member</th>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Share</th>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Paid</th>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Net</th>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Action</th>
+            <th style="text-align:left;padding:4px 8px;font-size:11px;color:var(--t3)">Live Split Friend</th>
+          </tr>
+        </thead>
+        <tbody>${previewRows}</tbody>
+      </table>
+    </div>
+    <div class="trip-settlement-mobile-list">${mobileRows}</div>
+    <label class="trip-settlement-toggle">
+      <input type="checkbox" id="tfAddSelfExpense" checked style="margin-top:3px">
+      <span>
+        <span style="display:block;font-size:13px;font-weight:700">Add my share to Expenses</span>
+        <span style="display:block;font-size:12px;color:var(--t2);margin-top:2px">Only your own share is added, not the full trip total.</span>
+      </span>
+    </label>
     <div style="margin-bottom:14px">
       <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">MY EXPENSE TYPE</div>
       <div style="display:flex;gap:8px">
@@ -4598,10 +4662,117 @@ async function tripFinalizeModal() {
       <input class="fi" id="tfCategory" list="expenseCategoryList" placeholder="e.g. Travel, Hotel, Food">
       <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
     </label>
+    <label class="fl full" style="margin-bottom:14px">Settlement Date
+      <input class="fi" type="date" id="tfDate" value="${todayStr()}">
+    </label>
     <div class="fa">
-      <button class="btn btn-p" onclick="doFinalizeTrip()">Finalize & Save</button>
+      <button class="btn btn-p" onclick="doFinalizeTrip()">Save Settlement</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
     </div>`);
+  window.__modalClassName = '';
+}
+
+async function showTripSettlementModal(tripId = null) {
+  const targetId = Number(tripId || _selectedTripId || _tripDetail?.id || 0);
+  if (!(targetId > 0)) {
+    toast('Select a trip first.', 'warn');
+    return;
+  }
+  if (!_tripDetail || String(_tripDetail.id) !== String(targetId)) {
+    const data = await api(`/api/trips/${targetId}`);
+    _selectedTripId = targetId;
+    _tripDetail = data?.trip || null;
+  }
+  if (!_tripDetail) {
+    toast('Trip details could not be loaded.', 'error');
+    return;
+  }
+  await tripFinalizeModal();
+}
+
+function tripSettlementNameKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function tripSettlementFirstToken(value) {
+  return tripSettlementNameKey(value).split(' ')[0] || '';
+}
+
+function detectTripSettlementSelfKey(trip) {
+  const members = trip?.members || [];
+  const currentName = String(_currentUser?.display_name || _currentUser?.name || '').trim();
+  const currentUsername = String(_currentUser?.username || '').trim();
+  const candidates = [currentName, currentUsername].map(tripSettlementNameKey).filter(Boolean);
+  const candidateTokens = [currentName, currentUsername].map(tripSettlementFirstToken).filter(Boolean);
+
+  const directMatch = members.find((member) => {
+    const memberName = tripSettlementNameKey(member?.member_name);
+    return memberName && candidates.includes(memberName);
+  });
+  if (directMatch) return String(_memberKey(directMatch));
+
+  const tokenMatch = members.find((member) => {
+    const memberToken = tripSettlementFirstToken(member?.member_name);
+    return memberToken && candidateTokens.includes(memberToken);
+  });
+  if (tokenMatch) return String(_memberKey(tokenMatch));
+
+  return members[0] ? String(_memberKey(members[0])) : 'self';
+}
+
+function buildTripSettlementPreview(trip, liveSplitFriends = []) {
+  const members = trip?.members || [];
+  const expenses = trip?.expenses || [];
+  const selfMemberKey = detectTripSettlementSelfKey(trip);
+  const memberByName = new Map();
+  const rows = members.map((member) => {
+    const key = String(_memberKey(member));
+    const uiKey = String(member?.id ?? key);
+    const row = {
+      key,
+      uiKey,
+      name: String(member?.member_name || '').trim() || 'Member',
+      totalShare: 0,
+      totalGave: 0,
+      liveSplitFriendId: null,
+      isSelf: key === selfMemberKey,
+    };
+    memberByName.set(tripSettlementNameKey(row.name), row);
+    return row;
+  });
+  const rowByUiKey = new Map(rows.map((row) => [String(row.uiKey), row]));
+  const rowByFallbackKey = new Map(rows.map((row, index) => [String(_memberKey(members[index]) || row.key), row]));
+
+  expenses.forEach((expense) => {
+    (expense.splits || []).forEach((split) => {
+      const target = rowByUiKey.get(String(split?.member_key || ''))
+        || rowByFallbackKey.get(String(split?.member_key || ''))
+        || memberByName.get(tripSettlementNameKey(split?.member_name || ''));
+      if (target) target.totalShare += Number(split?.share_amount || 0);
+    });
+    const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
+      || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
+      || memberByName.get(tripSettlementNameKey(expense?.paid_by_name || ''));
+    if (payer) payer.totalGave += Number(expense?.amount || 0);
+  });
+
+  return rows.map((row) => {
+    const matchedLiveFriend = (liveSplitFriends || []).find((friend) => tripSettlementNameKey(friend?.name) === tripSettlementNameKey(row.name)) || null;
+    return {
+      ...row,
+      totalShare: Math.round(Number(row.totalShare || 0) * 100) / 100,
+      totalGave: Math.round(Number(row.totalGave || 0) * 100) / 100,
+      net: Math.round((Number(row.totalGave || 0) - Number(row.totalShare || 0)) * 100) / 100,
+      liveSplitFriendId: matchedLiveFriend ? Number(matchedLiveFriend.id) : null,
+    };
+  });
+}
+
+function updateTripFinalizeLiveFriend(personKey, friendId) {
+  const row = (_tripFinalizePreview || []).find((item) => String(item.key) === String(personKey));
+  if (!row) return;
+  row.liveSplitFriendId = Number(friendId || 0) || null;
 }
 
 async function ensureTripMembersAsFriends(trip) {
@@ -4645,20 +4816,33 @@ async function doFinalizeTrip() {
   const trip = _tripDetail;
   const isExtra = document.getElementById('tfTypeExtra')?.classList.contains('active') || false;
   const category = document.getElementById('tfCategory')?.value.trim() || null;
-  const ensuredFriendIds = await ensureTripMembersAsFriends(trip);
+  const addSelfExpense = !!document.getElementById('tfAddSelfExpense')?.checked;
+  const txnDate = document.getElementById('tfDate')?.value || todayStr();
+  const selfMember = (_tripFinalizePreview || []).find((person) => person.isSelf) || null;
+  const liveSplitFriendIds = (_tripFinalizePreview || []).reduce((acc, person) => {
+    if (!person.isSelf && Number(person.liveSplitFriendId || 0) > 0 && Math.abs(Number(person.net || 0)) > 0.005) {
+      acc[person.key] = Number(person.liveSplitFriendId);
+    }
+    return acc;
+  }, {});
+  const isDetailView = !!document.querySelector('[data-trip-detail-view="1"]');
   await api(`/api/trips/${_selectedTripId}/finalize`, {
     method: 'POST',
     body: {
       is_extra: isExtra,
       category,
-      txn_date: todayStr(),
-      friend_ids: ensuredFriendIds,
+      txn_date: txnDate,
+      add_self_expense: addSelfExpense,
+      self_member_key: selfMember?.key || null,
+      live_split_friend_ids: liveSplitFriendIds,
     },
   });
 
   closeModal();
-  toast('Trip finalized and synced with expenses and friends.', 'success', 5000);
-  await openTripDetail(_selectedTripId);
+  toast('Trip settlement saved to expenses and Live Split.', 'success', 5000);
+  const tripId = _selectedTripId;
+  await loadTrips();
+  if (isDetailView && tripId) await openTripDetail(tripId);
 }
 
 // â”€â”€ Create Trip Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -4857,6 +5041,153 @@ const TRIP_STATUS_OPTIONS = [
 const TRIP_CATEGORY_OPTIONS = ['Office Trip', 'Personal Trip', 'Family Trip'];
 const TRIP_TRANSPORT_OPTIONS = ['Car', 'Bike', 'Bus', 'Train', 'Flight', 'Cab', 'Mixed', 'Other'];
 const TRIP_EXPENSE_TYPES = ['Travel', 'Stay', 'Food', 'Shopping', 'Tickets', 'Fuel', 'Tolls', 'Other'];
+const TRIP_GROUP_ORDER_STORAGE_KEY = 'expense-lite.trip-group-order.v1';
+const TRIP_GROUP_COLLAPSE_STORAGE_KEY = 'expense-lite.trip-group-collapse.v1';
+const TRIP_GROUP_SORT_STORAGE_KEY = 'expense-lite.trip-group-sort.v1';
+
+function tripGroupTypeKey(type) {
+  return String(type || '').trim().toLowerCase();
+}
+
+function readTripGroupStorage(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || '{}') || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeTripGroupStorage(key, value) {
+  localStorage.setItem(key, JSON.stringify(value || {}));
+}
+
+function getTripGroupOrder(tripId) {
+  const all = readTripGroupStorage(TRIP_GROUP_ORDER_STORAGE_KEY);
+  return Array.isArray(all?.[tripId]) ? all[tripId] : [];
+}
+
+function setTripGroupOrder(tripId, order) {
+  const all = readTripGroupStorage(TRIP_GROUP_ORDER_STORAGE_KEY);
+  all[tripId] = Array.isArray(order) ? order : [];
+  writeTripGroupStorage(TRIP_GROUP_ORDER_STORAGE_KEY, all);
+}
+
+function getTripCollapsedGroups(tripId, groups = []) {
+  const all = readTripGroupStorage(TRIP_GROUP_COLLAPSE_STORAGE_KEY);
+  if (Array.isArray(all?.[tripId])) return all[tripId];
+  const defaultCollapsed = (groups || []).map((group) => tripGroupTypeKey(group.type));
+  all[tripId] = defaultCollapsed;
+  writeTripGroupStorage(TRIP_GROUP_COLLAPSE_STORAGE_KEY, all);
+  return defaultCollapsed;
+}
+
+function setTripCollapsedGroups(tripId, collapsed) {
+  const all = readTripGroupStorage(TRIP_GROUP_COLLAPSE_STORAGE_KEY);
+  all[tripId] = Array.isArray(collapsed) ? collapsed : [];
+  writeTripGroupStorage(TRIP_GROUP_COLLAPSE_STORAGE_KEY, all);
+}
+
+function getTripGroupSorts(tripId) {
+  const all = readTripGroupStorage(TRIP_GROUP_SORT_STORAGE_KEY);
+  return all?.[tripId] && typeof all[tripId] === 'object' ? all[tripId] : {};
+}
+
+function setTripGroupSorts(tripId, sorts) {
+  const all = readTripGroupStorage(TRIP_GROUP_SORT_STORAGE_KEY);
+  all[tripId] = sorts && typeof sorts === 'object' ? sorts : {};
+  writeTripGroupStorage(TRIP_GROUP_SORT_STORAGE_KEY, all);
+}
+
+function getOrderedTripExpenseGroups(tripId, groups = []) {
+  const savedOrder = getTripGroupOrder(tripId);
+  const groupMap = new Map(groups.map((group) => [tripGroupTypeKey(group.type), group]));
+  const ordered = [];
+  savedOrder.forEach((typeKey) => {
+    if (groupMap.has(typeKey)) {
+      ordered.push(groupMap.get(typeKey));
+      groupMap.delete(typeKey);
+    }
+  });
+  groups.forEach((group) => {
+    const typeKey = tripGroupTypeKey(group.type);
+    if (groupMap.has(typeKey)) {
+      ordered.push(group);
+      groupMap.delete(typeKey);
+    }
+  });
+  setTripGroupOrder(tripId, ordered.map((group) => tripGroupTypeKey(group.type)));
+  return ordered;
+}
+
+function toggleTripExpenseGroupCollapse(groupType) {
+  if (!_selectedTripId) return;
+  const typeKey = tripGroupTypeKey(groupType);
+  const collapsed = new Set(getTripCollapsedGroups(_selectedTripId));
+  if (collapsed.has(typeKey)) collapsed.delete(typeKey);
+  else collapsed.add(typeKey);
+  setTripCollapsedGroups(_selectedTripId, [...collapsed]);
+  renderTripDetail();
+}
+
+function moveTripExpenseGroup(groupType, direction) {
+  if (!_selectedTripId || !_tripDetail?.expense_groups?.length) return;
+  const typeKey = tripGroupTypeKey(groupType);
+  const order = getOrderedTripExpenseGroups(_selectedTripId, _tripDetail.expense_groups).map((group) => tripGroupTypeKey(group.type));
+  const index = order.indexOf(typeKey);
+  if (index < 0) return;
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= order.length) return;
+  [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
+  setTripGroupOrder(_selectedTripId, order);
+  renderTripDetail();
+}
+
+function toggleTripExpenseGroupSort(groupType, field) {
+  if (!_selectedTripId) return;
+  const typeKey = tripGroupTypeKey(groupType);
+  const sorts = getTripGroupSorts(_selectedTripId);
+  const current = sorts[typeKey] || { field: 'date', dir: 'desc' };
+  const next = current.field === field
+    ? { field, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+    : { field, dir: field === 'details' || field === 'notes' ? 'asc' : 'desc' };
+  sorts[typeKey] = next;
+  setTripGroupSorts(_selectedTripId, sorts);
+  renderTripDetail();
+}
+
+function getTripExpenseGroupSort(tripId, groupType) {
+  const typeKey = tripGroupTypeKey(groupType);
+  const sorts = getTripGroupSorts(tripId);
+  return sorts[typeKey] || { field: 'date', dir: 'desc' };
+}
+
+function compareTripGroupItems(a, b, field, dir) {
+  const multiplier = dir === 'asc' ? 1 : -1;
+  const textCompare = (left, right) => String(left || '').localeCompare(String(right || ''), undefined, { sensitivity: 'base' }) * multiplier;
+  const numCompare = (left, right) => ((Number(left || 0) - Number(right || 0)) || 0) * multiplier;
+  const dateValue = (value) => {
+    const normalized = normalizeInputDate(value);
+    const time = normalized ? new Date(normalized).getTime() : 0;
+    return Number.isFinite(time) ? time : 0;
+  };
+  if (field === 'date') return (dateValue(a.expense_date) - dateValue(b.expense_date)) * multiplier || textCompare(a.details, b.details);
+  if (field === 'details') return textCompare(a.details, b.details) || numCompare(a.amount, b.amount);
+  if (field === 'qty') return numCompare(a.quantity, b.quantity) || textCompare(a.details, b.details);
+  if (field === 'price') return numCompare(a.unit_price, b.unit_price) || textCompare(a.details, b.details);
+  if (field === 'total') return numCompare(a.amount, b.amount) || textCompare(a.details, b.details);
+  if (field === 'notes') return textCompare(a.notes, b.notes) || textCompare(a.details, b.details);
+  return 0;
+}
+
+function sortTripGroupItems(items = [], sortState = { field: 'date', dir: 'desc' }) {
+  return [...(items || [])].sort((a, b) => compareTripGroupItems(a, b, sortState.field, sortState.dir));
+}
+
+function tripGroupSortHeader(groupType, activeSort, field, label, className = '') {
+  const isActive = activeSort.field === field;
+  const arrow = isActive ? (activeSort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+  return `<th class="${className}" style="cursor:pointer;user-select:none" onclick='toggleTripExpenseGroupSort(${JSON.stringify(String(groupType || ''))}, "${field}")'>${label}${arrow}</th>`;
+}
 
 function tripStatusLabel(status) {
   const value = String(status || '').toLowerCase();
@@ -4936,15 +5267,37 @@ function setTripsFilter(key, value) {
 }
 
 function renderTripList() {
-  const filtered = tripFilteredRows();
+  const filtered = tripFilteredRows().sort((a, b) => {
+    const aTime = a?.start_date ? new Date(normalizeInputDate(a.start_date)).getTime() : 0;
+    const bTime = b?.start_date ? new Date(normalizeInputDate(b.start_date)).getTime() : 0;
+    if (bTime !== aTime) return bTime - aTime;
+    return String(a?.destination || a?.name || '').localeCompare(String(b?.destination || b?.name || ''));
+  });
   const totalPages = Math.max(1, Math.ceil(filtered.length / TRIPS_PAGE_SIZE));
   tripsPage = Math.min(tripsPage, totalPages);
   const start = (tripsPage - 1) * TRIPS_PAGE_SIZE;
   const pageRows = filtered.slice(start, start + TRIPS_PAGE_SIZE);
   const totalSpend = filtered.reduce((sum, trip) => sum + Number(trip.total_expenditure || 0), 0);
 
+  const tripActionButtons = (trip) => `
+    <div class="trip-table-actions" role="group" aria-label="Trip actions">
+      <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})">
+        <span class="trip-icon-btn-glyph">&#128065;</span>
+      </button>
+      <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})">
+        <span class="trip-icon-btn-glyph">&#8644;</span>
+      </button>
+      <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
+        <span class="trip-icon-btn-glyph">&#9998;</span>
+      </button>
+      <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
+        <span class="trip-icon-btn-glyph">&#128465;</span>
+      </button>
+    </div>`;
+
   const tableRows = pageRows.map((trip) => `
     <tr>
+      <td class="trip-actions-cell">${tripActionButtons(trip)}</td>
       <td><button class="btn-d" style="font-weight:700;color:var(--green)" onclick="openTripDetail(${trip.id})">${escHtml(trip.destination || trip.name || '-')}</button></td>
       <td>${trip.start_date ? fmtDate(trip.start_date) : '-'}</td>
       <td>${trip.end_date ? fmtDate(trip.end_date) : '-'}</td>
@@ -4954,13 +5307,6 @@ function renderTripList() {
       <td>${escHtml(trip.category || '-')}</td>
       <td>${escHtml(trip.transport_mode || '-')}</td>
       <td style="max-width:230px;color:var(--t2)">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
-      <td>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-g btn-sm" onclick="openTripDetail(${trip.id})">Details</button>
-          <button class="btn btn-g btn-sm" onclick="showTripModal(${trip.id})">Edit</button>
-          <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDelete(${trip.id})">Delete</button>
-        </div>
-      </td>
     </tr>
   `).join('');
 
@@ -4973,10 +5319,10 @@ function renderTripList() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
         <div>
           <div style="font-size:22px;font-weight:800">My Trips</div>
-          <div style="font-size:13px;color:var(--t2);margin-top:4px">Track only your own trips, members, distance, and total spend.</div>
+          <div style="font-size:13px;color:var(--t2);margin-top:3px">Track only your own trips, members, distance, and total spend.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-s" onclick="showTripExcelImport()">Import Excel</button>
@@ -4984,26 +5330,38 @@ function renderTripList() {
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
-        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Total Trips</div><div style="font-size:28px;font-weight:800">${filtered.length}</div></div>
-        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Upcoming / Ongoing</div><div style="font-size:28px;font-weight:800">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div></div>
-        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Completed</div><div style="font-size:28px;font-weight:800">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div></div>
-        <div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Tracked Spend</div><div style="font-size:28px;font-weight:800;color:var(--green)">${fmtCur(totalSpend)}</div></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">
+        <div class="card" style="padding:14px 16px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Total Trips</div>
+          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.length}</div>
+        </div>
+        <div class="card" style="padding:14px 16px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Upcoming / Ongoing</div>
+          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div>
+        </div>
+        <div class="card" style="padding:14px 16px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Completed</div>
+          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div>
+        </div>
+        <div class="card" style="padding:14px 16px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Tracked Spend</div>
+          <div style="font-size:22px;font-weight:800;line-height:1.1;color:var(--green)">${fmtCur(totalSpend)}</div>
+        </div>
       </div>
 
-      <div class="card" style="margin-bottom:16px">
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
-          <label class="fl" style="margin:0">Search
-            <input class="fi" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
+      <div class="card" style="margin-bottom:14px;padding:14px 16px">
+        <div style="display:grid;grid-template-columns:1.2fr repeat(3,minmax(160px,.9fr));gap:10px;align-items:end">
+          <label class="fl" style="margin:0;font-size:12px">Search
+            <input class="fi" style="height:44px" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
           </label>
-          <label class="fl" style="margin:0">Status
-            <select class="fi" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
+          <label class="fl" style="margin:0;font-size:12px">Status
+            <select class="fi" style="height:44px" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
           </label>
-          <label class="fl" style="margin:0">Category
-            <select class="fi" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
+          <label class="fl" style="margin:0;font-size:12px">Category
+            <select class="fi" style="height:44px" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
           </label>
-          <label class="fl" style="margin:0">Transport
-            <select class="fi" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
+          <label class="fl" style="margin:0;font-size:12px">Transport
+            <select class="fi" style="height:44px" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
           </label>
         </div>
       </div>
@@ -5014,6 +5372,7 @@ function renderTripList() {
             <table>
               <thead>
                 <tr>
+                  <th style="width:132px;min-width:132px">Actions</th>
                   <th>Destination</th>
                   <th>Start date</th>
                   <th>End date</th>
@@ -5023,7 +5382,6 @@ function renderTripList() {
                   <th>Category</th>
                   <th>Transport</th>
                   <th>Members</th>
-                  <th style="width:210px">Actions</th>
                 </tr>
               </thead>
               <tbody>${tableRows}</tbody>
@@ -5057,88 +5415,173 @@ function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
   const members = trip.members || [];
-  const groups = trip.expense_groups || [];
+  const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
+  const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
+  const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
+  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const peopleMap = {};
+  const memberByName = new Map();
+  members.forEach((member) => {
+    const key = memberShareKey(member);
+    peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0 };
+    memberByName.set(memberNameKey(member.member_name), key);
+  });
+  (trip.expenses || []).forEach((expense) => {
+    (expense.splits || []).forEach((split) => {
+      const byNameKey = memberByName.get(memberNameKey(split.member_name));
+      const matchedMember = byNameKey
+        ? members.find((member) => memberShareKey(member) === byNameKey)
+        : members.find((member) => {
+            const stableKey = memberShareKey(member);
+            return String(split.member_key) === stableKey || String(split.member_key) === String(_memberKey(member));
+          });
+      const targetKey = byNameKey || (matchedMember ? memberShareKey(matchedMember) : String(split.member_key || ''));
+      if (peopleMap[targetKey]) peopleMap[targetKey].totalShare += Number(split.share_amount || 0);
+    });
+    const paidByNameKey = memberByName.get(memberNameKey(expense.paid_by_name));
+    const paidByMember = paidByNameKey
+      ? members.find((member) => memberShareKey(member) === paidByNameKey)
+      : members.find((member) => {
+          const stableKey = memberShareKey(member);
+          return String(expense.paid_by_key) === stableKey || String(expense.paid_by_key) === String(_memberKey(member));
+        });
+    const paidByKey = paidByNameKey || (paidByMember ? memberShareKey(paidByMember) : String(expense.paid_by_key || ''));
+    if (peopleMap[paidByKey]) peopleMap[paidByKey].totalGave += Number(expense.amount || 0);
+  });
   const memberChips = members.length
-    ? members.map((member) => `<span style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:var(--bg2);border:1px solid var(--br);font-size:12px;font-weight:600">${escHtml(member.member_name)}</span>`).join('')
+    ? members.map((member) => {
+        const key = memberShareKey(member);
+        const totals = peopleMap[key] || { totalShare: 0, totalGave: 0 };
+        return `<div style="display:flex;flex-direction:column;gap:2px;padding:6px 10px;border-radius:12px;background:var(--bg2);border:1px solid var(--br);min-width:96px">
+          <span style="font-size:12px;font-weight:700;line-height:1.2">${escHtml(member.member_name)}</span>
+          <span style="font-size:11px;color:var(--t3);line-height:1.2">Share: ${fmtCur(totals.totalShare || 0)}</span>
+        </div>`;
+      }).join('')
     : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
   const summaryCards = [
-    ['Status', tripStatusBadge(trip.status)],
-    ['Category', escHtml(trip.category || '-')],
     ['Transport', escHtml(trip.transport_mode || '-')],
-    ['Distance', trip.total_distance != null ? `${escHtml(String(trip.total_distance))} km` : '-'],
-  ].map(([label, value]) => `<div class="card"><div style="font-size:12px;color:var(--t3);margin-bottom:6px">${label}</div><div style="font-size:16px;font-weight:700">${value}</div></div>`).join('');
+  ].map(([label, value]) => `<div class="card" style="padding:12px 14px;min-height:0"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">${label}</div><div style="font-size:14px;font-weight:700;line-height:1.2">${value}</div></div>`).join('');
 
   const groupHtml = groups.length
-    ? groups.map((group) => `
+    ? groups.map((group, index) => {
+      const typeKey = tripGroupTypeKey(group.type);
+      const groupTypeArg = JSON.stringify(String(group.type || ''));
+      const isCollapsed = collapsedGroups.has(typeKey);
+      const activeSort = getTripExpenseGroupSort(trip.id, group.type);
+      const sortedItems = sortTripGroupItems(group.items || [], activeSort);
+      const itemCount = sortedItems.length;
+      return `
       <div class="card" style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-          <div style="font-size:18px;font-weight:800">${escHtml(group.type)}</div>
-          <div style="font-size:16px;font-weight:800;color:var(--green)">Subtotal: ${fmtCur(group.total || 0)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <button
+            type="button"
+            onclick='toggleTripExpenseGroupCollapse(${groupTypeArg})'
+            style="display:flex;align-items:center;gap:10px;background:none;border:none;padding:0;cursor:pointer;text-align:left;min-width:0"
+            aria-expanded="${isCollapsed ? 'false' : 'true'}"
+          >
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:var(--bg2);border:1px solid var(--br);font-size:14px;color:var(--t2)">${isCollapsed ? '&#9656;' : '&#9662;'}</span>
+            <span>
+              <span style="display:block;font-size:18px;font-weight:800">${escHtml(group.type)}</span>
+              <span style="display:block;font-size:12px;color:var(--t3)">${itemCount} item${itemCount !== 1 ? 's' : ''}${isCollapsed ? ' hidden' : ''}</span>
+            </span>
+          </button>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="trip-icon-btn" title="Move group up" aria-label="Move group up" onclick='moveTripExpenseGroup(${groupTypeArg}, "up")' ${index === 0 ? 'disabled' : ''} style="${index === 0 ? 'opacity:.45;cursor:not-allowed' : ''}">
+                <span class="trip-icon-btn-glyph">&#8593;</span>
+              </button>
+              <button class="trip-icon-btn" title="Move group down" aria-label="Move group down" onclick='moveTripExpenseGroup(${groupTypeArg}, "down")' ${index === groups.length - 1 ? 'disabled' : ''} style="${index === groups.length - 1 ? 'opacity:.45;cursor:not-allowed' : ''}">
+                <span class="trip-icon-btn-glyph">&#8595;</span>
+              </button>
+            </div>
+            <div style="font-size:16px;font-weight:800;color:var(--green)">Subtotal: ${fmtCur(group.total || 0)}</div>
+          </div>
         </div>
-        <div class="table-wrap">
+        ${isCollapsed ? '' : `
+        <div class="table-wrap" style="margin-top:12px">
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Details</th>
-                <th class="td-m">Qty</th>
-                <th class="td-m">Price</th>
-                <th class="td-m">Total</th>
-                <th>Notes</th>
-                <th style="width:150px">Actions</th>
+                <th style="width:132px;min-width:132px">Actions</th>
+                ${tripGroupSortHeader(group.type, activeSort, 'date', 'Date')}
+                ${tripGroupSortHeader(group.type, activeSort, 'details', 'Details')}
+                ${tripGroupSortHeader(group.type, activeSort, 'qty', 'Qty', 'td-m')}
+                ${tripGroupSortHeader(group.type, activeSort, 'price', 'Price', 'td-m')}
+                ${tripGroupSortHeader(group.type, activeSort, 'total', 'Total', 'td-m')}
+                ${tripGroupSortHeader(group.type, activeSort, 'notes', 'Notes')}
               </tr>
             </thead>
-            <tbody>${(group.items || []).map((item) => `
+            <tbody>${sortedItems.map((item) => `
               <tr>
+                <td class="trip-actions-cell">
+                  <div class="trip-table-actions" role="group" aria-label="Trip expense actions">
+                    <button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
+                      <span class="trip-icon-btn-glyph">&#9998;</span>
+                    </button>
+                    <button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
+                      <span class="trip-icon-btn-glyph">&#128465;</span>
+                    </button>
+                  </div>
+                </td>
                 <td>${item.expense_date ? fmtDate(item.expense_date) : '-'}</td>
                 <td style="font-weight:600">${escHtml(item.details || '-')}</td>
                 <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
                 <td class="td-m">${item.unit_price != null ? fmtCur(item.unit_price) : '-'}</td>
                 <td class="td-m" style="font-weight:700">${fmtCur(item.amount || 0)}</td>
-                <td>${escHtml(item.notes || '-')}</td>
                 <td>
-                  <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <button class="btn btn-g btn-sm" onclick="showTripExpenseModal(${item.id})">Edit</button>
-                    <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDeleteExpense(${item.id})">Delete</button>
-                  </div>
+                  <div>${escHtml(item.notes || '-')}</div>
+                  <div style="margin-top:4px;font-size:11px;color:var(--t3)">Paid by: ${escHtml(item.paid_by_name || 'You')}</div>
+                  ${(item.splits || []).length > 1 ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${fmtCur(split.share_amount)}`).join(' | '))}</div>` : ''}
                 </td>
               </tr>
             `).join('')}</tbody>
           </table>
         </div>
+        `}
       </div>
-    `).join('')
+    `;
+    }).join('')
     : `<div class="card" style="text-align:center;color:var(--t3);padding:28px 18px">No trip expenses yet. Add line items to see grouped totals here.</div>`;
 
   document.getElementById('main').innerHTML = `
-    <div class="tab-content">
+    <div class="tab-content" data-trip-detail-view="1">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
         <div>
           <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">Back</button>
-          <div style="font-size:24px;font-weight:800">${escHtml(trip.destination || trip.name || '')}</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div style="font-size:24px;font-weight:800">
+              ${escHtml(trip.destination || trip.name || '')}${trip.total_distance != null ? ` <span style="font-size:18px;font-weight:700;color:var(--t2)">(${escHtml(String(trip.total_distance))} km)</span>` : ''}
+            </div>
+            ${tripStatusBadge(trip.status)}
+          </div>
           <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-g btn-sm" onclick="showTripModal(${trip.id})">Edit Trip</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
+            <span class="trip-icon-btn-glyph">&#9998;</span>
+          </button>
+          <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
           <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
-          <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="tripDelete(${trip.id})">Delete Trip</button>
+          <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
+          <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
+            <span class="trip-icon-btn-glyph">&#128465;</span>
+          </button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:16px">
-        <div class="card">
-          <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Trip Members</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">${memberChips}</div>
-          ${trip.notes ? `<div style="margin-top:12px;font-size:13px;color:var(--t2)">${escHtml(trip.notes)}</div>` : ''}
+      <div style="display:grid;grid-template-columns:minmax(260px,1.5fr) minmax(190px,.95fr) repeat(2,minmax(130px,.7fr));gap:10px;margin-bottom:14px;align-items:stretch">
+        <div class="card" style="padding:12px 14px;min-height:0">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:5px">Trip Members</div>
+          <div style="display:flex;flex-wrap:wrap;gap:5px">${memberChips}</div>
+          ${trip.notes ? `<div style="margin-top:6px;font-size:11px;color:var(--t2);line-height:1.35">${escHtml(trip.notes)}</div>` : ''}
         </div>
-        <div class="card" style="display:flex;flex-direction:column;justify-content:center">
-          <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Grand Total</div>
-          <div style="font-size:34px;font-weight:900;color:var(--green)">${fmtCur(trip.grand_total || 0)}</div>
-          <div style="font-size:12px;color:var(--t3);margin-top:6px">${(trip.expenses || []).length} expense item${(trip.expenses || []).length !== 1 ? 's' : ''}</div>
+        <div class="card" style="display:flex;flex-direction:column;justify-content:center;padding:12px 14px;min-height:0">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:3px">Grand Total</div>
+          <div style="font-size:20px;font-weight:900;color:var(--green);line-height:1.1">${fmtCur(trip.grand_total || 0)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:3px">${(trip.expenses || []).length} item${(trip.expenses || []).length !== 1 ? 's' : ''}</div>
         </div>
+        ${summaryCards}
       </div>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">${summaryCards}</div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div>
@@ -5151,8 +5594,22 @@ function renderTripDetail() {
   `;
 }
 
-function showTripModal(tripId = null) {
-  const trip = tripId ? (_trips.find((row) => String(row.id) === String(tripId)) || _tripDetail) : null;
+async function showTripModal(tripId = null) {
+  let trip = null;
+  if (tripId) {
+    if (_tripDetail && String(_tripDetail.id) === String(tripId)) {
+      trip = _tripDetail;
+    } else {
+      const result = await api(`/api/trips/${tripId}`);
+      if (!result?.trip) {
+        toast(result?.error || 'Could not load trip details', 'error');
+        return;
+      }
+      trip = result.trip;
+    }
+  }
+  const startDateValue = trip?.start_date ? normalizeInputDate(trip.start_date) : todayStr();
+  const endDateValue = trip?.end_date ? normalizeInputDate(trip.end_date) : '';
   const memberValue = trip?.members?.map((member) => member.member_name).join('\n') || '';
   openModal(trip ? 'Edit Trip' : 'Add Trip', `
     <div class="fg">
@@ -5160,10 +5617,10 @@ function showTripModal(tripId = null) {
         <input class="fi" id="tripDestination" placeholder="Manali, Shimla, Thailand..." value="${escHtml(trip?.destination || trip?.name || '')}">
       </label>
       <label class="fl">Start Date *
-        <input class="fi" type="date" id="tripStartDate" value="${trip?.start_date || todayStr()}">
+        <input class="fi" type="date" id="tripStartDate" value="${escHtml(startDateValue)}">
       </label>
       <label class="fl">End Date
-        <input class="fi" type="date" id="tripEndDate" value="${trip?.end_date || ''}">
+        <input class="fi" type="date" id="tripEndDate" value="${escHtml(endDateValue)}">
       </label>
       <label class="fl">Status
         <select class="fi" id="tripStatus">${tripOptionsHtml(TRIP_STATUS_OPTIONS, trip?.status || 'upcoming')}</select>
@@ -5235,6 +5692,31 @@ function _findTripExpenseById(expenseId) {
 function showTripExpenseModal(expenseId = null) {
   if (!_tripDetail) return;
   const expense = expenseId ? _findTripExpenseById(expenseId) : null;
+  const members = _tripDetail.members || [];
+  const fallbackPaidByKey = expense?.paid_by_key || (members[0] ? _memberKey(members[0]) : 'self');
+  const selectedKeys = expense?.splits?.length
+    ? new Set(expense.splits.map((split) => split.member_key))
+    : new Set([fallbackPaidByKey]);
+  _tripExpSel = selectedKeys;
+  _tripExpPaidBy = selectedKeys.has(fallbackPaidByKey) ? fallbackPaidByKey : [...selectedKeys][0] || fallbackPaidByKey;
+  _tripExpMode = expense?.split_mode || 'equal';
+  _tripExpValues = expense?.splits?.length
+    ? _restoreSplitValues(
+        _tripExpMode,
+        (expense.splits || []).map((split) => ({ key: split.member_key, share: split.share_amount })),
+        parseFloat(expense.amount) || 0
+      )
+    : {};
+  const splitModeChips = SPLIT_MODES.map((mode) =>
+    `<button class="chip split-mode-chip ${_tripExpMode === mode.key ? 'active' : ''}" data-mode="${mode.key}" onclick="tripSetSplitMode('${mode.key}')">${mode.label}</button>`
+  ).join('');
+  const participantChips = members.map((member) => {
+    const key = _memberKey(member);
+    const selected = _tripExpSel.has(key);
+    return `<button type="button" class="fr-chip ${selected ? 'sel' : ''}" onclick="tripToggleMember('${key}')">
+      <span class="cbox ${selected ? 'chk' : ''}">${selected ? '&#10003;' : ''}</span>${escHtml(member.member_name)}
+    </button>`;
+  }).join('');
   openModal(expense ? 'Edit Trip Expense' : 'Add Trip Expense', `
     <div class="fg">
       <label class="fl">Expense Type *
@@ -5254,17 +5736,34 @@ function showTripExpenseModal(expenseId = null) {
         <input class="fi" id="tripExpensePrice" type="number" min="0" step="0.01" value="${expense?.unit_price ?? expense?.amount ?? ''}" oninput="tripExpenseAutoTotal()">
       </label>
       <label class="fl">Total *
-        <input class="fi" id="tripExpenseAmount" type="number" min="0" step="0.01" value="${expense?.amount ?? ''}">
+        <input class="fi" id="tripExpenseAmount" type="number" min="0" step="0.01" value="${expense?.amount ?? ''}" oninput="tripHandleAmountChange()">
+      </label>
+      <label class="fl">Paid By
+        <select class="fi" id="tripExpensePaidBy" onchange="tripExpenseChangePaidBy(this.value)">
+          ${members.map((member) => {
+            const key = _memberKey(member);
+            return `<option value="${escHtml(key)}" ${String(key) === String(_tripExpPaidBy) ? 'selected' : ''}>${escHtml(member.member_name)}</option>`;
+          }).join('')}
+        </select>
       </label>
       <label class="fl full">Notes
         <textarea class="fi" id="tripExpenseNotes" rows="3" placeholder="Optional notes">${escHtml(expense?.notes || '')}</textarea>
       </label>
+    </div>
+    <div class="card" style="padding:14px 16px;margin-top:12px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">Share Expense With Members</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.</div>
+      <div id="tripDivChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${participantChips}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Split Mode</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${splitModeChips}</div>
+      <div id="tripSplitInputs"></div>
     </div>
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="saveTripExpenseModal(${expense?.id || 'null'})">${expense ? 'Save Expense' : 'Add Expense'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>
   `);
+  tripUpdateSplitInputs();
 }
 
 function tripExpenseAutoTotal() {
@@ -5273,18 +5772,63 @@ function tripExpenseAutoTotal() {
   const totalInput = document.getElementById('tripExpenseAmount');
   if (!totalInput) return;
   if (qty > 0 && price >= 0) totalInput.value = (Math.round(qty * price * 100) / 100).toFixed(2);
+  tripHandleAmountChange();
+}
+
+function tripExpenseChangePaidBy(key) {
+  _tripExpPaidBy = key;
+  if (!_tripExpSel.has(key)) _tripExpSel.add(key);
+  const container = document.getElementById('tripDivChips');
+  if (container) {
+    container.querySelectorAll('.fr-chip').forEach((btn) => {
+      const match = btn.getAttribute('onclick')?.match(/tripToggleMember\('(.+?)'\)/);
+      if (!match) return;
+      const chipKey = match[1];
+      const selected = _tripExpSel.has(chipKey);
+      btn.classList.toggle('sel', selected);
+      const cbox = btn.querySelector('.cbox');
+      if (cbox) { cbox.classList.toggle('chk', selected); cbox.innerHTML = selected ? '&#10003;' : ''; }
+    });
+  }
+  tripHandleAmountChange();
 }
 
 async function saveTripExpenseModal(expenseId = null) {
   if (!_selectedTripId) return;
+  const amountValue = document.getElementById('tripExpenseAmount')?.value || null;
+  const members = _tripDetail?.members || [];
+  const payer = members.find((member) => String(_memberKey(member)) === String(_tripExpPaidBy));
+  if (!payer) {
+    toast('Choose who paid this expense', 'warning');
+    return;
+  }
+  if (_tripExpSel.size === 0) {
+    toast('Select at least one member', 'warning');
+    return;
+  }
+  if (!_tripExpSel.has(_tripExpPaidBy)) {
+    toast('Paid by member must also be included in sharing', 'warning');
+    return;
+  }
+  const people = _tripSelectedPeople();
+  const amountNumber = parseFloat(amountValue || 0);
+  const { valid, error, shares } = computeShares(amountNumber, _tripExpMode, people, _tripExpValues);
+  if (!valid) {
+    toast(error || 'Invalid split', 'warning');
+    return;
+  }
   const body = {
     expense_type: document.getElementById('tripExpenseType')?.value.trim(),
     details: document.getElementById('tripExpenseDetails')?.value.trim(),
     expense_date: document.getElementById('tripExpenseDate')?.value,
     quantity: document.getElementById('tripExpenseQty')?.value || null,
     unit_price: document.getElementById('tripExpensePrice')?.value || null,
-    amount: document.getElementById('tripExpenseAmount')?.value || null,
+    amount: amountValue,
     notes: document.getElementById('tripExpenseNotes')?.value.trim() || null,
+    paid_by_key: _tripExpPaidBy,
+    paid_by_name: payer.member_name,
+    split_mode: _tripExpMode,
+    splits: shares.map((share) => ({ member_key: share.key, member_name: share.name, share_amount: share.share })),
   };
   if (!body.expense_type || !body.details || !body.expense_date) {
     toast('Type, detail, and date are required', 'warning');
@@ -5300,6 +5844,8 @@ async function saveTripExpenseModal(expenseId = null) {
   }
   closeModal();
   toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  _tripExpMode = 'equal';
+  _tripExpValues = {};
   await openTripDetail(_selectedTripId);
 }
 
@@ -5328,6 +5874,148 @@ async function tripDelete(tripId) {
   }
   toast('Trip deleted', 'success');
   await loadTrips();
+}
+
+function showTripExpenseExcelImport(tripId = null) {
+  const targetId = tripId || _selectedTripId;
+  if (!targetId) {
+    toast('Open a trip first', 'warning');
+    return;
+  }
+  openModal('Import Trip Expenses From Excel', `
+    <div style="background:var(--green-l);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--t2)">
+      <div style="font-weight:700;color:var(--green);margin-bottom:6px">Import expenses directly into this trip</div>
+      <div>You can import detailed trip sheets like hotel, petrol, food, and other expense tables from your workbook.</div>
+      <div style="margin-top:4px">You can also import shared split sheets with columns like <b>Date</b>, <b>Thing</b>, <b>Amount</b>, and <b>Equal Divide</b>. Codes like <b>HD</b> will split the row equally between matching trip members.</div>
+    </div>
+    <div class="fg" style="margin-bottom:14px">
+      <label class="fl full">File (.xlsx / .xls / .ods)
+        <input type="file" accept=".xlsx,.xls,.ods" id="tripExpenseXlsxFile" class="fi">
+      </label>
+      <label class="fl">Password (if protected)
+        <input type="password" id="tripExpenseXlsxPass" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
+      </label>
+      <label class="fl" style="justify-content:flex-end;padding-top:20px">
+        <button class="btn btn-p" onclick="loadTripExpenseExcelSheets(${targetId})">Load Sheets &rarr;</button>
+      </label>
+    </div>
+    <div id="tripExpenseXlsxSheetArea"></div>
+    <div id="tripExpenseXlsxPreview"></div>
+  `);
+}
+
+function getSelectedTripExpenseSheets() {
+  return [...document.querySelectorAll('.trip-expense-xlsx-sheet-cb:checked')].map((checkbox) => checkbox.value);
+}
+
+async function loadTripExpenseExcelSheets(tripId = null) {
+  const targetId = tripId || _selectedTripId;
+  const file = document.getElementById('tripExpenseXlsxFile')?.files?.[0];
+  if (!targetId) {
+    toast('Open a trip first', 'warning');
+    return;
+  }
+  if (!file) {
+    toast('Please select a file first', 'warning');
+    return;
+  }
+  const password = document.getElementById('tripExpenseXlsxPass')?.value || '';
+  document.getElementById('tripExpenseXlsxSheetArea').innerHTML = `<div style="color:var(--t3);font-size:13px;margin-bottom:10px">Reading file...</div>`;
+  document.getElementById('tripExpenseXlsxPreview').innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  if (password) fd.append('password', password);
+  const res = await fetch(`/api/trips/${targetId}/expenses/import-excel/sheets`, { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById('tripExpenseXlsxSheetArea').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`;
+    return;
+  }
+  const checkboxes = (data.sheets || []).map((sheet, index) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:7px;cursor:pointer;background:var(--bg);margin-bottom:4px">
+      <input type="checkbox" class="trip-expense-xlsx-sheet-cb" value="${sheet}" ${index === 0 ? 'checked' : ''} onchange="document.getElementById('tripExpenseXlsxPreview').innerHTML=''">
+      <span style="font-size:13px">${sheet}</span>
+    </label>
+  `).join('');
+  document.getElementById('tripExpenseXlsxSheetArea').innerHTML = `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600;color:var(--t2)">SELECT SHEETS</span>
+        <span style="font-size:11px;color:var(--t3);cursor:pointer" onclick="document.querySelectorAll('.trip-expense-xlsx-sheet-cb').forEach(c=>c.checked=true)">Select all</span>
+      </div>
+      ${checkboxes}
+    </div>
+    <button class="btn btn-s" onclick="previewTripExpenseExcelImport(${targetId})">Preview &rarr;</button>
+  `;
+  if ((data.sheets || []).length === 1) previewTripExpenseExcelImport(targetId);
+}
+
+async function previewTripExpenseExcelImport(tripId = null) {
+  const targetId = tripId || _selectedTripId;
+  const file = document.getElementById('tripExpenseXlsxFile')?.files?.[0];
+  const sheets = getSelectedTripExpenseSheets();
+  const password = document.getElementById('tripExpenseXlsxPass')?.value || '';
+  if (!targetId || !file) return;
+  if (!sheets.length) {
+    toast('Select at least one sheet', 'warning');
+    return;
+  }
+  document.getElementById('tripExpenseXlsxPreview').innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheets', JSON.stringify(sheets));
+  if (password) fd.append('password', password);
+  const res = await fetch(`/api/trips/${targetId}/expenses/import-excel/preview`, { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById('tripExpenseXlsxPreview').innerHTML = `<p style="color:var(--red);font-size:13px">${data.error}</p>`;
+    return;
+  }
+  if (!data.count) {
+    document.getElementById('tripExpenseXlsxPreview').innerHTML = `<p style="color:var(--amber);font-size:13px">No valid expense rows found. Try a different sheet selection or workbook layout.</p>`;
+    return;
+  }
+  document.getElementById('tripExpenseXlsxPreview').innerHTML = `
+    <p style="font-size:13px;margin-bottom:10px">Found <b>${data.count}</b> valid expense row${data.count !== 1 ? 's' : ''} <span style="color:var(--t3)">(${data.skipped} skipped)</span></p>
+    <div style="max-height:260px;overflow:auto;margin-bottom:14px">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="td-m">Qty</th><th class="td-m">Price</th><th class="td-m">Amount</th></tr></thead>
+        <tbody>${(data.preview || []).map((expense) => `<tr>
+          <td>${expense.expense_date ? fmtDate(expense.expense_date) : '-'}</td>
+          <td>${escHtml(expense.expense_type || '-')}</td>
+          <td>${escHtml(expense.details || '-')}</td>
+          <td class="td-m">${expense.quantity != null ? escHtml(String(expense.quantity)) : '-'}</td>
+          <td class="td-m">${expense.unit_price != null ? fmtCur(expense.unit_price) : '-'}</td>
+          <td class="td-m">${fmtCur(expense.amount || 0)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="doTripExpenseExcelImport(${targetId})">Import ${data.count} Expense Row${data.count !== 1 ? 's' : ''}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `;
+}
+
+async function doTripExpenseExcelImport(tripId = null) {
+  const targetId = tripId || _selectedTripId;
+  const file = document.getElementById('tripExpenseXlsxFile')?.files?.[0];
+  const sheets = getSelectedTripExpenseSheets();
+  const password = document.getElementById('tripExpenseXlsxPass')?.value || '';
+  if (!targetId || !file || !sheets.length) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheets', JSON.stringify(sheets));
+  if (password) fd.append('password', password);
+  const res = await fetch(`/api/trips/${targetId}/expenses/import-excel`, { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.success) {
+    toast(`Imported ${data.imported} trip expense item${data.imported !== 1 ? 's' : ''}`, 'success');
+    closeModal();
+    await openTripDetail(targetId);
+  } else {
+    toast(`Trip expense import failed: ${data.error || 'Unknown error'}`, 'error');
+  }
 }
 
 function showTripExcelImport() {
@@ -5560,8 +6248,10 @@ let _adminAiDays = 30;
 let _adminAiReport = null;
 let _adminAiTestResult = null;
 let _adminAiTestError = '';
+let _adminAiLoadError = '';
 let _adminPublicStats = null;
 let _adminExpenseStats = null;
+let _adminAiTrainingDraft = null;
 
 const ADMIN_AI_INTENTS = [
   { key: 'top_expenses', label: 'Most Expensive Item', description: 'Find the highest recent expense or top expense list.', examples: ['what is the most expensive item', 'what are my top expenses'] },
@@ -5581,6 +6271,8 @@ const ADMIN_AI_INTENTS = [
   { key: 'i_owe_friends', label: 'I Owe Friends', description: 'List friends you owe money to.', examples: ['do i owe anyone'] },
   { key: 'trip_summary', label: 'Trip Summary', description: 'Show totals for a named trip.', examples: ['how much did i spend on goa trip'] },
   { key: 'trip_list', label: 'Trip List', description: 'List trips.', examples: ['show my trips'] },
+  { key: 'expense_day_total', label: 'Day Expense Total', description: 'Show spending for a specific date.', examples: ['how much did i spend on 17 april 2026'] },
+  { key: 'expense_today_total', label: 'Today Expense Total', description: 'Show total spending for today.', examples: ['what did i spend today', 'total my today expenses'] },
   { key: 'credit_card_detail', label: 'Credit Card Detail', description: 'Show due, spent, or limit for a card.', examples: ['what is the due on hdfc card'] },
   { key: 'credit_card_due', label: 'Credit Card Due', description: 'Show all current card dues.', examples: ['how much is my credit card due this month'] },
   { key: 'active_emis', label: 'Active EMIs', description: 'List active or pending EMI records.', examples: ['which emis are active'] },
@@ -5932,13 +6624,52 @@ async function adminSendNotification() {
 
 // â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAdminAiLearning() {
-  const data = await api(`/api/admin/ai-learning/report?days=${encodeURIComponent(_adminAiDays)}`);
-  _adminAiReport = data?.report || null;
+  _adminAiLoadError = '';
+  const data = await api(`/api/admin/ai-learning/report?days=${encodeURIComponent(_adminAiDays)}&_ts=${Date.now()}`);
+  if (data?.success) {
+    _adminAiReport = data?.report || null;
+    _adminAiLoadError = '';
+  } else {
+    _adminAiReport = null;
+    _adminAiLoadError = data?.error || 'Failed to load AI learning report';
+  }
   renderAdminAiLearning();
 }
 
 function _adminAiIntentMeta(intentKey) {
   return ADMIN_AI_INTENTS.find((item) => item.key === intentKey) || { key: intentKey, label: intentKey, description: 'Custom intent', examples: [] };
+}
+
+function _adminAiJsString(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, '\\n');
+}
+
+function _adminAiBuildTrainingPayload(example = {}) {
+  const question = String(example.question || '').trim();
+  const intent = String(example.intent || '').trim();
+  const answer = String(example.answer || '').trim();
+  const notes = String(example.notes || '').trim();
+  return {
+    messages: [
+      {
+        role: 'system',
+        content: "You are Expense Lite AI. Answer finance questions using the user's live financial data. Be concise, factual, and specific.",
+      },
+      {
+        role: 'user',
+        content: question,
+      },
+      {
+        role: 'assistant',
+        content: answer,
+      },
+    ],
+    metadata: {
+      intent: intent || 'custom',
+      source: 'admin_ai_learning',
+      notes,
+    },
+  };
 }
 
 function renderAdminAiLearning() {
@@ -5947,6 +6678,8 @@ function renderAdminAiLearning() {
   const topFallbacks = report.top_fallback_questions || [];
   const unknowns = report.unknown_intents || [];
   const topQuestions = report.top_questions || [];
+  const recentQueries = report.recent_queries || [];
+  const unresolvedQueries = report.unresolved_queries || [];
 
   const topIntentHtml = topIntents.length
     ? topIntents.slice(0, 6).map((item) => {
@@ -5965,7 +6698,10 @@ function renderAdminAiLearning() {
           <div class="admin-ai-question">${escHtml(item.normalized_question || '')}</div>
           <div class="admin-ai-meta">Fallbacks ${Number(item.fail_count || 0)} &middot; Last seen ${item.last_seen_at ? fmtDate(item.last_seen_at) : '-'}</div>
         </div>
-        <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${String(item.normalized_question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">Teach</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${_adminAiJsString(item.normalized_question || '')}')">Teach</button>
+          <button class="btn btn-p btn-sm" onclick="showAdminAiTrainingModal('${_adminAiJsString(item.normalized_question || '')}', '')">Train Model</button>
+        </div>
       </div>`).join('')
     : '<div style="color:var(--t3);font-size:13px">No fallback questions in this time window.</div>';
 
@@ -5975,13 +6711,58 @@ function renderAdminAiLearning() {
           <div class="admin-ai-question">${escHtml(item.normalized_question || '')}</div>
           <div class="admin-ai-meta">Asked ${Number(item.ask_count || 0)} &middot; Last seen ${item.last_seen_at ? fmtDate(item.last_seen_at) : '-'}</div>
         </div>
-        <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${String(item.normalized_question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">Map Intent</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${_adminAiJsString(item.normalized_question || '')}')">Map Intent</button>
+          <button class="btn btn-p btn-sm" onclick="showAdminAiTrainingModal('${_adminAiJsString(item.normalized_question || '')}', '')">Train Model</button>
+        </div>
       </div>`).join('')
     : '<div style="color:var(--t3);font-size:13px">No unknown intents found.</div>';
 
   const questionHtml = topQuestions.length
-    ? topQuestions.map((item) => `<div class="admin-ai-mini-row"><span>${escHtml(item.normalized_question || '')}</span><strong>${Number(item.ask_count || 0)}</strong></div>`).join('')
+    ? topQuestions.map((item) => `<div class="admin-ai-row">
+        <div style="flex:1;min-width:0">
+          <div class="admin-ai-question">${escHtml(item.normalized_question || '')}</div>
+          <div class="admin-ai-meta">Asked ${Number(item.ask_count || 0)} times &middot; Last seen ${item.last_seen_at ? fmtDate(item.last_seen_at) : '-'}</div>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="showAdminAiTrainingModal('${_adminAiJsString(item.normalized_question || '')}', '')">Train Model</button>
+      </div>`).join('')
     : '<div style="color:var(--t3);font-size:13px">No saved AI questions yet.</div>';
+
+  const unresolvedHtml = unresolvedQueries.length
+    ? unresolvedQueries.map((item) => {
+        const question = item.question || item.normalized_question || '';
+        return `<div class="admin-ai-row" style="align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div class="admin-ai-question">${escHtml(question)}</div>
+            <div class="admin-ai-meta">${escHtml(item.user_label || 'Unknown user')} &middot; ${item.created_at ? fmtDate(item.created_at) : '-'} &middot; intent ${escHtml(item.detected_intent || 'unknown')} &middot; ${item.was_fallback ? 'fallback' : escHtml(item.answer_type || 'unknown')}</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:6px;line-height:1.5">${escHtml(item.response_preview || 'No answer preview saved.')}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="showAdminAiTeachModal('${_adminAiJsString(item.normalized_question || question || '')}')">Teach</button>
+            <button class="btn btn-p btn-sm" onclick="showAdminAiTrainingModal('${_adminAiJsString(question || item.normalized_question || '')}', '${_adminAiJsString(item.detected_intent || '')}', '${_adminAiJsString(item.response_preview || '')}')">Train Model</button>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div style="color:var(--t3);font-size:13px">No unresolved AI questions in this time window.</div>';
+
+  const recentQueriesHtml = recentQueries.length
+    ? recentQueries.map((item) => {
+        const question = item.question || item.normalized_question || '';
+        const statusLabel = item.was_fallback
+          ? 'Fallback'
+          : (item.answer_type === 'admin_trained_answer' ? 'Trained' : (item.answer_type || 'Answered'));
+        return `<div class="admin-ai-row" style="align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div class="admin-ai-question">${escHtml(question)}</div>
+            <div class="admin-ai-meta">${escHtml(item.user_label || 'Unknown user')} &middot; ${item.created_at ? fmtDate(item.created_at) : '-'} &middot; ${escHtml(statusLabel)} &middot; intent ${escHtml(item.detected_intent || 'unknown')}</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:6px;line-height:1.5">${escHtml(item.response_preview || 'No answer preview saved.')}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-p btn-sm" onclick="showAdminAiTrainingModal('${_adminAiJsString(question || item.normalized_question || '')}', '${_adminAiJsString(item.detected_intent || '')}', '${_adminAiJsString(item.response_preview || '')}')">Train Model</button>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div style="color:var(--t3);font-size:13px">No recent AI queries found.</div>';
 
   const intentDirectoryHtml = ADMIN_AI_INTENTS.map((intent) => `<div class="admin-ai-intent-card">
       <div class="admin-ai-intent-title">${escHtml(intent.label)}</div>
@@ -6013,17 +6794,23 @@ function renderAdminAiLearning() {
   const testErrorHtml = _adminAiTestError
     ? `<div class="admin-ai-test-error">${escHtml(_adminAiTestError)}</div>`
     : '';
+  const loadErrorHtml = _adminAiLoadError
+    ? `<div class="admin-ai-test-error" style="margin-bottom:16px">Could not load AI Learning data: ${escHtml(_adminAiLoadError)}</div>`
+    : '';
 
   document.getElementById('adminContent').innerHTML = `
     <div class="admin-ai-topbar">
       <div>
         <div style="font-size:15px;font-weight:700">AI Learning</div>
-        <div style="font-size:12px;color:var(--t3)">Review user queries, fallback patterns, and teach the assistant with intent mappings.</div>
+        <div style="font-size:12px;color:var(--t3)">Review user queries, fallback patterns, teach intent mappings, and export real user questions as training examples for your external AI model.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="chip" onclick="loadAdminAiLearning()">Refresh</button>
         ${[7, 30, 90].map((days) => `<button class="chip ${Number(_adminAiDays)===days ? 'active' : ''}" onclick="_adminAiDays=${days};loadAdminAiLearning()">${days} days</button>`).join('')}
       </div>
     </div>
+
+    ${loadErrorHtml}
 
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">Test Question</div>
@@ -6032,6 +6819,7 @@ function renderAdminAiLearning() {
         <textarea class="fi" id="adminAiTestQuestion" rows="3" placeholder="e.g. what is the most expensive item">${escHtml(_adminAiTestResult?.question || '')}</textarea>
         <div class="fa">
           <button class="btn btn-p" onclick="adminAiRunTest()">Run Test</button>
+          ${_adminAiTestResult?.question ? `<button class="btn btn-s" onclick="showAdminAiTrainingModal('${_adminAiJsString(_adminAiTestResult.question || '')}', '${_adminAiJsString(_adminAiTestResult.ai_meta?.resolved_intent || '')}', '${_adminAiJsString(_adminAiTestResult.answer || '')}')">Export Test For Training</button>` : ''}
         </div>
       </div>
       <div style="margin-top:14px">${testErrorHtml}${testResultHtml}</div>
@@ -6056,6 +6844,19 @@ function renderAdminAiLearning() {
       <div class="card">
         <div class="card-title">Unknown Intents</div>
         <div class="admin-ai-list">${unknownHtml}</div>
+      </div>
+    </div>
+
+    <div class="admin-ai-grid">
+      <div class="card">
+        <div class="card-title">Needs Attention</div>
+        <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Queries where users likely did not get a useful result yet.</div>
+        <div class="admin-ai-list">${unresolvedHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Recent User Queries</div>
+        <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Latest questions asked in AI Lookup, with user and answer preview.</div>
+        <div class="admin-ai-list">${recentQueriesHtml}</div>
       </div>
     </div>
 
@@ -6123,6 +6924,154 @@ async function adminAiTeachIntent() {
     await loadAdminAiLearning();
   } else {
     toast(result?.error || 'Failed to save mapping', 'error');
+  }
+}
+
+function showAdminAiTrainingModal(question, suggestedIntent = '', answer = '') {
+  const suggestedMeta = _adminAiIntentMeta(suggestedIntent || ADMIN_AI_INTENTS[0]?.key || 'custom');
+  _adminAiTrainingDraft = {
+    question: String(question || '').trim(),
+    intent: suggestedMeta.key,
+    answer: String(answer || '').trim(),
+    notes: '',
+  };
+  const payloadPreview = escHtml(JSON.stringify(_adminAiBuildTrainingPayload(_adminAiTrainingDraft), null, 2));
+  openModal('Train AI From JSON', `
+    <div class="admin-ai-teach-box">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:12px">Use a real user question, attach the target intent and ideal answer, then either send this JSON directly into Expense Lite AI memory or export it for your external model pipeline.</div>
+      <label class="fl full">User Question
+        <textarea class="fi" id="adminAiTrainQuestion" rows="3" oninput="adminAiRefreshTrainingPreview()">${escHtml(_adminAiTrainingDraft.question)}</textarea>
+      </label>
+      <div class="admin-ai-selected" id="adminAiTrainingIntentBox">
+        <div class="admin-ai-intent-title">${escHtml(suggestedMeta.label)}</div>
+        <div class="admin-ai-intent-key">${escHtml(suggestedMeta.key)}</div>
+        <div class="admin-ai-intent-desc">${escHtml(suggestedMeta.description)}</div>
+        <div class="admin-ai-intent-ex">${escHtml((suggestedMeta.examples || []).join(' | '))}</div>
+      </div>
+      <div class="admin-ai-directory">
+        ${ADMIN_AI_INTENTS.map((intent) => `<button type="button" class="admin-ai-intent-pick ${intent.key===suggestedMeta.key ? 'active' : ''}" data-intent="${escHtml(intent.key)}" onclick="adminAiSelectTrainingIntent('${escHtml(intent.key)}', this)">${escHtml(intent.label)}</button>`).join('')}
+      </div>
+      <input type="hidden" id="adminAiTrainIntent" value="${escHtml(suggestedMeta.key)}">
+      <label class="fl full">Ideal Assistant Answer
+        <textarea class="fi" id="adminAiTrainAnswer" rows="6" placeholder="Write the exact answer you want your AI model to learn." oninput="adminAiRefreshTrainingPreview()">${escHtml(_adminAiTrainingDraft.answer)}</textarea>
+      </label>
+      <label class="fl full">Notes (optional)
+        <input class="fi" id="adminAiTrainNotes" type="text" placeholder="e.g. finance summary / today total / fallback repair" oninput="adminAiRefreshTrainingPreview()">
+      </label>
+      <div>
+        <div class="admin-ai-test-label" style="margin-bottom:8px">Training JSON Preview</div>
+        <pre id="adminAiTrainingPreview" class="admin-ai-test-answer" style="white-space:pre-wrap;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px">${payloadPreview}</pre>
+      </div>
+      <div class="fa" style="margin-top:16px">
+        <button class="btn btn-p" onclick="adminAiSendTrainingExample()">Send To AI Memory</button>
+        <button class="btn btn-p" onclick="adminAiCopyTrainingExample()">Copy JSONL</button>
+        <button class="btn btn-s" onclick="adminAiDownloadTrainingExample()">Download JSONL</button>
+      </div>
+    </div>`);
+}
+
+function adminAiSelectTrainingIntent(intentKey, buttonEl) {
+  const meta = _adminAiIntentMeta(intentKey);
+  const hidden = document.getElementById('adminAiTrainIntent');
+  if (hidden) hidden.value = meta.key;
+  const box = document.getElementById('adminAiTrainingIntentBox');
+  if (box) {
+    box.innerHTML = `
+      <div class="admin-ai-intent-title">${escHtml(meta.label)}</div>
+      <div class="admin-ai-intent-key">${escHtml(meta.key)}</div>
+      <div class="admin-ai-intent-desc">${escHtml(meta.description)}</div>
+      <div class="admin-ai-intent-ex">${escHtml((meta.examples || []).join(' | '))}</div>`;
+  }
+  document.querySelectorAll('.admin-ai-intent-pick').forEach((node) => node.classList.remove('active'));
+  if (buttonEl) buttonEl.classList.add('active');
+  adminAiRefreshTrainingPreview();
+}
+
+function adminAiRefreshTrainingPreview() {
+  const draft = {
+    question: document.getElementById('adminAiTrainQuestion')?.value?.trim() || '',
+    intent: document.getElementById('adminAiTrainIntent')?.value?.trim() || '',
+    answer: document.getElementById('adminAiTrainAnswer')?.value?.trim() || '',
+    notes: document.getElementById('adminAiTrainNotes')?.value?.trim() || '',
+  };
+  _adminAiTrainingDraft = draft;
+  const preview = document.getElementById('adminAiTrainingPreview');
+  if (preview) preview.textContent = JSON.stringify(_adminAiBuildTrainingPayload(draft), null, 2);
+}
+
+async function adminAiCopyTrainingExample() {
+  adminAiRefreshTrainingPreview();
+  if (!_adminAiTrainingDraft?.question) { toast('User question is required', 'warning'); return; }
+  if (!_adminAiTrainingDraft?.answer) { toast('Ideal answer is required', 'warning'); return; }
+  const jsonl = `${JSON.stringify(_adminAiBuildTrainingPayload(_adminAiTrainingDraft))}\n`;
+  await navigator.clipboard.writeText(jsonl);
+  toast('Training JSONL copied', 'success');
+}
+
+function adminAiDownloadTrainingExample() {
+  adminAiRefreshTrainingPreview();
+  if (!_adminAiTrainingDraft?.question) { toast('User question is required', 'warning'); return; }
+  if (!_adminAiTrainingDraft?.answer) { toast('Ideal answer is required', 'warning'); return; }
+  const jsonl = `${JSON.stringify(_adminAiBuildTrainingPayload(_adminAiTrainingDraft))}\n`;
+  const blob = new Blob([jsonl], { type: 'application/jsonl;charset=utf-8' });
+  const link = document.createElement('a');
+  const safeIntent = String(_adminAiTrainingDraft.intent || 'custom').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+  link.href = URL.createObjectURL(blob);
+  link.download = `ai-training-${safeIntent || 'example'}.jsonl`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+  toast('Training JSONL downloaded', 'success');
+}
+
+async function adminAiSendTrainingExample() {
+  adminAiRefreshTrainingPreview();
+  if (!_adminAiTrainingDraft?.question) { toast('User question is required', 'warning'); return; }
+  if (!_adminAiTrainingDraft?.answer) { toast('Ideal answer is required', 'warning'); return; }
+  try {
+    const result = await api('/api/admin/ai-learning/training-example', {
+      method: 'POST',
+      body: {
+        question: _adminAiTrainingDraft.question,
+        normalized_question: (_adminAiTrainingDraft.question || '').trim().toLowerCase(),
+        detected_intent: _adminAiTrainingDraft.intent || '',
+        ideal_answer: _adminAiTrainingDraft.answer,
+        notes: _adminAiTrainingDraft.notes || '',
+        training_payload: _adminAiBuildTrainingPayload(_adminAiTrainingDraft),
+      },
+    });
+    if (result?.success) {
+      closeModal();
+      toast('Training saved. Future exact matches will use this answer.', 'success');
+      if (_adminAiTestResult?.question && String(_adminAiTestResult.question || '').trim().toLowerCase() === String(_adminAiTrainingDraft.question || '').trim().toLowerCase()) {
+        _adminAiTestResult = {
+          success: true,
+          question: _adminAiTrainingDraft.question,
+          normalized_question: (_adminAiTrainingDraft.question || '').trim().toLowerCase(),
+          answer: _adminAiTrainingDraft.answer,
+          ai_meta: {
+            detected_intent: _adminAiTrainingDraft.intent || 'trained_answer',
+            detected_confidence: 1,
+            resolved_intent: _adminAiTrainingDraft.intent || 'trained_answer',
+            resolved_confidence: 1,
+            resolution_method: 'admin_training_store',
+            learned_match: null,
+            answer_type: 'admin_trained_answer',
+          },
+        };
+      }
+      await loadAdminAiLearning();
+      return;
+    }
+    const errorMessage = String(result?.error || '').trim();
+    if (result?.status === 404 || /server may need a restart/i.test(errorMessage)) {
+      toast('Training save route is not active yet. Restart the server, then try again.', 'warning');
+      return;
+    }
+    toast(errorMessage || 'Failed to save training example', 'error');
+  } catch (err) {
+    toast(err?.message || 'Failed to save training example', 'error');
   }
 }
 
@@ -8085,9 +9034,9 @@ function renderCcList() {
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="cc-list-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700">My Credit Cards</div>
-        <div style="display:flex;gap:8px">
+        <div class="cc-list-head-actions" style="display:flex;gap:8px">
           <button class="btn btn-s btn-sm" onclick="downloadCreditCardsPdf()">PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCcCardModal()">+ Add Card</button>
         </div>
@@ -8185,9 +9134,9 @@ async function renderCcDetail() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+      <div class="cc-detail-head" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-g btn-sm" onclick="loadCreditCards()">&larr; Back</button>
-        <div style="flex:1">
+        <div class="cc-detail-copy" style="flex:1">
           <div style="font-size:18px;font-weight:700">${escHtml(card.card_name)}</div>
           <div style="font-size:12px;color:var(--t2)">${escHtml(card.bank_name)} **** ${escHtml(card.last4)} &nbsp;&middot;&nbsp; Expires ${expiry} &nbsp;&middot;&nbsp; Bill on day ${card.bill_gen_day} &nbsp;&middot;&nbsp; Due ${card.due_days} days after</div>
         </div>
@@ -8225,6 +9174,30 @@ function renderCcCurrentCycle(card, cycle, txns) {
         </tr>`;
       }).join('')
     : `<tr><td colspan="7" class="empty-td">No transactions this cycle. Add one below.</td></tr>`;
+  const txnCards = txns.length
+    ? txns.map((t) => {
+        const srcBadge = t.source !== 'manual'
+          ? `<span class="cc-src-badge">${t.source}</span>` : '';
+        return `<div class="cc-txn-card">
+          <div class="cc-txn-card-head">
+            <div class="cc-txn-card-copy">
+              <div class="cc-txn-card-title">${escHtml(t.description)} ${srcBadge}</div>
+              <div class="cc-txn-card-date">${fmtDate(t.txn_date)}</div>
+            </div>
+            <div class="cc-txn-card-amount">${fmtCur(t.net_amount)}</div>
+          </div>
+          <div class="cc-txn-card-meta">
+            <span>Amount: <b>${fmtCur(t.amount)}</b></span>
+            <span>Disc%: <b>${t.discount_pct > 0 ? `${t.discount_pct}%` : '-'}</b></span>
+            <span>Discount: <b>${t.discount_amount > 0 ? fmtCur(t.discount_amount) : '-'}</b></span>
+          </div>
+          <div class="cc-txn-card-actions">
+            <button class="btn btn-g btn-sm" onclick="showCcTxnModal(${card.id},${t.id})">Edit</button>
+            <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="deleteCcTxn(${t.id})">Delete</button>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div class="cc-empty-card">No transactions this cycle. Add one below.</div>`;
 
   return `
     <div class="cc-cycle-summary">
@@ -8235,20 +9208,21 @@ function renderCcCurrentCycle(card, cycle, txns) {
       <div class="cc-cycle-stat"><div class="lbl">Net Payable</div><div class="val hl">${fmtCur(netPay)}</div></div>
     </div>
 
-    <div class="card" style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <div class="card cc-current-cycle-card" style="margin-bottom:16px">
+      <div class="cc-current-cycle-head" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <div class="card-title" style="margin:0">Transactions</div>
-        <div style="display:flex;gap:8px">
+        <div class="cc-current-cycle-actions" style="display:flex;gap:8px">
           <button class="btn btn-s btn-sm" onclick="downloadCcCyclePdf(${card.id},${cycle.id},'${escHtml(card.bank_name)} ${escHtml(card.card_name)}')">PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCcTxnModal(${card.id})">+ Add Transaction</button>
           <button class="btn btn-s btn-sm" onclick="showCcExcelImportModal(${cycle.id}, '${cycle.cycle_start}', '${cycle.cycle_end}', ${card.default_discount_pct || 0})">Import Excel</button>
           <button class="btn btn-s btn-sm" onclick="showCloseCycleModal(${cycle.id},${netPay})">Close Cycle / Mark Paid</button>
         </div>
       </div>
-      <div class="table-wrap"><table>
+      <div class="table-wrap cc-txn-table-wrap"><table>
         <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th class="td-m">Disc%</th><th class="td-m">Discount</th><th class="td-m">Net</th><th></th></tr></thead>
         <tbody>${txnRows}</tbody>
       </table></div>
+      <div class="cc-txn-card-list">${txnCards}</div>
     </div>`;
 }
 
@@ -10143,6 +11117,15 @@ let _aiStatus = null;
 let _aiPastHistory = []; // from DB
 let _aiHistoryExpanded = false;
 
+function _aiRewriteQuestion(question) {
+  const raw = String(question || '').trim();
+  const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const asksExpense = /\b(expense|expenses|spend|spent|spending|cost|costs)\b/.test(normalized);
+  const asksToday = /\btoday\b/.test(normalized);
+  if (asksExpense && asksToday) return 'what did i spend today';
+  return raw;
+}
+
 async function loadAiLookup() {
   _aiHistory = [];
   _aiHistoryExpanded = false;
@@ -10189,9 +11172,9 @@ async function loadAiLookup() {
             rows="1"
             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doAiAsk();}"
             oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
-            onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+            onfocus="this.style.borderColor='var(--em)'" onblur="this.style.borderColor='var(--border)'"></textarea>
           <button id="aiSendBtn" onclick="doAiAsk()"
-            style="padding:10px 18px;background:var(--primary);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;height:44px;transition:opacity 0.15s">
+            style="padding:10px 18px;background:var(--em);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;height:44px;transition:opacity 0.15s">
             Ask
           </button>
         </div>
@@ -10253,6 +11236,7 @@ async function doAiAsk() {
   const inp = document.getElementById('aiInput');
   const question = inp.value.trim();
   if (!question) return;
+  const lookupQuestion = _aiRewriteQuestion(question);
 
   inp.value = '';
   inp.style.height = 'auto';
@@ -10277,7 +11261,7 @@ async function doAiAsk() {
   const btn = document.getElementById('aiSendBtn');
   if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
 
-  const r = await api('/api/ai/lookup', { method: 'POST', body: { question, history: _aiHistory } });
+  const r = await api('/api/ai/lookup', { method: 'POST', body: { question: lookupQuestion, history: _aiHistory } });
 
   // Update history
   _aiHistory.push({ role: 'user', content: question });
