@@ -6739,7 +6739,6 @@ function renderAdminPublicStats() {
         ${readonlyCard('Unique Users', stats.unique_users, 'Live count from active registered users')}
         ${readonlyCard('Expense Items', stats.expense_items, 'Live count from saved expense rows')}
       </div>
-
       <div class="card" style="padding:18px">
         <div class="card-title">Editable Public Counters</div>
         <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Update the numbers shown on the landing page for app downloads and daily visitors.</div>
