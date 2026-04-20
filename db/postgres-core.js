@@ -3371,6 +3371,11 @@ async function bulkUpdateTripExpenseShares(userId, tripId, data = {}) {
   const splitMode = normalizeTripSplitModeValue(data.split_mode || 'equal');
   const requestedKeys = Array.isArray(data.member_keys) ? data.member_keys.map((key) => normalizeTripMemberKeyValue(key)).filter(Boolean) : [];
   const rawValues = data.split_values && typeof data.split_values === 'object' ? data.split_values : {};
+  const normalizedValues = Object.entries(rawValues).reduce((acc, [key, value]) => {
+    const normalizedKey = normalizeTripMemberKeyValue(key);
+    if (normalizedKey) acc[String(normalizedKey)] = num(value);
+    return acc;
+  }, {});
   await withTransaction(async (client) => {
     const membersR = await client.query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]);
     const memberRows = membersR.rows.map((member) => ({
@@ -3383,7 +3388,7 @@ async function bulkUpdateTripExpenseShares(userId, tripId, data = {}) {
     if (!selectedMembers.length) throw validationError('Select at least one member');
     const values = selectedMembers.reduce((acc, member) => {
       const key = String(member.member_key);
-      acc[key] = num(rawValues[key]);
+      acc[key] = num(normalizedValues[key]);
       return acc;
     }, {});
     const expenses = await _loadNormalizedTripExpenses(client, tripId);
