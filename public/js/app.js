@@ -5361,13 +5361,39 @@ function compareTripGroupItems(a, b, field, dir) {
     const time = normalized ? new Date(normalized).getTime() : 0;
     return Number.isFinite(time) ? time : 0;
   };
-  if (field === 'date') return (dateValue(a.expense_date) - dateValue(b.expense_date)) * multiplier || textCompare(a.details, b.details);
+  const timeValue = (item) => {
+    const raw = item?.updated_at || item?.created_at || '';
+    const time = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(time) ? time : 0;
+  };
+  if (field === 'date') {
+    const dateDiff = (dateValue(a.expense_date) - dateValue(b.expense_date)) * multiplier;
+    if (dateDiff) return dateDiff;
+    const tsDiff = (timeValue(a) - timeValue(b)) * multiplier;
+    if (tsDiff) return tsDiff;
+    const idDiff = ((Number(a?.id || 0) - Number(b?.id || 0)) || 0) * multiplier;
+    if (idDiff) return idDiff;
+    return textCompare(a.details, b.details);
+  }
   if (field === 'details') return textCompare(a.details, b.details) || numCompare(a.amount, b.amount);
   if (field === 'qty') return numCompare(a.quantity, b.quantity) || textCompare(a.details, b.details);
   if (field === 'price') return numCompare(a.unit_price, b.unit_price) || textCompare(a.details, b.details);
   if (field === 'total') return numCompare(a.amount, b.amount) || textCompare(a.details, b.details);
   if (field === 'notes') return textCompare(a.notes, b.notes) || textCompare(a.details, b.details);
   return 0;
+}
+
+function fmtTripExpenseDateTime(expenseDate, timestamp) {
+  const dateLabel = expenseDate ? fmtDate(expenseDate) : '-';
+  if (!timestamp) return dateLabel;
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return dateLabel;
+  const timeLabel = parsed.toLocaleTimeString('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${dateLabel}<div style="font-size:11px;color:var(--t3);margin-top:2px">${escHtml(timeLabel)}</div>`;
 }
 
 function sortTripGroupItems(items = [], sortState = { field: 'date', dir: 'asc' }) {
@@ -5792,7 +5818,7 @@ function renderTripDetail() {
                     </button>
                   </div>
                 </td>
-                <td>${item.expense_date ? fmtDate(item.expense_date) : '-'}</td>
+                <td>${fmtTripExpenseDateTime(item.expense_date, item.updated_at || item.created_at)}</td>
                 <td style="font-weight:600">${escHtml(item.details || '-')}</td>
                 <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
                 <td class="td-m">${item.unit_price != null ? fmtCur(item.unit_price) : '-'}</td>
