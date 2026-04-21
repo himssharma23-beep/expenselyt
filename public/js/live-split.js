@@ -173,6 +173,9 @@
     const row = map.get(key);
     if (extra.linked_user_id && !row.linked_user_id) row.linked_user_id = extra.linked_user_id;
     if (extra.friend_id && !row.friend_id) row.friend_id = extra.friend_id;
+    if (extra.linked_user_avatar_url && !row.linked_user_avatar_url) row.linked_user_avatar_url = extra.linked_user_avatar_url;
+    if (extra.linked_user_display_name && !row.linked_user_display_name) row.linked_user_display_name = extra.linked_user_display_name;
+    if (extra.linked_user_username && !row.linked_user_username) row.linked_user_username = extra.linked_user_username;
     return row;
   }
   function ensureLinkedRow(map, linkedUserId, name, extra = {}) {
@@ -184,6 +187,9 @@
     const row = map.get(key);
     row.linked_user_id = uid;
     if (extra.friend_id && !row.friend_id) row.friend_id = extra.friend_id;
+    if (extra.linked_user_avatar_url && !row.linked_user_avatar_url) row.linked_user_avatar_url = extra.linked_user_avatar_url;
+    if (extra.linked_user_display_name && !row.linked_user_display_name) row.linked_user_display_name = extra.linked_user_display_name;
+    if (extra.linked_user_username && !row.linked_user_username) row.linked_user_username = extra.linked_user_username;
     if ((!row.name || String(row.name).trim().length < 2) && safeName) row.name = safeName;
     return row;
   }
@@ -236,8 +242,15 @@
     appFriends.forEach((friend) => {
       const linkedUserId = Number(friend?.linked_user_id || 0);
       const preferredName = String(friend?.linked_user_display_name || friend?.linked_user_username || friend?.name || '').trim();
-      if (linkedUserId > 0) ensureLinkedRow(map, linkedUserId, preferredName, { friend_id: Number(friend.id) || null });
-      else ensureRow(map, friend.name, { linked_user_id: friend.linked_user_id || null, friend_id: Number(friend.id) || null });
+      const extra = {
+        friend_id: Number(friend.id) || null,
+        linked_user_id: friend.linked_user_id || null,
+        linked_user_avatar_url: friend.linked_user_avatar_url || '',
+        linked_user_display_name: friend.linked_user_display_name || '',
+        linked_user_username: friend.linked_user_username || '',
+      };
+      if (linkedUserId > 0) ensureLinkedRow(map, linkedUserId, preferredName, extra);
+      else ensureRow(map, friend.name, extra);
     });
 
     (groups || []).forEach((group) => {
@@ -287,10 +300,20 @@
           || ''
         ).trim();
         const row = (linkedFriend && normalizedLinkedFriendUserId > 0)
-          ? ensureLinkedRow(map, normalizedLinkedFriendUserId, preferredLinkedName, { friend_id: Number(linkedFriend.id) || null })
+          ? ensureLinkedRow(map, normalizedLinkedFriendUserId, preferredLinkedName, {
+              friend_id: Number(linkedFriend.id) || null,
+              linked_user_avatar_url: linkedFriend?.linked_user_avatar_url || fallbackFriendByUser?.linked_user_avatar_url || '',
+              linked_user_display_name: linkedFriend?.linked_user_display_name || fallbackFriendByUser?.linked_user_display_name || '',
+              linked_user_username: linkedFriend?.linked_user_username || fallbackFriendByUser?.linked_user_username || '',
+            })
           : linkedByUser
             || (fallbackFriendByUser
-              ? ensureLinkedRow(map, splitLinkedUserId, preferredLinkedName, { friend_id: Number(fallbackFriendByUser?.id) || null })
+              ? ensureLinkedRow(map, splitLinkedUserId, preferredLinkedName, {
+                  friend_id: Number(fallbackFriendByUser?.id) || null,
+                  linked_user_avatar_url: fallbackFriendByUser?.linked_user_avatar_url || '',
+                  linked_user_display_name: fallbackFriendByUser?.linked_user_display_name || '',
+                  linked_user_username: fallbackFriendByUser?.linked_user_username || '',
+                })
               : findExistingLinkedRowByName(map, friendName));
         if (!row) return;
         const rowNameKey = String(row?.name || '').trim().toLowerCase();
@@ -390,6 +413,9 @@
         ).trim();
         const row = ensureLinkedRow(map, participantLinkedId, preferredName, {
           friend_id: Number(linkedFriend?.id || participant?.friend_id || 0) || null,
+          linked_user_avatar_url: linkedFriend?.linked_user_avatar_url || '',
+          linked_user_display_name: linkedFriend?.linked_user_display_name || '',
+          linked_user_username: linkedFriend?.linked_user_username || '',
         });
         if (!row) return;
         if (isSelfLinkedEntity(row)) return;
@@ -442,6 +468,9 @@
             amount: 0,
             linked_user_id: linkedUserId || null,
             friend_id: Number(friend.id) || null,
+            linked_user_avatar_url: friend.linked_user_avatar_url || '',
+            linked_user_display_name: friend.linked_user_display_name || '',
+            linked_user_username: friend.linked_user_username || '',
           });
         }
       });
