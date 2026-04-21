@@ -3030,6 +3030,81 @@ function normalizeTripExpenseType(value) {
   return normalizeText(value || 'Other', 'Expense type', 60);
 }
 
+function normalizeCoreCurrencyCode(code, fallback = 'INR') {
+  const raw = String(code || fallback).trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(raw)) throw validationError('Currency code is invalid');
+  return raw;
+}
+
+async function getUserCurrencyCode(userId, client = null) {
+  const run = client || { query };
+  const result = await run.query('SELECT currency_code FROM users WHERE id = $1 LIMIT 1', [userId]);
+  return normalizeCoreCurrencyCode(result.rows[0]?.currency_code || 'INR');
+}
+
+async function getAdminCurrencyRates() {
+  const result = await query(
+    `SELECT currency_code, rate_to_inr, is_active, updated_at
+     FROM currency_rates
+     ORDER BY currency_code ASC`
+  );
+  return result.rows.map((row) => ({
+    currency_code: normalizeCoreCurrencyCode(row.currency_code),
+    rate_to_inr: Number(row.rate_to_inr),
+    is_active: !!row.is_active,
+    updated_at: row.updated_at,
+  }));
+}
+
+async function upsertAdminCurrencyRate(data = {}) {
+  const currencyCode = normalizeCoreCurrencyCode(data.currency_code);
+  const rateToInr = Number(data.rate_to_inr);
+  if (!Number.isFinite(rateToInr) || rateToInr <= 0) throw validationError('Rate to INR must be greater than 0');
+  const isActive = data.is_active === undefined ? true : !!data.is_active;
+  await query(
+    `INSERT INTO currency_rates (currency_code, rate_to_inr, is_active, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (currency_code) DO UPDATE
+     SET rate_to_inr = EXCLUDED.rate_to_inr,
+         is_active = EXCLUDED.is_active,
+         updated_at = NOW()`,
+    [currencyCode, Math.round(rateToInr * 1000000) / 1000000, isActive]
+  );
+  return { success: true };
+}
+
+async function deleteAdminCurrencyRate(currencyCode) {
+  const code = normalizeCoreCurrencyCode(currencyCode);
+  if (code === 'INR') throw validationError('INR cannot be deleted');
+  await query('DELETE FROM currency_rates WHERE currency_code = $1', [code]);
+}
+
+async function getAvailableCurrencyRates(userId) {
+  const userCurrencyCode = await getUserCurrencyCode(userId);
+  const rows = await getAdminCurrencyRates();
+  const activeRows = rows.filter((row) => row.is_active || row.currency_code === userCurrencyCode || row.currency_code === 'INR');
+  const rateMap = new Map(activeRows.map((row) => [row.currency_code, Number(row.rate_to_inr)]));
+  if (!rateMap.has('INR')) rateMap.set('INR', 1);
+  if (!rateMap.has(userCurrencyCode)) {
+    if (userCurrencyCode === 'INR') rateMap.set('INR', 1);
+    else rateMap.set(userCurrencyCode, 1);
+  }
+  const defaultRate = Number(rateMap.get(userCurrencyCode) || 1);
+  return {
+    base_currency_code: 'INR',
+    user_currency_code: userCurrencyCode,
+    currencies: Array.from(rateMap.entries())
+      .map(([currencyCode, rateToInr]) => ({
+        currency_code: currencyCode,
+        rate_to_inr: rateToInr,
+        conversion_rate_to_default: currencyCode === userCurrencyCode
+          ? 1
+          : Math.round((rateToInr / defaultRate) * 1000000) / 1000000,
+      }))
+      .sort((a, b) => a.currency_code.localeCompare(b.currency_code)),
+  };
+}
+
 function mapTripExpenseRow(row) {
   const quantity = row.quantity == null ? null : num(row.quantity);
   const unitPrice = row.unit_price == null ? null : num(row.unit_price);
@@ -3042,6 +3117,9 @@ function mapTripExpenseRow(row) {
     quantity,
     unit_price: unitPrice,
     amount,
+    original_currency_code: row.original_currency_code || null,
+    original_amount: row.original_amount == null ? null : num(row.original_amount),
+    conversion_rate: row.conversion_rate == null ? null : Number(row.conversion_rate),
     expense_date: row.expense_date,
     notes: row.notes || null,
     created_at: row.created_at,
@@ -3049,20 +3127,40 @@ function mapTripExpenseRow(row) {
   };
 }
 
-function normalizeTripExpensePayload(data = {}) {
+function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
   const details = normalizeText(data.details || data.item_name, 'Expense detail', 160);
   const expenseType = normalizeTripExpenseType(data.expense_type);
   const expenseDate = normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date');
+  const defaultCurrencyCode = normalizeCoreCurrencyCode(userCurrencyCode || 'INR');
+  const originalCurrencyCode = normalizeCoreCurrencyCode(data.original_currency_code || defaultCurrencyCode);
+  const originalAmount = data.original_amount === undefined || data.original_amount === null || data.original_amount === ''
+    ? null
+    : normalizeAmount(data.original_amount, 'Original amount');
+  const conversionRate = data.conversion_rate === undefined || data.conversion_rate === null || data.conversion_rate === ''
+    ? null
+    : Number(data.conversion_rate);
+  if (conversionRate != null && (!Number.isFinite(conversionRate) || conversionRate <= 0)) {
+    throw validationError('Conversion rate must be greater than 0');
+  }
   const quantity = data.quantity === undefined || data.quantity === null || data.quantity === '' ? null : Number(data.quantity);
   if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) throw validationError('Quantity must be greater than 0');
   const unitPrice = data.unit_price === undefined || data.unit_price === null || data.unit_price === '' ? null : Number(data.unit_price);
   if (unitPrice != null && (!Number.isFinite(unitPrice) || unitPrice < 0)) throw validationError('Price must be 0 or more');
+  const derivedAmount = originalAmount != null
+    ? originalCurrencyCode === defaultCurrencyCode
+      ? originalAmount
+      : (conversionRate != null ? originalAmount * conversionRate : null)
+    : null;
+  const amountInput = data.amount !== undefined && data.amount !== null && data.amount !== ''
+    ? data.amount
+    : (derivedAmount != null ? derivedAmount : (quantity != null && unitPrice != null ? quantity * unitPrice : 0));
   const amount = normalizeAmount(
-    data.amount !== undefined && data.amount !== null && data.amount !== ''
-      ? data.amount
-      : (quantity != null && unitPrice != null ? quantity * unitPrice : 0),
+    amountInput,
     'Expense total'
   );
+  if (originalCurrencyCode !== defaultCurrencyCode && originalAmount != null && conversionRate == null) {
+    throw validationError(`Conversion rate is required for ${originalCurrencyCode} expenses`);
+  }
   const paidByKey = normalizeTripMemberKeyValue(data.paid_by_key || 'self') || 'self';
   const paidByName = normalizeText(data.paid_by_name || 'You', 'Paid by', 80);
   const splitMode = normalizeTripSplitModeValue(data.split_mode || 'equal');
@@ -3086,6 +3184,11 @@ function normalizeTripExpensePayload(data = {}) {
     quantity: quantity == null ? 1 : Math.round(quantity * 100) / 100,
     unit_price: unitPrice == null ? amount : Math.round(unitPrice * 100) / 100,
     amount,
+    original_currency_code: originalCurrencyCode,
+    original_amount: originalAmount == null ? amount : originalAmount,
+    conversion_rate: originalCurrencyCode === defaultCurrencyCode
+      ? 1
+      : Math.round((conversionRate || 0) * 1000000) / 1000000,
     expense_date: expenseDate,
     notes: normalizeOptionalText(data.notes, 300),
     paid_by_key: paidByKey,
@@ -3225,6 +3328,9 @@ async function getTripById(userId, tripId) {
       quantity: expense.quantity == null ? null : num(expense.quantity),
       unit_price: expense.unit_price == null ? null : num(expense.unit_price),
       amount: num(expense.amount),
+      original_currency_code: expense.original_currency_code || null,
+      original_amount: expense.original_amount == null ? null : num(expense.original_amount),
+      conversion_rate: expense.conversion_rate == null ? null : Number(expense.conversion_rate),
       expense_date: expense.expense_date,
       notes: expense.notes || null,
       created_at: expense.created_at,
@@ -3320,16 +3426,17 @@ async function deleteTrip(userId, id) {
 
 async function addTripExpense(userId, tripId, data) {
   await _assertTripOwner(userId, tripId);
-  const payload = normalizeTripExpensePayload(data);
   return withTransaction(async (client) => {
+    const userCurrencyCode = await getUserCurrencyCode(userId, client);
+    const payload = normalizeTripExpensePayload(data, userCurrencyCode);
     const expR = await client.query(
       `INSERT INTO trip_expenses (
          trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode,
-         expense_type, quantity, unit_price, notes, updated_at
+         expense_type, quantity, unit_price, notes, original_currency_code, original_amount, conversion_rate, updated_at
         )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-       RETURNING id`,
-      [tripId, payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes]
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+        RETURNING id`,
+      [tripId, payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, payload.original_currency_code, payload.original_amount, payload.conversion_rate]
     );
     const expenseId = Number(expR.rows[0].id);
     for (const split of payload.splits) {
@@ -3348,8 +3455,9 @@ async function updateTripExpense(userId, expenseId, data) {
   const exp = expR.rows[0];
   if (!exp) throw new Error('Not found');
   await _assertTripOwner(userId, exp.trip_id);
-  const payload = normalizeTripExpensePayload(data);
   await withTransaction(async (client) => {
+    const userCurrencyCode = await getUserCurrencyCode(userId, client);
+    const payload = normalizeTripExpensePayload(data, userCurrencyCode);
     await client.query(
       `UPDATE trip_expenses
        SET paid_by_key = $1,
@@ -3362,9 +3470,12 @@ async function updateTripExpense(userId, expenseId, data) {
            quantity = $8,
            unit_price = $9,
            notes = $10,
+           original_currency_code = $11,
+           original_amount = $12,
+           conversion_rate = $13,
            updated_at = NOW()
-       WHERE id = $11`,
-      [payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, expenseId]
+       WHERE id = $14`,
+      [payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, payload.original_currency_code, payload.original_amount, payload.conversion_rate, expenseId]
     );
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
     for (const split of payload.splits) {
@@ -4229,6 +4340,10 @@ module.exports = {
   getDashboardData,
   getPublicSiteStats,
   getAdminExpenseStats,
+  getAdminCurrencyRates,
+  upsertAdminCurrencyRate,
+  deleteAdminCurrencyRate,
+  getAvailableCurrencyRates,
   upsertPublicSiteMetrics,
   getReportYears,
   getReportMonths,

@@ -2169,7 +2169,22 @@ router.delete('/trips/:id', async (req, res) => {
 
 router.post('/trips/:id/expenses', async (req, res) => {
   try {
-    const { expense_type, details, quantity, unit_price, amount, expense_date, notes, paid_by_key, paid_by_name, split_mode, splits } = req.body;
+    const {
+      expense_type,
+      details,
+      quantity,
+      unit_price,
+      amount,
+      original_currency_code,
+      original_amount,
+      conversion_rate,
+      expense_date,
+      notes,
+      paid_by_key,
+      paid_by_name,
+      split_mode,
+      splits,
+    } = req.body;
     if (!expense_type || !details) return res.status(400).json({ error: 'Expense type and detail are required' });
     const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, {
       expense_type,
@@ -2177,6 +2192,9 @@ router.post('/trips/:id/expenses', async (req, res) => {
       quantity,
       unit_price,
       amount,
+      original_currency_code,
+      original_amount,
+      conversion_rate,
       expense_date,
       notes,
       paid_by_key,
@@ -2350,13 +2368,31 @@ router.post('/trips/import-excel', withUpload, async (req, res) => {
 
 router.put('/trips/:id/expenses/:eid', async (req, res) => {
   try {
-    const { expense_type, details, quantity, unit_price, amount, expense_date, notes, paid_by_key, paid_by_name, split_mode, splits } = req.body;
+    const {
+      expense_type,
+      details,
+      quantity,
+      unit_price,
+      amount,
+      original_currency_code,
+      original_amount,
+      conversion_rate,
+      expense_date,
+      notes,
+      paid_by_key,
+      paid_by_name,
+      split_mode,
+      splits,
+    } = req.body;
     await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, {
       expense_type,
       details,
       quantity,
       unit_price,
       amount,
+      original_currency_code,
+      original_amount,
+      conversion_rate,
       expense_date,
       notes,
       paid_by_key,
@@ -2366,6 +2402,15 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
     }));
     res.json({ success: true });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.get('/currencies', async (req, res) => {
+  try {
+    const data = await Promise.resolve(getCoreDb().getAvailableCurrencyRates(req.session.userId));
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
 });
 
 router.delete('/trips/:id/expenses', async (req, res) => {
@@ -3037,6 +3082,42 @@ router.get('/admin/public-stats', requireAdmin, async (req, res) => {
     res.json({ stats });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/currencies', requireAdmin, async (_req, res) => {
+  try {
+    const currencies = await Promise.resolve(getCoreDb().getAdminCurrencyRates());
+    res.json({ currencies });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/currencies', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().upsertAdminCurrencyRate(req.body || {}));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/admin/currencies/:code', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({ ...(req.body || {}), currency_code: req.params.code }));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/admin/currencies/:code', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteAdminCurrencyRate(req.params.code));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

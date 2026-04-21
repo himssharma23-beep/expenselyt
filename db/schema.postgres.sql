@@ -401,7 +401,21 @@ ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS expense_type TEXT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS quantity NUMERIC(14,2);
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS unit_price NUMERIC(14,2);
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_currency_code TEXT;
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_amount NUMERIC(14,2);
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS conversion_rate NUMERIC(14,6);
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS currency_rates (
+  currency_code TEXT PRIMARY KEY,
+  rate_to_inr NUMERIC(14,6) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO currency_rates (currency_code, rate_to_inr, is_active)
+VALUES ('INR', 1, TRUE)
+ON CONFLICT (currency_code) DO NOTHING;
 UPDATE trip_expenses
 SET expense_type = COALESCE(expense_type, 'Other')
 WHERE expense_type IS NULL;

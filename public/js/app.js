@@ -321,7 +321,7 @@ function showProfileSettings() {
       <label class="fl">Phone Number<input class="fi" id="pfMobile" value="${escHtml(_currentUser.mobile || '')}" placeholder="+91 9876543210"></label>
       <label class="fl">Currency
         <select class="fi" id="pfCurrency">
-          ${['INR','USD','EUR','GBP','AED','CAD','AUD','SGD','JPY','CNY'].map(code => `<option value="${code}" ${currencyCode===code?'selected':''}>${code}</option>`).join('')}
+          ${['INR','USD','EUR','GBP','AED','CAD','AUD','SGD','JPY','CNY','THB'].map(code => `<option value="${code}" ${currencyCode===code?'selected':''}>${code}</option>`).join('')}
         </select>
       </label>
       <label class="fl">Profile Picture URL<input class="fi" id="pfAvatar" value="${escHtml(_currentUser.avatar_url || '')}" placeholder="https://..."></label>
@@ -4015,6 +4015,8 @@ let _tripFinalizeLiveFriends = [];
 let _tripBulkSel = new Set();
 let _tripBulkMode = 'equal';
 let _tripBulkValues = {};
+let _tripCurrencies = null;
+let _adminCurrencies = [];
 const TRIP_BULK_SPLIT_MODES = SPLIT_MODES.filter((mode) => mode.key !== 'amount');
 
 function _findTripExpenseById(expenseId) {
@@ -4388,7 +4390,20 @@ function tripBulkSetSplitMode(mode) {
 }
 
 function tripHandleAmountChange() {
-  const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
+  const totalInput = document.getElementById('teAmount') || document.getElementById('tripExpenseAmount');
+  const amt = parseFloat(totalInput?.value || 0);
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const originalCurrencyInput = document.getElementById('tripExpenseOrigCurrency');
+  const originalAmountInput = document.getElementById('tripExpenseOrigAmount');
+  const rateInput = document.getElementById('tripExpenseConversionRateView');
+  if (originalCurrencyInput && originalAmountInput) {
+    if ((originalCurrencyInput.value || defaultCurrencyCode) === defaultCurrencyCode) {
+      if (rateInput) rateInput.value = formatTripCurrencyHint(defaultCurrencyCode);
+      if (totalInput) originalAmountInput.value = totalInput.value || '';
+    } else if (rateInput) {
+      rateInput.value = formatTripCurrencyHint(originalCurrencyInput.value || defaultCurrencyCode);
+    }
+  }
   const people = _tripSelectedPeople();
   if (_tripExpMode !== 'equal') {
     _tripExpValues = {};
@@ -5969,9 +5984,110 @@ function _resolveTripExpenseMemberUiKey(rawKey, rawName, members = []) {
   return byKey ? String(_memberKey(byKey)) : String(rawKey || '');
 }
 
-function showTripExpenseModal(expenseId = null) {
+async function ensureTripCurrenciesLoaded(force = false) {
+  if (_tripCurrencies && !force) return _tripCurrencies;
+  const result = await api('/api/currencies');
+  if (result?.error) {
+    toast(result.error, 'error');
+    _tripCurrencies = [];
+    return _tripCurrencies;
+  }
+  _tripCurrencies = Array.isArray(result?.currencies) ? result.currencies : [];
+  return _tripCurrencies;
+}
+
+function getTripCurrencyMeta(currencyCode) {
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const currencies = Array.isArray(_tripCurrencies) ? _tripCurrencies : [];
+  return currencies.find((item) => String(item.currency_code || '').toUpperCase() === String(currencyCode || defaultCurrencyCode).toUpperCase())
+    || currencies.find((item) => String(item.currency_code || '').toUpperCase() === defaultCurrencyCode.toUpperCase())
+    || {
+      currency_code: defaultCurrencyCode,
+      conversion_rate_to_default: 1,
+      rate_to_inr: defaultCurrencyCode === 'INR' ? 1 : null,
+    };
+}
+
+function formatTripCurrencyHint(currencyCode) {
+  return formatTripCurrencyHintWithRate(currencyCode, getTripCurrencyMeta(currencyCode)?.conversion_rate_to_default || 0);
+}
+
+function formatTripCurrencyHintWithRate(currencyCode, rateOverride) {
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const meta = getTripCurrencyMeta(currencyCode);
+  const rate = parseFloat(rateOverride || meta?.conversion_rate_to_default || 0);
+  if (!Number.isFinite(rate) || rate <= 0) return '';
+  if (String(currencyCode || defaultCurrencyCode).toUpperCase() === defaultCurrencyCode.toUpperCase()) {
+    return `Saved in ${defaultCurrencyCode}.`;
+  }
+  return `1 ${meta.currency_code} = ${String(rate.toFixed(6)).replace(/\.?0+$/, '')} ${defaultCurrencyCode}`;
+}
+
+function getTripExpenseEffectiveRate(currencyCode) {
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const selectedCurrency = String(currencyCode || defaultCurrencyCode).toUpperCase();
+  if (selectedCurrency === defaultCurrencyCode.toUpperCase()) return 1;
+  return parseFloat(getTripCurrencyMeta(selectedCurrency)?.conversion_rate_to_default || 0);
+}
+
+function recalcTripExpenseConvertedTotal() {
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const currencyInput = document.getElementById('tripExpenseOrigCurrency');
+  const originalAmountInput = document.getElementById('tripExpenseOrigAmount');
+  const totalInput = document.getElementById('tripExpenseAmount');
+  const rateInput = document.getElementById('tripExpenseConversionRateView');
+  const rateWrap = document.getElementById('tripExpenseRateWrap');
+  if (!currencyInput || !originalAmountInput || !totalInput) return;
+  const originalCurrencyCode = currencyInput.value || defaultCurrencyCode;
+  const originalAmountRaw = originalAmountInput.value;
+  const originalAmount = parseFloat(originalAmountRaw || 0);
+  const conversionRate = getTripExpenseEffectiveRate(originalCurrencyCode);
+  if (rateWrap) rateWrap.style.display = originalCurrencyCode === defaultCurrencyCode ? 'none' : '';
+  if (rateInput) rateInput.value = formatTripCurrencyHintWithRate(originalCurrencyCode, conversionRate);
+  if (originalAmountRaw === '') {
+    totalInput.value = '';
+    return;
+  }
+  if (originalCurrencyCode === defaultCurrencyCode) {
+    totalInput.value = (Math.round(originalAmount * 100) / 100).toFixed(2);
+    return;
+  }
+  if (conversionRate > 0) {
+    totalInput.value = (Math.round(originalAmount * conversionRate * 100) / 100).toFixed(2);
+  }
+}
+
+async function showTripExpenseModal(expenseId = null) {
   if (!_tripDetail) return;
+  await ensureTripCurrenciesLoaded();
   const expense = expenseId ? _findTripExpenseById(expenseId) : null;
+  const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
+  const originalCurrencyCode = expense?.original_currency_code || defaultCurrencyCode;
+  const originalAmount = expense?.original_amount ?? expense?.amount ?? '';
+  const currentConversionRate = getTripExpenseEffectiveRate(originalCurrencyCode);
+  const quantityValue = Number(expense?.quantity ?? 1);
+  const normalizedQuantity = Number.isFinite(quantityValue) && quantityValue > 0 ? quantityValue : 1;
+  const derivedUnitPrice = originalAmount !== '' && Number.isFinite(Number(originalAmount)) && normalizedQuantity > 0
+    ? (Math.round((Number(originalAmount) / normalizedQuantity) * 100) / 100)
+    : null;
+  const displayUnitPrice = derivedUnitPrice != null
+    ? derivedUnitPrice
+    : (expense?.unit_price ?? expense?.amount ?? '');
+  const convertedTotal = originalAmount !== ''
+    ? (() => {
+        const rate = currentConversionRate;
+        if (String(originalCurrencyCode).toUpperCase() === defaultCurrencyCode.toUpperCase()) {
+          return Math.round(Number(originalAmount) * 100) / 100;
+        }
+        if (Number.isFinite(rate) && rate > 0) {
+          return Math.round(Number(originalAmount) * rate * 100) / 100;
+        }
+        return expense?.amount ?? '';
+      })()
+    : (expense?.amount ?? '');
+  const currencyOptions = (Array.isArray(_tripCurrencies) && _tripCurrencies.length ? _tripCurrencies : [{ currency_code: defaultCurrencyCode }])
+    .map((item) => String(item.currency_code || '').toUpperCase())
+    .filter((code, index, arr) => code && arr.indexOf(code) === index);
   const members = _tripDetail.members || [];
   const fallbackPaidByKey = expense
     ? _resolveTripExpenseMemberUiKey(expense?.paid_by_key, expense?.paid_by_name, members)
@@ -6018,13 +6134,24 @@ function showTripExpenseModal(expenseId = null) {
         <input class="fi" id="tripExpenseDetails" placeholder="Hotel advance, petrol, dinner..." value="${escHtml(expense?.details || '')}">
       </label>
       <label class="fl">Quantity
-        <input class="fi" id="tripExpenseQty" type="number" min="0" step="0.01" value="${expense?.quantity ?? 1}" oninput="tripExpenseAutoTotal()">
+        <input class="fi" id="tripExpenseQty" type="number" min="0" step="0.01" value="${normalizedQuantity}" oninput="tripExpenseAutoTotal()">
       </label>
       <label class="fl">Price
-        <input class="fi" id="tripExpensePrice" type="number" min="0" step="0.01" value="${expense?.unit_price ?? expense?.amount ?? ''}" oninput="tripExpenseAutoTotal()">
+        <input class="fi" id="tripExpensePrice" type="number" min="0" step="0.01" value="${displayUnitPrice}" oninput="tripExpenseAutoTotal()">
       </label>
       <label class="fl">Total *
-        <input class="fi" id="tripExpenseAmount" type="number" min="0" step="0.01" value="${expense?.amount ?? ''}" oninput="tripHandleAmountChange()">
+        <input class="fi" id="tripExpenseAmount" type="number" min="0" step="0.01" value="${convertedTotal}" readonly>
+      </label>
+      <label class="fl">Original Currency
+        <select class="fi" id="tripExpenseOrigCurrency" onchange="tripExpenseCurrencyChanged()">
+          ${currencyOptions.map((code) => `<option value="${code}" ${code === originalCurrencyCode ? 'selected' : ''}>${code}</option>`).join('')}
+        </select>
+      </label>
+      <label class="fl">Original Amount
+        <input class="fi" id="tripExpenseOrigAmount" type="number" min="0" step="0.01" value="${originalAmount}" oninput="tripExpenseCurrencyChanged()">
+      </label>
+      <label class="fl" id="tripExpenseRateWrap">Conversion
+        <input class="fi" id="tripExpenseConversionRateView" type="text" value="${escHtml(formatTripCurrencyHintWithRate(originalCurrencyCode, currentConversionRate))}" readonly>
       </label>
       <label class="fl">Paid By
         <select class="fi" id="tripExpensePaidBy" onchange="tripExpenseChangePaidBy(this.value)">
@@ -6051,15 +6178,26 @@ function showTripExpenseModal(expenseId = null) {
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>
   `);
+  tripExpenseCurrencyChanged();
   tripUpdateSplitInputs();
 }
 
 function tripExpenseAutoTotal() {
   const qty = parseFloat(document.getElementById('tripExpenseQty')?.value || 0);
   const price = parseFloat(document.getElementById('tripExpensePrice')?.value || 0);
+  const originalAmountInput = document.getElementById('tripExpenseOrigAmount');
   const totalInput = document.getElementById('tripExpenseAmount');
   if (!totalInput) return;
-  if (qty > 0 && price >= 0) totalInput.value = (Math.round(qty * price * 100) / 100).toFixed(2);
+  if (qty > 0 && price >= 0) {
+    const originalTotal = (Math.round(qty * price * 100) / 100).toFixed(2);
+    if (originalAmountInput) originalAmountInput.value = originalTotal;
+  }
+  recalcTripExpenseConvertedTotal();
+  tripHandleAmountChange();
+}
+
+function tripExpenseCurrencyChanged() {
+  recalcTripExpenseConvertedTotal();
   tripHandleAmountChange();
 }
 
@@ -6112,6 +6250,9 @@ async function saveTripExpenseModal(expenseId = null) {
     quantity: document.getElementById('tripExpenseQty')?.value || null,
     unit_price: document.getElementById('tripExpensePrice')?.value || null,
     amount: amountValue,
+    original_currency_code: document.getElementById('tripExpenseOrigCurrency')?.value || (_currentUser?.currency_code || 'INR'),
+    original_amount: document.getElementById('tripExpenseOrigAmount')?.value || amountValue,
+    conversion_rate: getTripExpenseEffectiveRate(document.getElementById('tripExpenseOrigCurrency')?.value || (_currentUser?.currency_code || 'INR')) || 1,
     notes: document.getElementById('tripExpenseNotes')?.value.trim() || null,
     paid_by_key: _tripExpPaidBy,
     paid_by_name: payer.member_name,
@@ -6545,7 +6686,7 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | ai
+let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | ai | currencies
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
@@ -6620,12 +6761,13 @@ async function loadAdmin() {
   else if (adminSection === 'public_stats') await loadAdminPublicStats();
   else if (adminSection === 'plans') await loadAdminPlans();
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
+  else if (adminSection === 'currencies') await loadAdminCurrencies();
   else if (adminSection === 'notifications') await loadAdminNotifications();
   else if (adminSection === 'ai') await loadAdminAiLearning();
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['notifications','Notifications'], ['ai','AI Learning']];
+  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['currencies','Currencies'], ['notifications','Notifications'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -6635,6 +6777,122 @@ function renderAdminShell() {
       <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
+}
+
+async function loadAdminCurrencies() {
+  const result = await api('/api/admin/currencies');
+  if (result?.error) {
+    toast(result.error, 'error');
+    _adminCurrencies = [];
+  } else {
+    _adminCurrencies = Array.isArray(result?.currencies) ? result.currencies : [];
+  }
+  renderAdminCurrencies();
+}
+
+function renderAdminCurrencies() {
+  const rows = Array.isArray(_adminCurrencies) ? [..._adminCurrencies] : [];
+  rows.sort((a, b) => String(a.currency_code || '').localeCompare(String(b.currency_code || '')));
+  const html = rows.length
+    ? rows.map((item) => `
+        <tr>
+          <td style="padding:12px">${escHtml(item.currency_code || '')}</td>
+          <td style="padding:12px;text-align:right">${Number(item.rate_to_inr || 0).toFixed(6)}</td>
+          <td style="padding:12px">${item.is_active ? '<span style="color:var(--ok)">Active</span>' : '<span style="color:var(--t3)">Inactive</span>'}</td>
+          <td style="padding:12px">${fmtDate(item.updated_at)}</td>
+          <td style="padding:12px;text-align:right;white-space:nowrap">
+            <button class="btn btn-s btn-sm" onclick="openAdminCurrencyModal('${escHtml(item.currency_code || '')}')">Edit</button>
+            ${String(item.currency_code || '').toUpperCase() === 'INR' ? '' : `<button class="btn btn-g btn-sm" style="margin-left:8px" onclick="deleteAdminCurrency('${escHtml(item.currency_code || '')}')">Delete</button>`}
+          </td>
+        </tr>`)
+      .join('')
+    : `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--t3)">No currencies added yet.</td></tr>`;
+  document.getElementById('adminContent').innerHTML = `
+    <div class="card" style="padding:18px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <div class="card-title">Currency Master</div>
+          <div style="font-size:12px;color:var(--t3)">Manage currency rates once here. Trip expense forms will use these saved rates automatically.</div>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="openAdminCurrencyModal()">Add Currency</button>
+      </div>
+      <div style="overflow:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:640px">
+          <thead>
+            <tr style="background:var(--bg2);color:var(--t2)">
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Currency</th>
+              <th style="text-align:right;padding:10px 12px;font-size:12px">Rate To INR</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Status</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Updated</th>
+              <th style="text-align:right;padding:10px 12px;font-size:12px">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${html}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function openAdminCurrencyModal(currencyCode = '') {
+  const item = (Array.isArray(_adminCurrencies) ? _adminCurrencies : []).find((entry) => String(entry.currency_code || '').toUpperCase() === String(currencyCode || '').toUpperCase()) || null;
+  openModal(item ? `Edit Currency: ${item.currency_code}` : 'Add Currency', `
+    <div class="fg">
+      <label class="fl">Currency Code *
+        <input class="fi" id="adminCurrencyCode" value="${escHtml(item?.currency_code || '')}" placeholder="USD" ${item ? 'readonly' : ''}>
+      </label>
+      <label class="fl">Rate To INR *
+        <input class="fi" id="adminCurrencyRate" type="number" min="0" step="0.000001" value="${item?.rate_to_inr ?? ''}" placeholder="83.500000">
+      </label>
+      <label class="fl">Status
+        <select class="fi" id="adminCurrencyActive">
+          <option value="1" ${item?.is_active !== false ? 'selected' : ''}>Active</option>
+          <option value="0" ${item?.is_active === false ? 'selected' : ''}>Inactive</option>
+        </select>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveAdminCurrency('${escHtml(item?.currency_code || '')}')">${item ? 'Update' : 'Add'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function saveAdminCurrency(existingCode = '') {
+  const currencyCode = String(document.getElementById('adminCurrencyCode')?.value || existingCode || '').trim().toUpperCase();
+  const rateToInr = parseFloat(document.getElementById('adminCurrencyRate')?.value || 0);
+  const isActive = String(document.getElementById('adminCurrencyActive')?.value || '1') === '1';
+  if (!/^[A-Z]{3}$/.test(currencyCode)) {
+    toast('Currency code must be a 3-letter code', 'warning');
+    return;
+  }
+  if (!Number.isFinite(rateToInr) || rateToInr <= 0) {
+    toast('Rate to INR must be greater than 0', 'warning');
+    return;
+  }
+  const endpoint = existingCode ? `/api/admin/currencies/${encodeURIComponent(existingCode)}` : '/api/admin/currencies';
+  const result = await api(endpoint, {
+    method: existingCode ? 'PUT' : 'POST',
+    body: { currency_code: currencyCode, rate_to_inr: rateToInr, is_active: isActive ? 1 : 0 },
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  _tripCurrencies = null;
+  closeModal();
+  toast(existingCode ? 'Currency updated' : 'Currency added', 'success');
+  await loadAdminCurrencies();
+}
+
+async function deleteAdminCurrency(currencyCode) {
+  if (!await confirmDialog(`Delete currency "${currencyCode}"?`)) return;
+  const result = await api(`/api/admin/currencies/${encodeURIComponent(currencyCode)}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  _tripCurrencies = null;
+  toast('Currency deleted', 'success');
+  await loadAdminCurrencies();
 }
 
 async function loadAdminExpenseStats() {
