@@ -4231,7 +4231,9 @@ async function cancelLiveSplitInviteForInviter(userId, inviteId) {
 }
 
 async function createShareLink(userId, data) {
-  const token = crypto.randomBytes(20).toString('hex');
+  const token = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(20).toString('hex');
   await query(
     `INSERT INTO share_links (user_id, token, link_type, filters, expires_at)
      VALUES ($1, $2, $3, $4::text, $5)`,
@@ -4257,13 +4259,27 @@ async function getPublicShareData(token) {
   await query('UPDATE share_links SET view_count = view_count + 1 WHERE id = $1', [link.id]);
 
   const filters = link.filters ? JSON.parse(link.filters) : {};
+  const ownerR = await query('SELECT display_name FROM users WHERE id = $1 LIMIT 1', [link.user_id]);
+
+  if (String(link.link_type || '').trim().toLowerCase() === 'trip_detail') {
+    const tripId = Number(filters.trip_id || 0);
+    if (!tripId) return null;
+    const trip = await getTripById(link.user_id, tripId);
+    if (!trip) return null;
+    return {
+      link_type: 'trip_detail',
+      owner_name: ownerR.rows[0]?.display_name || null,
+      filters,
+      trip,
+      expires_at: link.expires_at,
+    };
+  }
+
   let friends = await getFriends(link.user_id);
   if (filters.friend_ids && filters.friend_ids.length > 0) {
     const friendIdSet = new Set(filters.friend_ids.map((value) => String(value)));
     friends = friends.filter((friend) => friendIdSet.has(String(friend.id)));
   }
-
-  const ownerR = await query('SELECT display_name FROM users WHERE id = $1 LIMIT 1', [link.user_id]);
   const friendsWithData = [];
   for (const friend of friends) {
     const params = [link.user_id, friend.id];
@@ -4285,6 +4301,7 @@ async function getPublicShareData(token) {
   }
 
   return {
+    link_type: link.link_type || 'friends',
     owner_name: ownerR.rows[0]?.display_name || null,
     filters,
     friends: friendsWithData,

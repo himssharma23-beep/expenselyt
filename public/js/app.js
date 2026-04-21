@@ -18,6 +18,11 @@ let _expenseCategoryHideTimer = null;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
 let _expenseScanCommonBankId = '';
+let _notificationItems = [];
+let _notificationUnread = 0;
+let _notificationPreferences = { push_enabled: true };
+let _notificationLoading = false;
+let _notificationPrefsLoading = false;
 
 function cleanMojibakeText(value) {
   const raw = String(value ?? '');
@@ -258,6 +263,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (!canAccessTab(tab)) btn.style.display = 'none';
     });
   }
+  if (canAccessTab('notifications')) {
+    refreshNotificationPreferences().catch(() => {});
+    refreshNotificationUnreadCount().catch(() => {});
+  } else {
+    updateNotificationNavBadge();
+  }
   loadTab();
   // Auto-apply recurring entries for the current month (silent, runs in background)
   api('/api/recurring/apply', { method: 'POST' }).then(r => {
@@ -270,6 +281,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     history.replaceState({}, '', '/');
     checkTripInvite(inviteToken);
   }
+});
+
+window.addEventListener('focus', () => {
+  if (!canAccessTab('notifications')) return;
+  refreshNotificationUnreadCount().catch(() => {});
+  if (currentTab === 'notifications') loadNotifications();
 });
 
 function toggleSidebar(forceOpen) {
@@ -480,7 +497,245 @@ function loadTab() {
   else if (currentTab === 'tracker') loadTracker();
   else if (currentTab === 'recurring') loadRecurring();
   else if (currentTab === 'ailookup') loadAiLookup();
+  else if (currentTab === 'notifications') loadNotifications();
   else if (currentTab === 'admin') loadAdmin();
+}
+
+function updateNotificationNavBadge() {
+  const badge = document.getElementById('notifUnreadBadge');
+  if (!badge) return;
+  const unread = Math.max(0, Number(_notificationUnread || 0));
+  if (!unread) {
+    badge.style.display = 'none';
+    badge.textContent = '';
+    return;
+  }
+  badge.style.display = 'inline-flex';
+  badge.textContent = unread > 99 ? '99+' : String(unread);
+}
+
+async function refreshNotificationUnreadCount() {
+  if (!canAccessTab('notifications')) return 0;
+  const result = await api('/api/notifications/unread-count');
+  if (result?.error) return _notificationUnread;
+  _notificationUnread = Math.max(0, Number(result?.unread || 0));
+  updateNotificationNavBadge();
+  if (currentTab === 'notifications') renderNotifications();
+  return _notificationUnread;
+}
+
+async function refreshNotificationPreferences() {
+  if (!canAccessTab('notifications')) return _notificationPreferences;
+  _notificationPrefsLoading = true;
+  if (currentTab === 'notifications') renderNotifications();
+  const result = await api('/api/notifications/preferences');
+  _notificationPrefsLoading = false;
+  if (result?.error) {
+    if (currentTab === 'notifications') renderNotifications();
+    return _notificationPreferences;
+  }
+  _notificationPreferences = result?.preferences || { push_enabled: true };
+  if (currentTab === 'notifications') renderNotifications();
+  return _notificationPreferences;
+}
+
+function getNotificationTargetTab(item) {
+  const screen = String(item?.target_screen || '').trim().toLowerCase();
+  if (!screen) return '';
+  const map = {
+    dashboard: 'dashboard',
+    expenses: 'expenses',
+    friends: 'friends',
+    divide: 'divide',
+    livesplit: 'livesplit',
+    trips: 'trips',
+    reports: 'reports',
+    planner: 'planner',
+    tracker: 'tracker',
+    recurring: 'recurring',
+    emitracker: 'emitracker',
+    creditcards: 'creditcards',
+    banks: 'banks',
+    notifications: 'notifications',
+  };
+  return map[screen] || '';
+}
+
+function renderNotifications() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const unread = Math.max(0, Number(_notificationUnread || 0));
+  const pushEnabled = _notificationPreferences?.push_enabled !== false;
+  const loadingBlock = `
+    <div style="padding:48px 16px;text-align:center;color:var(--t3)">
+      <div style="font-size:14px">Loading notifications...</div>
+    </div>`;
+  const emptyBlock = `
+    <div class="card" style="padding:32px;text-align:center">
+      <div style="font-size:28px;line-height:1">○</div>
+      <div style="font-size:20px;font-weight:800;margin-top:10px">No notifications yet</div>
+      <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-top:8px">Monthly summaries and reminders will appear here once the backend sends them.</div>
+    </div>`;
+  const listBlock = _notificationItems.map((item) => {
+    const isRead = !!item?.is_read;
+    return `
+      <div
+        class="card"
+        onclick="openNotificationItem(${Number(item.id)})"
+        role="button"
+        tabindex="0"
+        onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openNotificationItem(${Number(item.id)}) }"
+        style="width:100%;text-align:left;padding:18px;border:1px solid #e7ebf0;opacity:${isRead ? '0.86' : '1'};cursor:pointer"
+      >
+        <div style="display:flex;align-items:flex-start;gap:12px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(item?.title || 'Notification')}</div>
+            <div style="font-size:14px;line-height:1.6;color:var(--t2);margin-top:8px">${escHtml(item?.body || '')}</div>
+          </div>
+          ${isRead ? '' : '<div style="width:10px;height:10px;border-radius:50%;background:var(--em);margin-top:6px;flex-shrink:0"></div>'}
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #eef1f4;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div style="font-size:12px;color:var(--t3)">${fmtDate(item?.created_at)}</div>
+          <button
+            type="button"
+            class="btn btn-g btn-sm"
+            onclick="event.stopPropagation();toggleNotificationRead(${Number(item.id)})"
+          >${isRead ? 'Mark unread' : 'Mark read'}</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="min-width:0">
+          <div style="font-size:28px;font-weight:800;color:var(--t1)">Notifications</div>
+          <div style="font-size:14px;color:var(--t2);margin-top:4px">${unread ? `${unread} unread update${unread === 1 ? '' : 's'}` : 'Everything is caught up.'}</div>
+        </div>
+        <button class="btn btn-g" onclick="markAllNotificationsRead()" ${unread ? '' : 'disabled'}>Mark all read</button>
+      </div>
+
+      <div class="card" style="padding:16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:16px;font-weight:700;color:var(--t1)">Push notifications</div>
+          <div style="font-size:13px;line-height:1.5;color:var(--t2);margin-top:4px">Turn monthly summaries and reminders on or off for this account.</div>
+        </div>
+        <label style="display:inline-flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--t1)">
+          <input type="checkbox" ${pushEnabled ? 'checked' : ''} ${_notificationPrefsLoading ? 'disabled' : ''} onchange="toggleNotificationPushEnabled(this.checked)">
+          ${_notificationPrefsLoading ? 'Saving...' : (pushEnabled ? 'Enabled' : 'Disabled')}
+        </label>
+      </div>
+
+      <div style="display:grid;gap:12px">
+        ${_notificationLoading ? loadingBlock : (_notificationItems.length ? listBlock : emptyBlock)}
+      </div>
+    </div>`;
+}
+
+async function loadNotifications() {
+  _notificationLoading = true;
+  renderNotifications();
+  const [prefsResult, data] = await Promise.all([
+    api('/api/notifications/preferences'),
+    api('/api/notifications?limit=100&offset=0'),
+  ]);
+  if (prefsResult && !prefsResult.error) {
+    _notificationPreferences = prefsResult.preferences || { push_enabled: true };
+  }
+  _notificationPrefsLoading = false;
+  if (data?.error) {
+    _notificationLoading = false;
+    renderNotifications();
+    toast(data.error || 'Could not load notifications', 'error');
+    return;
+  }
+  _notificationItems = Array.isArray(data?.notifications) ? data.notifications : [];
+  _notificationUnread = Math.max(0, Number(data?.unread || 0));
+  _notificationLoading = false;
+  updateNotificationNavBadge();
+  renderNotifications();
+}
+
+async function toggleNotificationPushEnabled(enabled) {
+  _notificationPrefsLoading = true;
+  renderNotifications();
+  const result = await api('/api/notifications/preferences', {
+    method: 'PUT',
+    body: { push_enabled: !!enabled },
+  });
+  _notificationPrefsLoading = false;
+  if (result?.error) {
+    renderNotifications();
+    toast(result.error || 'Could not update notification preference', 'error');
+    return;
+  }
+  _notificationPreferences = result?.preferences || { push_enabled: !!enabled };
+  renderNotifications();
+  toast('Notification preference updated', 'success');
+}
+
+async function toggleNotificationRead(notificationId) {
+  const id = Number(notificationId);
+  const item = _notificationItems.find((row) => Number(row.id) === id);
+  if (!item) return;
+  const nextRead = !item.is_read;
+  const result = await api(`/api/notifications/${id}/read`, {
+    method: 'PUT',
+    body: { is_read: nextRead },
+  });
+  if (result?.error) {
+    toast(result.error || 'Could not update notification', 'error');
+    return;
+  }
+  const updated = result?.notification || {};
+  _notificationItems = _notificationItems.map((row) => Number(row.id) === id
+    ? { ...row, is_read: !!updated.is_read, read_at: updated.read_at || null }
+    : row);
+  _notificationUnread = Math.max(0, Number(result?.unread || 0));
+  updateNotificationNavBadge();
+  renderNotifications();
+}
+
+async function markAllNotificationsRead() {
+  if (!_notificationUnread) return;
+  const result = await api('/api/notifications/read-all', {
+    method: 'POST',
+    body: { is_read: true },
+  });
+  if (result?.error) {
+    toast(result.error || 'Could not mark all notifications read', 'error');
+    return;
+  }
+  const nowIso = new Date().toISOString();
+  _notificationItems = _notificationItems.map((row) => ({ ...row, is_read: true, read_at: row.read_at || nowIso }));
+  _notificationUnread = Math.max(0, Number(result?.unread || 0));
+  updateNotificationNavBadge();
+  renderNotifications();
+}
+
+async function openNotificationItem(notificationId) {
+  const id = Number(notificationId);
+  const item = _notificationItems.find((row) => Number(row.id) === id);
+  if (!item) return;
+  if (!item.is_read) {
+    const result = await api(`/api/notifications/${id}/read`, {
+      method: 'PUT',
+      body: { is_read: true },
+    });
+    if (!result?.error) {
+      const updated = result?.notification || {};
+      _notificationItems = _notificationItems.map((row) => Number(row.id) === id
+        ? { ...row, is_read: true, read_at: updated.read_at || new Date().toISOString() }
+        : row);
+      _notificationUnread = Math.max(0, Number(result?.unread || 0));
+      updateNotificationNavBadge();
+      renderNotifications();
+    }
+  }
+  const targetTab = getNotificationTargetTab(item);
+  if (targetTab && targetTab !== 'notifications') {
+    switchTab(targetTab);
+  }
 }
 
 async function logout() {
@@ -5516,6 +5771,7 @@ function renderTripList() {
     if (bTime !== aTime) return bTime - aTime;
     return String(a?.destination || a?.name || '').localeCompare(String(b?.destination || b?.name || ''));
   });
+  _tripsFiltered = filtered;
   const totalPages = Math.max(1, Math.ceil(filtered.length / TRIPS_PAGE_SIZE));
   tripsPage = Math.min(tripsPage, totalPages);
   const start = (tripsPage - 1) * TRIPS_PAGE_SIZE;
@@ -5527,6 +5783,12 @@ function renderTripList() {
     <div class="trip-table-actions" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
       <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
         <span class="trip-icon-btn-glyph" style="font-size:13px">&#128065;</span>
+      </button>
+      <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128279;</span>
+      </button>
+      <button class="trip-icon-btn" title="Download trip PDF" aria-label="Download trip PDF" onclick="downloadTripPdfById(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
+        <span class="trip-icon-btn-glyph" style="font-size:10px">PDF</span>
       </button>
       <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
         <span class="trip-icon-btn-glyph" style="font-size:13px">&#8644;</span>
@@ -5584,6 +5846,7 @@ function renderTripList() {
           <div style="font-size:13px;color:var(--t2);margin-top:3px">Track only your own trips, members, distance, and total spend.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">PDF</button>
           <button class="btn btn-s" onclick="showTripExcelImport()">Import Excel</button>
           <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
         </div>
@@ -5634,7 +5897,7 @@ function renderTripList() {
             <table>
               <thead>
                 <tr>
-                  <th style="width:94px;min-width:94px">Actions</th>
+                  <th style="width:156px;min-width:156px">Actions</th>
                   <th>Destination</th>
                   <th>Dates</th>
                   <th class="td-m">Total Expenditure</th>
@@ -5855,6 +6118,8 @@ function renderTripDetail() {
           <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
             <span class="trip-icon-btn-glyph">&#9998;</span>
           </button>
+          <button class="btn btn-s btn-sm" onclick="showTripShareModal(${trip.id})">Share Link</button>
+          <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
           <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
           <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
           ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
@@ -5902,6 +6167,112 @@ function renderTripDetail() {
       }
     });
   }
+}
+
+async function downloadTripPdfById(tripId) {
+  const previousTripId = _selectedTripId;
+  const previousTripDetail = _tripDetail;
+  try {
+    const data = await api(`/api/trips/${tripId}`);
+    if (!data?.trip) {
+      toast(data?.error || 'Trip not found', 'error');
+      return;
+    }
+    _tripDetail = data.trip;
+    downloadTripDetailPdf();
+  } finally {
+    _selectedTripId = previousTripId;
+    _tripDetail = previousTripDetail;
+  }
+}
+
+function parseJsonSafe(value, fallback = null) {
+  try {
+    return value ? JSON.parse(value) : fallback;
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function tripDefaultShareExpiry() {
+  const date = new Date();
+  date.setDate(date.getDate() + 7);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+async function showTripShareModal(tripId = null) {
+  const targetId = tripId || _selectedTripId;
+  if (!targetId) {
+    toast('Open a trip first', 'warning');
+    return;
+  }
+  const trip = (_tripDetail && String(_tripDetail.id) === String(targetId))
+    ? _tripDetail
+    : (_trips.find((row) => String(row.id) === String(targetId)) || null);
+  const linksData = await api('/api/shares');
+  const links = (linksData?.links || []).filter((link) => {
+    const filters = parseJsonSafe(link.filters, {});
+    return String(link.link_type || '').toLowerCase() === 'trip_detail' && String(filters?.trip_id || '') === String(targetId);
+  });
+  const rowsHtml = links.length
+    ? links.map((link) => {
+        const url = `${location.origin}/s/${link.token}`;
+        return `<div style="padding:10px 12px;border:1px solid var(--br);border-radius:10px;background:var(--bg2);margin-bottom:8px">
+          <div style="word-break:break-all;color:var(--em);font-size:12px;margin-bottom:6px">${escHtml(url)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-bottom:8px">Expires: ${link.expires_at ? escHtml(String(link.expires_at)) : 'No expiry'} &nbsp;&middot;&nbsp; Views: ${Number(link.view_count || 0)}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-g btn-sm" onclick="navigator.clipboard.writeText('${url}').then(()=>toast('Copied!','success'))">Copy Link</button>
+            <button class="btn btn-s btn-sm" onclick="deleteTripShareLink(${Number(link.id)}, ${Number(targetId)})">Delete</button>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div style="font-size:12px;color:var(--t3);padding:8px 0">No trip share links yet.</div>';
+  openModal(`Share Trip`, `
+    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Create a unique GUID link for <b>${escHtml(trip?.destination || trip?.name || 'this trip')}</b>. Anyone with the link can open a read-only trip view until the expiry date.</div>
+    <div class="card" style="padding:14px 16px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">Create New Link</div>
+      <div class="fg">
+        <label class="fl">Expiry Date
+          <input class="fi" type="date" id="tripShareExpiry" value="${tripDefaultShareExpiry()}">
+        </label>
+      </div>
+      <div class="fa" style="margin-top:14px">
+        <button class="btn btn-p" onclick="createTripShareLink(${Number(targetId)})">Create Link</button>
+        <button class="btn btn-g" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Existing Links</div>
+    <div id="tripShareLinksList">${rowsHtml}</div>
+  `);
+}
+
+async function createTripShareLink(tripId) {
+  const expiresAt = document.getElementById('tripShareExpiry')?.value || null;
+  const result = await api('/api/shares', {
+    method: 'POST',
+    body: {
+      link_type: 'trip_detail',
+      filters: { trip_id: Number(tripId) },
+      expires_at: expiresAt || null,
+    },
+  });
+  if (!result?.token) {
+    toast(result?.error || 'Failed to create trip share link', 'error');
+    return;
+  }
+  toast('Trip share link created', 'success');
+  await showTripShareModal(tripId);
+}
+
+async function deleteTripShareLink(linkId, tripId) {
+  if (!await confirmDialog('Delete this trip share link?')) return;
+  const result = await api(`/api/shares/${linkId}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Trip share link deleted', 'success');
+  await showTripShareModal(tripId);
 }
 
 async function showTripModal(tripId = null) {
@@ -10487,8 +10858,14 @@ async function saveCcCard(id) {
       }
       closeModal();
       toast(id ? 'Card updated' : 'Card added', 'success');
-      await loadCreditCards();
-      if (_ccSelectedCardId) renderCcDetail();
+      const cardsData = await api('/api/cc/cards');
+      if (!cardsData?.error) _ccCards = cardsData?.cards || [];
+      const shouldRefreshOpenDetail = _ccSelectedCardId && _sameId(_ccSelectedCardId, id || r?.id);
+      if (shouldRefreshOpenDetail) {
+        await renderCcDetail();
+      } else {
+        renderCcList();
+      }
     } else toast(r?.error || 'Failed', 'error');
   } catch (err) {
     toast(err?.message || 'Please check card details', 'warning');

@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Read-only shared friends and balance summary from Expense Lite AI.">
+<meta name="description" content="Read-only shared data from Expense Lite AI.">
 <meta name="author" content="Expense Lite AI">
 <meta name="robots" content="noindex,nofollow,noarchive">
 <meta name="theme-color" content="#145A3C">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Expense Lite AI">
-<meta property="og:title" content="Shared Friends List - Expense Lite AI">
-<meta property="og:description" content="Read-only shared friends and balance summary from Expense Lite AI.">
+<meta property="og:title" content="Shared View - Expense Lite AI">
+<meta property="og:description" content="Read-only shared data from Expense Lite AI.">
 <meta property="og:url" content="https://expenselyt.com/share">
 <meta property="og:image" content="https://expenselyt.com/logo.svg">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Shared Friends List - Expense Lite AI">
-<meta name="twitter:description" content="Read-only shared friends and balance summary from Expense Lite AI.">
-<title>Shared Friends List - Expense Lite AI</title>
+<meta name="twitter:title" content="Shared View - Expense Lite AI">
+<meta name="twitter:description" content="Read-only shared data from Expense Lite AI.">
+<title>Shared View - Expense Lite AI</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/runtime-config.js"></script>
 <script src="/js/mobile-app-banner.js"></script>
@@ -102,6 +102,10 @@ async function load() {
 }
 
 function render(data) {
+  if (String(data.link_type || '').toLowerCase() === 'trip_detail') {
+    renderTrip(data);
+    return;
+  }
   const friends = data.friends || [];
   const totalOwed = friends.reduce((s,f) => s + (f.balance > 0 ? f.balance : 0), 0);
   const totalOwe  = friends.reduce((s,f) => s + (f.balance < 0 ? Math.abs(f.balance) : 0), 0);
@@ -151,6 +155,64 @@ function render(data) {
         });
       }
       html += `</div></div>`;
+    });
+  }
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderTrip(data) {
+  const trip = data.trip || {};
+  const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
+  const members = Array.isArray(trip.members) ? trip.members : [];
+  const total = Number(trip.grand_total || 0);
+  const grouped = {};
+  expenses.forEach((expense) => {
+    const key = String(expense.expense_type || 'Other');
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(expense);
+  });
+  const subtitleParts = [];
+  if (trip.start_date || trip.end_date) subtitleParts.push(`${trip.start_date || '-'}${trip.end_date ? ` to ${trip.end_date}` : ''}`);
+  if (data.expires_at) subtitleParts.push(`Expires ${data.expires_at}`);
+  let html = `
+    <div class="page-header">
+      <h1>${esc(data.owner_name || 'Shared')}'s Trip: ${esc(trip.destination || trip.name || 'Trip')}</h1>
+      <p>${subtitleParts.join(' - ') || 'Read-only shared trip view'}</p>
+    </div>
+    <div class="summary-row">
+      <div class="sum-card"><div class="sum-label">Status</div><div class="sum-val">${esc(String(trip.status || 'upcoming'))}</div></div>
+      <div class="sum-card"><div class="sum-label">Members</div><div class="sum-val">${members.length}</div></div>
+      <div class="sum-card"><div class="sum-label">Expenses</div><div class="sum-val">${expenses.length}</div></div>
+      <div class="sum-card"><div class="sum-label">Grand Total</div><div class="sum-val pos">${fmt(total)}</div></div>
+    </div>
+    <div class="friend-card" style="padding:16px 20px">
+      <div class="friend-name">${esc(trip.destination || trip.name || 'Trip')}</div>
+      <div class="friend-label" style="margin-top:8px">Members: ${esc(members.map((member) => member.member_name || '').filter(Boolean).join(', ') || '-')}</div>
+      ${trip.notes ? `<div class="friend-label" style="margin-top:10px;line-height:1.5;color:var(--t2)">${esc(trip.notes)}</div>` : ''}
+    </div>`;
+  if (!expenses.length) {
+    html += '<div class="friend-card"><div class="no-txn">No trip expenses to display.</div></div>';
+  } else {
+    Object.keys(grouped).forEach((groupName) => {
+      const rows = grouped[groupName];
+      const subtotal = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      html += `<div class="friend-card open">
+        <div class="friend-header" style="cursor:default">
+          <div class="friend-main"><div class="friend-meta"><div class="friend-name">${esc(groupName)}</div><div class="friend-label">${rows.length} item${rows.length !== 1 ? 's' : ''}</div></div></div>
+          <div class="balance pos">${fmt(subtotal)}</div>
+        </div>
+        <div class="txn-list" style="display:block">`;
+      rows.forEach((row) => {
+        const splits = Array.isArray(row.splits) && row.splits.length
+          ? row.splits.map((split) => `${split.member_name}: ${fmt(split.share_amount)}`).join(' | ')
+          : '';
+        html += `<div class="txn-row">
+          <span class="txn-date">${esc(row.expense_date || '-')}</span>
+          <span class="txn-detail">${esc(row.details || '-')}${row.notes ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">${esc(row.notes)}</div>` : ''}${splits ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">Shared: ${esc(splits)}</div>` : ''}</span>
+          <span class="txn-amt got">${fmt(row.amount || 0)}</span>
+        </div>`;
+      });
+      html += '</div></div>';
     });
   }
   document.getElementById('content').innerHTML = html;

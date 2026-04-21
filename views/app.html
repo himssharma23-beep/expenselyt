@@ -64,6 +64,11 @@
     <button class="nav-btn" data-tab="tracker" onclick="switchTab('tracker')"><span class="icon">&#9672;</span><span>Daily Tracker</span></button>
     <button class="nav-btn" data-tab="recurring" onclick="switchTab('recurring')"><span class="icon">&#8635;</span><span>Recurring</span></button>
     <button class="nav-btn" data-tab="ailookup" onclick="switchTab('ailookup')"><span class="icon">&#10022;</span><span>AI Lookup</span></button>
+    <button class="nav-btn" data-tab="notifications" onclick="switchTab('notifications')" style="position:relative">
+      <span class="icon">&#9711;</span>
+      <span>Notifications</span>
+      <span id="notifUnreadBadge" style="display:none;position:absolute;right:10px;top:8px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#ff8a8a;color:#fff;font-size:10px;font-weight:700;align-items:center;justify-content:center;line-height:18px">0</span>
+    </button>
     <button class="nav-btn" id="adminNavBtn" data-tab="admin" onclick="switchTab('admin')" style="display:none"><span class="icon">&#9881;</span><span>Admin</span></button>
     <div style="flex:1"></div>
     <div class="user-box" id="userBox"></div>

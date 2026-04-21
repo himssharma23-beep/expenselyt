@@ -369,30 +369,38 @@ function downloadSplitSessionPdf(sessionKey) {
 // ── Trips Overview ───────────────────────────────────────────
 function downloadTripsPdf(tripsArr) {
   const trips = tripsArr || _trips || [];
+  const filterParts = [];
+  if (typeof tripsFilters === 'object' && tripsFilters) {
+    if (tripsFilters.search) filterParts.push(`Search: "${tripsFilters.search}"`);
+    if (tripsFilters.status && tripsFilters.status !== 'all') filterParts.push(`Status: ${tripsFilters.status}`);
+    if (tripsFilters.category && tripsFilters.category !== 'all') filterParts.push(`Category: ${tripsFilters.category}`);
+    if (tripsFilters.transport && tripsFilters.transport !== 'all') filterParts.push(`Transport: ${tripsFilters.transport}`);
+    if (tripsFilters.member && tripsFilters.member !== 'all') filterParts.push(`Member share: ${tripsFilters.member}`);
+  }
   const doc = _P.init(true);
   let y = _P.header(doc, 'Trips Overview',
-    `${trips.length} trip${trips.length!==1?'s':''}  ·  ${new Date().toLocaleDateString('en-IN')}`);
-  const total = trips.reduce((s,t)=>s+(t.totalExpenses||0),0);
-  const active = trips.filter(t=>t.status==='active').length;
+    `${trips.length} trip${trips.length!==1?'s':''}  ·  ${filterParts.join(' · ') || new Date().toLocaleDateString('en-IN')}`);
+  const total = trips.reduce((s,t)=>s+(Number(t.total_expenditure ?? t.totalExpenses ?? 0) || 0),0);
+  const active = trips.filter(t => ['pending', 'upcoming', 'ongoing'].includes(String(t.status || '').toLowerCase())).length;
+  const completed = trips.filter(t => String(t.status || '').toLowerCase() === 'completed').length;
   y = _P.cards(doc, y, [
     { label:'Total Trips',  value:trips.length,   color:'' },
-    { label:'Active',       value:active,          color:'green' },
-    { label:'Completed',    value:trips.length-active, color:'' },
+    { label:'Upcoming / Ongoing', value:active,    color:'green' },
+    { label:'Completed',    value:completed, color:'' },
     { label:'Total Spent',  value:_P.cur(total),  color:'' },
   ]);
   _P.table(doc, y,
-    [['Trip Name','Status','Start','End','Members','Expenses','Total Spent','My Net Balance']],
+    [['Trip Name','Status','Start','End','Members','Expenses','Shown Amount']],
     trips.map(t=>[
-      t.name+(t.is_owner===0?' (Shared)':''),
-      t.status==='completed'?'Completed':'Active',
+      (t.destination || t.name || '-') + (t.is_owner===0 ? ' (Shared)' : ''),
+      String(t.status || 'upcoming').replace(/\b\w/g, (m) => m.toUpperCase()),
       _P.dt(t.start_date),
       t.end_date?_P.dt(t.end_date):'—',
       (t.members||[]).map(m=>m.member_name).join(', '),
-      t.expenseCount||0,
-      _P.cur(t.totalExpenses||0),
-      _P.cur(t.selfNet||0),
+      t.expense_count ?? t.expenseCount ?? 0,
+      _P.cur(Number(t.total_expenditure ?? t.totalExpenses ?? 0) || 0),
     ]),
-    { 1:{halign:'center'}, 5:{halign:'center'}, 6:{halign:'right',fontStyle:'bold'}, 7:{halign:'right',fontStyle:'bold'} },
+    { 1:{halign:'center'}, 5:{halign:'center'}, 6:{halign:'right',fontStyle:'bold'} },
     true
   );
   _P.save(doc, 'Trips_Overview');
@@ -403,7 +411,7 @@ function downloadTripDetailPdf() {
   const trip = _tripDetail;
   if (!trip) return;
   const doc = _P.init(true);
-  let y = _P.header(doc, `Trip: ${trip.name}`,
+  let y = _P.header(doc, `Trip: ${trip.destination || trip.name || 'Trip'}`,
     `${_P.dt(trip.start_date)}${trip.end_date?' → '+_P.dt(trip.end_date):''}  ·  ${trip.status}`);
 
   const memberStr = (trip.members||[]).map(m=>m.member_name).join('  ·  ');
@@ -450,7 +458,7 @@ function downloadTripDetailPdf() {
     { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
     true
   );
-  _P.save(doc, `Trip_${trip.name}`);
+  _P.save(doc, `Trip_${trip.destination || trip.name || 'Trip'}`);
 }
 
 // ── EMI Overview ─────────────────────────────────────────────
