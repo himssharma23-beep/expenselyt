@@ -104,12 +104,21 @@
   function firstNameToken(value) {
     return normalizePersonName(value).split(' ')[0] || '';
   }
+  function normalizeAvatarUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('//')) return `${window.location.protocol}${raw}`;
+    if (raw.startsWith('/')) return `${window.location.origin}${raw}`;
+    return `${window.location.origin}/${raw.replace(/^\/+/, '')}`;
+  }
   function _renderAvatar(name, avatarUrl, extraStyle) {
     const initial = escHtml((String(name || '?')[0]).toUpperCase());
     const styleAttr = extraStyle ? ` style="${extraStyle}"` : '';
-    if (avatarUrl) {
+    const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
+    if (safeAvatarUrl) {
       const fallbackStyle = `display:none${extraStyle ? ';' + extraStyle : ''}`;
-      return `<img src="${escHtml(avatarUrl)}" class="avatar" style="object-fit:cover${extraStyle ? ';' + extraStyle : ''}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="avatar" style="${fallbackStyle}">${initial}</div>`;
+      return `<img src="${escHtml(safeAvatarUrl)}" class="avatar" style="object-fit:cover${extraStyle ? ';' + extraStyle : ''}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="avatar" style="${fallbackStyle}">${initial}</div>`;
     }
     return `<div class="avatar"${styleAttr}>${initial}</div>`;
   }
