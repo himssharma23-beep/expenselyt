@@ -10128,6 +10128,8 @@ async function showCcCardModal(id) {
 async function saveCcCard(id) {
   const existingCard = id ? _findCcCardById(id) : null;
   const currentCycle = existingCard?.currentCycle || null;
+  const originalBillDay = Number(existingCard?.bill_gen_day || 1);
+  const originalDueDays = Number(existingCard?.due_days || 20);
   const thisYear = new Date().getFullYear();
   const maxYear = thisYear + 30;
 
@@ -10182,8 +10184,18 @@ async function saveCcCard(id) {
     if (r?.success || r?.id) {
       if (id && currentCycle) {
         const currentDueDate = document.getElementById('ccCurrentDueDate')?.value || '';
-        if (currentDueDate && currentDueDate !== currentCycle.due_date) {
-          const cycleRes = await api(`/api/cc/cycles/${currentCycle.id}`, { method: 'PUT', body: { due_date: currentDueDate } });
+        const cycleSettingsChanged = billDay !== originalBillDay || dueDays !== originalDueDays;
+        let targetCycleId = currentCycle.id;
+        let targetCycleDueDate = currentCycle.due_date || '';
+
+        if (cycleSettingsChanged) {
+          const refreshed = await api(`/api/cc/cards/${id}/current`);
+          targetCycleId = refreshed?.cycle?.id || null;
+          targetCycleDueDate = refreshed?.cycle?.due_date || '';
+        }
+
+        if (currentDueDate && targetCycleId && currentDueDate !== targetCycleDueDate) {
+          const cycleRes = await api(`/api/cc/cycles/${targetCycleId}`, { method: 'PUT', body: { due_date: currentDueDate } });
           if (!cycleRes?.success) {
             toast(cycleRes?.error || 'Card updated but current cycle due date update failed', 'warning');
           }
