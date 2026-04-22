@@ -692,12 +692,17 @@ CREATE TABLE IF NOT EXISTS recurring_entries (
   amount NUMERIC(14,2) NOT NULL,
   interval_months INTEGER NOT NULL DEFAULT 1,
   start_month TEXT,
+  due_day INTEGER NOT NULL DEFAULT 1,
   card_id BIGINT,
   bank_account_id BIGINT,
   expense_category TEXT,
   discount_pct NUMERIC(8,4) NOT NULL DEFAULT 0,
   also_expense BOOLEAN NOT NULL DEFAULT FALSE,
   is_extra BOOLEAN NOT NULL DEFAULT FALSE,
+  reminder_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  reminder_days_before INTEGER NOT NULL DEFAULT 0,
+  reminder_frequency TEXT NOT NULL DEFAULT 'once',
+  reminder_silent BOOLEAN NOT NULL DEFAULT FALSE,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   last_applied TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -874,6 +879,20 @@ CREATE INDEX IF NOT EXISTS idx_ai_query_logs_intent_created_at ON ai_query_logs(
 CREATE INDEX IF NOT EXISTS idx_ai_training_examples_active ON ai_training_examples(is_active, updated_at DESC);
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS due_day INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_days_before INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_frequency TEXT NOT NULL DEFAULT 'once';
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_silent BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE recurring_entries
+SET due_day = 1
+WHERE due_day IS NULL OR due_day < 1 OR due_day > 28;
+UPDATE recurring_entries
+SET reminder_days_before = 0
+WHERE reminder_days_before IS NULL OR reminder_days_before < 0;
+UPDATE recurring_entries
+SET reminder_frequency = 'once'
+WHERE reminder_frequency IS NULL OR reminder_frequency NOT IN ('once', 'daily', 'weekly');
 ALTER TABLE friends ADD COLUMN IF NOT EXISTS linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE loan_transactions ADD COLUMN IF NOT EXISTS source_id BIGINT;

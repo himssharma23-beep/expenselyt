@@ -191,98 +191,52 @@ async function getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, d
 }
 
 async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
-  const today = _localDate(new Date());
-  const openCyclesR = await client.query(
+  const currentPeriod = getCcCyclePeriod(card.bill_gen_day || 1);
+  const editableCyclesR = await client.query(
     `SELECT *
      FROM cc_cycles
-     WHERE card_id = $1 AND user_id = $2 AND status = 'open'
+     WHERE card_id = $1
+       AND user_id = $2
+       AND status = 'open'
+       AND cycle_end >= $3
      ORDER BY cycle_start ASC, id ASC`,
-    [cardId, userId]
+    [cardId, userId, currentPeriod.cycleStart]
   );
-  const openCycles = openCyclesR.rows;
-  if (!openCycles.length) {
-    await getOrCreateCurrentCycle(cardId, userId, client);
-    return;
-  }
+  const editableCycles = editableCyclesR.rows;
 
-  const currentPeriod = getCcCyclePeriod(card.bill_gen_day || 1);
-  let activeCycle = openCycles.find((cycle) => cycle.cycle_start <= today && cycle.cycle_end >= today) || openCycles[openCycles.length - 1];
-  if (!activeCycle) return;
-  const futureCycles = openCycles
-    .filter((cycle) => Number(cycle.id) !== Number(activeCycle.id) && cycle.cycle_start > today)
-    .sort((a, b) => String(a.cycle_start).localeCompare(String(b.cycle_start)) || Number(a.id) - Number(b.id));
-
-  const activeTxnsR = await client.query(
-    `SELECT id, txn_date
-     FROM cc_txns
-     WHERE cycle_id = $1 AND user_id = $2
-     ORDER BY txn_date ASC, id ASC`,
-    [activeCycle.id, userId]
-  );
-  const txnsToPrevious = activeTxnsR.rows.filter((txn) => normalizeCcDateValue(txn.txn_date, 'Transaction date') < currentPeriod.cycleStart);
-
-  let previousCycle = null;
-  if (txnsToPrevious.length) {
-    const previousCycleR = await client.query(
-      `SELECT *
-       FROM cc_cycles
-       WHERE card_id = $1 AND user_id = $2 AND id != $3 AND cycle_end < $4
-       ORDER BY cycle_end DESC, id DESC
-       LIMIT 1`,
-      [cardId, userId, activeCycle.id, currentPeriod.cycleStart]
-    );
-    previousCycle = previousCycleR.rows[0] || null;
-    if (!previousCycle) {
-      const previousDate = _parseDateInput(currentPeriod.cycleStart, 'Cycle start date');
-      previousDate.setDate(previousDate.getDate() - 1);
-      const previousPeriod = getCcCyclePeriodForDate(card.bill_gen_day || 1, previousDate);
-      previousCycle = await getOrCreateCycleForPeriod(
-        cardId,
-        userId,
-        previousPeriod.cycleStart,
-        previousPeriod.cycleEnd,
-        card.due_days || 20,
-        client
-      );
-    }
-  }
-
-  const currentConflict = await findExactCycle(
-    client,
+  let activeCycle = await getOrCreateCycleForPeriod(
     cardId,
     userId,
     currentPeriod.cycleStart,
     currentPeriod.cycleEnd,
-    activeCycle.id
+    card.due_days || 20,
+    client
   );
-  if (currentConflict) {
-    await mergeCycleInto(client, userId, activeCycle.id, currentConflict.id);
-    activeCycle = currentConflict;
-  } else {
-    await client.query(
-      `UPDATE cc_cycles
-       SET cycle_start = $1,
-           cycle_end = $2,
-           due_date = $3,
-           status = 'open'
-       WHERE id = $4 AND user_id = $5`,
-      [currentPeriod.cycleStart, currentPeriod.cycleEnd, getCcDueDate(currentPeriod.cycleEnd, card.due_days || 20), activeCycle.id, userId]
-    );
+  if (!activeCycle) return;
+
+  const remainingCycles = [];
+  for (const cycle of editableCycles) {
+    if (Number(cycle.id) === Number(activeCycle.id)) continue;
+    if (cycle.cycle_start === currentPeriod.cycleStart && cycle.cycle_end === currentPeriod.cycleEnd) {
+      activeCycle = await mergeCycleInto(client, userId, cycle.id, activeCycle.id);
+      continue;
+    }
+    remainingCycles.push(cycle);
   }
 
   let nextPeriod = currentPeriod;
-  for (const futureCycle of futureCycles) {
+  for (const cycle of remainingCycles) {
     nextPeriod = getNextCcCyclePeriod(nextPeriod, card.bill_gen_day || 1);
-    const futureConflict = await findExactCycle(
+    const exactConflict = await findExactCycle(
       client,
       cardId,
       userId,
       nextPeriod.cycleStart,
       nextPeriod.cycleEnd,
-      futureCycle.id
+      cycle.id
     );
-    if (futureConflict) {
-      await mergeCycleInto(client, userId, futureCycle.id, futureConflict.id);
+    if (exactConflict) {
+      await mergeCycleInto(client, userId, cycle.id, exactConflict.id);
       continue;
     }
     await client.query(
@@ -292,46 +246,31 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
            due_date = $3,
            status = 'open'
        WHERE id = $4 AND user_id = $5`,
-      [nextPeriod.cycleStart, nextPeriod.cycleEnd, getCcDueDate(nextPeriod.cycleEnd, card.due_days || 20), futureCycle.id, userId]
+      [nextPeriod.cycleStart, nextPeriod.cycleEnd, getCcDueDate(nextPeriod.cycleEnd, card.due_days || 20), cycle.id, userId]
     );
   }
 
-  if (previousCycle) {
-    for (const txn of txnsToPrevious) {
-      await client.query(
-        `UPDATE cc_txns
-         SET cycle_id = $1
-         WHERE id = $2 AND user_id = $3`,
-        [previousCycle.id, txn.id, userId]
-      );
-    }
-
-    const previousTxnsR = await client.query(
-      `SELECT id, txn_date
-       FROM cc_txns
-       WHERE cycle_id = $1 AND user_id = $2
-       ORDER BY txn_date ASC, id ASC`,
-      [previousCycle.id, userId]
-    );
-    const txnsToCurrent = previousTxnsR.rows.filter((txn) => {
-      const txnDate = normalizeCcDateValue(txn.txn_date, 'Transaction date');
-      return txnDate >= currentPeriod.cycleStart && txnDate <= currentPeriod.cycleEnd;
-    });
-    for (const txn of txnsToCurrent) {
-      await client.query(
-        `UPDATE cc_txns
-         SET cycle_id = $1
-         WHERE id = $2 AND user_id = $3`,
-        [activeCycle.id, txn.id, userId]
-      );
-    }
-
-    await updateCycleTotals(previousCycle.id, client);
+  const cycleIdsToReconcile = new Set();
+  cycleIdsToReconcile.add(Number(activeCycle.id));
+  const refreshedEditableR = await client.query(
+    `SELECT *
+     FROM cc_cycles
+     WHERE card_id = $1
+       AND user_id = $2
+       AND status = 'open'
+       AND cycle_end >= $3
+     ORDER BY cycle_start ASC, id ASC`,
+    [cardId, userId, currentPeriod.cycleStart]
+  );
+  for (const cycle of refreshedEditableR.rows) {
+    if (cycle?.id) cycleIdsToReconcile.add(Number(cycle.id));
   }
 
-  await updateCycleTotals(activeCycle.id, client);
-  for (const futureCycle of futureCycles) {
-    const refreshedCycleR = await client.query('SELECT * FROM cc_cycles WHERE id = $1 AND user_id = $2 LIMIT 1', [futureCycle.id, userId]);
+  for (const cycleId of cycleIdsToReconcile) {
+    const refreshedCycleR = await client.query(
+      'SELECT * FROM cc_cycles WHERE id = $1 AND user_id = $2 LIMIT 1',
+      [cycleId, userId]
+    );
     if (refreshedCycleR.rows[0]) {
       await reconcileCycleTransactions(userId, refreshedCycleR.rows[0], card, client);
     }
@@ -498,7 +437,12 @@ async function updateCreditCard(userId, id, card) {
         WHERE id = $10 AND user_id = $11`,
       [bankName, cardName, last4, card.expiry_month || null, card.expiry_year || null, card.bill_gen_day || 1, card.due_days || 20, card.default_discount_pct || 0, card.credit_limit || 0, id, userId]
     );
-    await rebalanceOpenCycleForCard(userId, id, card, client);
+    const updatedCardR = await client.query(
+      'SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1',
+      [id, userId]
+    );
+    const updatedCard = updatedCardR.rows[0] || { ...card, id: Number(id) || id };
+    await rebalanceOpenCycleForCard(userId, id, updatedCard, client);
   });
 }
 

@@ -31,6 +31,27 @@ function recurringEntryAppliesToMonth(entry, month) {
   return diffMonths >= 0 && diffMonths % interval === 0;
 }
 
+function recurringDueDateForMonth(month, dueDay) {
+  const [year, monthNo] = String(month || '').split('-').map(Number);
+  if (!year || !monthNo) return null;
+  const maxDay = new Date(year, monthNo, 0).getDate();
+  const safeDay = Math.min(normalizeDueDay(dueDay), maxDay);
+  return `${month}-${String(safeDay).padStart(2, '0')}`;
+}
+
+function normalizeDueDay(value) {
+  return Math.max(1, Math.min(28, parseInt(value, 10) || 1));
+}
+
+function normalizeReminderFrequency(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['once', 'daily', 'weekly'].includes(normalized) ? normalized : 'once';
+}
+
+function normalizeReminderDaysBefore(value) {
+  return Math.max(0, Math.min(60, parseInt(value, 10) || 0));
+}
+
 function normalizeBankAccountId(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -790,11 +811,27 @@ async function generateMonthlyPayments(userId, month) {
         `SELECT id FROM monthly_payments WHERE user_id = $1 AND month = $2 AND recurring_entry_id = $3 LIMIT 1`,
         [userId, month, entry.id]
       );
-      if (exists.rows[0]) continue;
+      const dueDay = Math.min(normalizeDueDay(entry.due_day), new Date(yr, mo, 0).getDate());
+      const dueDate = `${month}-${String(dueDay).padStart(2, '0')}`;
+      if (exists.rows[0]) {
+        await client.query(
+          `UPDATE monthly_payments
+           SET name = $1,
+               amount = $2,
+               due_date = $3,
+               bank_account_id = $4,
+               notes = $5
+           WHERE id = $6
+             AND (status = 'pending' OR status IS NULL)
+             AND COALESCE(paid_amount, 0) <= 0`,
+          [entry.description, entry.amount, dueDate, normalizeBankAccountId(entry.bank_account_id), 'Recurring entry', exists.rows[0].id]
+        );
+        continue;
+      }
       await client.query(
         `INSERT INTO monthly_payments (user_id, recurring_entry_id, month, name, amount, due_date, bank_account_id, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [userId, entry.id, month, entry.description, entry.amount, `${month}-01`, normalizeBankAccountId(entry.bank_account_id), 'Recurring entry']
+        [userId, entry.id, month, entry.description, entry.amount, dueDate, normalizeBankAccountId(entry.bank_account_id), 'Recurring entry']
       );
     }
     for (const item of trackerPlannerItems) {
@@ -1128,18 +1165,53 @@ async function getRecurringEntries(userId) {
      ORDER BY r.created_at DESC`,
     [userId]
   );
-  return result.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), also_expense: !!row.also_expense, is_extra: !!row.is_extra, is_active: !!row.is_active }));
+  return result.rows.map((row) => ({
+    ...row,
+    amount: num(row.amount),
+    discount_pct: num(row.discount_pct),
+    due_day: normalizeDueDay(row.due_day),
+    reminder_enabled: !!row.reminder_enabled,
+    reminder_days_before: normalizeReminderDaysBefore(row.reminder_days_before),
+    reminder_frequency: normalizeReminderFrequency(row.reminder_frequency),
+    reminder_silent: !!row.reminder_silent,
+    also_expense: !!row.also_expense,
+    is_extra: !!row.is_extra,
+    is_active: !!row.is_active,
+  }));
 }
 
 async function addRecurringEntry(userId, data) {
   const description = normalizeText(data.description, 'Recurring description', 160);
   const amount = normalizePositiveAmount(data.amount);
   const expenseCategory = normalizeOptionalText(data.expense_category, 80);
+  const dueDay = normalizeDueDay(data.due_day);
+  const reminderEnabled = !!data.reminder_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
   const result = await query(
-    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, card_id, bank_account_id, expense_category, discount_pct, also_expense, is_extra, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $1, $1)
+    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, due_day, card_id, bank_account_id, expense_category, discount_pct, also_expense, is_extra, reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $1, $1)
      RETURNING id`,
-    [userId, data.type, description, amount, Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, normalizeBankAccountId(data.bank_account_id), expenseCategory, parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra]
+    [
+      userId,
+      data.type,
+      description,
+      amount,
+      Math.max(1, parseInt(data.interval_months, 10) || 1),
+      data.start_month || null,
+      dueDay,
+      data.card_id || null,
+      normalizeBankAccountId(data.bank_account_id),
+      expenseCategory,
+      parseFloat(data.discount_pct) || 0,
+      !!data.also_expense,
+      !!data.is_extra,
+      reminderEnabled,
+      reminderDaysBefore,
+      reminderFrequency,
+      reminderSilent,
+    ]
   );
   return Number(result.rows[0].id);
 }
@@ -1196,14 +1268,67 @@ async function updateRecurringEntry(userId, id, data) {
   const description = normalizeText(data.description, 'Recurring description', 160);
   const amount = normalizePositiveAmount(data.amount);
   const expenseCategory = normalizeOptionalText(data.expense_category, 80);
-  await query(
-    `UPDATE recurring_entries
-     SET description = $1, amount = $2, interval_months = $3, start_month = $4, card_id = $5,
-         bank_account_id = $6, expense_category = $7, discount_pct = $8, also_expense = $9, is_extra = $10, is_active = $11,
-         updated_at = NOW(), updated_by = $13
-     WHERE id = $12 AND user_id = $13`,
-    [description, amount, Math.max(1, parseInt(data.interval_months, 10) || 1), data.start_month || null, data.card_id || null, normalizeBankAccountId(data.bank_account_id), expenseCategory, parseFloat(data.discount_pct) || 0, !!data.also_expense, !!data.is_extra, data.is_active != null ? !!data.is_active : true, id, userId]
-  );
+  const dueDay = normalizeDueDay(data.due_day);
+  const reminderEnabled = !!data.reminder_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
+  const intervalMonths = Math.max(1, parseInt(data.interval_months, 10) || 1);
+  const bankAccountId = normalizeBankAccountId(data.bank_account_id);
+  const isActive = data.is_active != null ? !!data.is_active : true;
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE recurring_entries
+       SET description = $1, amount = $2, interval_months = $3, start_month = $4, due_day = $5, card_id = $6,
+           bank_account_id = $7, expense_category = $8, discount_pct = $9, also_expense = $10, is_extra = $11,
+           reminder_enabled = $12, reminder_days_before = $13, reminder_frequency = $14, reminder_silent = $15,
+           is_active = $16, updated_at = NOW(), updated_by = $18
+       WHERE id = $17 AND user_id = $18`,
+      [
+        description,
+        amount,
+        intervalMonths,
+        data.start_month || null,
+        dueDay,
+        data.card_id || null,
+        bankAccountId,
+        expenseCategory,
+        parseFloat(data.discount_pct) || 0,
+        !!data.also_expense,
+        !!data.is_extra,
+        reminderEnabled,
+        reminderDaysBefore,
+        reminderFrequency,
+        reminderSilent,
+        isActive,
+        id,
+        userId,
+      ]
+    );
+
+    const linkedPayments = await client.query(
+      `SELECT id, month
+       FROM monthly_payments
+       WHERE user_id = $1
+         AND recurring_entry_id = $2
+         AND COALESCE(paid_amount, 0) <= 0
+         AND (status = 'pending' OR status IS NULL)`,
+      [userId, id]
+    );
+
+    for (const row of linkedPayments.rows) {
+      await client.query(
+        `UPDATE monthly_payments
+         SET name = $1,
+             amount = $2,
+             due_date = $3,
+             bank_account_id = $4,
+             notes = $5
+         WHERE id = $6`,
+        [description, amount, recurringDueDateForMonth(row.month, dueDay), bankAccountId, 'Recurring entry', row.id]
+      );
+    }
+  });
 }
 
 async function deleteRecurringEntry(userId, id) {

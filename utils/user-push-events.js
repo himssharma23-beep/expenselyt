@@ -24,6 +24,25 @@ function addDays(date, days) {
   return next;
 }
 
+function dateOnly(value) {
+  if (!value) return null;
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function daysBetween(a, b) {
+  const left = dateOnly(a);
+  const right = dateOnly(b);
+  if (!left || !right) return 0;
+  return Math.round((left.getTime() - right.getTime()) / (24 * 60 * 60 * 1000));
+}
+
 function monthLabel(month, localeCode = 'en-IN') {
   if (!month) return '';
   const [year, monthNo] = String(month).split('-').map(Number);
@@ -60,7 +79,7 @@ async function createAndSendUserNotification(user, payload = {}) {
 
   const prefs = await pgAuth.getUserNotificationPreferences(user.id);
   const unreadCount = await pgAuth.getUnreadNotificationCount(user.id);
-  if (prefs.push_enabled !== false) {
+  if (prefs.push_enabled !== false && !payload.silent) {
     const devices = await pgAuth.getPushTokensForUsers([user.id]);
     if (devices.length) {
       const messageData = {
@@ -246,6 +265,72 @@ async function notifyUpcomingEmiRemindersForUser(user, dueDate) {
   }
 }
 
+async function notifyRecurringPaymentRemindersForUser(user, today) {
+  const todayKey = localDate(today);
+  const currentMonth = currentMonthKey(today);
+  const nextMonth = currentMonthKey(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+  const [currentPayments, nextPayments, recurringEntries] = await Promise.all([
+    pgOps.getMonthlyPayments(user.id, currentMonth),
+    pgOps.getMonthlyPayments(user.id, nextMonth),
+    pgOps.getRecurringEntries(user.id),
+  ]);
+  const recurringById = new Map((recurringEntries || []).map((entry) => [Number(entry.id), entry]));
+
+  for (const payment of [...(currentPayments || []), ...(nextPayments || [])]) {
+    const recurringId = Number(payment.recurring_entry_id || 0);
+    if (!(recurringId > 0)) continue;
+    const entry = recurringById.get(recurringId);
+    if (!entry || !entry.is_active || !entry.reminder_enabled) continue;
+    if ((payment.status || 'pending') === 'paid') continue;
+    if (num(payment.paid_amount) >= num(payment.amount) - 0.01) continue;
+
+    const dueDate = dateOnly(payment.due_date);
+    if (!dueDate) continue;
+    const startDate = addDays(dueDate, -Math.max(0, Number(entry.reminder_days_before || 0)));
+    const diffFromStart = daysBetween(todayKey, localDate(startDate));
+    if (diffFromStart < 0) continue;
+
+    const frequency = String(entry.reminder_frequency || 'once').toLowerCase();
+    let shouldNotify = false;
+    let cadenceKey = todayKey;
+    if (frequency === 'daily') {
+      shouldNotify = true;
+    } else if (frequency === 'weekly') {
+      shouldNotify = diffFromStart % 7 === 0;
+      cadenceKey = `${localDate(startDate)}:${Math.floor(diffFromStart / 7)}`;
+    } else {
+      shouldNotify = diffFromStart === 0;
+      cadenceKey = localDate(startDate);
+    }
+    if (!shouldNotify) continue;
+
+    const remaining = Math.max(0, num(payment.amount) - num(payment.paid_amount));
+    const daysUntilDue = daysBetween(localDate(dueDate), todayKey);
+    const timingText = daysUntilDue > 1
+      ? `due in ${daysUntilDue} days`
+      : daysUntilDue === 1
+        ? 'due tomorrow'
+        : daysUntilDue === 0
+          ? 'due today'
+          : `overdue by ${Math.abs(daysUntilDue)} day${Math.abs(daysUntilDue) === 1 ? '' : 's'}`;
+
+    await createAndSendUserNotification(user, {
+      type: 'recurring_payment_reminder',
+      dedupe_key: `${payment.id}:${cadenceKey}`,
+      title: `${entry.description} payment reminder`,
+      body: `${entry.description} for ${formatCurrency(remaining, user.currency_code, user.locale_code)} is ${timingText}. Due ${payment.due_date}.`,
+      target_screen: 'Recurring',
+      data: {
+        recurring_entry_id: recurringId,
+        monthly_payment_id: Number(payment.id),
+        due_date: payment.due_date,
+        month: payment.month,
+      },
+      silent: !!entry.reminder_silent,
+    });
+  }
+}
+
 async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
   const todayKey = localDate(today);
   const reminderKey = localDate(reminderDate);
@@ -328,6 +413,7 @@ async function runPushNotificationCycle() {
         await notifyMonthlyLiveSplitSummary(user, month);
       }
       await notifyUpcomingEmiRemindersForUser(user, dueReminderDate);
+      await notifyRecurringPaymentRemindersForUser(user, now);
       await notifyCreditCardCycleEventsForUser(user, now, dueReminderDate);
     } catch (err) {
       console.error(`[push] notification cycle failed for user ${user.id}:`, err?.message || err);

@@ -240,17 +240,22 @@ function stopEvent(event) {
 
 // â”€â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 window.addEventListener('DOMContentLoaded', async () => {
-  const [user, access] = await Promise.all([api('/api/auth/me'), api('/api/auth/me/access')]);
-  if (user && user.display_name) {
-    _currentUserId = user.id || null;
-    _currentUser = user;
-    if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
-    renderUserBox();
+  try {
+    const [user, access] = await Promise.all([api('/api/auth/me'), api('/api/auth/me/access')]);
+    if (user && user.display_name) {
+      _currentUserId = user.id || null;
+      _currentUser = user;
+      if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
+      renderUserBox();
+    }
+    if (access && !access.error) {
+      _userRole = access.role || 'user';
+      _accessiblePages = access.pages || ['dashboard'];
+    }
+  } catch (err) {
+    console.error('[app:init] startup failed', err);
   }
-  if (access) {
-    _userRole = access.role || 'user';
-    _accessiblePages = access.pages || ['dashboard'];
-  }
+
   if (_userRole === 'admin') {
     const btn = document.getElementById('adminNavBtn');
     if (btn) btn.style.display = '';
@@ -4047,7 +4052,18 @@ let _dashCharts = [];
 async function loadDashboard() {
   const year = dashFilters.year;
   const data = await api(`/api/dashboard?year=${year}`);
-  if (!data) return;
+  if (!data || data.error) {
+    document.getElementById('main').innerHTML = `
+      <div class="tab-content">
+        <div class="section-card" style="padding:24px;color:var(--red)">
+          ${escHtml(data?.error || 'Could not load dashboard')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+  const monthTotal = data?.monthTotal || { total: 0, count: 0 };
+  const yearTotal = data?.yearTotal || { total: 0, count: 0 };
   const monthlyTotals = Array.isArray(data.monthlyTotals) ? data.monthlyTotals : [];
   const monthlyByType = Array.isArray(data.monthlyByType) ? data.monthlyByType : [];
   const spendBreakdown = Array.isArray(data.spendBreakdown) ? data.spendBreakdown : [];
@@ -4106,13 +4122,13 @@ async function loadDashboard() {
       <div class="dash-cards">
         <div class="dash-card">
           <div class="dc-label">This Month</div>
-          <div class="dc-amount">${fmtCur(data.monthTotal.total)}</div>
-          <div class="dc-sub">${data.monthTotal.count} expense${data.monthTotal.count !== 1 ? 's' : ''}</div>
+          <div class="dc-amount">${fmtCur(monthTotal.total)}</div>
+          <div class="dc-sub">${monthTotal.count} expense${monthTotal.count !== 1 ? 's' : ''}</div>
         </div>
         <div class="dash-card">
           <div class="dc-label">This Year (${year})</div>
-          <div class="dc-amount">${fmtCur(data.yearTotal.total)}</div>
-          <div class="dc-sub">${data.yearTotal.count} expense${data.yearTotal.count !== 1 ? 's' : ''}</div>
+          <div class="dc-amount">${fmtCur(yearTotal.total)}</div>
+          <div class="dc-sub">${yearTotal.count} expense${yearTotal.count !== 1 ? 's' : ''}</div>
         </div>
         <div class="dash-card dash-card-green">
           <div class="dc-label">You Are Owed</div>
@@ -12669,6 +12685,23 @@ async function deleteTracker(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _recurringEntries = [];
 
+function _recurringReminderSummary(entry) {
+  const dueDay = Math.max(1, Math.min(28, parseInt(entry?.due_day, 10) || 1));
+  if (!entry?.reminder_enabled) return `Due on day ${dueDay}`;
+  const daysBefore = Math.max(0, parseInt(entry?.reminder_days_before, 10) || 0);
+  const frequency = String(entry?.reminder_frequency || 'once').toLowerCase();
+  const freqLabel = frequency === 'daily' ? 'daily' : frequency === 'weekly' ? 'weekly' : 'once';
+  const startLabel = daysBefore > 0 ? `${daysBefore} day${daysBefore === 1 ? '' : 's'} before` : 'on due date';
+  const silentLabel = entry?.reminder_silent ? ' · silent' : '';
+  return `Due on day ${dueDay} · Remind ${freqLabel} from ${startLabel}${silentLabel}`;
+}
+
+function toggleRecurringReminderFields() {
+  const enabled = !!document.getElementById('reReminderEnabled')?.checked;
+  const wrap = document.getElementById('reReminderFields');
+  if (wrap) wrap.style.display = enabled ? '' : 'none';
+}
+
 async function loadRecurring() {
   const data = await api('/api/recurring');
   _recurringEntries = data?.entries || [];
@@ -12688,6 +12721,7 @@ function renderRecurring() {
     const cardLabel = isCC ? `<br><span style="font-size:11px;color:var(--t3)">${escHtml(e.bank_name || '')} ${escHtml(e.card_name || '')} **${escHtml(e.last4 || '')}</span>` : '';
     const interval = parseInt(e.interval_months) || 1;
     const scheduleLabel = interval <= 1 ? 'Every month' : `Every ${interval} months${e.start_month ? ` from ${fmtMonYear(e.start_month + '-01')}` : ''}`;
+    const reminderLabel = _recurringReminderSummary(e);
     const typeBadge = `<span class="badge ${isCC ? 'b-extra' : 'b-fair'}">${isCC ? 'CC Txn' : 'Expense'}</span>`;
     const extraBadge = isCC && e.also_expense ? `<span class="badge b-fair">+Exp</span>` : (!isCC && e.is_extra ? `<span class="badge b-extra">Extra</span>` : '');
     const statusBadge = appliedThisMonth
@@ -12696,7 +12730,7 @@ function renderRecurring() {
     return `<tr>
       <td><input type="checkbox" title="${e.is_active ? 'Active - click to disable' : 'Inactive - click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
       <td>${typeBadge}${extraBadge}</td>
-      <td>${escHtml(e.description)}${cardLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span></td>
+      <td>${escHtml(e.description)}${cardLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span><br><span style="font-size:11px;color:var(--t3)">${escHtml(reminderLabel)}</span></td>
       <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
       <td>${statusBadge}</td>
       <td><button class="btn-d" style="color:var(--em)" onclick="showRecurringModal(${e.id})">Edit</button><button class="btn-d" onclick="deleteRecurring(${e.id})">Del</button></td>
@@ -12763,6 +12797,10 @@ async function showRecurringModal(id) {
   const currentMonth = _localYM();
 
   const isCC = entry?.type === 'cc_txn';
+  const dueDay = Math.max(1, Math.min(28, parseInt(entry?.due_day, 10) || 1));
+  const reminderEnabled = !!entry?.reminder_enabled;
+  const reminderDaysBefore = Math.max(0, parseInt(entry?.reminder_days_before, 10) || 0);
+  const reminderFrequency = String(entry?.reminder_frequency || 'once').toLowerCase();
   const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
@@ -12775,6 +12813,7 @@ async function showRecurringModal(id) {
       </label>
       <label class="fl full">Description *<input class="fi" id="reDesc" value="${escHtml(entry?.description || '')}" placeholder="e.g. Netflix, Gym, Electricity..."></label>
       <label class="fl">Amount (&#8377;) *<input class="fi" type="number" step="0.01" id="reAmt" value="${entry?.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Payment Day (1-28)<input class="fi" type="number" id="reDueDay" value="${dueDay}" min="1" max="28"></label>
       <label class="fl">Repeat Every<select class="fi" id="reInterval">
         <option value="1" ${(parseInt(entry?.interval_months) || 1) === 1 ? 'selected' : ''}>Every month</option>
         <option value="2" ${(parseInt(entry?.interval_months) || 1) === 2 ? 'selected' : ''}>Every 2 months</option>
@@ -12817,6 +12856,27 @@ async function showRecurringModal(id) {
       </label>` : ''}
     </div>
 
+    <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="reReminderEnabled" ${reminderEnabled ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleRecurringReminderFields()">
+        Enable payment reminders
+      </label>
+      <div id="reReminderFields" style="${reminderEnabled ? '' : 'display:none'}">
+        <div class="fg">
+          <label class="fl">Start Before (days)<input class="fi" type="number" id="reReminderDaysBefore" value="${reminderDaysBefore}" min="0" max="31"></label>
+          <label class="fl">Reminder Frequency<select class="fi" id="reReminderFrequency">
+            <option value="once" ${reminderFrequency === 'once' ? 'selected' : ''}>Once</option>
+            <option value="daily" ${reminderFrequency === 'daily' ? 'selected' : ''}>Daily</option>
+            <option value="weekly" ${reminderFrequency === 'weekly' ? 'selected' : ''}>Weekly</option>
+          </select></label>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="reReminderSilent" ${entry?.reminder_silent ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+          Silent only: track in Notifications tab but do not send push alert
+        </label>
+      </div>
+    </div>
+
     <div class="fa">
       <button class="btn btn-p" onclick="saveRecurring(${id || 'null'})">${id ? 'Update' : 'Add'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -12853,7 +12913,14 @@ async function saveRecurring(id) {
     amount,
     interval_months: parseInt(document.getElementById('reInterval').value) || 1,
     start_month: document.getElementById('reStartMonth').value || _localYM(),
+    due_day: parseInt(document.getElementById('reDueDay').value, 10) || 1,
+    reminder_enabled: document.getElementById('reReminderEnabled')?.checked ? 1 : 0,
+    reminder_days_before: parseInt(document.getElementById('reReminderDaysBefore')?.value, 10) || 0,
+    reminder_frequency: document.getElementById('reReminderFrequency')?.value || 'once',
+    reminder_silent: document.getElementById('reReminderSilent')?.checked ? 1 : 0,
   };
+  if (!Number.isInteger(body.due_day) || body.due_day < 1 || body.due_day > 28) { toast('Payment day must be between 1 and 28', 'warning'); return; }
+  if (!Number.isInteger(body.reminder_days_before) || body.reminder_days_before < 0 || body.reminder_days_before > 31) { toast('Reminder days before must be between 0 and 31', 'warning'); return; }
   if (type === 'cc_txn') {
     body.card_id = parseInt(document.getElementById('reCard').value) || null;
     body.discount_pct = parseFloat(document.getElementById('reDisc').value) || 0;
@@ -13219,6 +13286,10 @@ async function showRecurringModal(id) {
   }
   const currentMonth = _localYM();
   const isCC = entry?.type === 'cc_txn';
+  const dueDay = Math.max(1, Math.min(28, parseInt(entry?.due_day, 10) || 1));
+  const reminderEnabled = !!entry?.reminder_enabled;
+  const reminderDaysBefore = Math.max(0, parseInt(entry?.reminder_days_before, 10) || 0);
+  const reminderFrequency = String(entry?.reminder_frequency || 'once').toLowerCase();
   const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
   const bankOptions = `<option value="">-- Default / none --</option>${_bankDropdownOptions(entry?.bank_account_id)}`;
 
@@ -13232,6 +13303,7 @@ async function showRecurringModal(id) {
       </label>
       <label class="fl full">Description *<input class="fi" id="reDesc" value="${escHtml(entry?.description || '')}" placeholder="e.g. Netflix, Gym, Electricity..." maxlength="160"></label>
       <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="reAmt" value="${entry?.amount || ''}" placeholder="0.00"></label>
+      <label class="fl">Payment Day (1-28)<input class="fi" type="number" id="reDueDay" value="${dueDay}" min="1" max="28"></label>
       <label class="fl">Repeat Every<select class="fi" id="reInterval">
         <option value="1" ${(parseInt(entry?.interval_months) || 1) === 1 ? 'selected' : ''}>Every month</option>
         <option value="2" ${(parseInt(entry?.interval_months) || 1) === 2 ? 'selected' : ''}>Every 2 months</option>
@@ -13272,6 +13344,26 @@ async function showRecurringModal(id) {
         Add this recurring expense for the current month as well
       </label>` : ''}
     </div>
+    <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="reReminderEnabled" ${reminderEnabled ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleRecurringReminderFields()">
+        Enable payment reminders
+      </label>
+      <div id="reReminderFields" style="${reminderEnabled ? '' : 'display:none'}">
+        <div class="fg">
+          <label class="fl">Start Before (days)<input class="fi" type="number" id="reReminderDaysBefore" value="${reminderDaysBefore}" min="0" max="31"></label>
+          <label class="fl">Reminder Frequency<select class="fi" id="reReminderFrequency">
+            <option value="once" ${reminderFrequency === 'once' ? 'selected' : ''}>Once</option>
+            <option value="daily" ${reminderFrequency === 'daily' ? 'selected' : ''}>Daily</option>
+            <option value="weekly" ${reminderFrequency === 'weekly' ? 'selected' : ''}>Weekly</option>
+          </select></label>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="reReminderSilent" ${entry?.reminder_silent ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+          Silent only: track in Notifications tab but do not send push alert
+        </label>
+      </div>
+    </div>
     <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
 
     <div class="fa">
@@ -13299,11 +13391,18 @@ async function saveRecurring(id) {
     amount,
     interval_months: intervalMonths,
     start_month: startMonth,
+    due_day: parseInt(document.getElementById('reDueDay').value, 10) || 1,
+    reminder_enabled: document.getElementById('reReminderEnabled')?.checked ? 1 : 0,
+    reminder_days_before: parseInt(document.getElementById('reReminderDaysBefore')?.value, 10) || 0,
+    reminder_frequency: document.getElementById('reReminderFrequency')?.value || 'once',
+    reminder_silent: document.getElementById('reReminderSilent')?.checked ? 1 : 0,
     bank_account_id: type === 'expense' ? (bankVal ? parseInt(bankVal, 10) : null) : null,
     expense_category: type === 'cc_txn'
       ? (document.getElementById('reCcExpenseCategory')?.value.trim() || null)
       : (document.getElementById('reExpenseCategory')?.value.trim() || null),
   };
+  if (!Number.isInteger(body.due_day) || body.due_day < 1 || body.due_day > 28) { toast('Payment day must be between 1 and 28', 'warning'); return; }
+  if (!Number.isInteger(body.reminder_days_before) || body.reminder_days_before < 0 || body.reminder_days_before > 31) { toast('Reminder days before must be between 0 and 31', 'warning'); return; }
   if (type === 'cc_txn') {
     body.card_id = parseInt(document.getElementById('reCard').value, 10) || null;
     body.discount_pct = parseFloat(document.getElementById('reDisc').value) || 0;

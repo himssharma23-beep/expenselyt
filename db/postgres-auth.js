@@ -27,6 +27,14 @@ function normalizeLocaleCode(locale, currencyCode) {
   return DEFAULT_LOCALE_BY_CURRENCY[currencyCode] || 'en-US';
 }
 
+function isMissingUserPreferenceColumnError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return err?.code === '42703' && (
+    message.includes('currency_code')
+    || message.includes('locale_code')
+  );
+}
+
 function normalizeUser(row) {
   if (!row) return null;
   const currencyCode = normalizeCurrencyCode(row.currency_code) || 'INR';
@@ -187,15 +195,30 @@ async function findUserByMobile(mobile) {
 }
 
 async function findUserById(id) {
-  const result = await query(
-    `SELECT id, username, email, display_name, role, mobile, avatar_url, apple_user_id, currency_code, locale_code, is_active,
-            created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
-     FROM users
-     WHERE id = $1
-       AND deleted_at IS NULL
-     LIMIT 1`,
-    [id]
-  );
+  let result;
+  try {
+    result = await query(
+      `SELECT id, username, email, display_name, role, mobile, avatar_url, apple_user_id, currency_code, locale_code, is_active,
+              created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
+       FROM users
+       WHERE id = $1
+         AND deleted_at IS NULL
+       LIMIT 1`,
+      [id]
+    );
+  } catch (err) {
+    if (!isMissingUserPreferenceColumnError(err)) throw err;
+    result = await query(
+      `SELECT id, username, email, display_name, role, mobile, avatar_url, apple_user_id,
+              NULL::text AS currency_code, NULL::text AS locale_code, is_active,
+              created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
+       FROM users
+       WHERE id = $1
+         AND deleted_at IS NULL
+       LIMIT 1`,
+      [id]
+    );
+  }
   return normalizeUser(result.rows[0] || null);
 }
 

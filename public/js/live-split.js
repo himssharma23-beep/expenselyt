@@ -2422,8 +2422,19 @@
       api('/api/live-split/invites/outgoing'),
       api('/api/live-split/trips'),
     ]);
-    if (friendResult.status !== 'fulfilled' || divideResult.status !== 'fulfilled') {
-      throw new Error(friendResult.reason?.message || divideResult.reason?.message || 'Could not load live split');
+    if (
+      friendResult.status !== 'fulfilled'
+      || divideResult.status !== 'fulfilled'
+      || friendResult.value?.error
+      || divideResult.value?.error
+    ) {
+      throw new Error(
+        friendResult.value?.error
+        || divideResult.value?.error
+        || friendResult.reason?.message
+        || divideResult.reason?.message
+        || 'Could not load live split'
+      );
     }
     let safeSharedGroups = Array.isArray(state.sharedGroups) ? state.sharedGroups : [];
     if (sharedResult.status === 'fulfilled' && Array.isArray(sharedResult.value?.groups)) {
@@ -3022,6 +3033,30 @@
     }
   }
 
+  function isLiveSplitDuplicateWarning(resultOrMessage) {
+    const message = typeof resultOrMessage === 'string'
+      ? resultOrMessage
+      : String(resultOrMessage?.error || resultOrMessage?.message || '');
+    return message.toLowerCase().includes('this live split expense looks already added');
+  }
+
+  function liveSplitDuplicateConfirmHtml(message) {
+    const safeMessage = escHtml(String(message || '')).replace(/\n/g, '<br>');
+    return `
+      <div style="display:grid;gap:10px;text-align:left">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:38px;height:38px;border-radius:12px;background:rgba(217,119,6,.12);color:#b45309;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800">!</div>
+          <div>
+            <div style="font-weight:800;color:var(--t1);font-size:15px">Possible Duplicate</div>
+            <div style="font-size:12px;color:var(--t3)">This looks like the same split was already added.</div>
+          </div>
+        </div>
+        <div style="font-size:13px;line-height:1.6;color:var(--t2);background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 14px">${safeMessage}</div>
+        <div style="font-size:13px;color:var(--t2)">Do you want to add it again anyway?</div>
+      </div>
+    `;
+  }
+
   async function saveLiveSplit() {
     const form = state.create;
     const people = peopleForForm(form);
@@ -3056,39 +3091,58 @@
       share_amount: r2(share.share),
     }));
 
+    let splitCreated = false;
     try {
       state.saveBusy = true;
       renderCreateModal();
       const sessionKey = `live_${Date.now()}`;
-      await api('/api/live-split/groups', {
+      const createBody = {
+        divide_date: normalizedDate,
+        details: form.details.trim(),
+        paid_by: payerPerson.name,
+        total_amount: total,
+        split_mode: String(form.splitMode || 'equal'),
+        trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,
+        splits: splitsPayload,
+        heading: form.details.trim(),
+        session_id: sessionKey,
+        owner_added_to_expense: !!(form.addExpense && selfShare > 0),
+      };
+      let createResult = await api('/api/live-split/groups', {
         method: 'POST',
-        body: {
-          divide_date: normalizedDate,
-          details: form.details.trim(),
-          paid_by: payerPerson.name,
-          total_amount: total,
-          split_mode: String(form.splitMode || 'equal'),
-          trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,
-          splits: splitsPayload,
-          heading: form.details.trim(),
-          session_id: sessionKey,
-          owner_added_to_expense: !!(form.addExpense && selfShare > 0),
-        },
+        body: createBody,
       });
+      if (createResult?.status === 409 && isLiveSplitDuplicateWarning(createResult)) {
+        const shouldAddAgain = await confirmDialog(liveSplitDuplicateConfirmHtml(createResult.error));
+        if (!shouldAddAgain) {
+          state.saveBusy = false;
+          renderCreateModal();
+          return;
+        }
+        createResult = await api('/api/live-split/groups', {
+          method: 'POST',
+          body: { ...createBody, allow_duplicate: true },
+        });
+      }
+      if (!createResult || createResult.error) {
+        throw new Error(createResult?.error || 'Could not save live split');
+      }
+      splitCreated = true;
 
       const linkedFriendIds = splitsPayload
         .map((split) => state.appFriends.find((friend) => Number(friend.id) === Number(split.friend_id)))
         .filter((friend) => friend && Number(friend.linked_user_id) > 0)
         .map((friend) => Number(friend.id));
       if (linkedFriendIds.length) {
-        await api('/api/live-split/groups/share-session', {
+        const shareResult = await api('/api/live-split/groups/share-session', {
           method: 'POST',
           body: { session_key: sessionKey, friend_ids: [...new Set(linkedFriendIds)] },
         });
+        if (shareResult?.error) throw new Error(shareResult.error);
       }
 
       if (form.addExpense && selfShare > 0) {
-        await api('/api/expenses', {
+        const expenseResult = await api('/api/expenses', {
           method: 'POST',
           body: {
             item_name: form.details.trim(),
@@ -3099,13 +3153,14 @@
             bank_account_id: null,
           },
         });
+        if (expenseResult?.error) throw new Error(expenseResult.error);
       }
 
       const payerIsSelf = String(form.paidBy || '') === 'self';
       if (payerIsSelf && total > 0) {
         if (form.finance_target === 'card' && Number(form.card_id || 0) > 0) {
           const cardId = Number(form.card_id || 0);
-          await api('/api/cc/txns', {
+          const cardTxnResult = await api('/api/cc/txns', {
             method: 'POST',
             body: {
               card_id: cardId,
@@ -3116,15 +3171,17 @@
               source: 'live_split',
             },
           });
+          if (cardTxnResult?.error) throw new Error(cardTxnResult.error);
         } else if (form.bank_account_id) {
           const bankId = Number(form.bank_account_id);
           const bank = (state.bankAccounts || []).find((item) => Number(item.id) === bankId);
           if (bank) {
             const nextBalance = r2(Number(bank.balance || 0) - total);
-            await api(`/api/banks/${bankId}/balance`, {
+            const bankResult = await api(`/api/banks/${bankId}/balance`, {
               method: 'PATCH',
               body: { balance: nextBalance >= 0 ? nextBalance : 0 },
             });
+            if (bankResult?.error) throw new Error(bankResult.error);
           }
         }
       }
@@ -3136,6 +3193,13 @@
       toast('Live split saved', 'success');
     } catch (error) {
       state.saveBusy = false;
+      if (splitCreated) {
+        closeModal();
+        state.create = null;
+        await loadLiveSplit();
+        toast(error?.message || 'Live split saved, but a follow-up step failed', 'warning');
+        return;
+      }
       if (state.create) renderCreateModal();
       toast(error?.message || 'Could not save live split', 'error');
     }

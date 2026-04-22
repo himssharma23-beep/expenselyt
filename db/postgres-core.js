@@ -15,6 +15,23 @@ function validationError(message) {
   return err;
 }
 
+function isMissingLiveSplitFriendColumnError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return err?.code === '42703' && (
+    message.includes('live_split_friends')
+    || message.includes('linked_user_id')
+    || message.includes('deleted_at')
+    || message.includes('updated_at')
+    || message.includes('updated_by')
+  );
+}
+
+function duplicateError(message) {
+  const err = new Error(message);
+  err.statusCode = 409;
+  return err;
+}
+
 function normalizeBankAccountId(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -481,9 +498,9 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
      UPDATE live_split_splits s
      SET friend_id = r.canonical_id,
          friend_name = COALESCE(NULLIF(trim(r.canonical_name), ''), s.friend_name)
-     FROM ranked r
-     JOIN live_split_groups g ON g.id = s.group_id
+     FROM ranked r, live_split_groups g
      WHERE g.user_id = $1
+       AND g.id = s.group_id
        AND s.friend_id = r.id
        AND r.canonical_id <> r.id`,
     [ownerId]
@@ -859,20 +876,44 @@ async function deleteFriend(userId, id) {
 }
 
 async function getLiveSplitFriends(userId) {
-  const result = await query(
-    `SELECT
-       f.*,
-       u.display_name AS linked_user_display_name,
-       u.username AS linked_user_username,
-       u.avatar_url AS linked_user_avatar_url
-     FROM live_split_friends f
-     LEFT JOIN users u
-       ON u.id = f.linked_user_id
-      AND u.deleted_at IS NULL
-     WHERE f.user_id = $1 AND f.deleted_at IS NULL
-     ORDER BY f.name`,
-    [userId]
-  );
+  try {
+    await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
+  } catch (err) {
+    if (!isMissingLiveSplitFriendColumnError(err)) throw err;
+  }
+  let result;
+  try {
+    result = await query(
+      `SELECT
+         f.*,
+         u.display_name AS linked_user_display_name,
+         u.username AS linked_user_username,
+         u.avatar_url AS linked_user_avatar_url
+       FROM live_split_friends f
+       LEFT JOIN users u
+         ON u.id = f.linked_user_id
+        AND u.deleted_at IS NULL
+       WHERE f.user_id = $1 AND f.deleted_at IS NULL
+       ORDER BY f.name`,
+      [userId]
+    );
+  } catch (err) {
+    if (!isMissingLiveSplitFriendColumnError(err)) throw err;
+    result = await query(
+      `SELECT
+         f.id,
+         f.user_id,
+         f.name,
+         f.linked_user_id,
+         NULL::text AS linked_user_display_name,
+         NULL::text AS linked_user_username,
+         NULL::text AS linked_user_avatar_url
+       FROM live_split_friends f
+       WHERE f.user_id = $1
+       ORDER BY f.name`,
+      [userId]
+    );
+  }
   return result.rows.map((row) => ({
     ...row,
     linked_user_id: row.linked_user_id ? Number(row.linked_user_id) : null,
@@ -933,6 +974,7 @@ async function linkLiveSplitFriendToUser(userId, friendId, linkedUserId = null) 
     'UPDATE live_split_friends SET linked_user_id = $1, updated_at = NOW(), updated_by = $2 WHERE id = $3 AND user_id = $2',
     [targetUserId, userId, friendId]
   );
+  await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
 }
 
 async function deleteLiveSplitFriend(userId, id) {
@@ -1338,6 +1380,7 @@ async function addLiveSplitTripToExpense(userId, tripId, data = {}) {
 }
 
 async function getLiveSplitGroups(userId) {
+  await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
   const result = await query(
     `SELECT
        g.*,
@@ -1716,25 +1759,53 @@ async function getLiveSplitFriendActivities(userId, friendId, limit = 60) {
   const fid = Number(friendId);
   const cappedLimit = Math.max(1, Math.min(200, Number(limit) || 60));
   const friendResult = await query(
-    `SELECT id, name
+    `SELECT id, name, linked_user_id
      FROM live_split_friends
      WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL
      LIMIT 1`,
     [uid, fid]
   );
-  if (!friendResult.rows[0]) throw new Error('Live split friend not found');
+  const selectedFriend = friendResult.rows[0];
+  if (!selectedFriend) throw new Error('Live split friend not found');
+
+  const linkedUserId = Number(selectedFriend.linked_user_id || 0);
+  const friendName = String(selectedFriend.name || '').trim();
+  const friendNameNorm = friendName.toLowerCase();
+  const friendNameFirstToken = friendNameNorm.split(/\s+/).filter(Boolean)[0] || '';
 
   const result = await query(
     `SELECT a.id, a.owner_user_id, a.friend_id, a.group_id, a.actor_user_id, a.action, a.summary,
             a.expense_details, a.divide_date, a.total_amount, a.friend_name_snapshot, a.created_at,
             u.display_name AS actor_name, u.username AS actor_username
      FROM live_split_friend_activity a
+     JOIN live_split_friends f ON f.id = a.friend_id
      LEFT JOIN users u ON u.id = a.actor_user_id
      WHERE a.owner_user_id = $1
-       AND a.friend_id = $2
+       AND (
+         a.friend_id = $2
+         OR (
+           $4 > 0
+           AND f.user_id = $1
+           AND f.deleted_at IS NULL
+           AND f.linked_user_id = $4
+         )
+         OR (
+           $4 = 0
+           AND $5 <> ''
+           AND f.user_id = $1
+           AND f.deleted_at IS NULL
+           AND (
+             lower(trim(COALESCE(f.name, ''))) = $5
+             OR (
+               $6 <> ''
+               AND split_part(lower(trim(COALESCE(f.name, ''))), ' ', 1) = $6
+             )
+           )
+         )
+       )
      ORDER BY a.created_at DESC, a.id DESC
      LIMIT $3`,
-    [uid, fid, cappedLimit]
+    [uid, fid, cappedLimit, linkedUserId, friendNameNorm, friendNameFirstToken]
   );
   return result.rows.map((row) => ({
     ...row,
@@ -1753,6 +1824,13 @@ async function addLiveSplitGroup(userId, data) {
     const tripId = Number(data.trip_id || 0) > 0 ? Number(data.trip_id) : null;
     const ownerUserId = Number(userId);
     const normalizedSplits = await normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, data.splits || []);
+    if (!data.allow_duplicate) {
+      await assertNoDuplicateLiveSplitGroup(client, ownerUserId, {
+        divide_date: divideDate,
+        total_amount: data.total_amount,
+        splits: normalizedSplits,
+      });
+    }
     if (tripId) {
       const trip = await getLiveSplitTripAccessRow(client, userId, tripId);
       if (!trip) throw validationError('Live split trip not found');
@@ -1767,13 +1845,7 @@ async function addLiveSplitGroup(userId, data) {
       [userId, divideDate, data.details, data.paid_by, data.total_amount, data.heading || null, data.session_id || null, String(data.split_mode || 'equal'), tripId, !!data.owner_added_to_expense]
     );
     const groupId = Number(groupResult.rows[0].id);
-    for (const split of normalizedSplits) {
-      await client.query(
-        `INSERT INTO live_split_splits (group_id, friend_id, friend_name, share_amount)
-         VALUES ($1, $2, $3, $4)`,
-      [groupId, split.friend_id, split.friend_name, split.share_amount]
-      );
-    }
+    await insertLiveSplitSplitsWithSequenceRecovery(client, groupId, normalizedSplits);
     await logLiveSplitGroupActivity(client, {
       groupId,
       actorUserId: userId,
@@ -1830,6 +1902,7 @@ async function normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, splits
     normalized.push({
       friend_id: Number(friendRow.id),
       friend_name: requestedName || String(friendRow.name || '').trim(),
+      linked_user_id: friendRow.linked_user_id ? Number(friendRow.linked_user_id) : null,
       share_amount: num(split?.share_amount),
     });
   }
@@ -1838,6 +1911,159 @@ async function normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, splits
 
 function normalizeLiveSplitPayerName(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function buildLiveSplitDuplicateSignature(ownerUserId, totalAmount, splits = []) {
+  const normalizedTotal = Math.round(num(totalAmount) * 100) / 100;
+  const normalizedShares = (splits || [])
+    .map((split) => Math.round(num(split?.share_amount) * 100) / 100)
+    .filter((value) => value >= 0)
+    .sort((a, b) => a - b);
+  const splitSum = Math.round(normalizedShares.reduce((sum, value) => sum + value, 0) * 100) / 100;
+  const ownerShare = Math.round((normalizedTotal - splitSum) * 100) / 100;
+  const signatureShares = [...normalizedShares, ownerShare].sort((a, b) => a - b);
+  const participantTokens = [
+    Number(ownerUserId || 0) > 0 ? `user:${Number(ownerUserId)}` : 'user:0',
+    ...(splits || []).map((split) => {
+      const linkedUserId = Number(split?.linked_user_id || 0);
+      if (linkedUserId > 0) return `user:${linkedUserId}`;
+      const friendId = Number(split?.friend_id || 0);
+      return friendId > 0 ? `friend:${friendId}` : `name:${String(split?.friend_name || '').trim().toLowerCase()}`;
+    }),
+  ].sort();
+  return {
+    totalAmount: normalizedTotal,
+    participantCount: participantTokens.length,
+    participantKey: participantTokens.join('|'),
+    sharesKey: signatureShares.map((value) => value.toFixed(2)).join('|'),
+  };
+}
+
+async function insertLiveSplitSplitsWithSequenceRecovery(client, groupId, normalizedSplits = []) {
+  for (const split of normalizedSplits) {
+    try {
+      await client.query(
+        `INSERT INTO live_split_splits (group_id, friend_id, friend_name, share_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [groupId, split.friend_id, split.friend_name, split.share_amount]
+      );
+    } catch (err) {
+      const isSequenceDrift = err?.code === '23505' && String(err?.constraint || '') === 'live_split_splits_pkey';
+      if (!isSequenceDrift) throw err;
+      await client.query(
+        `SELECT setval(
+           pg_get_serial_sequence('live_split_splits', 'id'),
+           COALESCE((SELECT MAX(id) FROM live_split_splits), 0) + 1,
+           false
+         )`
+      );
+      await client.query(
+        `INSERT INTO live_split_splits (group_id, friend_id, friend_name, share_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [groupId, split.friend_id, split.friend_name, split.share_amount]
+      );
+    }
+  }
+}
+
+async function runLiveSplitGroupShareUpsertWithRecovery(client, sql, params = []) {
+  await client.query('SAVEPOINT live_split_group_shares_seq_fix');
+  try {
+    const result = await client.query(sql, params);
+    await client.query('RELEASE SAVEPOINT live_split_group_shares_seq_fix');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK TO SAVEPOINT live_split_group_shares_seq_fix');
+    const isSequenceDrift = err?.code === '23505' && String(err?.constraint || '') === 'live_split_group_shares_pkey';
+    if (!isSequenceDrift) {
+      await client.query('RELEASE SAVEPOINT live_split_group_shares_seq_fix');
+      throw err;
+    }
+    await client.query(
+      `SELECT setval(
+         pg_get_serial_sequence('live_split_group_shares', 'id'),
+         COALESCE((SELECT MAX(id) FROM live_split_group_shares), 0) + 1,
+         false
+       )`
+    );
+    const result = await client.query(sql, params);
+    await client.query('RELEASE SAVEPOINT live_split_group_shares_seq_fix');
+    return result;
+  }
+}
+
+async function assertNoDuplicateLiveSplitGroup(client, userId, data, excludeGroupId = null) {
+  const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
+  const target = buildLiveSplitDuplicateSignature(userId, data.total_amount, data.splits || []);
+  const params = [Number(userId), divideDate];
+  let excludeSql = '';
+  if (Number(excludeGroupId || 0) > 0) {
+    params.push(Number(excludeGroupId));
+    excludeSql = ` AND g.id <> $${params.length}`;
+  }
+  const result = await client.query(
+    `SELECT
+       g.id,
+       g.user_id,
+       g.details,
+       g.divide_date,
+       g.total_amount,
+       owner.display_name AS owner_name,
+       COALESCE(
+          json_agg(
+            json_build_object(
+              'friend_id', s.friend_id,
+              'friend_name', s.friend_name,
+              'linked_user_id', COALESCE(
+                NULLIF(lf.linked_user_id, g.user_id),
+                (
+                  SELECT dgs.target_user_id
+                  FROM live_split_group_shares dgs
+                  WHERE dgs.group_id = g.id
+                    AND dgs.friend_id = s.friend_id
+                  ORDER BY dgs.id DESC
+                  LIMIT 1
+                )
+              ),
+              'share_amount', s.share_amount
+            )
+            ORDER BY s.share_amount, s.id
+          ) FILTER (WHERE s.id IS NOT NULL),
+          '[]'::json
+        ) AS splits
+      FROM live_split_groups g
+      JOIN users owner ON owner.id = g.user_id
+      LEFT JOIN live_split_splits s ON s.group_id = g.id
+      LEFT JOIN live_split_friends lf ON lf.id = s.friend_id
+     WHERE g.divide_date = $2
+       AND g.split_mode <> 'settlement'
+       ${excludeSql}
+       AND (
+         g.user_id = $1
+         OR EXISTS (
+           SELECT 1
+           FROM live_split_group_shares share
+           WHERE share.group_id = g.id
+             AND share.target_user_id = $1
+             AND share.owner_hidden_at IS NULL
+             AND share.target_hidden_at IS NULL
+         )
+       )
+     GROUP BY g.id, owner.display_name
+     ORDER BY g.id DESC`,
+    params
+  );
+
+  for (const row of result.rows || []) {
+    const candidate = buildLiveSplitDuplicateSignature(row.user_id, row.total_amount, row.splits || []);
+    if (candidate.totalAmount !== target.totalAmount) continue;
+    if (candidate.participantCount !== target.participantCount) continue;
+    if (candidate.participantKey !== target.participantKey) continue;
+    if (candidate.sharesKey !== target.sharesKey) continue;
+    const ownerName = String(row.owner_name || '').trim() || 'Someone';
+    const details = String(row.details || 'this split').trim();
+    throw duplicateError(`This live split expense looks already added on ${row.divide_date} for ${candidate.totalAmount.toFixed(2)} with the same participant split. Existing item: "${details}" by ${ownerName}.`);
+  }
 }
 
 async function assertLiveSplitTripPayerAllowed(client, tripId, paidBy) {
@@ -1905,7 +2131,7 @@ async function syncSingleLiveSplitGroupShares(client, ownerUserId, groupId, frie
   for (const friendId of eligibleFriendIds) {
     const targetUserId = participantMap.get(friendId);
     if (!targetUserId) continue;
-    await client.query(
+    await runLiveSplitGroupShareUpsertWithRecovery(client,
       `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id, owner_hidden_at, target_hidden_at, updated_at)
        VALUES ($1, $2, $3, $4, $2, NULL, NULL, NOW())
        ON CONFLICT (group_id, target_user_id)
@@ -1972,6 +2198,13 @@ async function updateLiveSplitGroup(userId, groupId, data) {
       [gid]
     );
     const normalizedSplits = await normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, data.splits || []);
+    if (!data.allow_duplicate) {
+      await assertNoDuplicateLiveSplitGroup(client, uid, {
+        divide_date: divideDate,
+        total_amount: data.total_amount,
+        splits: normalizedSplits,
+      }, gid);
+    }
     if (nextTripId) {
       await assertLiveSplitTripParticipants(client, nextTripId, normalizedSplits);
       await assertLiveSplitTripPayerAllowed(client, nextTripId, data.paid_by);
@@ -2170,7 +2403,7 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
       const rows = participantMap.get(friendId) || [];
       for (const row of rows) {
         if (!row.target_user_id) continue;
-        await client.query(
+        await runLiveSplitGroupShareUpsertWithRecovery(client,
           `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id, owner_hidden_at, target_hidden_at, updated_at)
            VALUES ($1, $2, $3, $4, $2, NULL, NULL, NOW())
            ON CONFLICT (group_id, target_user_id)
@@ -2202,8 +2435,7 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
 }
 
 async function getReceivedLiveSplitShares(userId) {
-  await query(
-    `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id)
+  const shareHydrationSql = `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id)
      SELECT DISTINCT
        g.id,
        g.user_id,
@@ -2236,9 +2468,21 @@ async function getReceivedLiveSplitShares(userId) {
      ON CONFLICT (group_id, target_user_id)
      DO UPDATE SET friend_id = EXCLUDED.friend_id,
                    shared_by_user_id = EXCLUDED.shared_by_user_id,
-                   updated_at = NOW()`,
-    [userId]
-  );
+                   updated_at = NOW()`;
+  try {
+    await query(shareHydrationSql, [userId]);
+  } catch (err) {
+    const isSequenceDrift = err?.code === '23505' && String(err?.constraint || '') === 'live_split_group_shares_pkey';
+    if (!isSequenceDrift) throw err;
+    await query(
+      `SELECT setval(
+         pg_get_serial_sequence('live_split_group_shares', 'id'),
+         COALESCE((SELECT MAX(id) FROM live_split_group_shares), 0) + 1,
+         false
+       )`
+    );
+    await query(shareHydrationSql, [userId]);
+  }
 
   const normalizeSplits = (raw) => {
     if (Array.isArray(raw)) return raw;
@@ -2710,7 +2954,7 @@ async function getDashboardData(userId, year) {
   const currentYear = String(new Date().getFullYear());
   const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
 
-  const [monthlyTotalsR, monthlyByTypeR, topItemsR, spendBreakdownR, yearTotalR, monthTotalR, recentExpensesR, yearsR, liveSplitFriends, liveSplitGroups, liveSplitSharedGroups] = await Promise.all([
+  const [monthlyTotalsR, monthlyByTypeR, topItemsR, spendBreakdownR, yearTotalR, monthTotalR, recentExpensesR, yearsR] = await Promise.all([
     query(
       `SELECT to_char(purchase_date, 'MM') AS month, SUM(amount) AS total, COUNT(*) AS count
        FROM expenses
@@ -2768,13 +3012,28 @@ async function getDashboardData(userId, year) {
        WHERE user_id = $1 AND EXTRACT(YEAR FROM purchase_date)::int BETWEEN 2018 AND $2 AND deleted_at IS NULL
        ORDER BY year DESC`,
       [userId, new Date().getFullYear() + 1]
-    ),
-    getLiveSplitFriends(userId),
-    getLiveSplitGroups(userId),
-    getReceivedLiveSplitShares(userId),
+    )
   ]);
 
-  const liveSplitSummary = computeLiveSplitDashboardSummary(userId, liveSplitFriends, liveSplitGroups, liveSplitSharedGroups);
+  let liveSplitFriends = [];
+  let liveSplitGroups = [];
+  let liveSplitSharedGroups = [];
+  try {
+    [liveSplitFriends, liveSplitGroups, liveSplitSharedGroups] = await Promise.all([
+      getLiveSplitFriends(userId),
+      getLiveSplitGroups(userId),
+      getReceivedLiveSplitShares(userId),
+    ]);
+  } catch (err) {
+    console.error('[dashboard] live split summary fallback:', err?.message || err);
+  }
+
+  const liveSplitSummary = computeLiveSplitDashboardSummary(
+    userId,
+    Array.isArray(liveSplitFriends) ? liveSplitFriends : [],
+    Array.isArray(liveSplitGroups) ? liveSplitGroups : [],
+    Array.isArray(liveSplitSharedGroups) ? liveSplitSharedGroups : []
+  );
   const totalOwed = liveSplitSummary.totals.oweToMe;
   const totalOwe = liveSplitSummary.totals.iOwe;
   const years = yearsR.rows.map((row) => row.year);

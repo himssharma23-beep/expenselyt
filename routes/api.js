@@ -1907,7 +1907,7 @@ router.delete('/live-split/trips/:id(\\d+)/members/:mid(\\d+)', async (req, res)
 
 router.post('/live-split/groups', async (req, res) => {
   try {
-    const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id, owner_added_to_expense } = req.body;
+    const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id, owner_added_to_expense, allow_duplicate } = req.body;
     if (!details || !total_amount || !Array.isArray(splits)) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(
       getCoreDb().addLiveSplitGroup(req.session.userId, {
@@ -1921,6 +1921,7 @@ router.post('/live-split/groups', async (req, res) => {
         heading,
         session_id,
         owner_added_to_expense: !!owner_added_to_expense,
+        allow_duplicate: !!allow_duplicate,
       })
     );
     res.json({ success: true, id });
@@ -1931,7 +1932,7 @@ router.post('/live-split/groups', async (req, res) => {
 
 router.put('/live-split/groups/:id(\\d+)', async (req, res) => {
   try {
-    const { divide_date, details, paid_by, total_amount, splits, heading, split_mode, trip_id } = req.body;
+    const { divide_date, details, paid_by, total_amount, splits, heading, split_mode, trip_id, allow_duplicate } = req.body;
     if (!details || !total_amount || !Array.isArray(splits)) {
       return res.status(400).json({ error: 'Missing fields' });
     }
@@ -1945,6 +1946,7 @@ router.put('/live-split/groups/:id(\\d+)', async (req, res) => {
         trip_id: trip_id || null,
         splits,
         heading,
+        allow_duplicate: !!allow_duplicate,
       })
     );
     res.json({ success: true });
@@ -4723,9 +4725,14 @@ router.post('/recurring', (req, res) => {
       card_id,
       bank_account_id,
       expense_category,
+      due_day,
       discount_pct,
       also_expense,
       is_extra,
+      reminder_enabled,
+      reminder_days_before,
+      reminder_frequency,
+      reminder_silent,
       apply_current_month,
     } = req.body;
     if (!type || !description || !amount) return res.status(400).json({ error: 'Missing required fields' });
@@ -4738,9 +4745,14 @@ router.post('/recurring', (req, res) => {
       card_id,
       bank_account_id,
       expense_category,
+      due_day,
       discount_pct,
       also_expense,
       is_extra,
+      reminder_enabled,
+      reminder_days_before,
+      reminder_frequency,
+      reminder_silent,
     })).then(async (id) => {
       if (apply_current_month) {
         await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));

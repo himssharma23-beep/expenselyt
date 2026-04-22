@@ -53,15 +53,6 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
 
   const run = client || { query };
-  const existing = await run.query(
-    `SELECT *
-     FROM cc_cycles
-     WHERE card_id = $1 AND user_id = $2 AND cycle_start <= $3 AND cycle_end >= $4
-     LIMIT 1`,
-    [cardId, userId, dateStr, dateStr]
-  );
-  if (existing.rows[0]) return existing.rows[0];
-
   const cardR = await run.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
   const card = cardR.rows[0];
   if (!card) return null;
@@ -79,18 +70,27 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   }
 
   await lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd);
-  const check = await findExactCycle(run, cardId, userId, cycleStart, cycleEnd);
-  if (check) return check;
+  const exact = await findExactCycle(run, cardId, userId, cycleStart, cycleEnd);
+  if (exact) return exact;
 
   const dueEnd = new Date(`${cycleEnd}T00:00:00`);
   dueEnd.setDate(dueEnd.getDate() + Number(card.due_days || 20));
-  const inserted = await run.query(
-    `INSERT INTO cc_cycles (user_id, card_id, cycle_start, cycle_end, due_date, status)
-     VALUES ($1, $2, $3, $4, $5, 'open')
-     RETURNING *`,
-    [userId, cardId, cycleStart, cycleEnd, _localDate(dueEnd)]
-  );
-  return inserted.rows[0];
+  const today = _localDate(new Date());
+  const status = cycleEnd < today ? 'billed' : 'open';
+  try {
+    const inserted = await run.query(
+      `INSERT INTO cc_cycles (user_id, card_id, cycle_start, cycle_end, due_date, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [userId, cardId, cycleStart, cycleEnd, _localDate(dueEnd), status]
+    );
+    return inserted.rows[0];
+  } catch (err) {
+    if (err?.code !== '23505') throw err;
+    const conflict = await findExactCycle(run, cardId, userId, cycleStart, cycleEnd);
+    if (conflict) return conflict;
+    throw err;
+  }
 }
 
 async function updateCycleTotals(cycleId, client = null) {
