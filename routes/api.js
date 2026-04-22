@@ -3630,7 +3630,10 @@ router.put('/planner/monthly/:id/pay', (req, res) => {
 router.get('/cc/cards', (req, res) => {
   Promise.resolve(getBillingDb().getCreditCards(req.session.userId)).then((cards) => {
     res.json({ cards });
-  }).catch((err) => { res.status(500).json({ error: err.message }); });
+  }).catch((err) => {
+    console.error('[cc/cards] failed for user', req.session?.userId, err?.stack || err?.message || err);
+    res.status(500).json({ error: err.message });
+  });
 });
 
 router.post('/cc/cards', (req, res) => {
