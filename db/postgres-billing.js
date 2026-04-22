@@ -395,6 +395,39 @@ async function getOrCreateCurrentCycle(cardId, userId, client = null) {
   return getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, card.due_days || 20, client);
 }
 
+async function getCurrentCycleSnapshot(cardId, userId, card, client = null) {
+  const run = client || { query };
+  if (!card) return null;
+  const { cycleStart, cycleEnd } = getCcCyclePeriod(card.bill_gen_day || 1);
+  const exactR = await run.query(
+    `SELECT *
+     FROM cc_cycles
+     WHERE card_id = $1
+       AND user_id = $2
+       AND cycle_start = $3
+       AND cycle_end = $4
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    [cardId, userId, cycleStart, cycleEnd]
+  );
+  if (exactR.rows[0]) return exactR.rows[0];
+
+  const today = _localDate(new Date());
+  const fallbackR = await run.query(
+    `SELECT *
+     FROM cc_cycles
+     WHERE card_id = $1
+       AND user_id = $2
+       AND status = 'open'
+       AND cycle_start <= $3
+       AND cycle_end >= $4
+     ORDER BY cycle_start DESC, created_at DESC, id DESC
+     LIMIT 1`,
+    [cardId, userId, today, today]
+  );
+  return fallbackR.rows[0] || null;
+}
+
 async function updateCycleTotals(cycleId, client = null) {
   const run = client || { query };
   const cycleR = await run.query('SELECT manual_total_override FROM cc_cycles WHERE id = $1 LIMIT 1', [cycleId]);
@@ -485,24 +518,14 @@ async function getCreditCards(userId) {
   const cards = [];
   for (const card of cardsR.rows) {
     const { cycle, totals } = await withTransaction(async (client) => {
-      await rebalanceOpenCycleForCard(userId, card.id, card, client);
-      const today = _localDate(new Date());
-      const [cycleR, totalsR] = await Promise.all([
-        client.query(
-          `SELECT *
-           FROM cc_cycles
-           WHERE card_id = $1 AND user_id = $2 AND status = 'open' AND cycle_start <= $3 AND cycle_end >= $4
-           LIMIT 1`,
-          [card.id, userId, today, today]
-        ),
-        client.query(
+      const cycle = await getCurrentCycleSnapshot(card.id, userId, card, client);
+      const totalsR = await client.query(
           `SELECT COALESCE(SUM(amount),0) AS total_spent, COALESCE(SUM(net_amount),0) AS total_net, COUNT(*)::int AS txn_count
            FROM cc_txns
            WHERE card_id = $1 AND user_id = $2`,
           [card.id, userId]
-        ),
-      ]);
-      return { cycle: cycleR.rows[0] || null, totals: totalsR.rows[0] || {} };
+      );
+      return { cycle: cycle || null, totals: totalsR.rows[0] || {} };
     });
     cards.push({
       ...card,
@@ -545,11 +568,8 @@ async function getCcCurrentCycle(userId, cardId) {
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
     const card = cardR.rows[0];
     if (!card) return null;
-    await rebalanceOpenCycleForCard(userId, cardId, card, client);
-    let cycle = await getOrCreateCurrentCycle(cardId, userId, client);
+    const cycle = await getCurrentCycleSnapshot(cardId, userId, card, client);
     if (!cycle) return { card, cycle: null, txns: [] };
-    const reconciled = await reconcileCycleTransactions(userId, cycle, card, client);
-    cycle = reconciled.cycle || cycle;
     const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC, id ASC', [cycle.id]);
     return { card, cycle, txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.net_amount) })) };
   });
@@ -559,14 +579,8 @@ async function getCcCycles(userId, cardId) {
   return withTransaction(async (client) => {
     await autoClosePastCcCycles(userId, cardId);
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
-    const card = cardR.rows[0];
-    if (!card) return [];
-    await rebalanceOpenCycleForCard(userId, cardId, card, client);
-    let cyclesR = await client.query('SELECT * FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC', [cardId, userId]);
-    for (const cycle of cyclesR.rows) {
-      await reconcileCycleTransactions(userId, cycle, card, client);
-    }
-    cyclesR = await client.query('SELECT * FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC', [cardId, userId]);
+    if (!cardR.rows[0]) return [];
+    const cyclesR = await client.query('SELECT * FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC, created_at DESC, id DESC', [cardId, userId]);
     const cycles = [];
     for (const cycle of cyclesR.rows) {
       const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC', [cycle.id]);
