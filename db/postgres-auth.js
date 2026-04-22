@@ -64,6 +64,54 @@ function normalizeMobile(mobile) {
   return cleaned;
 }
 
+function normalizeNotification(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    type: row.type,
+    dedupe_key: row.dedupe_key || null,
+    title: row.title,
+    body: row.body,
+    target_screen: row.target_screen || null,
+    target_params: row.target_params || {},
+    data: row.data || {},
+    is_read: !!row.is_read,
+    read_at: row.read_at || null,
+    pushed_at: row.pushed_at || null,
+    created_at: row.created_at || null,
+  };
+}
+
+function getNotificationGroupKey(row) {
+  if (!row) return null;
+  const type = String(row.type || '').trim();
+  const dedupeKey = String(row.dedupe_key || '').trim();
+  const data = row.data && typeof row.data === 'object' ? row.data : {};
+  const cardId = Number(data.card_id || 0);
+  const datePart = dedupeKey.includes(':') ? dedupeKey.split(':').pop() : dedupeKey;
+
+  if ((type === 'credit_cycle_closed' || type === 'credit_due_reminder') && cardId > 0 && /^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    return `${type}:${cardId}:${datePart}`;
+  }
+  if (type && dedupeKey) return `${type}:${dedupeKey}`;
+  if (type) return `${type}:id:${row.id}`;
+  return `id:${row.id}`;
+}
+
+function collapseNotificationRows(rows = [], { limit = 50, offset = 0 } = {}) {
+  const grouped = [];
+  const seen = new Set();
+  for (const rawRow of rows) {
+    const row = normalizeNotification(rawRow);
+    const key = getNotificationGroupKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    grouped.push(row);
+  }
+  return grouped.slice(offset, offset + limit);
+}
+
 async function createUser(username, email, password, displayName, preferences = {}, mobile = null) {
   const hash = bcrypt.hashSync(password, 10);
   const currencyCode = normalizeCurrencyCode(preferences.currency_code) || 'INR';
@@ -601,13 +649,13 @@ async function markUserNotificationPushed(userId, notificationId) {
 
 async function getUnreadNotificationCount(userId) {
   const result = await query(
-    `SELECT COUNT(*)::int AS unread_count
+    `SELECT id, user_id, type, dedupe_key, title, body, target_screen, target_params, data, is_read, read_at, pushed_at, created_at
      FROM user_notifications
      WHERE user_id = $1
-       AND is_read = FALSE`,
+        AND is_read = FALSE`,
     [userId]
   );
-  return Number(result.rows[0]?.unread_count || 0);
+  return collapseNotificationRows(result.rows, { limit: Number.MAX_SAFE_INTEGER, offset: 0 }).length;
 }
 
 async function listUserNotifications(userId, options = {}) {
@@ -618,37 +666,48 @@ async function listUserNotifications(userId, options = {}) {
      FROM user_notifications
      WHERE user_id = $1
      ORDER BY created_at DESC, id DESC
-     LIMIT $2 OFFSET $3`,
-    [userId, limit, offset]
+     LIMIT 500`,
+    [userId]
   );
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    user_id: Number(row.user_id),
-    type: row.type,
-    dedupe_key: row.dedupe_key || null,
-    title: row.title,
-    body: row.body,
-    target_screen: row.target_screen || null,
-    target_params: row.target_params || {},
-    data: row.data || {},
-    is_read: !!row.is_read,
-    read_at: row.read_at || null,
-    pushed_at: row.pushed_at || null,
-    created_at: row.created_at || null,
-  }));
+  return collapseNotificationRows(result.rows, { limit, offset });
 }
 
 async function markUserNotificationRead(userId, notificationId, isRead = true) {
+  const existingR = await query(
+    `SELECT id, user_id, type, dedupe_key, title, body, target_screen, target_params, data, is_read, read_at, pushed_at, created_at
+     FROM user_notifications
+     WHERE id = $1
+       AND user_id = $2
+     LIMIT 1`,
+    [notificationId, userId]
+  );
+  const existing = normalizeNotification(existingR.rows[0] || null);
+  if (!existing) return null;
+
+  const groupKey = getNotificationGroupKey(existing);
+  const relatedR = await query(
+    `SELECT id, user_id, type, dedupe_key, title, body, target_screen, target_params, data, is_read, read_at, pushed_at, created_at
+     FROM user_notifications
+     WHERE user_id = $1`,
+    [userId]
+  );
+  const relatedIds = relatedR.rows
+    .map((row) => normalizeNotification(row))
+    .filter((row) => getNotificationGroupKey(row) === groupKey)
+    .map((row) => Number(row.id))
+    .filter((id) => id > 0);
+  const targetIds = relatedIds.length ? relatedIds : [Number(notificationId)];
+
   const result = await query(
     `UPDATE user_notifications
      SET is_read = $1,
-         read_at = CASE WHEN $1 THEN NOW() ELSE NULL END
-     WHERE id = $2
-       AND user_id = $3
+          read_at = CASE WHEN $1 THEN NOW() ELSE NULL END
+     WHERE user_id = $2
+       AND id = ANY($3::bigint[])
      RETURNING id, is_read, read_at`,
-    [!!isRead, notificationId, userId]
+    [!!isRead, userId, targetIds]
   );
-  const row = result.rows[0];
+  const row = result.rows.find((entry) => Number(entry.id) === Number(notificationId)) || result.rows[0];
   if (!row) return null;
   return {
     id: Number(row.id),

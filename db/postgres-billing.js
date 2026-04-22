@@ -130,16 +130,30 @@ function getNextCcCyclePeriod(period, billGenDay) {
   return getCcCyclePeriodForDate(billGenDay, nextDate);
 }
 
-async function getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, dueDays, client = null) {
-  const run = client || { query };
+async function lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd) {
+  await run.query(
+    `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+    [`cc_cycle:${userId}:${cardId}`, `${cycleStart}:${cycleEnd}`]
+  );
+}
+
+async function findExactCycle(run, cardId, userId, cycleStart, cycleEnd) {
   const existingR = await run.query(
     `SELECT *
      FROM cc_cycles
      WHERE card_id = $1 AND user_id = $2 AND cycle_start = $3 AND cycle_end = $4
+     ORDER BY created_at DESC, id DESC
      LIMIT 1`,
     [cardId, userId, cycleStart, cycleEnd]
   );
-  if (existingR.rows[0]) return existingR.rows[0];
+  return existingR.rows[0] || null;
+}
+
+async function getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, dueDays, client = null) {
+  const run = client || { query };
+  await lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd);
+  const existing = await findExactCycle(run, cardId, userId, cycleStart, cycleEnd);
+  if (existing) return existing;
   const today = _localDate(new Date());
   const status = cycleEnd < today ? 'billed' : 'open';
   const insertR = await run.query(
@@ -328,21 +342,7 @@ async function getOrCreateCurrentCycle(cardId, userId, client = null) {
   const card = cardR.rows[0];
   if (!card) return null;
   const { cycleStart, cycleEnd } = getCcCyclePeriod(card.bill_gen_day || 1);
-  const existingR = await run.query(
-    `SELECT *
-     FROM cc_cycles
-     WHERE card_id = $1 AND user_id = $2 AND cycle_start = $3 AND cycle_end = $4
-     LIMIT 1`,
-    [cardId, userId, cycleStart, cycleEnd]
-  );
-  if (existingR.rows[0]) return existingR.rows[0];
-  const insertR = await run.query(
-    `INSERT INTO cc_cycles (user_id, card_id, cycle_start, cycle_end, due_date, status)
-     VALUES ($1, $2, $3, $4, $5, 'open')
-     RETURNING *`,
-    [userId, cardId, cycleStart, cycleEnd, getCcDueDate(cycleEnd, card.due_days || 20)]
-  );
-  return insertR.rows[0];
+  return getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, card.due_days || 20, client);
 }
 
 async function updateCycleTotals(cycleId, client = null) {
@@ -360,12 +360,11 @@ async function updateCycleTotals(cycleId, client = null) {
     [cycleId]
   );
   const totals = totalsR.rows[0];
-  if (!totals || !totals.txn_count) return;
   await run.query(
     `UPDATE cc_cycles
      SET total_amount = $1, total_discount = $2, net_payable = $3
      WHERE id = $4`,
-    [totals.total_amount, totals.total_discount, totals.net_payable, cycleId]
+    [totals?.total_amount || 0, totals?.total_discount || 0, totals?.net_payable || 0, cycleId]
   );
 }
 

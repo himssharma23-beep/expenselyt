@@ -5780,7 +5780,7 @@ function renderTripList() {
   const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
 
   const tripActionButtons = (trip) => `
-    <div class="trip-table-actions" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
+    <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
       <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
         <span class="trip-icon-btn-glyph" style="font-size:13px">&#128065;</span>
       </button>
@@ -5799,6 +5799,17 @@ function renderTripList() {
       <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
         <span class="trip-icon-btn-glyph" style="font-size:13px">&#128465;</span>
       </button>
+    </div>
+    <div class="trip-table-actions-mobile">
+      <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)">
+        <option value="">Actions</option>
+        <option value="view">View details</option>
+        <option value="share">Share link</option>
+        <option value="pdf">Download PDF</option>
+        <option value="settle">Settle trip</option>
+        <option value="edit">Edit trip</option>
+        <option value="delete">Delete trip</option>
+      </select>
     </div>`;
 
   const tableRows = pageRows.map((trip) => {
@@ -5840,12 +5851,12 @@ function renderTripList() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+      <div class="trip-page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
         <div>
           <div style="font-size:22px;font-weight:800">My Trips</div>
           <div style="font-size:13px;color:var(--t2);margin-top:3px">Track only your own trips, members, distance, and total spend.</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="trip-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">PDF</button>
           <button class="btn btn-s" onclick="showTripExcelImport()">Import Excel</button>
           <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
@@ -5872,7 +5883,7 @@ function renderTripList() {
       </div>
 
       <div class="card" style="margin-bottom:14px;padding:14px 16px">
-        <div style="display:grid;grid-template-columns:1.2fr repeat(4,minmax(160px,.9fr));gap:10px;align-items:end">
+        <div class="trip-filters-grid" style="display:grid;grid-template-columns:1.2fr repeat(4,minmax(160px,.9fr));gap:10px;align-items:end">
           <label class="fl" style="margin:0;font-size:12px">Search
             <input id="tripsSearchInput" class="fi" style="height:44px" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
           </label>
@@ -5919,6 +5930,17 @@ function renderTripList() {
       ${pagination}
     </div>
   `;
+}
+
+function handleTripRowAction(tripId, action, el) {
+  if (!action) return;
+  if (action === 'view') openTripDetail(tripId);
+  else if (action === 'share') showTripShareModal(tripId);
+  else if (action === 'pdf') downloadTripPdfById(tripId);
+  else if (action === 'settle') showTripSettlementModal(tripId);
+  else if (action === 'edit') showTripModal(tripId);
+  else if (action === 'delete') tripDelete(tripId);
+  if (el) el.value = '';
 }
 
 async function openTripDetail(tripId) {
@@ -6029,11 +6051,12 @@ function renderTripDetail() {
       const sortedItems = sortTripGroupItems(group.items || [], activeSort);
       const itemCount = sortedItems.length;
       return `
-      <div class="card" style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="card trip-group-card" style="margin-bottom:14px">
+        <div class="trip-group-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
           <button
             type="button"
             onclick='toggleTripExpenseGroupCollapse(${groupTypeArg})'
+            class="trip-group-toggle"
             style="display:flex;align-items:center;gap:10px;background:none;border:none;padding:0;cursor:pointer;text-align:left;min-width:0"
             aria-expanded="${isCollapsed ? 'false' : 'true'}"
           >
@@ -6043,8 +6066,8 @@ function renderTripDetail() {
               <span style="display:block;font-size:12px;color:var(--t3)">${itemCount} item${itemCount !== 1 ? 's' : ''}${isCollapsed ? ' hidden' : ''}</span>
             </span>
           </button>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-            <div style="display:flex;align-items:center;gap:6px">
+          <div class="trip-group-meta" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <div class="trip-group-sort-actions" style="display:flex;align-items:center;gap:6px">
               <button class="trip-icon-btn" title="Move group up" aria-label="Move group up" onclick='moveTripExpenseGroup(${groupTypeArg}, "up")' ${index === 0 ? 'disabled' : ''} style="${index === 0 ? 'opacity:.45;cursor:not-allowed' : ''}">
                 <span class="trip-icon-btn-glyph">&#8593;</span>
               </button>
@@ -6103,8 +6126,8 @@ function renderTripDetail() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content" data-trip-detail-view="1">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
-        <div>
+      <div class="trip-detail-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="trip-detail-title-block">
           <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">Back</button>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div style="font-size:24px;font-weight:800">
@@ -6114,24 +6137,37 @@ function renderTripDetail() {
           </div>
           <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
-            <span class="trip-icon-btn-glyph">&#9998;</span>
-          </button>
-          <button class="btn btn-s btn-sm" onclick="showTripShareModal(${trip.id})">Share Link</button>
-          <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
-          <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
-          <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
-          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
-          <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
-          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
-          <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
-            <span class="trip-icon-btn-glyph">&#128465;</span>
-          </button>
+        <div class="trip-detail-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div class="trip-detail-actions-desktop" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
+              <span class="trip-icon-btn-glyph">&#9998;</span>
+            </button>
+            <button class="btn btn-s btn-sm" onclick="showTripShareModal(${trip.id})">Share Link</button>
+            <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
+            <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
+            <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
+            ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
+            <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
+            ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
+            <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
+              <span class="trip-icon-btn-glyph">&#128465;</span>
+            </button>
+          </div>
+          <div class="trip-detail-actions-mobile">
+            <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+            <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})"><span class="trip-icon-btn-glyph">&#128279;</span></button>
+            <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()"><span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span></button>
+            <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})"><span class="trip-icon-btn-glyph">&#8644;</span></button>
+            <button class="trip-icon-btn" title="Add expense" aria-label="Add expense" onclick="showTripExpenseModal()"><span class="trip-icon-btn-glyph">+</span></button>
+            ${(trip.expenses || []).length ? `<button class="trip-icon-btn" title="Bulk edit shares" aria-label="Bulk edit shares" onclick="showTripBulkShareModal()"><span class="trip-icon-btn-glyph">&#8942;</span></button>` : ''}
+            <button class="trip-icon-btn" title="Import Excel" aria-label="Import Excel" onclick="showTripExpenseExcelImport(${trip.id})"><span class="trip-icon-btn-glyph">&#8681;</span></button>
+            ${(trip.expenses || []).length ? `<button class="trip-icon-btn danger" title="Delete all expenses" aria-label="Delete all expenses" onclick="tripDeleteAllExpenses()"><span class="trip-icon-btn-glyph">&#128465;</span></button>` : ''}
+            <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})"><span class="trip-icon-btn-glyph">&#10006;</span></button>
+          </div>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:minmax(260px,1.5fr) minmax(190px,.95fr) repeat(2,minmax(130px,.7fr));gap:10px;margin-bottom:14px;align-items:stretch">
+      <div class="trip-detail-summary-grid" style="display:grid;grid-template-columns:minmax(260px,1.5fr) minmax(190px,.95fr) repeat(2,minmax(130px,.7fr));gap:10px;margin-bottom:14px;align-items:stretch">
         <div class="card" style="padding:12px 14px;min-height:0">
           <div style="font-size:11px;color:var(--t3);margin-bottom:5px">Trip Members</div>
           <div style="display:flex;flex-wrap:wrap;gap:5px">${memberChips}</div>

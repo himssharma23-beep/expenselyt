@@ -28,6 +28,25 @@ function normalizeOptionalText(value, maxLength = 80) {
   return normalized;
 }
 
+async function lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd) {
+  await run.query(
+    `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+    [`cc_cycle:${userId}:${cardId}`, `${cycleStart}:${cycleEnd}`]
+  );
+}
+
+async function findExactCycle(run, cardId, userId, cycleStart, cycleEnd) {
+  const existingR = await run.query(
+    `SELECT *
+     FROM cc_cycles
+     WHERE card_id = $1 AND user_id = $2 AND cycle_start = $3 AND cycle_end = $4
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    [cardId, userId, cycleStart, cycleEnd]
+  );
+  return existingR.rows[0] || null;
+}
+
 async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   // Normalize txnDate to a YYYY-MM-DD string (pg may return DATE columns as Date objects inside transactions)
   const dateStr = txnDate instanceof Date ? _localDate(txnDate) : String(txnDate || '').slice(0, 10);
@@ -59,14 +78,9 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
     cycleEnd = _localDate(new Date(dt.getFullYear(), dt.getMonth() + 1, billGenDay));
   }
 
-  const check = await run.query(
-    `SELECT *
-     FROM cc_cycles
-     WHERE card_id = $1 AND user_id = $2 AND cycle_start = $3 AND cycle_end = $4
-     LIMIT 1`,
-    [cardId, userId, cycleStart, cycleEnd]
-  );
-  if (check.rows[0]) return check.rows[0];
+  await lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd);
+  const check = await findExactCycle(run, cardId, userId, cycleStart, cycleEnd);
+  if (check) return check;
 
   const dueEnd = new Date(`${cycleEnd}T00:00:00`);
   dueEnd.setDate(dueEnd.getDate() + Number(card.due_days || 20));

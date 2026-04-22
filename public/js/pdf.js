@@ -440,20 +440,49 @@ function downloadTripDetailPdf() {
   );
 
   // Settlement summary
-  const pmap = {};
-  (trip.members||[]).forEach(m => { pmap[_memberKey(m)] = { name:m.member_name, share:0, gave:0 }; });
-  (trip.expenses||[]).forEach(e => {
-    e.splits?.forEach(s => { if(pmap[s.member_key]) pmap[s.member_key].share += s.share_amount; });
-    if(pmap[e.paid_by_key]) pmap[e.paid_by_key].gave += e.amount;
-  });
+  const settlementRows = (() => {
+    const members = trip.members || [];
+    const expenses = trip.expenses || [];
+    const nameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const memberStableKey = (member) => String(member?.id ?? (typeof _memberKey === 'function' ? _memberKey(member) : '') ?? '');
+    const rows = members.map((member) => ({
+      key: memberStableKey(member),
+      fallbackKey: String(typeof _memberKey === 'function' ? _memberKey(member) : member?.member_key || ''),
+      name: member.member_name,
+      share: 0,
+      gave: 0,
+    }));
+    const rowByUiKey = new Map(rows.map((row) => [String(row.key), row]));
+    const rowByFallbackKey = new Map(rows.map((row) => [String(row.fallbackKey), row]));
+    const rowByName = new Map(rows.map((row) => [nameKey(row.name), row]));
+
+    expenses.forEach((expense) => {
+      (expense.splits || []).forEach((split) => {
+        const target = rowByUiKey.get(String(split?.member_key || ''))
+          || rowByFallbackKey.get(String(split?.member_key || ''))
+          || rowByName.get(nameKey(split?.member_name || ''));
+        if (target) target.share += Number(split?.share_amount || 0);
+      });
+      const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
+        || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
+        || rowByName.get(nameKey(expense?.paid_by_name || ''));
+      if (payer) payer.gave += Number(expense?.amount || 0);
+    });
+
+    return rows.map((row) => ({
+      ...row,
+      share: Math.round(Number(row.share || 0) * 100) / 100,
+      gave: Math.round(Number(row.gave || 0) * 100) / 100,
+      net: Math.round((Number(row.gave || 0) - Number(row.share || 0)) * 100) / 100,
+    }));
+  })();
 
   y = _P.section(doc, y, 'Settlement Summary');
   _P.table(doc, y,
     [['Member','Total Share (Owes)','Total Paid','Net Balance']],
-    Object.entries(pmap).map(([key,p])=>{
-      const net = p.gave - p.share;
-      return [p.name+(key==='self'?' (You)':''), _P.cur(p.share), _P.cur(p.gave),
-        (net>0.005?'+':'')+_P.cur(net)];
+    settlementRows.map((p)=>{
+      return [p.name+(p.fallbackKey==='self'?' (You)':''), _P.cur(p.share), _P.cur(p.gave),
+        (p.net>0.005?'+':'')+_P.cur(p.net)];
     }),
     { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
     true

@@ -560,6 +560,69 @@ CREATE TABLE IF NOT EXISTS cc_cycles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_cc_cycles_card ON cc_cycles(card_id);
+WITH ranked_cycles AS (
+  SELECT
+    id,
+    FIRST_VALUE(id) OVER (
+      PARTITION BY user_id, card_id, cycle_start, cycle_end
+      ORDER BY id ASC
+    ) AS keep_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_id, card_id, cycle_start, cycle_end
+      ORDER BY id ASC
+    ) AS rn
+  FROM cc_cycles
+),
+duplicate_cycles AS (
+  SELECT id, keep_id
+  FROM ranked_cycles
+  WHERE rn > 1
+)
+UPDATE cc_txns t
+SET cycle_id = d.keep_id
+FROM duplicate_cycles d
+WHERE t.cycle_id = d.id;
+WITH ranked_cycles AS (
+  SELECT
+    id,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_id, card_id, cycle_start, cycle_end
+      ORDER BY id ASC
+    ) AS rn
+  FROM cc_cycles
+)
+DELETE FROM cc_cycles c
+USING ranked_cycles r
+WHERE c.id = r.id
+  AND r.rn > 1;
+UPDATE cc_cycles cy
+SET total_amount = COALESCE(src.total_amount, 0),
+    total_discount = COALESCE(src.total_discount, 0),
+    net_payable = COALESCE(src.net_payable, 0)
+FROM (
+  SELECT
+    cycle_id,
+    COALESCE(SUM(amount), 0) AS total_amount,
+    COALESCE(SUM(discount_amount), 0) AS total_discount,
+    COALESCE(SUM(net_amount), 0) AS net_payable
+  FROM cc_txns
+  WHERE cycle_id IS NOT NULL
+  GROUP BY cycle_id
+) src
+WHERE cy.id = src.cycle_id
+  AND cy.manual_total_override = FALSE;
+UPDATE cc_cycles
+SET total_amount = 0,
+    total_discount = 0,
+    net_payable = 0
+WHERE manual_total_override = FALSE
+  AND id NOT IN (
+    SELECT DISTINCT cycle_id
+    FROM cc_txns
+    WHERE cycle_id IS NOT NULL
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cc_cycles_unique_period
+  ON cc_cycles (user_id, card_id, cycle_start, cycle_end);
 
 CREATE TABLE IF NOT EXISTS cc_txns (
   id BIGSERIAL PRIMARY KEY,

@@ -90,6 +90,56 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
 const fmt = n => '\u20B9' + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 const token = location.pathname.split('/s/')[1]?.split('/')[0];
 
+function fmtShareDate(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return esc(String(value));
+  return parsed.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function nameKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function computeTripSettlementRows(trip) {
+  const members = Array.isArray(trip?.members) ? trip.members : [];
+  const expenses = Array.isArray(trip?.expenses) ? trip.expenses : [];
+  const rows = members.map((member) => ({
+    key: String(member?.id ?? member?.member_key ?? ''),
+    fallbackKey: String(member?.member_key ?? ''),
+    name: String(member?.member_name || 'Member'),
+    share: 0,
+    gave: 0,
+  }));
+  const rowByUiKey = new Map(rows.map((row) => [String(row.key), row]));
+  const rowByFallbackKey = new Map(rows.map((row) => [String(row.fallbackKey), row]));
+  const rowByName = new Map(rows.map((row) => [nameKey(row.name), row]));
+
+  expenses.forEach((expense) => {
+    (expense.splits || []).forEach((split) => {
+      const target = rowByUiKey.get(String(split?.member_key || ''))
+        || rowByFallbackKey.get(String(split?.member_key || ''))
+        || rowByName.get(nameKey(split?.member_name || ''));
+      if (target) target.share += Number(split?.share_amount || 0);
+    });
+    const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
+      || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
+      || rowByName.get(nameKey(expense?.paid_by_name || ''));
+    if (payer) payer.gave += Number(expense?.amount || 0);
+  });
+
+  return rows.map((row) => ({
+    ...row,
+    share: Math.round(Number(row.share || 0) * 100) / 100,
+    gave: Math.round(Number(row.gave || 0) * 100) / 100,
+    net: Math.round((Number(row.gave || 0) - Number(row.share || 0)) * 100) / 100,
+  }));
+}
+
 async function load() {
   try {
     const res = await fetch('/api/public/share/' + token);
@@ -164,6 +214,7 @@ function renderTrip(data) {
   const trip = data.trip || {};
   const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   const members = Array.isArray(trip.members) ? trip.members : [];
+  const settlementRows = computeTripSettlementRows(trip);
   const total = Number(trip.grand_total || 0);
   const grouped = {};
   expenses.forEach((expense) => {
@@ -172,8 +223,8 @@ function renderTrip(data) {
     grouped[key].push(expense);
   });
   const subtitleParts = [];
-  if (trip.start_date || trip.end_date) subtitleParts.push(`${trip.start_date || '-'}${trip.end_date ? ` to ${trip.end_date}` : ''}`);
-  if (data.expires_at) subtitleParts.push(`Expires ${data.expires_at}`);
+  if (trip.start_date || trip.end_date) subtitleParts.push(`${fmtShareDate(trip.start_date)}${trip.end_date ? ` to ${fmtShareDate(trip.end_date)}` : ''}`);
+  if (data.expires_at) subtitleParts.push(`Expires ${fmtShareDate(data.expires_at)}`);
   let html = `
     <div class="page-header">
       <h1>${esc(data.owner_name || 'Shared')}'s Trip: ${esc(trip.destination || trip.name || 'Trip')}</h1>
@@ -188,6 +239,12 @@ function renderTrip(data) {
     <div class="friend-card" style="padding:16px 20px">
       <div class="friend-name">${esc(trip.destination || trip.name || 'Trip')}</div>
       <div class="friend-label" style="margin-top:8px">Members: ${esc(members.map((member) => member.member_name || '').filter(Boolean).join(', ') || '-')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px">
+        ${settlementRows.length ? settlementRows.map((row) => `<div style="min-width:110px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:700;color:var(--t1)">${esc(row.name)}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:3px">Share: <strong style="color:var(--t1)">${fmt(row.share)}</strong></div>
+        </div>`).join('') : '<span class="friend-label">No member share totals yet.</span>'}
+      </div>
       ${trip.notes ? `<div class="friend-label" style="margin-top:10px;line-height:1.5;color:var(--t2)">${esc(trip.notes)}</div>` : ''}
     </div>`;
   if (!expenses.length) {
@@ -204,16 +261,33 @@ function renderTrip(data) {
         <div class="txn-list" style="display:block">`;
       rows.forEach((row) => {
         const splits = Array.isArray(row.splits) && row.splits.length
-          ? row.splits.map((split) => `${split.member_name}: ${fmt(split.share_amount)}`).join(' | ')
+          ? row.splits.map((split) => `<strong>${esc(split.member_name)}: ${fmt(split.share_amount)}</strong>`).join(' | ')
           : '';
         html += `<div class="txn-row">
-          <span class="txn-date">${esc(row.expense_date || '-')}</span>
-          <span class="txn-detail">${esc(row.details || '-')}${row.notes ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">${esc(row.notes)}</div>` : ''}${splits ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">Shared: ${esc(splits)}</div>` : ''}</span>
+          <span class="txn-date">${fmtShareDate(row.expense_date)}</span>
+          <span class="txn-detail">${esc(row.details || '-')}${row.notes ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">${esc(row.notes)}</div>` : ''}${splits ? `<div style="margin-top:4px;color:var(--t3);font-size:12px">Shared: ${splits}</div>` : ''}</span>
           <span class="txn-amt got">${fmt(row.amount || 0)}</span>
         </div>`;
       });
       html += '</div></div>';
     });
+  }
+  if (settlementRows.length) {
+    html += `<div class="friend-card open">
+      <div class="friend-header" style="cursor:default">
+        <div class="friend-main"><div class="friend-meta"><div class="friend-name">Settlement Summary</div><div class="friend-label">${settlementRows.length} member${settlementRows.length !== 1 ? 's' : ''}</div></div></div>
+      </div>
+      <div class="txn-list" style="display:block">
+        ${settlementRows.map((row) => `<div class="txn-row">
+          <span class="txn-date">${esc(row.name)}</span>
+          <span class="txn-detail">
+            <div>Total Share: <strong>${fmt(row.share)}</strong></div>
+            <div style="margin-top:4px;color:var(--t3);font-size:12px">Total Paid: <strong style="color:var(--t1)">${fmt(row.gave)}</strong></div>
+          </span>
+          <span class="txn-amt ${row.net >= 0 ? 'got' : 'gave'}">${row.net > 0 ? '+' : row.net < 0 ? '-' : ''}${fmt(Math.abs(row.net))}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
   }
   document.getElementById('content').innerHTML = html;
 }

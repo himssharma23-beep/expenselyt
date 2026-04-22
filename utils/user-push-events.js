@@ -251,7 +251,7 @@ async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
   const reminderKey = localDate(reminderDate);
 
   const cycleCompleteResult = await query(
-    `SELECT
+    `SELECT DISTINCT ON (cy.card_id, cy.cycle_end)
        cy.id,
        cy.card_id,
        cy.cycle_end,
@@ -261,18 +261,19 @@ async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
        c.card_name,
        c.bank_name,
        c.last4
-     FROM cc_cycles cy
-     JOIN credit_cards c ON c.id = cy.card_id
-     WHERE cy.user_id = $1
-       AND cy.cycle_end = $2
-       AND c.is_active = TRUE`,
+      FROM cc_cycles cy
+      JOIN credit_cards c ON c.id = cy.card_id
+      WHERE cy.user_id = $1
+        AND cy.cycle_end = $2
+        AND c.is_active = TRUE
+      ORDER BY cy.card_id, cy.cycle_end, cy.created_at DESC, cy.id DESC`,
     [user.id, todayKey]
   );
   for (const row of cycleCompleteResult.rows) {
     const remaining = Math.max(0, num(row.net_payable) - num(row.paid_amount));
     await createAndSendUserNotification(user, {
       type: 'credit_cycle_closed',
-      dedupe_key: `${row.id}:${row.cycle_end}`,
+      dedupe_key: `${row.card_id}:${row.cycle_end}`,
       title: `${row.card_name} cycle completed`,
       body: `Your ${row.bank_name} ${row.card_name} ending ${row.last4} cycle closed today. Total amount to pay is ${formatCurrency(remaining, user.currency_code, user.locale_code)}.`,
       target_screen: 'CreditCards',
@@ -281,7 +282,7 @@ async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
   }
 
   const dueReminderResult = await query(
-    `SELECT
+    `SELECT DISTINCT ON (cy.card_id, cy.due_date)
        cy.id,
        cy.card_id,
        cy.due_date,
@@ -293,18 +294,19 @@ async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
        c.last4
      FROM cc_cycles cy
      JOIN credit_cards c ON c.id = cy.card_id
-     WHERE cy.user_id = $1
-       AND cy.due_date = $2
-       AND c.is_active = TRUE
-       AND cy.status IN ('open', 'billed', 'partial')
-       AND COALESCE(cy.net_payable, 0) > COALESCE(cy.paid_amount, 0)`,
+      WHERE cy.user_id = $1
+        AND cy.due_date = $2
+        AND c.is_active = TRUE
+        AND cy.status IN ('open', 'billed', 'partial')
+        AND COALESCE(cy.net_payable, 0) > COALESCE(cy.paid_amount, 0)
+      ORDER BY cy.card_id, cy.due_date, cy.created_at DESC, cy.id DESC`,
     [user.id, reminderKey]
   );
   for (const row of dueReminderResult.rows) {
     const remaining = Math.max(0, num(row.net_payable) - num(row.paid_amount));
     await createAndSendUserNotification(user, {
       type: 'credit_due_reminder',
-      dedupe_key: `${row.id}:${row.due_date}`,
+      dedupe_key: `${row.card_id}:${row.due_date}`,
       title: 'Credit card due in 3 days',
       body: `${row.bank_name} ${row.card_name} ending ${row.last4} is due on ${row.due_date}. Amount due: ${formatCurrency(remaining, user.currency_code, user.locale_code)}.`,
       target_screen: 'CreditCards',
