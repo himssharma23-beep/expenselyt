@@ -642,6 +642,77 @@ async function getCcAvailableYears(userId, cardId) {
   return result.rows.map((row) => parseInt(row.year, 10));
 }
 
+async function repairCreditCardTxnCycles(userId, cardId = null) {
+  return withTransaction(async (client) => {
+    const params = cardId ? [userId, cardId] : [userId];
+    const cardsR = await client.query(
+      `SELECT *
+       FROM credit_cards
+       WHERE user_id = $1
+         AND is_active = TRUE${cardId ? ' AND id = $2' : ''}
+       ORDER BY id ASC`,
+      params
+    );
+    const summary = [];
+
+    for (const card of cardsR.rows) {
+      const txnsR = await client.query(
+        `SELECT id, cycle_id, txn_date
+         FROM cc_txns
+         WHERE user_id = $1
+           AND card_id = $2
+         ORDER BY txn_date ASC, id ASC`,
+        [userId, card.id]
+      );
+
+      const affectedCycleIds = new Set();
+      let movedCount = 0;
+
+      for (const txn of txnsR.rows) {
+        const txnDate = normalizeCcDateValue(txn.txn_date, 'Transaction date');
+        const targetPeriod = getCcCyclePeriodForDate(card.bill_gen_day || 1, txnDate);
+        const targetCycle = await getOrCreateCycleForPeriod(
+          card.id,
+          userId,
+          targetPeriod.cycleStart,
+          targetPeriod.cycleEnd,
+          card.due_days || 20,
+          client
+        );
+        if (!targetCycle) continue;
+
+        const currentCycleId = Number(txn.cycle_id || 0);
+        const targetCycleId = Number(targetCycle.id);
+        affectedCycleIds.add(targetCycleId);
+        if (currentCycleId > 0) affectedCycleIds.add(currentCycleId);
+        if (currentCycleId === targetCycleId) continue;
+
+        await client.query(
+          `UPDATE cc_txns
+           SET cycle_id = $1
+           WHERE id = $2
+             AND user_id = $3`,
+          [targetCycleId, txn.id, userId]
+        );
+        movedCount += 1;
+      }
+
+      for (const cycleId of affectedCycleIds) {
+        await updateCycleTotals(cycleId, client);
+      }
+
+      summary.push({
+        card_id: Number(card.id),
+        card_name: card.card_name,
+        checked_count: txnsR.rows.length,
+        moved_count: movedCount,
+      });
+    }
+
+    return summary;
+  });
+}
+
 async function updateCcTxn(userId, id, txn) {
   const existingR = await query('SELECT * FROM cc_txns WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
   const existing = existingR.rows[0];
@@ -883,4 +954,5 @@ module.exports = {
   importHistoricalCycles,
   getCcDuesForMonth,
   getCcTxnBySource,
+  repairCreditCardTxnCycles,
 };
