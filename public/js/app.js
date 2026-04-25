@@ -938,8 +938,18 @@ async function showExpenseForm(id) {
       _editingExpCcLink = ccData.txn;
     }
   }
+  window._expenseEntryMode = id ? 'expense' : 'expense';
   const bankOpts = `<option value="">-- Do not deduct from bank --</option>${_bankAccounts.map(a => `<option value="${a.id}" ${e.bank_account_id == a.id ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`).join('')}`;
+  const incomeDefaultBank = _bankAccounts.find((a) => a.is_default) || _bankAccounts[0] || null;
+  const incomeBankOpts = `<option value="">-- Select bank account --</option>${_bankAccounts.map(a => `<option value="${a.id}" ${incomeDefaultBank && Number(incomeDefaultBank.id) === Number(a.id) ? 'selected' : ''}>${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}${a.is_default ? ' (Default)' : ''}</option>`).join('')}`;
   openModal(id ? 'Edit Expense' : 'Add Expense', `
+    ${id ? '' : `
+      <div class="expense-mode-tabs" role="tablist" aria-label="Expense entry mode">
+        <button type="button" class="expense-mode-tab active" id="expenseModeExpense" onclick="setExpenseEntryMode('expense')" role="tab" aria-selected="true">Add Expense</button>
+        <button type="button" class="expense-mode-tab" id="expenseModeIncome" onclick="setExpenseEntryMode('income')" role="tab" aria-selected="false">Add Income</button>
+      </div>
+    `}
+    <div id="expenseFormExpenseSection">
     <div class="fg">
       <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
       <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
@@ -949,14 +959,96 @@ async function showExpenseForm(id) {
       <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
     </div>
     ${ccFormSection(existingCcLink)}
+    </div>
+    ${id ? '' : `
+        <div id="expenseFormIncomeSection" style="display:none">
+          <div style="display:grid;gap:14px">
+            <div style="font-size:13px;color:var(--t2)">Choose a bank account, review its current balance, and add funds to that balance.</div>
+            <label class="fl full">Bank Account<select class="fi" id="eIncomeBank" onchange="updateIncomeBankPreview()">${incomeBankOpts}</select></label>
+            <div id="eIncomeBankCard" class="income-balance-card">
+              <div class="income-balance-label">Selected Bank Balance</div>
+              <div id="eIncomeCurrentBalance" class="income-balance-value">₹0.00</div>
+              <div id="eIncomeMinBalance" class="income-balance-note"></div>
+            </div>
+            <label class="fl">Add Funds (&#8377;)<input class="fi" type="number" step="0.01" id="eIncomeAmount" value="" placeholder="0.00" oninput="updateIncomeBankPreview()"></label>
+            <div id="eIncomePreviewCard" class="income-preview-card">
+              <div class="income-balance-label">Updated Balance</div>
+              <div id="eIncomeNextBalance" class="income-balance-value">₹0.00</div>
+            </div>
+          </div>
+        </div>
+    `}
     <div class="fa">
       <button class="btn btn-p" onclick="saveExpense(${id||'null'})">${id?'Update':'Save'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
+  if (!id) {
+    setExpenseEntryMode('expense');
+    updateIncomeBankPreview();
+  }
   bindModalSubmit(() => saveExpense(id || null));
 }
 
+function setExpenseEntryMode(mode) {
+  window._expenseEntryMode = mode === 'income' ? 'income' : 'expense';
+  const expenseBtn = document.getElementById('expenseModeExpense');
+  const incomeBtn = document.getElementById('expenseModeIncome');
+  const expenseSection = document.getElementById('expenseFormExpenseSection');
+  const incomeSection = document.getElementById('expenseFormIncomeSection');
+  const isIncome = window._expenseEntryMode === 'income';
+  if (expenseBtn) {
+    expenseBtn.className = `expense-mode-tab${isIncome ? '' : ' active'}`;
+    expenseBtn.setAttribute('aria-selected', isIncome ? 'false' : 'true');
+  }
+  if (incomeBtn) {
+    incomeBtn.className = `expense-mode-tab${isIncome ? ' active' : ''}`;
+    incomeBtn.setAttribute('aria-selected', isIncome ? 'true' : 'false');
+  }
+  if (expenseSection) expenseSection.style.display = isIncome ? 'none' : '';
+  if (incomeSection) incomeSection.style.display = isIncome ? '' : 'none';
+}
+
+function updateIncomeBankPreview() {
+  const bankId = document.getElementById('eIncomeBank')?.value || '';
+  const amount = parseFloat(document.getElementById('eIncomeAmount')?.value || '0') || 0;
+  const bank = (_bankAccounts || []).find((item) => String(item.id) === String(bankId));
+  const bankCard = document.getElementById('eIncomeBankCard');
+  const previewCard = document.getElementById('eIncomePreviewCard');
+  const currentBalanceEl = document.getElementById('eIncomeCurrentBalance');
+  const minBalanceEl = document.getElementById('eIncomeMinBalance');
+  const nextBalanceEl = document.getElementById('eIncomeNextBalance');
+  if (!bank) {
+    if (bankCard) bankCard.style.display = 'none';
+    if (previewCard) previewCard.style.display = 'none';
+    return;
+  }
+  const currentBalance = Number(bank.balance || 0);
+  const minBalance = Number(bank.min_balance || 0);
+  if (bankCard) bankCard.style.display = 'block';
+  if (currentBalanceEl) currentBalanceEl.textContent = fmtCur(currentBalance);
+  if (minBalanceEl) minBalanceEl.textContent = `Minimum locked balance ${fmtCur(minBalance)}`;
+  if (previewCard) previewCard.style.display = amount > 0 ? 'block' : 'none';
+  if (nextBalanceEl) nextBalanceEl.textContent = fmtCur(currentBalance + amount);
+}
+
 async function saveExpense(id) {
+  if (!id && window._expenseEntryMode === 'income') {
+    const incomeBankId = parseInt(document.getElementById('eIncomeBank')?.value || '', 10) || null;
+    const incomeAmount = parseFloat(document.getElementById('eIncomeAmount')?.value || '0');
+    if (!incomeBankId) { toast('Please select a bank account', 'warning'); return; }
+    if (!Number.isFinite(incomeAmount) || incomeAmount <= 0) { toast('Enter a valid income amount', 'warning'); return; }
+    const bank = (_bankAccounts || []).find((item) => Number(item.id) === Number(incomeBankId));
+    if (!bank) { toast('Selected bank account was not found', 'error'); return; }
+    const nextBalance = Math.round((Number(bank.balance || 0) + incomeAmount) * 100) / 100;
+    const incomeRes = await api(`/api/banks/${incomeBankId}/balance`, { method: 'PATCH', body: { balance: nextBalance } });
+    if (!incomeRes?.success) { toast(incomeRes?.error || 'Could not add income to bank balance', 'error'); return; }
+    closeModal();
+    toast(`${fmtCur(incomeAmount)} added to ${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`, 'success');
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+    loadExpenses();
+    return;
+  }
   const original = id ? (_activeExpenseForm && String(_activeExpenseForm.id) === String(id) ? _activeExpenseForm : _findExpenseById(id)) : null;
   const bankVal = document.getElementById('eBank')?.value;
   const body = {

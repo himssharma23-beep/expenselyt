@@ -2109,8 +2109,9 @@
     const friend = (state.friends || []).find((item) => Number(item.id) === Number(settle.friend_id));
     if (!friend) return;
     const outstanding = r2(settle.outstanding_amount);
+    window.__modalClassName = 'live-split-settle-modal';
     openModal(`Settle - ${escHtml(friend.name || 'Friend')}`, `
-      <div style="display:grid;gap:12px">
+      <div class="live-split-settle-shell" style="display:grid;gap:12px">
         <div style="font-size:12px;color:var(--t2)">
           Outstanding: <b style="color:${settle.direction === 'received' ? 'var(--green)' : 'var(--red)'}">${fmtCur(outstanding)}</b> (${settle.direction === 'received' ? 'to receive' : 'to pay'})
         </div>
@@ -2153,9 +2154,9 @@
             </label>
           ` : ``}
         ` : ''}
-        <div class="fa">
-          <button class="btn btn-g" onclick="liveSplitCancelSettle()">Cancel</button>
+        <div class="fa live-split-settle-actions">
           <button class="btn btn-p" ${state.settleBusy ? 'disabled' : ''} onclick="liveSplitSaveSettle()">${state.settleBusy ? liveSplitBusyLabel('Saving...') : 'Settle'}</button>
+          <button class="btn btn-g" onclick="liveSplitCancelSettle()">Cancel</button>
         </div>
       </div>
     `);
