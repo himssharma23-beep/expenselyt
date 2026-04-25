@@ -2039,7 +2039,6 @@
             <div class="friend-info">
               <div class="friend-name">${escHtml(row.name)}</div>
               <div style="font-size:11px;color:${tone}">${escHtml(label)}</div>
-              <div style="font-size:11px;color:${row.linked_user_id ? 'var(--green)' : 'var(--t3)'};margin-top:2px">${row.linked_user_id ? 'App user' : ''}</div>
             </div>
           </div>
           <div class="live-split-card-actions" style="display:flex;align-items:center;gap:10px" onclick="event.stopPropagation()">
