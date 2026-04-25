@@ -6760,6 +6760,7 @@ function tripExpenseChangePaidBy(key) {
   tripHandleAmountChange();
 }
 
+
 async function saveTripExpenseModal(expenseId = null) {
   if (!_selectedTripId) return;
   const amountValue = document.getElementById('tripExpenseAmount')?.value || null;
