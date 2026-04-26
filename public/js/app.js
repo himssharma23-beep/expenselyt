@@ -7232,6 +7232,10 @@ let adminSection = 'users'; // users | expense_stats | public_stats | plans | su
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
+let _adminNotifUserIndex = new Map();
+let _adminNotifDraftTitle = '';
+let _adminNotifDraftMessage = '';
+let _adminNotifListScrollTop = 0;
 let _adminNotifLastResult = null;
 let _adminAiDays = 30;
 let _adminAiReport = null;
@@ -7505,7 +7509,23 @@ function renderAdminExpenseStats() {
 }
 
 function _adminNotifSelectedUsers() {
-  return _adminNotifUsers.filter((user) => _adminNotifSelected.has(user.id));
+  return [..._adminNotifSelected]
+    .map((userId) => _adminNotifUserIndex.get(userId))
+    .filter(Boolean);
+}
+
+function _adminNotifCaptureUiState() {
+  const titleInput = document.getElementById('adminNotifTitle');
+  const messageInput = document.getElementById('adminNotifMessage');
+  const listEl = document.getElementById('adminNotifRecipientList');
+  if (titleInput) _adminNotifDraftTitle = titleInput.value || '';
+  if (messageInput) _adminNotifDraftMessage = messageInput.value || '';
+  if (listEl) _adminNotifListScrollTop = listEl.scrollTop || 0;
+}
+
+function _adminNotifRestoreUiState() {
+  const listEl = document.getElementById('adminNotifRecipientList');
+  if (listEl) listEl.scrollTop = _adminNotifListScrollTop || 0;
 }
 
 async function loadAdminPublicStats() {
@@ -7558,6 +7578,7 @@ function renderAdminPublicStats() {
 }
 
 function _adminNotifToggleUser(userId) {
+  _adminNotifCaptureUiState();
   if (_adminNotifSelected.has(userId)) _adminNotifSelected.delete(userId);
   else _adminNotifSelected.add(userId);
   renderAdminNotifications();
@@ -7587,6 +7608,7 @@ async function adminSavePublicStats() {
 }
 
 function _adminNotifToggleVisible(selectAll) {
+  _adminNotifCaptureUiState();
   (_adminNotifUsers || []).forEach((user) => {
     if (!user?.id) return;
     if (selectAll) _adminNotifSelected.add(user.id);
@@ -7596,10 +7618,12 @@ function _adminNotifToggleVisible(selectAll) {
 }
 
 async function loadAdminNotifications() {
+  _adminNotifCaptureUiState();
   const data = await api(`/api/admin/notifications/users${_adminNotifSearch ? `?search=${encodeURIComponent(_adminNotifSearch)}` : ''}`);
   _adminNotifUsers = data?.users || [];
-  const visibleIds = new Set(_adminNotifUsers.map((user) => user.id));
-  _adminNotifSelected = new Set([..._adminNotifSelected].filter((userId) => visibleIds.has(userId)));
+  (_adminNotifUsers || []).forEach((user) => {
+    if (user?.id) _adminNotifUserIndex.set(user.id, user);
+  });
   renderAdminNotifications();
 }
 
@@ -7664,10 +7688,10 @@ function renderAdminNotifications() {
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input class="fi" id="adminNotifSearch" placeholder="Search by name, username, or email" value="${escHtml(_adminNotifSearch)}" onkeydown="if(event.key==='Enter'){_adminNotifSearch=this.value.trim();loadAdminNotifications()}">
-          <button class="btn btn-p btn-sm" onclick="_adminNotifSearch=document.getElementById('adminNotifSearch').value.trim();loadAdminNotifications()">Search</button>
+          <input class="fi" id="adminNotifSearch" placeholder="Search by name, username, or email" value="${escHtml(_adminNotifSearch)}" oninput="_adminNotifSearch=this.value.trim()" onkeydown="if(event.key==='Enter'){_adminNotifSearch=this.value.trim();_adminNotifListScrollTop=0;loadAdminNotifications()}">
+          <button class="btn btn-p btn-sm" onclick="_adminNotifSearch=document.getElementById('adminNotifSearch').value.trim();_adminNotifListScrollTop=0;loadAdminNotifications()">Search</button>
         </div>
-        <div style="display:grid;gap:10px;max-height:520px;overflow:auto">
+        <div id="adminNotifRecipientList" style="display:grid;gap:10px;max-height:520px;overflow:auto" onscroll="_adminNotifListScrollTop=this.scrollTop">
           ${userCards || '<div style="text-align:center;color:var(--t3);padding:30px 16px">No users found.</div>'}
         </div>
       </div>
@@ -7677,11 +7701,11 @@ function renderAdminNotifications() {
         <div style="display:grid;gap:12px">
           <div>
             <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px">Title</div>
-            <input class="fi" id="adminNotifTitle" maxlength="80" placeholder="e.g. Bill reminder">
+            <input class="fi" id="adminNotifTitle" maxlength="80" placeholder="e.g. Bill reminder" value="${escHtml(_adminNotifDraftTitle)}" oninput="_adminNotifDraftTitle=this.value">
           </div>
           <div>
             <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px">Message</div>
-            <textarea class="fi" id="adminNotifMessage" rows="6" maxlength="250" placeholder="Write the notification message here"></textarea>
+            <textarea class="fi" id="adminNotifMessage" rows="6" maxlength="250" placeholder="Write the notification message here" oninput="_adminNotifDraftMessage=this.value">${escHtml(_adminNotifDraftMessage)}</textarea>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px">
@@ -7698,13 +7722,14 @@ function renderAdminNotifications() {
             <div style="font-size:22px;font-weight:700;margin-top:4px">${totalDevices}</div>
           </div>
         </div>
-        <div style="font-size:12px;color:var(--t3);margin-top:12px">${selectedUsers.length ? selectedUsers.map((user) => escHtml(user.display_name)).join(', ') : 'No users selected yet.'}</div>
-        <div class="fa" style="margin-top:16px">
-          <button class="btn btn-p" onclick="adminSendNotification()">Send Notification</button>
+          <div style="font-size:12px;color:var(--t3);margin-top:12px">${selectedUsers.length ? selectedUsers.map((user) => escHtml(user.display_name || user.username || user.email || `User ${user.id}`)).join(', ') : 'No users selected yet.'}</div>
+          <div class="fa" style="margin-top:16px">
+            <button class="btn btn-p" onclick="adminSendNotification()">Send Notification</button>
+          </div>
+          ${resultBox}
         </div>
-        ${resultBox}
-      </div>
-    </div>`;
+      </div>`;
+  _adminNotifRestoreUiState();
 }
 
 async function adminSendNotification() {
@@ -8221,6 +8246,19 @@ async function loadAdminUsers() {
   _renderAdminUsersPage();
 }
 
+function _adminUserHandleSearchInput(input) {
+  _adminUserSearch = String(input?.value || '');
+  const start = Number(input?.selectionStart ?? _adminUserSearch.length);
+  const end = Number(input?.selectionEnd ?? start);
+  _renderAdminUsersPage();
+  const nextInput = document.getElementById('adminUserSearch');
+  if (!nextInput) return;
+  nextInput.focus();
+  try {
+    nextInput.setSelectionRange(start, end);
+  } catch (_) {}
+}
+
 function _renderAdminUserCard(u) {
   const shortAuditDate = (value) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
   const subBadge = u.subscription
@@ -8309,7 +8347,7 @@ function _renderAdminUsersPage() {
       <input class="fi" id="adminUserSearch" placeholder="Search name, username, email, phone…"
         style="flex:1;min-width:180px;max-width:320px;padding:7px 10px;font-size:13px"
         value="${escHtml(_adminUserSearch)}"
-        oninput="_adminUserSearch=this.value;_renderAdminUsersPage()">
+        oninput="_adminUserHandleSearchInput(this)">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${filterBtn('all','All')}
         ${filterBtn('active','Active')}
