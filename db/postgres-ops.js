@@ -1155,6 +1155,299 @@ async function addTrackerMonthToExpense(userId, trackerId, year, month, options 
   ));
 }
 
+function normalizeHabitBinaryValue(value, label = 'Value') {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || ![0, 1].includes(parsed)) throw validationError(`${label} must be 0 or 1`);
+  return parsed;
+}
+
+function normalizeTrackerMonthPart(value, label, min, max) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) throw validationError(`${label} is invalid`);
+  return parsed;
+}
+
+function habitMonthPrefix(year, month) {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+function habitDaysInMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
+async function ensureHabitEntriesForMonth(userId, trackerId, year, month) {
+  const safeYear = normalizeTrackerMonthPart(year, 'Year', 2000, 2100);
+  const safeMonth = normalizeTrackerMonthPart(month, 'Month', 1, 12);
+  const trackerR = await query(
+    'SELECT id, default_value FROM habit_trackers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [trackerId, userId]
+  );
+  const tracker = trackerR.rows[0];
+  if (!tracker) throw validationError('Tracker not found');
+  const prefix = habitMonthPrefix(safeYear, safeMonth);
+  const existingR = await query(
+    `SELECT entry_date
+     FROM habit_entries
+     WHERE tracker_id = $1
+       AND user_id = $2
+       AND entry_date::text LIKE $3`,
+    [trackerId, userId, `${prefix}-%`]
+  );
+  const existing = new Set(existingR.rows.map((row) => dbDateToYmd(row.entry_date)));
+  const totalDays = habitDaysInMonth(safeYear, safeMonth);
+  const defaultValue = normalizeHabitBinaryValue(tracker.default_value, 'Default value');
+  for (let day = 1; day <= totalDays; day++) {
+    const dateStr = `${prefix}-${String(day).padStart(2, '0')}`;
+    if (existing.has(dateStr)) continue;
+    await query(
+      `INSERT INTO habit_entries (tracker_id, user_id, entry_date, entry_value, is_auto)
+       VALUES ($1, $2, $3, $4, TRUE)
+       ON CONFLICT (tracker_id, entry_date) DO NOTHING`,
+      [trackerId, userId, dateStr, defaultValue]
+    );
+  }
+}
+
+async function getHabitTrackers(userId, year, month) {
+  const now = new Date();
+  const safeYear = normalizeTrackerMonthPart(year || now.getFullYear(), 'Year', 2000, 2100);
+  const safeMonth = normalizeTrackerMonthPart(month || (now.getMonth() + 1), 'Month', 1, 12);
+  const trackersR = await query(
+    `SELECT *
+     FROM habit_trackers
+     WHERE user_id = $1
+       AND deleted_at IS NULL
+     ORDER BY lower(name) ASC, id ASC`,
+    [userId]
+  );
+  const trackers = trackersR.rows || [];
+  for (const tracker of trackers) {
+    await ensureHabitEntriesForMonth(userId, tracker.id, safeYear, safeMonth);
+  }
+  const prefix = habitMonthPrefix(safeYear, safeMonth);
+  const todayKey = dbDateToYmd(new Date()) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const summaryR = await query(
+    `SELECT
+       t.id,
+       COUNT(e.id) AS total_days,
+       COALESCE(SUM(CASE WHEN e.entry_value = 1 THEN 1 ELSE 0 END), 0) AS one_days,
+       MAX(CASE WHEN e.entry_date = $3::date THEN e.entry_value END) AS today_value
+     FROM habit_trackers t
+     LEFT JOIN habit_entries e
+       ON e.tracker_id = t.id
+      AND e.user_id = $1
+       AND e.entry_date::text LIKE $2
+     WHERE t.user_id = $1
+       AND t.deleted_at IS NULL
+     GROUP BY t.id`,
+    [userId, `${prefix}-%`, todayKey]
+  );
+  const summaryMap = new Map(summaryR.rows.map((row) => [Number(row.id), row]));
+  const daysInMonth = habitDaysInMonth(safeYear, safeMonth);
+  return trackers.map((row) => {
+    const summary = summaryMap.get(Number(row.id)) || {};
+    const oneDays = Number(summary.one_days || 0);
+    const totalDays = Number(summary.total_days || 0) || daysInMonth;
+    return {
+      ...row,
+      default_value: normalizeHabitBinaryValue(row.default_value, 'Default value'),
+      notes: row.notes || '',
+      is_active: !!row.is_active,
+      month_one_days: oneDays,
+      month_total_days: totalDays,
+      month_percent: totalDays ? Math.round((oneDays / totalDays) * 10000) / 100 : 0,
+      today_value: summary.today_value == null ? null : normalizeHabitBinaryValue(summary.today_value, 'Today value'),
+    };
+  });
+}
+
+async function addHabitTracker(userId, data = {}) {
+  const name = normalizeText(data.name, 'Tracker name', 80);
+  const defaultValue = normalizeHabitBinaryValue(data.default_value ?? 0, 'Default daily value');
+  const notes = normalizeOptionalText(data.notes, 500);
+  const result = await query(
+    `INSERT INTO habit_trackers (user_id, name, default_value, notes, is_active, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $1, $1)
+     RETURNING id`,
+    [userId, name, defaultValue, notes, data.is_active != null ? !!data.is_active : true]
+  );
+  return Number(result.rows[0]?.id || 0);
+}
+
+async function updateHabitTracker(userId, id, data = {}) {
+  const trackerId = Number(id);
+  if (!Number.isFinite(trackerId) || trackerId <= 0) throw validationError('Invalid tracker id');
+  const trackerR = await query(
+    'SELECT id FROM habit_trackers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [trackerId, userId]
+  );
+  if (!trackerR.rows[0]) throw validationError('Tracker not found');
+  const name = normalizeText(data.name, 'Tracker name', 80);
+  const defaultValue = normalizeHabitBinaryValue(data.default_value ?? 0, 'Default daily value');
+  const notes = normalizeOptionalText(data.notes, 500);
+  await query(
+    `UPDATE habit_trackers
+     SET name = $1,
+         default_value = $2,
+         notes = $3,
+         is_active = $4,
+         updated_at = NOW(),
+         updated_by = $6
+     WHERE id = $5
+       AND user_id = $6`,
+    [name, defaultValue, notes, data.is_active != null ? !!data.is_active : true, trackerId, userId]
+  );
+}
+
+async function deleteHabitTracker(userId, id) {
+  await query('DELETE FROM habit_trackers WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
+async function getHabitEntries(userId, trackerId, year, month) {
+  const safeYear = normalizeTrackerMonthPart(year, 'Year', 2000, 2100);
+  const safeMonth = normalizeTrackerMonthPart(month, 'Month', 1, 12);
+  await ensureHabitEntriesForMonth(userId, trackerId, safeYear, safeMonth);
+  const prefix = habitMonthPrefix(safeYear, safeMonth);
+  const result = await query(
+    `SELECT *
+     FROM habit_entries
+     WHERE user_id = $1
+       AND tracker_id = $2
+       AND entry_date::text LIKE $3
+     ORDER BY entry_date ASC`,
+    [userId, trackerId, `${prefix}-%`]
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    entry_date: dbDateToYmd(row.entry_date),
+    entry_value: normalizeHabitBinaryValue(row.entry_value, 'Entry value'),
+    is_auto: !!row.is_auto,
+  }));
+}
+
+async function upsertHabitEntry(userId, trackerId, date, entryValue, isAuto = false) {
+  const trackerR = await query(
+    'SELECT id FROM habit_trackers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [trackerId, userId]
+  );
+  if (!trackerR.rows[0]) throw validationError('Tracker not found');
+  const entryDate = normalizeDateValue(date, 'Entry date');
+  const normalizedValue = normalizeHabitBinaryValue(entryValue, 'Entry value');
+  await query(
+    `INSERT INTO habit_entries (tracker_id, user_id, entry_date, entry_value, is_auto)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (tracker_id, entry_date)
+     DO UPDATE SET entry_value = EXCLUDED.entry_value, is_auto = EXCLUDED.is_auto`,
+    [trackerId, userId, entryDate, normalizedValue, !!isAuto]
+  );
+  return { entry_value: normalizedValue };
+}
+
+async function getHabitMonthSummary(userId, trackerId, year, month) {
+  const safeYear = normalizeTrackerMonthPart(year, 'Year', 2000, 2100);
+  const safeMonth = normalizeTrackerMonthPart(month, 'Month', 1, 12);
+  await ensureHabitEntriesForMonth(userId, trackerId, safeYear, safeMonth);
+  const prefix = habitMonthPrefix(safeYear, safeMonth);
+  const result = await query(
+    `SELECT
+       COUNT(*) AS total_days,
+       COALESCE(SUM(CASE WHEN entry_value = 1 THEN 1 ELSE 0 END), 0) AS one_days,
+       COALESCE(SUM(CASE WHEN entry_value = 0 THEN 1 ELSE 0 END), 0) AS zero_days,
+       COALESCE(SUM(CASE WHEN is_auto = TRUE THEN 1 ELSE 0 END), 0) AS auto_days
+     FROM habit_entries
+     WHERE user_id = $1
+       AND tracker_id = $2
+       AND entry_date::text LIKE $3`,
+    [userId, trackerId, `${prefix}-%`]
+  );
+  const row = result.rows[0] || {};
+  const totalDays = Number(row.total_days || 0);
+  const oneDays = Number(row.one_days || 0);
+  return {
+    total_days: totalDays,
+    one_days: oneDays,
+    zero_days: Number(row.zero_days || 0),
+    auto_days: Number(row.auto_days || 0),
+    percent: totalDays ? Math.round((oneDays / totalDays) * 10000) / 100 : 0,
+  };
+}
+
+async function getHabitYearSummary(userId, trackerId, year) {
+  const safeYear = normalizeTrackerMonthPart(year, 'Year', 2000, 2100);
+  const months = [];
+  let totalOneDays = 0;
+  let totalDays = 0;
+  for (let month = 1; month <= 12; month++) {
+    const summary = await getHabitMonthSummary(userId, trackerId, safeYear, month);
+    totalOneDays += Number(summary.one_days || 0);
+    totalDays += Number(summary.total_days || 0);
+    months.push({
+      year: safeYear,
+      month,
+      ...summary,
+    });
+  }
+  return {
+    year: safeYear,
+    one_days: totalOneDays,
+    total_days: totalDays,
+    percent: totalDays ? Math.round((totalOneDays / totalDays) * 10000) / 100 : 0,
+    months,
+  };
+}
+
+async function getHabitYearsSummary(userId, trackerId) {
+  const trackerR = await query(
+    'SELECT id FROM habit_trackers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [trackerId, userId]
+  );
+  if (!trackerR.rows[0]) throw validationError('Tracker not found');
+  const result = await query(
+    `SELECT
+       EXTRACT(YEAR FROM entry_date)::int AS year,
+       COUNT(*) AS total_days,
+       COALESCE(SUM(CASE WHEN entry_value = 1 THEN 1 ELSE 0 END), 0) AS one_days
+     FROM habit_entries
+     WHERE user_id = $1
+       AND tracker_id = $2
+     GROUP BY EXTRACT(YEAR FROM entry_date)
+     ORDER BY year DESC`,
+    [userId, trackerId]
+  );
+  return (result.rows || []).map((row) => {
+    const totalDays = Number(row.total_days || 0);
+    const oneDays = Number(row.one_days || 0);
+    return {
+      year: Number(row.year || 0),
+      one_days: oneDays,
+      total_days: totalDays,
+      percent: totalDays ? Math.round((oneDays / totalDays) * 10000) / 100 : 0,
+    };
+  });
+}
+
+async function importHabitEntries(userId, trackerId, items = []) {
+  const trackerR = await query(
+    'SELECT id FROM habit_trackers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1',
+    [trackerId, userId]
+  );
+  if (!trackerR.rows[0]) throw validationError('Tracker not found');
+  let imported = 0;
+  for (const item of Array.isArray(items) ? items : []) {
+    const entryDate = normalizeDateValue(item.entry_date, 'Entry date');
+    const entryValue = normalizeHabitBinaryValue(item.entry_value, 'Entry value');
+    await query(
+      `INSERT INTO habit_entries (tracker_id, user_id, entry_date, entry_value, is_auto)
+       VALUES ($1, $2, $3, $4, FALSE)
+       ON CONFLICT (tracker_id, entry_date)
+       DO UPDATE SET entry_value = EXCLUDED.entry_value, is_auto = FALSE`,
+      [trackerId, userId, entryDate, entryValue]
+    );
+    imported++;
+  }
+  return imported;
+}
+
 async function getRecurringEntries(userId) {
   const result = await query(
     `SELECT r.*, c.card_name, c.bank_name, c.last4, b.bank_name AS recurring_bank_name, b.account_name AS recurring_account_name
@@ -1429,6 +1722,16 @@ module.exports = {
   autoFillDailyEntries,
   getDailyMonthSummary,
   addTrackerMonthToExpense,
+  getHabitTrackers,
+  addHabitTracker,
+  updateHabitTracker,
+  deleteHabitTracker,
+  getHabitEntries,
+  upsertHabitEntry,
+  getHabitMonthSummary,
+  getHabitYearSummary,
+  getHabitYearsSummary,
+  importHabitEntries,
   getRecurringEntries,
   addRecurringEntry,
   applyRecurringEntryForCurrentMonth,

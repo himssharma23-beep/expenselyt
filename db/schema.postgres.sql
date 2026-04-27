@@ -684,6 +684,28 @@ CREATE TABLE IF NOT EXISTS daily_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_daily_entries_tracker ON daily_entries(tracker_id, entry_date);
 
+CREATE TABLE IF NOT EXISTS habit_trackers (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  default_value SMALLINT NOT NULL DEFAULT 0 CHECK (default_value IN (0, 1)),
+  notes TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS habit_entries (
+  id BIGSERIAL PRIMARY KEY,
+  tracker_id BIGINT NOT NULL REFERENCES habit_trackers(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entry_date DATE NOT NULL,
+  entry_value SMALLINT NOT NULL DEFAULT 0 CHECK (entry_value IN (0, 1)),
+  is_auto BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(tracker_id, entry_date)
+);
+CREATE INDEX IF NOT EXISTS idx_habit_entries_tracker ON habit_entries(tracker_id, entry_date);
+
 CREATE TABLE IF NOT EXISTS recurring_entries (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -850,6 +872,8 @@ BEGIN
     'daily_trackers',
     'daily_tracker_prices',
     'daily_entries',
+    'habit_trackers',
+    'habit_entries',
     'recurring_entries',
     'trip_invites',
     'share_links',

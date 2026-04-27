@@ -500,6 +500,7 @@ function loadTab() {
   else if (currentTab === 'banks') loadBankAccounts();
   else if (currentTab === 'planner') loadPlanner();
   else if (currentTab === 'tracker') loadTracker();
+  else if (currentTab === 'habittracker') loadHabitTracker();
   else if (currentTab === 'recurring') loadRecurring();
   else if (currentTab === 'ailookup') loadAiLookup();
   else if (currentTab === 'notifications') loadNotifications();
@@ -7291,6 +7292,7 @@ const ALL_PAGES = [
   { key: 'banks',       label: 'Bank Accounts' },
   { key: 'planner',     label: 'Planner' },
   { key: 'tracker',     label: 'Daily Tracker' },
+  { key: 'habittracker', label: 'Habit Tracker' },
   { key: 'recurring',   label: 'Recurring' },
   { key: 'ailookup',    label: 'AI Lookup' },
   { key: 'notifications', label: 'Notifications' },
@@ -12485,6 +12487,12 @@ function _refreshAiStatusBanner() {
 let _trackers = [];
 let _selectedTrackerId = null;
 let _trackerYear = new Date().getFullYear();
+let _habitTrackers = [];
+let _selectedHabitTrackerId = null;
+let _habitYear = new Date().getFullYear();
+let _habitMonth = new Date().getMonth() + 1;
+let _habitYearSummaryOpen = false;
+let _habitMonthSummaryOpen = false;
 let _trackerMonth = new Date().getMonth() + 1;
 const _MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function fmtMonYear(dateStr) {
@@ -13938,6 +13946,448 @@ function renderBankAccounts() {
       <div class="bank-grid">${grid}</div>
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
+}
+
+function habitMonthKey(year, month) {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+function habitMonthLabel(year, month) {
+  return `${_MONTHS_LONG[month - 1]} ${year}`;
+}
+
+function habitDaysInMonthLocal(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
+function habitMonthStep(diff) {
+  const date = new Date(_habitYear, _habitMonth - 1 + diff, 1);
+  _habitYear = date.getFullYear();
+  _habitMonth = date.getMonth() + 1;
+}
+
+function selectHabitYear(year, preferredMonth) {
+  _habitYear = Number(year);
+  if (preferredMonth) _habitMonth = Number(preferredMonth);
+  _habitYearSummaryOpen = true;
+  _habitMonthSummaryOpen = true;
+}
+
+function selectHabitMonth(month) {
+  _habitMonth = Number(month);
+  _habitMonthSummaryOpen = true;
+}
+
+function toggleHabitYearSummary() {
+  _habitYearSummaryOpen = !_habitYearSummaryOpen;
+  if (!_habitYearSummaryOpen) _habitMonthSummaryOpen = false;
+  renderHabitTrackerDetail();
+}
+
+function toggleHabitMonthSummary() {
+  _habitMonthSummaryOpen = !_habitMonthSummaryOpen;
+  renderHabitTrackerDetail();
+}
+
+async function fetchHabitTrackersForMonth() {
+  const data = await api(`/api/habit-trackers?year=${_habitYear}&month=${_habitMonth}`);
+  _habitTrackers = data?.trackers || [];
+  return _habitTrackers;
+}
+
+async function loadHabitTracker() {
+  await fetchHabitTrackersForMonth();
+  if (_selectedHabitTrackerId && _habitTrackers.find((t) => String(t.id) === String(_selectedHabitTrackerId))) {
+    await renderHabitTrackerDetail();
+  } else {
+    _selectedHabitTrackerId = null;
+    renderHabitTrackerGrid();
+  }
+}
+
+async function toggleHabitTodayFromTile(trackerId, nextValue, event) {
+  stopEvent(event);
+  const result = await api(`/api/habit-trackers/${trackerId}/entries`, {
+    method: 'POST',
+    body: { date: todayStr(), entry_value: nextValue, is_auto: false },
+  });
+  if (!result?.success) { toast(result?.error || 'Could not update today', 'error'); return; }
+  await fetchHabitTrackersForMonth();
+  renderHabitTrackerGrid();
+}
+
+function renderHabitTrackerGrid() {
+  const monthLabel = habitMonthLabel(_habitYear, _habitMonth);
+  const now = new Date();
+  const atCurrentMonth = _habitYear === now.getFullYear() && _habitMonth === (now.getMonth() + 1);
+  const cards = _habitTrackers.length ? _habitTrackers.map((tracker) => {
+    const percent = Number(tracker.month_percent || 0);
+    const oneDays = Number(tracker.month_one_days || 0);
+    const totalDays = Number(tracker.month_total_days || habitDaysInMonthLocal(_habitYear, _habitMonth));
+    const tone = percent >= 70 ? 'var(--green)' : percent >= 40 ? 'var(--amber)' : 'var(--t2)';
+    const todayValue = tracker.today_value == null ? Number(tracker.default_value || 0) : Number(tracker.today_value || 0);
+    const todayToggleLabel = todayValue ? '1 = done today' : '0 = not done today';
+    const todayToggle = atCurrentMonth ? `
+      <div
+        title="Today's habit value. 1 means done, 0 means not done."
+        aria-label="Today's habit value. 1 means done, 0 means not done."
+        onclick="toggleHabitTodayFromTile(${tracker.id}, ${todayValue ? 0 : 1}, event)"
+        style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:12px;border:1px solid var(--border-l);background:var(--bg2);cursor:pointer;min-width:160px">
+        <div style="display:flex;flex-direction:column;min-width:0">
+          <span style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;line-height:1.1">Today</span>
+          <span style="font-size:11px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:3px">${todayToggleLabel}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+          <span style="font-size:11px;font-weight:800;color:${todayValue ? 'var(--t3)' : 'var(--green)'}">0</span>
+          <span style="position:relative;display:inline-block;width:30px;height:18px;border-radius:999px;background:${todayValue ? 'var(--green)' : 'var(--border)'};transition:all .2s ease">
+            <span style="position:absolute;top:2px;left:${todayValue ? '14px' : '2px'};width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:all .2s ease"></span>
+          </span>
+          <span style="font-size:11px;font-weight:800;color:${todayValue ? 'var(--green)' : 'var(--t3)'}">1</span>
+        </div>
+      </div>` : '';
+    return `
+      <div class="bank-card" style="cursor:pointer;padding:14px 16px" onclick="openHabitTrackerDetail(${tracker.id})">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div style="min-width:0">
+            <div class="bank-card-name" style="font-size:15px;line-height:1.2">${escHtml(tracker.name || 'Habit')}</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:2px;line-height:1.25">${escHtml(tracker.notes || 'No notes added yet.')}</div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;justify-content:flex-end" onclick="stopEvent(event)">
+            ${todayToggle}
+            <button class="trip-icon-btn" title="Edit habit" aria-label="Edit habit" onclick="showHabitTrackerModal(${tracker.id})" style="width:34px;height:34px;min-width:34px;padding:0;border-radius:12px"><span class="trip-icon-btn-glyph" style="font-size:13px">&#9998;</span></button>
+            <button class="trip-icon-btn" title="Import Excel" aria-label="Import Excel" onclick="showHabitImportModal(${tracker.id})" style="width:34px;height:34px;min-width:34px;padding:0;border-radius:12px"><span class="trip-icon-btn-glyph" style="font-size:13px">&#8681;</span></button>
+            <button class="trip-icon-btn danger" title="Delete habit" aria-label="Delete habit" onclick="deleteHabitTracker(${tracker.id})" style="width:34px;height:34px;min-width:34px;padding:0;border-radius:12px"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128465;</span></button>
+            <span class="badge" style="background:${tracker.is_active ? 'var(--green-l)' : 'var(--border-l)'};color:${tracker.is_active ? 'var(--green)' : 'var(--t3)'};margin-left:2px">${tracker.is_active ? 'Active' : 'Paused'}</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px">
+          <div>
+            <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Days Marked 1</div>
+            <div style="font-size:20px;font-weight:800;color:var(--t1);margin-top:2px;font-family:var(--mono)">${oneDays}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Month Days</div>
+            <div style="font-size:20px;font-weight:800;color:var(--t1);margin-top:2px;font-family:var(--mono)">${totalDays}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Progress</div>
+            <div style="font-size:20px;font-weight:800;color:${tone};margin-top:2px;font-family:var(--mono)">${percent.toFixed(2)}%</div>
+          </div>
+        </div>
+      </div>`;
+  }).join('') : '<div class="card" style="text-align:center;color:var(--t3);padding:38px">No habits added yet.</div>';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">HABIT TRACKERS</div>
+            <div class="summary-amount">${_habitTrackers.length}</div>
+            <div class="summary-words">Simple daily 0/1 tracking with monthly and yearly progress</div>
+          </div>
+          <div class="count-box"><div class="num">${_habitTrackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--t1)">My Habits</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">Tracking month: ${monthLabel}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-g btn-sm" onclick="habitMonthStep(-1);loadHabitTracker()">←</button>
+          <span style="min-width:120px;text-align:center;font-weight:700">${monthLabel}</span>
+          <button class="btn btn-g btn-sm" onclick="habitMonthStep(1);loadHabitTracker()" ${atCurrentMonth ? 'disabled' : ''}>→</button>
+          <button class="btn btn-p btn-sm" onclick="showHabitTrackerModal()">+ Add Habit</button>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function openHabitTrackerDetail(id) {
+  _selectedHabitTrackerId = String(id);
+  _habitYearSummaryOpen = false;
+  _habitMonthSummaryOpen = false;
+  await renderHabitTrackerDetail();
+}
+
+async function renderHabitTrackerDetail() {
+  await fetchHabitTrackersForMonth();
+  const tracker = _habitTrackers.find((t) => String(t.id) === String(_selectedHabitTrackerId));
+  if (!tracker) { renderHabitTrackerGrid(); return; }
+  const [entriesRes, summaryRes, yearRes, yearsRes] = await Promise.all([
+    api(`/api/habit-trackers/${tracker.id}/entries?year=${_habitYear}&month=${_habitMonth}`),
+    api(`/api/habit-trackers/${tracker.id}/summary?year=${_habitYear}&month=${_habitMonth}`),
+    api(`/api/habit-trackers/${tracker.id}/year-summary?year=${_habitYear}`),
+    api(`/api/habit-trackers/${tracker.id}/years`),
+  ]);
+  const entries = entriesRes?.entries || [];
+  const summary = summaryRes?.summary || {};
+  const yearSummary = yearRes?.summary || { percent: 0, one_days: 0, total_days: 0, months: [] };
+  const yearRowsData = (yearsRes?.years && yearsRes.years.length)
+    ? yearsRes.years
+    : [{
+        year: Number(yearSummary.year || _habitYear),
+        one_days: Number(yearSummary.one_days || 0),
+        total_days: Number(yearSummary.total_days || 0),
+        percent: Number(yearSummary.percent || 0),
+      }];
+  const entryMap = {};
+  entries.forEach((entry) => { entryMap[String(entry.entry_date || '').slice(0, 10)] = entry; });
+  const today = todayStr();
+  const currentMonthKey = habitMonthKey(_habitYear, _habitMonth);
+  const daysInMonth = habitDaysInMonthLocal(_habitYear, _habitMonth);
+  const now = new Date();
+  const atCurrentMonth = _habitYear === now.getFullYear() && _habitMonth === (now.getMonth() + 1);
+  const rows = Array.from({ length: daysInMonth }, (_, idx) => {
+    const day = idx + 1;
+    const dateStr = `${currentMonthKey}-${String(day).padStart(2, '0')}`;
+    const row = entryMap[dateStr] || { entry_value: Number(tracker.default_value || 0), is_auto: true };
+    const value = Number(row.entry_value || 0) ? 1 : 0;
+    const isFuture = dateStr > today;
+    const tone = value === 1 ? 'var(--green)' : 'var(--t3)';
+    const dayLabel = new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short' });
+    return `<tr style="${value === 1 ? 'background:#f3fbf6;' : ''}${dateStr === today ? 'outline:1px solid var(--border-l);' : ''}">
+      <td><strong>${day}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${dateStr === today ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
+      <td><span class="badge" style="background:${value === 1 ? 'var(--green-l)' : 'var(--bg2)'};color:${tone}">${value}</span></td>
+      <td style="color:var(--t2)">${row.is_auto ? 'Default' : 'Edited'}</td>
+      <td style="text-align:right"><button class="btn btn-s btn-sm" onclick="toggleHabitEntry(${tracker.id}, '${dateStr}', ${value ? 0 : 1})" ${isFuture ? 'disabled' : ''}>Set ${value ? 0 : 1}</button></td>
+    </tr>`;
+  }).join('');
+  const yearCards = yearRowsData.map((item) => {
+    const active = Number(item.year) === Number(_habitYear);
+    return `<button
+      class="chip ${active ? 'active' : ''}"
+      style="display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:6px;min-width:170px;padding:14px 16px;border-radius:20px;${active ? 'background:var(--green);color:#fff;border-color:var(--green);box-shadow:0 14px 28px rgba(30,107,70,0.18);' : 'background:#fff;'}"
+      onclick="selectHabitYear(${item.year});renderHabitTrackerDetail()">
+      <span style="font-size:18px;font-weight:800;letter-spacing:.01em">${item.year}</span>
+      <span style="font-size:12px;opacity:${active ? '.92' : '.78'}">${Number(item.one_days || 0)} / ${Number(item.total_days || 0)} days</span>
+      <span style="font-size:22px;font-weight:800;font-family:var(--mono)">${Number(item.percent || 0).toFixed(2)}%</span>
+    </button>`;
+  }).join('');
+  const monthCards = (yearSummary.months || []).map((month) => {
+    const active = month.month === _habitMonth;
+    const percent = Number(month.percent || 0).toFixed(2);
+    return `<button
+      class="chip ${active ? 'active' : ''}"
+      style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:14px 16px;min-height:112px;border-radius:20px;${active ? 'background:var(--green);color:#fff;border-color:var(--green);box-shadow:0 14px 28px rgba(30,107,70,0.16);' : 'background:#fff;'}"
+      onclick="selectHabitMonth(${month.month});renderHabitTrackerDetail()">
+      <span style="font-size:15px;font-weight:800">${_MONTHS_LONG[month.month - 1]}</span>
+      <span style="font-size:12px;opacity:${active ? '.92' : '.78'}">${Number(month.one_days || 0)}/${Number(month.total_days || 0)} days at 1</span>
+      <span style="font-size:20px;font-weight:800;font-family:var(--mono)">${percent}%</span>
+      <span style="font-size:11px;opacity:${active ? '.92' : '.7'}">${active ? 'Open below' : 'Click to open'}</span>
+    </button>`;
+  }).join('');
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn btn-g btn-sm" onclick="_selectedHabitTrackerId=null;renderHabitTrackerGrid()">← Back</button>
+        <div style="min-width:0">
+          <div style="font-size:18px;font-weight:700">${escHtml(tracker.name)}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:4px">Default daily value: ${Number(tracker.default_value || 0)} · ${escHtml(tracker.notes || 'No notes')}</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showHabitImportModal(${tracker.id})">Import Excel</button>
+          <button class="btn btn-g btn-sm" onclick="showHabitTrackerModal(${tracker.id})">Edit</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:15px;font-weight:800;color:var(--t1)">Yearly Summary</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Pick a year to see the monthly breakdown when you need it.</div>
+          </div>
+          <button class="btn btn-s btn-sm" onclick="toggleHabitYearSummary()">${_habitYearSummaryOpen ? 'Hide' : 'Show'}</button>
+        </div>
+        ${_habitYearSummaryOpen ? `<div class="filter-row" style="gap:12px;overflow:auto;padding-top:12px;padding-bottom:4px">${yearCards}</div>` : ''}
+      </div>
+
+      <div class="card" style="padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:15px;font-weight:800;color:var(--t1)">Monthly Summary</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Selected year: ${_habitYear}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div style="font-size:12px;color:var(--t3)">Click any month to open its daily table.</div>
+            <button class="btn btn-s btn-sm" onclick="toggleHabitMonthSummary()">${_habitMonthSummaryOpen ? 'Hide' : 'Show'}</button>
+          </div>
+        </div>
+        ${_habitMonthSummaryOpen ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding-top:12px">${monthCards}</div>` : ''}
+      </div>
+
+      <div class="cc-cycle-summary" style="margin-bottom:16px">
+        <div class="cc-cycle-stat"><div class="lbl">Month Days At 1</div><div class="val">${Number(summary.one_days || 0)}</div></div>
+        <div class="cc-cycle-stat"><div class="lbl">Month Progress</div><div class="val hl">${Number(summary.percent || 0).toFixed(2)}%</div></div>
+        <div class="cc-cycle-stat"><div class="lbl">Year Days At 1</div><div class="val">${Number(yearSummary.one_days || 0)}</div></div>
+        <div class="cc-cycle-stat"><div class="lbl">Year Progress</div><div class="val hl">${Number(yearSummary.percent || 0).toFixed(2)}%</div></div>
+      </div>
+
+      <div class="filter-row" style="justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-g btn-sm" onclick="habitMonthStep(-1);renderHabitTrackerDetail()">←</button>
+          <span style="font-weight:700;min-width:140px;text-align:center">${habitMonthLabel(_habitYear, _habitMonth)}</span>
+          <button class="btn btn-g btn-sm" onclick="habitMonthStep(1);renderHabitTrackerDetail()" ${atCurrentMonth ? 'disabled' : ''}>→</button>
+        </div>
+        <div style="font-size:12px;color:var(--t3)">Edited days: ${Math.max(0, Number(summary.total_days || 0) - Number(summary.auto_days || 0))}</div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Value</th><th>Status</th><th class="td-m">Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function toggleHabitEntry(trackerId, date, nextValue) {
+  const result = await api(`/api/habit-trackers/${trackerId}/entries`, {
+    method: 'POST',
+    body: { date, entry_value: nextValue, is_auto: false },
+  });
+  if (!result?.success) { toast(result?.error || 'Could not update day', 'error'); return; }
+  await fetchHabitTrackersForMonth();
+  await renderHabitTrackerDetail();
+}
+
+async function showHabitTrackerModal(id) {
+  const tracker = id ? (_habitTrackers.find((item) => String(item.id) === String(id)) || {}) : {};
+  openModal(id ? 'Edit Habit Tracker' : 'Add Habit Tracker', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="habitName" value="${escHtml(tracker.name || '')}" placeholder="e.g. Workout, Reading" autofocus></label>
+      <label class="fl">Default Daily Value
+        <select class="fi" id="habitDefaultValue">
+          <option value="0" ${Number(tracker.default_value || 0) === 0 ? 'selected' : ''}>0</option>
+          <option value="1" ${Number(tracker.default_value || 0) === 1 ? 'selected' : ''}>1</option>
+        </select>
+      </label>
+      <label class="fl">Status
+        <select class="fi" id="habitActive">
+          <option value="1" ${tracker.is_active !== false ? 'selected' : ''}>Active</option>
+          <option value="0" ${tracker.is_active === false ? 'selected' : ''}>Paused</option>
+        </select>
+      </label>
+      <label class="fl full">Notes
+        <textarea class="fi" id="habitNotes" rows="4" maxlength="500" placeholder="Optional notes about what you are tracking">${escHtml(tracker.notes || '')}</textarea>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveHabitTracker(${id || 'null'})">${id ? 'Update' : 'Add Habit'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveHabitTracker(id || null));
+}
+
+async function saveHabitTracker(id) {
+  const body = {
+    name: document.getElementById('habitName')?.value?.trim() || '',
+    default_value: Number(document.getElementById('habitDefaultValue')?.value || 0),
+    notes: document.getElementById('habitNotes')?.value?.trim() || '',
+    is_active: String(document.getElementById('habitActive')?.value || '1') === '1',
+  };
+  if (!body.name) { toast('Habit name is required', 'warning'); return; }
+  const result = id
+    ? await api(`/api/habit-trackers/${id}`, { method: 'PUT', body })
+    : await api('/api/habit-trackers', { method: 'POST', body });
+  if (!(result?.success || result?.id)) { toast(result?.error || 'Could not save habit', 'error'); return; }
+  closeModal();
+  toast(id ? 'Habit updated' : 'Habit added', 'success');
+  if (!id && result?.id) _selectedHabitTrackerId = String(result.id);
+  await loadHabitTracker();
+}
+
+async function deleteHabitTracker(id) {
+  if (!await confirmDialog('Delete this habit tracker and all tracked days?')) return;
+  const result = await api(`/api/habit-trackers/${id}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete habit', 'error'); return; }
+  if (String(_selectedHabitTrackerId) === String(id)) _selectedHabitTrackerId = null;
+  toast('Habit deleted', 'success');
+  await loadHabitTracker();
+}
+
+function showHabitImportModal(trackerId) {
+  const tracker = _habitTrackers.find((item) => String(item.id) === String(trackerId)) || {};
+  openModal(`Import Habit Excel - ${escHtml(tracker.name || 'Habit')}`, `
+    <div style="display:grid;gap:14px">
+      <div style="font-size:12px;color:var(--t2);background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px">
+        Import a yearly month sheet where each month column contains daily 0/1 values. Blank cells are treated as 0.
+      </div>
+      <div class="fg">
+        <label class="fl full">File (.xlsx / .xls / .ods)<input type="file" accept=".xlsx,.xls,.ods" id="habitImportFile" class="fi"></label>
+        <label class="fl">Password (if any)<input type="password" id="habitImportPassword" class="fi" placeholder="Leave blank if none"></label>
+        <label class="fl">Year override<input type="number" id="habitImportYear" class="fi" value="${_habitYear}" min="2000" max="2100"></label>
+      </div>
+      <div class="fa" style="margin-top:0">
+        <button class="btn btn-s" onclick="previewHabitImport(${trackerId})">Preview</button>
+        <button class="btn btn-g" onclick="closeModal()">Close</button>
+      </div>
+      <div id="habitImportPreview" data-tracker-id="${trackerId}"></div>
+    </div>`);
+}
+
+async function previewHabitImport(trackerId) {
+  const file = document.getElementById('habitImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an Excel file first', 'warning'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', document.getElementById('habitImportPassword')?.value || '');
+  fd.append('year', document.getElementById('habitImportYear')?.value || '');
+  const previewEl = document.getElementById('habitImportPreview');
+  if (previewEl) previewEl.innerHTML = '<div style="font-size:13px;color:var(--t3)">Reading workbook...</div>';
+  const response = await fetch('/api/habit-trackers/import-excel/preview', { method: 'POST', body: fd });
+  const data = await response.json();
+  if (!response.ok || data?.error) {
+    if (previewEl) previewEl.innerHTML = `<div style="font-size:13px;color:var(--red)">${escHtml(data?.error || 'Could not preview import')}</div>`;
+    return;
+  }
+  const monthRows = (data.preview || []).map((row) => `<tr><td>${escHtml(row.label)}</td><td class="td-m">${row.one_days}</td><td class="td-m">${row.total_days}</td><td class="td-m">${Number(row.percent || 0).toFixed(2)}%</td></tr>`).join('');
+  const yearRows = (data.years || []).map((row) => `<tr><td>${row.year}</td><td class="td-m">${row.one_days}</td><td class="td-m">${row.total_days}</td><td class="td-m">${Number(row.percent || 0).toFixed(2)}%</td></tr>`).join('');
+  if (previewEl) previewEl.innerHTML = `
+    <div class="card" style="padding:16px;margin-top:6px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:10px">Preview</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px">
+        Reading sheet: <strong>${escHtml(data.sheet_name || 'Sheet 1')}</strong>${data.year ? ` · Year ${data.year}` : ''}<br>
+        ${data.count} daily entries will be imported.
+      </div>
+      <div class="table-wrap" style="margin-bottom:12px">
+        <table>
+          <thead><tr><th>Month</th><th class="td-m">Days at 1</th><th class="td-m">Days in Month</th><th class="td-m">Month %</th></tr></thead>
+          <tbody>${monthRows}</tbody>
+        </table>
+      </div>
+      <div class="table-wrap" style="margin-bottom:12px">
+        <table>
+          <thead><tr><th>Year</th><th class="td-m">Days at 1</th><th class="td-m">Days in Year</th><th class="td-m">Year %</th></tr></thead>
+          <tbody>${yearRows}</tbody>
+        </table>
+      </div>
+      <div class="fa">
+        <button class="btn btn-p" onclick="doHabitImport(${trackerId})">Import Excel</button>
+        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+async function doHabitImport(trackerId) {
+  const file = document.getElementById('habitImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an Excel file first', 'warning'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', document.getElementById('habitImportPassword')?.value || '');
+  fd.append('year', document.getElementById('habitImportYear')?.value || '');
+  const response = await fetch(`/api/habit-trackers/${trackerId}/import-excel`, { method: 'POST', body: fd });
+  const data = await response.json();
+  if (!response.ok || data?.error) { toast(data?.error || 'Could not import Excel', 'error'); return; }
+  closeModal();
+  toast(`Imported ${Number(data.imported || 0)} daily habit entries`, 'success');
+  await loadHabitTracker();
+  if (String(_selectedHabitTrackerId) === String(trackerId)) await renderHabitTrackerDetail();
 }
 
 async function renderTrackerGrid() {

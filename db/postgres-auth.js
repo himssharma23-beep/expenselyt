@@ -1057,7 +1057,7 @@ async function getUserAccessiblePages(userId) {
   const user = userResult.rows[0];
   if (!user) return ['dashboard'];
   if (user.role === 'admin') {
-    return ['dashboard', 'expenses', 'friends', 'divide', 'livesplit', 'petroldivide', 'trips', 'reports', 'emi', 'emitracker', 'friendemis', 'creditcards', 'banks', 'planner', 'tracker', 'recurring', 'ailookup', 'notifications', 'admin'];
+    return ['dashboard', 'expenses', 'friends', 'divide', 'livesplit', 'petroldivide', 'trips', 'reports', 'emi', 'emitracker', 'friendemis', 'creditcards', 'banks', 'planner', 'tracker', 'habittracker', 'recurring', 'ailookup', 'notifications', 'admin'];
   }
 
   const pages = new Set(['dashboard']);
@@ -1076,6 +1076,7 @@ async function getUserAccessiblePages(userId) {
   for (const row of result.rows) {
     pages.add(row.page_key);
   }
+  if (pages.has('tracker')) pages.add('habittracker');
   return [...pages];
 }
 

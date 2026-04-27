@@ -4623,6 +4623,121 @@ router.post('/ai/lookup', async (req, res) => {
   }
 });
 // ─── DAILY TRACKERS ──────────────────────────────────────────
+const HABIT_IMPORT_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+function detectHabitImportHeader(sheet) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return null;
+  const lastCol = Math.min(24, usedRange.endCell().columnNumber());
+  let best = null;
+  for (let row = 1; row <= Math.min(8, usedRange.endCell().rowNumber()); row++) {
+    const monthCols = [];
+    for (let col = 1; col <= lastCol; col++) {
+      const normalized = normalizeExcelHeader(sheet.cell(row, col).value());
+      const monthIndex = HABIT_IMPORT_MONTHS.indexOf(normalized);
+      if (monthIndex >= 0) monthCols.push({ month: monthIndex + 1, col });
+    }
+    if (monthCols.length >= 3 && (!best || monthCols.length > best.monthCols.length)) best = { row, monthCols };
+  }
+  return best;
+}
+
+function detectHabitImportYear(sheet, headerRow) {
+  const usedRange = sheet.usedRange();
+  if (!usedRange) return { year: null, explicit: false };
+  for (let row = Math.max(1, headerRow - 1); row <= headerRow; row++) {
+    for (let col = 1; col <= Math.min(24, usedRange.endCell().columnNumber()); col++) {
+      const raw = sheet.cell(row, col).value();
+      const match = String(raw == null ? '' : raw).match(/\b(20\d{2})\b/);
+      if (match) return { year: Number(match[1]), explicit: true };
+      const num = Number(raw);
+      if (Number.isInteger(num) && num >= 2000 && num <= 2100) return { year: num, explicit: true };
+    }
+  }
+  return { year: null, explicit: false };
+}
+
+function parseHabitImportCellValue(value) {
+  if (value == null || value === '') return 0;
+  const normalized = String(value).trim();
+  if (!normalized) return 0;
+  const numeric = Number(normalized);
+  if (!Number.isFinite(numeric)) return 0;
+  return numeric >= 1 ? 1 : 0;
+}
+
+async function parseHabitTrackerExcelBuffer(buffer, password, importYear) {
+  const opts = password ? { password } : {};
+  const wb = await XlsxPopulate.fromDataAsync(buffer, opts);
+  const requestedYear = Number(importYear);
+  const hasYearOverride = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100;
+  const fallbackYear = hasYearOverride ? requestedYear : new Date().getFullYear();
+  const candidates = [];
+  for (const sheet of wb.sheets()) {
+    const header = detectHabitImportHeader(sheet);
+    if (!header) continue;
+    const yearInfo = detectHabitImportYear(sheet, header.row);
+    const year = hasYearOverride ? requestedYear : (yearInfo.year || fallbackYear);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) continue;
+    const entriesMap = new Map();
+    const monthMap = new Map();
+    let nonBlankCells = 0;
+    for (const item of header.monthCols) {
+      const totalDays = new Date(year, item.month, 0).getDate();
+      let oneDays = 0;
+      for (let day = 1; day <= totalDays; day++) {
+        const rawValue = sheet.cell(header.row + day, item.col).value();
+        if (rawValue != null && String(rawValue).trim() !== '') nonBlankCells++;
+        const entryValue = parseHabitImportCellValue(rawValue);
+        const entryDate = `${year}-${String(item.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        entriesMap.set(entryDate, entryValue);
+        if (entryValue === 1) oneDays++;
+      }
+      monthMap.set(`${year}-${String(item.month).padStart(2, '0')}`, {
+        year,
+        month: item.month,
+        one_days: oneDays,
+        total_days: totalDays,
+        percent: totalDays ? Math.round((oneDays / totalDays) * 10000) / 100 : 0,
+      });
+    }
+    candidates.push({
+      sheetName: typeof sheet.name === 'function' ? sheet.name() : String(sheet.name || ''),
+      year,
+      explicitYear: !!yearInfo.explicit,
+      monthCount: header.monthCols.length,
+      nonBlankCells,
+      months: [...monthMap.values()].sort((a, b) => (a.year - b.year) || (a.month - b.month)),
+      entries: [...entriesMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([entry_date, entry_value]) => ({ entry_date, entry_value })),
+    });
+  }
+  if (!candidates.length) throw new Error('Could not find month columns like January to December in the workbook');
+  candidates.sort((a, b) => {
+    if (b.nonBlankCells !== a.nonBlankCells) return b.nonBlankCells - a.nonBlankCells;
+    if (b.monthCount !== a.monthCount) return b.monthCount - a.monthCount;
+    if (Number(b.explicitYear) !== Number(a.explicitYear)) return Number(b.explicitYear) - Number(a.explicitYear);
+    return a.sheetName.localeCompare(b.sheetName);
+  });
+  const selected = candidates[0];
+  const months = selected.months;
+  if (!months.length) throw new Error('Could not find month columns like January to December in the workbook');
+  const entries = selected.entries;
+  const yearGroups = new Map();
+  months.forEach((month) => {
+    if (!yearGroups.has(month.year)) yearGroups.set(month.year, { one_days: 0, total_days: 0 });
+    const bucket = yearGroups.get(month.year);
+    bucket.one_days += month.one_days;
+    bucket.total_days += month.total_days;
+  });
+  const years = [...yearGroups.entries()].map(([year, totals]) => ({
+    year,
+    one_days: totals.one_days,
+    total_days: totals.total_days,
+    percent: totals.total_days ? Math.round((totals.one_days / totals.total_days) * 10000) / 100 : 0,
+  })).sort((a, b) => a.year - b.year);
+  return { entries, months, years, count: entries.length, sheet_name: selected.sheetName, year: selected.year };
+}
+
 router.get('/trackers', (req, res) => {
   Promise.resolve(getOpsDb().getDailyTrackers(req.session.userId)).then((trackers) => {
     res.json({ trackers });
@@ -4708,6 +4823,112 @@ router.post('/trackers/:id/month-expense', (req, res) => {
 });
 
 // ─── RECURRING ENTRIES ───────────────────────────────────────
+router.get('/habit-trackers', (req, res) => {
+  try {
+    const { year, month } = req.query;
+    Promise.resolve(getOpsDb().getHabitTrackers(req.session.userId, year, month)).then((trackers) => {
+      res.json({ trackers });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/habit-trackers', (req, res) => {
+  try {
+    Promise.resolve(getOpsDb().addHabitTracker(req.session.userId, req.body || {})).then((id) => {
+      res.json({ success: true, id });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/habit-trackers/:id', (req, res) => {
+  Promise.resolve(getOpsDb().updateHabitTracker(req.session.userId, req.params.id, req.body || {})).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.delete('/habit-trackers/:id', (req, res) => {
+  Promise.resolve(getOpsDb().deleteHabitTracker(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.get('/habit-trackers/:id/entries', (req, res) => {
+  try {
+    const { year, month } = req.query;
+    Promise.resolve(getOpsDb().getHabitEntries(req.session.userId, req.params.id, year, month)).then((entries) => {
+      res.json({ entries });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/habit-trackers/:id/entries', (req, res) => {
+  try {
+    const { date, entry_value, is_auto } = req.body || {};
+    Promise.resolve(getOpsDb().upsertHabitEntry(req.session.userId, req.params.id, date, entry_value, !!is_auto)).then((result) => {
+      res.json({ success: true, entry_value: result.entry_value });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/habit-trackers/:id/summary', (req, res) => {
+  try {
+    const { year, month } = req.query;
+    Promise.resolve(getOpsDb().getHabitMonthSummary(req.session.userId, req.params.id, year, month)).then((summary) => {
+      res.json({ summary });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/habit-trackers/:id/year-summary', (req, res) => {
+  try {
+    const { year } = req.query;
+    Promise.resolve(getOpsDb().getHabitYearSummary(req.session.userId, req.params.id, year)).then((summary) => {
+      res.json({ summary });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/habit-trackers/:id/years', (req, res) => {
+  try {
+    Promise.resolve(getOpsDb().getHabitYearsSummary(req.session.userId, req.params.id)).then((years) => {
+      res.json({ years });
+    }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/habit-trackers/import-excel/preview', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = await parseHabitTrackerExcelBuffer(req.file.buffer, req.body?.password || '', req.body?.year || '');
+    res.json({
+      count: parsed.count,
+      months: parsed.months,
+      years: parsed.years,
+      sheet_name: parsed.sheet_name,
+      year: parsed.year,
+      preview: parsed.months.map((month) => ({
+        label: `${HABIT_IMPORT_MONTHS[month.month - 1].replace(/^\w/, (c) => c.toUpperCase())} ${month.year}`,
+        one_days: month.one_days,
+        total_days: month.total_days,
+        percent: month.percent,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/habit-trackers/:id/import-excel', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = await parseHabitTrackerExcelBuffer(req.file.buffer, req.body?.password || '', req.body?.year || '');
+    const imported = await getOpsDb().importHabitEntries(req.session.userId, req.params.id, parsed.entries);
+    res.json({ success: true, imported, months: parsed.months, years: parsed.years });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.get('/recurring', (req, res) => {
   Promise.resolve(getOpsDb().getRecurringEntries(req.session.userId)).then((entries) => {
     res.json({ entries });
