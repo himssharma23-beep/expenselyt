@@ -645,6 +645,35 @@
     return (state.liveTrips || []).find((trip) => Number(trip?.id || 0) === tid) || null;
   }
 
+  function liveSplitEventShareAmount(event) {
+    const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
+    if (isTripSummary) {
+      const trip = getTripById(event?.trip_id);
+      return r2(Number(trip?.my_share_amount || event?.my_share_amount || 0));
+    }
+    return r2(Number(event?.my_share_amount || 0));
+  }
+
+  function liveSplitEventAddedToExpense(event) {
+    const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
+    if (isTripSummary) {
+      const trip = getTripById(event?.trip_id);
+      return !!trip?.added_to_expense;
+    }
+    return !!event?.added_to_expense;
+  }
+
+  function canAddLiveSplitEventToExpense(event) {
+    const shareAmount = liveSplitEventShareAmount(event);
+    const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
+    if (!(shareAmount > 0) || liveSplitEventAddedToExpense(event)) return false;
+    if (isTripSummary) {
+      const trip = getTripById(event?.trip_id);
+      return !!trip && trip.show_add_to_expense_option !== false;
+    }
+    return String(event?.split_mode || '').toLowerCase() !== 'settlement';
+  }
+
   function tripAllowsOwnerExpenseOption(tripId) {
     const trip = getTripById(tripId);
     if (!trip) return true;
@@ -965,6 +994,8 @@
           payer: payer || '-',
           total,
           delta,
+          my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
+          split_mode: groupMode || 'equal',
           added_to_expense: !!group?.owner_added_to_expense,
           participants,
         });
@@ -1063,6 +1094,8 @@
           payer: payer || ownerName || '-',
           total,
           delta,
+          my_share_amount: String(group?.split_mode || '').trim().toLowerCase() === 'settlement' ? 0 : selfShare,
+          split_mode: String(group?.split_mode || '').trim().toLowerCase() || 'equal',
           added_to_expense: !!group?.added_to_expense,
           participants: eventParticipants,
         });
@@ -1096,7 +1129,9 @@
         payer: '-',
         total: r2(Math.abs(n(trip.delta))),
         delta: r2(trip.delta),
+        my_share_amount: r2(Number(tripMeta?.my_share_amount || 0)),
         expense_count: Number(trip.expense_count || 0),
+        added_to_expense: !!tripMeta?.added_to_expense,
         participants: [],
       };
     });
@@ -1523,6 +1558,8 @@
             payer: payer || '-',
             total,
             delta: 0,
+            my_share_amount: String(groupFromId?.split_mode || '').trim().toLowerCase() === 'settlement' ? 0 : selfShare,
+            split_mode: String(groupFromId?.split_mode || '').trim().toLowerCase() || 'equal',
             added_to_expense: !!groupFromId?.added_to_expense,
             participants: [
               { name: 'You', share: selfShare, paid: selfPayer },
@@ -1623,17 +1660,19 @@
         `;
   }).join('')}
         </div>
-        ${event.delta < 0 && Math.abs(event.delta) > 0 && !event.added_to_expense ? `
+        ${canAddLiveSplitEventToExpense(event) ? `
           <button
             id="lsAddToExpenseBtn"
             class="btn btn-p btn-sm ls-expense-add-btn"
             style="margin-top:4px"
-            data-default-label="Add My Share (${fmtCur(Math.abs(event.delta))}) to Expenses"
-            onclick="liveSplitAddToExpense(${Math.abs(event.delta)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', 'lsAddToExpenseBtn', ${Number(event.group_id) || 0})"
+            data-default-label="Add My Share (${fmtCur(liveSplitEventShareAmount(event))}) to Expenses"
+            onclick="liveSplitAddToExpense(${liveSplitEventShareAmount(event)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', 'lsAddToExpenseBtn', ${Number(event.group_id) || 0})"
           >
-            Add My Share (${fmtCur(Math.abs(event.delta))}) to Expenses
+            Add My Share (${fmtCur(liveSplitEventShareAmount(event))}) to Expenses
           </button>
-        ` : ''}
+        ` : (liveSplitEventAddedToExpense(event) ? `
+          <div style="margin-top:4px;font-size:12px;font-weight:700;color:var(--green)">My share already added to expenses</div>
+        ` : '')}
         <div class="ls-expense-activity-wrap">
           <div class="ls-expense-activity-heading" style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Activity</div>
           <div class="live-split-activity-list" style="max-height:240px;overflow:auto;padding-right:4px">
@@ -1707,13 +1746,18 @@
                       const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                       const canManage = Number(event.group_id) > 0;
                       const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
-                      const canAddMyShare = !isTripSummary && !event.added_to_expense && Number(event.delta) < 0 && Math.abs(Number(event.delta)) > 0;
+                      const canAddMyShare = canAddLiveSplitEventToExpense(event);
+                      const addedToExpense = liveSplitEventAddedToExpense(event);
+                      const shareAmount = liveSplitEventShareAmount(event);
+                      const addedLabel = isTripSummary
+                        ? (((getTripById(event.trip_id)?.added_to_expense_is_extra) ? 'Added Extra' : 'Added Fair'))
+                        : (event.added_to_expense_is_extra ? 'Added Extra' : 'Added');
                       const openCall = isTripSummary
                         ? `liveSplitOpenTripDetails(${Number(event.trip_id)})`
                         : `liveSplitOpenEvent('${rowRefToken}', '${Number(event.group_id) || 0}')`;
                       const addShareBtnId = `lsAddToExpenseBtn_${Number(event.group_id) || 0}`;
                       const mobileAddShareBtnId = `lsAddToExpenseBtn_mobile_${Number(event.group_id) || 0}`;
-                      const addShareLabel = `Add My Share (${fmtCur(Math.abs(Number(event.delta) || 0))})`;
+                      const addShareLabel = `Add My Share (${fmtCur(shareAmount)})`;
                       const buildActionHtml = (buttonId) => (canManage && !isTripSummary) || canAddMyShare ? `
                         <div class="live-split-row-actions">
                           ${canManage && !isTripSummary ? `
@@ -1724,6 +1768,11 @@
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12v2H6V7zm2 3h8l-.7 9.1c-.1 1.1-1 1.9-2.1 1.9h-2.4c-1.1 0-2-.8-2.1-1.9L8 10zm3-5h2l1 1h4v2H6V6h4l1-1z"/></svg>
                           </button>
                           ` : ''}
+                          ${addedToExpense ? `
+                          <button class="live-split-icon-btn success" title="${escHtml(addedLabel)}" aria-label="${escHtml(addedLabel)}" disabled>
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>
+                          </button>
+                          ` : ''}
                           ${canAddMyShare ? `
                           <button
                             id="${buttonId}"
@@ -1731,13 +1780,17 @@
                             title="${escHtml(`${addShareLabel} to Expenses`)}"
                             aria-label="${escHtml(`${addShareLabel} to Expenses`)}"
                             data-default-label="icon"
-                            onclick="liveSplitAddToExpense(${Math.abs(Number(event.delta) || 0)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${buttonId}', ${Number(event.group_id) || 0})"
+                            onclick="${isTripSummary
+                              ? `liveSplitAddTripToExpense(${Number(event.trip_id) || 0}, decodeURIComponent('${encodeURIComponent(String(getTripById(event.trip_id)?.name || 'Trip').trim())}'), ${shareAmount})`
+                              : `liveSplitAddToExpense(${shareAmount}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${buttonId}', ${Number(event.group_id) || 0})`}"
                           >
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-7-7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                           </button>
                           ` : ''}
                         </div>
-                      ` : '<span style="font-size:11px;color:var(--t3)">-</span>';
+                      ` : (addedToExpense
+                        ? `<span style="font-size:11px;font-weight:700;color:var(--green)">${escHtml(addedLabel)}</span>`
+                        : '<span style="font-size:11px;color:var(--t3)">-</span>');
                       const mobileActionHtml = buildActionHtml(mobileAddShareBtnId);
                       const desktopActionHtml = buildActionHtml(addShareBtnId);
                       return `
@@ -1769,12 +1822,17 @@
                   const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                   const canManage = Number(event.group_id) > 0;
                   const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
-                  const canAddMyShare = !isTripSummary && !event.added_to_expense && Number(event.delta) < 0 && Math.abs(Number(event.delta)) > 0;
+                  const canAddMyShare = canAddLiveSplitEventToExpense(event);
+                  const addedToExpense = liveSplitEventAddedToExpense(event);
+                  const shareAmount = liveSplitEventShareAmount(event);
+                  const addedLabel = isTripSummary
+                    ? (((getTripById(event.trip_id)?.added_to_expense_is_extra) ? 'Added Extra' : 'Added Fair'))
+                    : (event.added_to_expense_is_extra ? 'Added Extra' : 'Added');
                   const openCall = isTripSummary
                     ? `liveSplitOpenTripDetails(${Number(event.trip_id)})`
                     : `liveSplitOpenEvent('${rowRefToken}', '${Number(event.group_id) || 0}')`;
                   const mobileAddShareBtnId = `lsAddToExpenseBtn_mobile_card_${Number(event.group_id) || 0}`;
-                  const addShareLabel = `Add My Share (${fmtCur(Math.abs(Number(event.delta) || 0))})`;
+                  const addShareLabel = `Add My Share (${fmtCur(shareAmount)})`;
                   const actionHtml = (canManage && !isTripSummary) || canAddMyShare ? `
                     <div class="live-split-row-actions">
                       ${canManage && !isTripSummary ? `
@@ -1785,6 +1843,11 @@
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12v2H6V7zm2 3h8l-.7 9.1c-.1 1.1-1 1.9-2.1 1.9h-2.4c-1.1 0-2-.8-2.1-1.9L8 10zm3-5h2l1 1h4v2H6V6h4l1-1z"/></svg>
                       </button>
                       ` : ''}
+                      ${addedToExpense ? `
+                      <button class="live-split-icon-btn success" title="${escHtml(addedLabel)}" aria-label="${escHtml(addedLabel)}" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>
+                      </button>
+                      ` : ''}
                       ${canAddMyShare ? `
                       <button
                         id="${mobileAddShareBtnId}"
@@ -1792,13 +1855,17 @@
                         title="${escHtml(`${addShareLabel} to Expenses`)}"
                         aria-label="${escHtml(`${addShareLabel} to Expenses`)}"
                         data-default-label="icon"
-                        onclick="liveSplitAddToExpense(${Math.abs(Number(event.delta) || 0)}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${mobileAddShareBtnId}', ${Number(event.group_id) || 0})"
+                        onclick="${isTripSummary
+                          ? `liveSplitAddTripToExpense(${Number(event.trip_id) || 0}, decodeURIComponent('${encodeURIComponent(String(getTripById(event.trip_id)?.name || 'Trip').trim())}'), ${shareAmount})`
+                          : `liveSplitAddToExpense(${shareAmount}, decodeURIComponent('${encodeURIComponent(String(event.details || ''))}'), '${String(event.date || '')}', '${mobileAddShareBtnId}', ${Number(event.group_id) || 0})`}"
                       >
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-7-7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                       </button>
                       ` : ''}
                     </div>
-                  ` : '<span style="font-size:11px;color:var(--t3)">-</span>';
+                  ` : (addedToExpense
+                    ? `<span style="font-size:11px;font-weight:700;color:var(--green)">${escHtml(addedLabel)}</span>`
+                    : '<span style="font-size:11px;color:var(--t3)">-</span>');
                   return `
                     <div class="ls-mobile-event-card" onclick="${openCall}">
                       <div class="ls-mobile-event-head">
@@ -1867,9 +1934,9 @@
             | ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            ${trip.show_add_to_expense_option === false ? (trip.added_to_expense
+            ${trip.added_to_expense
               ? `<div style="font-size:11px;font-weight:700;color:var(--green);padding:6px 10px;border-radius:999px;background:#edfbf3;border:1px solid #cdeeda">Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}</div>`
-              : `<button class="btn btn-s btn-sm" ${Number(trip.total_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.total_amount || 0)})"` : 'disabled'}>${Number(trip.total_amount || 0) > 0 ? 'Add To Expenses' : 'Add To Expenses'}</button>`) : ''}
+              : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}</button>`}
             <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="liveSplitUseTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
             </button>
@@ -2074,26 +2141,39 @@
             const status = String(trip?.status || 'active').toLowerCase();
             const statusTone = status === 'completed' ? 'var(--t3)' : 'var(--green)';
             const busy = state.tripActionBusy === Number(trip.id);
+            const toggleLabel = status === 'completed' ? 'Reopen trip' : 'Complete trip';
             return `
               <div class="friend-card live-split-card" style="cursor:pointer" onclick="liveSplitOpenTripDetails(${Number(trip.id)})">
-                <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-                  <div class="friend-info">
-                    <div class="friend-name">${escHtml(trip.name || 'Trip')}</div>
+                <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:6px;align-self:stretch" onclick="event.stopPropagation()">
+                    <button class="live-split-icon-btn soft" title="Manage trip members" aria-label="Manage trip members" onclick="liveSplitManageTripMembers(${Number(trip.id)})">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l8.06-8.06.92.92L5.92 19.58zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0L15.13 5.1l3.75 3.75 1.83-1.81z"/></svg>
+                    </button>
+                    ${trip.is_owner ? `<button class="live-split-icon-btn ${status === 'completed' ? 'soft' : 'success'}" title="${toggleLabel}" aria-label="${toggleLabel}" ${busy ? 'disabled' : ''} onclick="liveSplitToggleTripStatus(${Number(trip.id)}, '${status === 'completed' ? 'active' : 'completed'}')">
+                      ${busy ? '<span style="font-size:11px;line-height:1">...</span>' : (status === 'completed'
+                        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-10.24 4.24l-1.42 1.42A8 8 0 1 0 12 5z"/></svg>'
+                        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>')}
+                    </button>` : ''}
+                    ${trip.is_owner ? `<button class="live-split-icon-btn danger" title="Delete trip" aria-label="Delete trip" ${busy ? 'disabled' : ''} onclick="liveSplitDeleteTrip(${Number(trip.id)})">
+                      ${busy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12v2H6V7zm2 3h8l-.7 9.1c-.1 1.1-1 1.9-2.1 1.9h-2.4c-1.1 0-2-.8-2.1-1.9L8 10zm3-5h2l1 1h4v2H6V6h4l1-1z"/></svg>'}
+                    </button>` : ''}
+                  </div>
+                  <div class="friend-info" style="min-width:0">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                      <div class="friend-name">${escHtml(trip.name || 'Trip')}</div>
+                      <span style="font-size:10px;font-weight:700;color:${statusTone};text-transform:capitalize;padding:3px 8px;border-radius:999px;background:${status === 'completed' ? 'rgba(148,163,184,0.16)' : 'rgba(20,90,60,0.14)'};border:1px solid ${status === 'completed' ? 'rgba(148,163,184,0.28)' : 'rgba(20,90,60,0.18)'}">${escHtml(status)}</span>
+                    </div>
                     <div style="font-size:11px;color:var(--t3)">
-            | ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
+            ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
                     </div>
                   </div>
                 </div>
                 <div class="live-split-card-actions live-split-trip-action-wrap" onclick="event.stopPropagation()">
-                  <span class="live-split-trip-status" style="font-size:11px;font-weight:700;color:${statusTone};text-transform:capitalize">${escHtml(status)}</span>
                   <div class="live-split-trip-actions">
                     <button class="btn btn-p btn-sm" onclick="liveSplitUseTrip(${Number(trip.id)})">Add Split</button>
-                    ${trip.show_add_to_expense_option === false ? (trip.added_to_expense
+                    ${trip.added_to_expense
                       ? `<button class="btn btn-s btn-sm" disabled>${trip.added_to_expense_is_extra ? 'Added Extra' : 'Added Fair'}</button>`
-                      : `<button class="btn btn-s btn-sm" ${Number(trip.total_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${Number(trip.id)}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.total_amount || 0)})"` : 'disabled'}>Add To Expenses</button>`) : ''}
-                    <button class="btn btn-s btn-sm" onclick="liveSplitManageTripMembers(${Number(trip.id)})">Members</button>
-                    ${trip.is_owner ? `<button class="btn btn-g btn-sm" ${busy ? 'disabled' : ''} onclick="liveSplitDeleteTrip(${Number(trip.id)})">${busy ? liveSplitBusyLabel('Deleting...') : 'Delete Trip'}</button>` : ''}
-                    ${trip.is_owner ? `<button class="btn btn-g btn-sm" ${busy ? 'disabled' : ''} onclick="liveSplitToggleTripStatus(${Number(trip.id)}, '${status === 'completed' ? 'active' : 'completed'}')">${busy ? liveSplitBusyLabel('Saving...') : (status === 'completed' ? 'Reopen' : 'Complete')}</button>` : ''}
+                      : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${Number(trip.id)}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>Add My Share</button>`}
                   </div>
                 </div>
               </div>`;
@@ -4047,14 +4127,15 @@
   };
   window.liveSplitAddTripToExpense = function liveSplitAddTripToExpense(tripId, tripName, totalAmount) {
     const resolvedTripId = Number(tripId || 0);
-    const resolvedAmount = Number(totalAmount || 0);
+    const trip = getTripById(resolvedTripId);
+    const resolvedAmount = Number(trip?.my_share_amount || totalAmount || 0);
     if (!(resolvedTripId > 0) || !(resolvedAmount > 0)) {
-      toast('Trip total is not available', 'error');
+      toast('Your trip share is not available', 'error');
       return;
     }
     openModal('Add Trip To Expenses', `
       <div style="display:grid;gap:12px">
-        <div style="font-size:13px;color:var(--t2)">Add the full trip total <b style="color:var(--t1)">${fmtCur(resolvedAmount)}</b> to Expenses using trip name <b style="color:var(--t1)">${escHtml(String(tripName || 'Trip').trim() || 'Trip')}</b>.</div>
+        <div style="font-size:13px;color:var(--t2)">Add your trip share <b style="color:var(--t1)">${fmtCur(resolvedAmount)}</b> to Expenses using trip name <b style="color:var(--t1)">${escHtml(String(tripName || 'Trip').trim() || 'Trip')}</b>.</div>
         <div style="display:grid;gap:8px">
           <button class="btn btn-p" onclick="liveSplitConfirmAddTripToExpense('fair', ${resolvedTripId})">Fair / Regular</button>
           <button class="btn btn-s" onclick="liveSplitConfirmAddTripToExpense('extra', ${resolvedTripId})">Extra / Non-essential</button>
@@ -4075,7 +4156,7 @@
       });
       if (!result?.success) throw new Error(result?.error || 'Could not add trip to expenses');
       await loadLiveSplit();
-      toast(`Trip total has been added to expenses as ${String(type || '').toLowerCase() === 'extra' ? 'Extra' : 'Fair'}`, 'success');
+      toast(`Your trip share has been added to expenses as ${String(type || '').toLowerCase() === 'extra' ? 'Extra' : 'Fair'}`, 'success');
       await refreshActiveLiveSplitModal();
     } catch (error) {
       toast(error?.message || 'Could not add trip to expenses', 'error');

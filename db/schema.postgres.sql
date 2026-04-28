@@ -428,6 +428,21 @@ CREATE TABLE IF NOT EXISTS trip_expense_splits (
   share_amount NUMERIC(14,2) NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS trip_itinerary_items (
+  id BIGSERIAL PRIMARY KEY,
+  trip_id BIGINT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  itinerary_date DATE NOT NULL,
+  start_time TIME,
+  end_time TIME,
+  location TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_trip_itinerary_items_trip_date
+  ON trip_itinerary_items(trip_id, itinerary_date, start_time, id);
+
 CREATE TABLE IF NOT EXISTS emi_records (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -931,3 +946,7 @@ ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS auto_add_to_expense BOOLEAN 
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_bank_account_id BIGINT;
 ALTER TABLE emi_installments ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_query_limit INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_lookup_mode TEXT NOT NULL DEFAULT 'both';
+UPDATE plans
+SET ai_lookup_mode = 'both'
+WHERE ai_lookup_mode IS NULL OR ai_lookup_mode NOT IN ('none', 'offline', 'online', 'both');

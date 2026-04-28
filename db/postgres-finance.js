@@ -969,6 +969,30 @@ async function getUserFinancialSummary(userId) {
   };
 }
 
+async function getExpensesForDate(userId, dateKey) {
+  const date = String(dateKey || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { day: date, total: 0, count: 0, expenses: [] };
+  const result = await query(
+    `SELECT purchase_date, item_name, amount, is_extra
+     FROM expenses
+     WHERE user_id = $1 AND deleted_at IS NULL AND purchase_date = $2
+     ORDER BY id ASC`,
+    [userId, date]
+  );
+  const expenses = result.rows.map((row) => ({
+    ...row,
+    purchase_date: row.purchase_date instanceof Date ? row.purchase_date.toISOString().slice(0, 10) : String(row.purchase_date || '').slice(0, 10),
+    amount: num(row.amount),
+    is_extra: !!row.is_extra,
+  }));
+  return {
+    day: date,
+    total: expenses.reduce((sum, row) => sum + num(row.amount), 0),
+    count: expenses.length,
+    expenses,
+  };
+}
+
 module.exports = {
   saveEmiRecord,
   getEmiRecords,
@@ -988,4 +1012,5 @@ module.exports = {
   getEmiDuesForMonth,
   getPreviewDataForMonth,
   getUserFinancialSummary,
+  getExpensesForDate,
 };

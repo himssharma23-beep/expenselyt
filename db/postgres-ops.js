@@ -289,6 +289,48 @@ async function getAiLookupStatus(userId) {
   const usedToday = Number(usageR.rows[0]?.query_count || 0);
   const activeSub = activeSubR.rows[0] || null;
   const isAdmin = userR.rows[0]?.role === 'admin';
+  const normalizeMode = (mode) => {
+    const value = String(mode || '').trim().toLowerCase();
+    return ['none', 'offline', 'online', 'both'].includes(value) ? value : 'both';
+  };
+  const modeToAllowed = (mode) => {
+    const normalized = normalizeMode(mode);
+    return {
+      mode: normalized,
+      offline: normalized === 'offline' || normalized === 'both',
+      online: normalized === 'online' || normalized === 'both',
+    };
+  };
+  const aiModeRows = await query(
+    `SELECT p.ai_lookup_mode
+     FROM plans p
+     JOIN plan_pages pp
+       ON pp.plan_id = p.id
+      AND pp.page_key = 'ailookup'
+     LEFT JOIN user_subscriptions s
+       ON s.plan_id = p.id
+      AND s.user_id = $1
+      AND s.status = 'active'
+      AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+     WHERE (p.is_free = TRUE AND p.is_active = TRUE) OR s.id IS NOT NULL`,
+    [userId]
+  );
+  let allowOffline = false;
+  let allowOnline = false;
+  for (const row of aiModeRows.rows) {
+    const modes = modeToAllowed(row.ai_lookup_mode);
+    allowOffline = allowOffline || modes.offline;
+    allowOnline = allowOnline || modes.online;
+  }
+  const allowedModes = isAdmin
+    ? modeToAllowed('both')
+    : allowOffline && allowOnline
+      ? modeToAllowed('both')
+      : allowOnline
+        ? modeToAllowed('online')
+        : allowOffline
+          ? modeToAllowed('offline')
+          : modeToAllowed('none');
 
   if (isAdmin) {
     return {
@@ -300,6 +342,7 @@ async function getAiLookupStatus(userId) {
       isAdmin: true,
       planName: activeSub?.name || 'Admin',
       canAsk: true,
+      allowed_modes: allowedModes,
       message: 'Admin account — unlimited AI lookups.',
     };
   }
@@ -310,7 +353,8 @@ async function getAiLookupStatus(userId) {
   const isUnlimited = dailyLimit === -1;
   const hasPaidPlan = !!(activeSub && !activeSub.is_free);
   const remainingFreeQueries = isUnlimited ? -1 : Math.max(0, dailyLimit - usedToday);
-  const canAsk = isUnlimited ? true : remainingFreeQueries > 0;
+  const hasAnyMode = allowedModes.offline || allowedModes.online;
+  const canAsk = hasAnyMode && (isUnlimited ? true : remainingFreeQueries > 0);
 
   return {
     date: today,
@@ -321,9 +365,12 @@ async function getAiLookupStatus(userId) {
     isAdmin: false,
     planName: activeSub?.name || null,
     canAsk,
-    message: isUnlimited
-      ? `Unlimited AI lookups available on your ${activeSub?.name || 'plan'}.`
-      : `Plan includes ${dailyLimit} AI lookups per day. ${remainingFreeQueries} remaining today.`,
+    message: !hasAnyMode
+      ? 'AI Lookup is not included in your current plan.'
+      : isUnlimited
+        ? `Unlimited AI lookups available on your ${activeSub?.name || 'plan'}.`
+        : `Plan includes ${dailyLimit} AI lookups per day. ${remainingFreeQueries} remaining today.`,
+    allowed_modes: allowedModes,
   };
 }
 

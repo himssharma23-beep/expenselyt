@@ -1157,16 +1157,9 @@ async function getLiveSplitTrips(userId) {
          ORDER BY m.id`,
         [row.id]
       ),
-      query(
-        `SELECT COUNT(*)::int AS expense_count,
-                COALESCE(SUM(total_amount), 0) AS total_amount,
-                COUNT(*) FILTER (WHERE split_mode = 'settlement')::int AS settlement_count
-         FROM live_split_groups
-         WHERE trip_id = $1`,
-        [row.id]
-      ),
+      getLiveSplitTripExpenseStats({ query }, row.id, userId),
     ]);
-    const stats = statsResult.rows[0] || {};
+    const stats = statsResult || {};
     trips.push({
       ...row,
       id: Number(row.id),
@@ -1187,10 +1180,67 @@ async function getLiveSplitTrips(userId) {
       expense_count: Number(stats.expense_count || 0),
       settlement_count: Number(stats.settlement_count || 0),
       total_amount: num(stats.total_amount),
+      my_share_amount: num(stats.my_share_amount),
+      latest_divide_date: stats.latest_divide_date || null,
     });
   }
 
   return trips;
+}
+
+async function getLiveSplitTripExpenseStats(client, tripId, userId) {
+  const tid = Number(tripId || 0);
+  const uid = Number(userId || 0);
+  if (!(tid > 0)) {
+    return {
+      expense_count: 0,
+      total_amount: 0,
+      settlement_count: 0,
+      my_share_amount: 0,
+      latest_divide_date: null,
+    };
+  }
+  const statsResult = await client.query(
+    `SELECT
+       COUNT(*)::int AS expense_count,
+       COALESCE(SUM(g.total_amount), 0) AS total_amount,
+       COUNT(*) FILTER (WHERE lower(COALESCE(g.split_mode, '')) = 'settlement')::int AS settlement_count,
+       COALESCE(SUM(
+         CASE
+           WHEN lower(COALESCE(g.split_mode, '')) = 'settlement' THEN 0
+           WHEN g.user_id = $2 THEN (
+             g.total_amount - COALESCE((
+               SELECT SUM(s.share_amount)
+               FROM live_split_splits s
+               WHERE s.group_id = g.id
+             ), 0)
+           )
+           ELSE COALESCE((
+             SELECT fs.share_amount
+             FROM live_split_group_shares share
+             LEFT JOIN live_split_splits fs
+               ON fs.group_id = g.id
+              AND fs.friend_id = share.friend_id
+             WHERE share.group_id = g.id
+               AND share.target_user_id = $2
+             ORDER BY share.id DESC
+             LIMIT 1
+           ), 0)
+         END
+       ), 0) AS my_share_amount,
+       MAX(g.divide_date) AS latest_divide_date
+     FROM live_split_groups g
+     WHERE g.trip_id = $1`,
+    [tid, uid]
+  );
+  const row = statsResult.rows[0] || {};
+  return {
+    expense_count: Number(row.expense_count || 0),
+    total_amount: num(row.total_amount),
+    settlement_count: Number(row.settlement_count || 0),
+    my_share_amount: num(row.my_share_amount),
+    latest_divide_date: row.latest_divide_date || null,
+  };
 }
 
 async function updateLiveSplitTrip(userId, tripId, data = {}) {
@@ -1331,17 +1381,12 @@ async function addLiveSplitTripToExpense(userId, tripId, data = {}) {
   return withTransaction(async (client) => {
     const access = await getLiveSplitTripAccessRow(client, uid, tid);
     if (!access) throw validationError('Trip not found');
-    if (Number(access.user_id) !== uid) throw validationError('Only trip owner can add trip totals to expenses');
-    const statsR = await client.query(
-      `SELECT COALESCE(SUM(total_amount), 0) AS total_amount
-       FROM live_split_groups
-       WHERE trip_id = $1`,
-      [tid]
-    );
-    const totalAmount = normalizeAmount(statsR.rows[0]?.total_amount || 0);
-    if (!(totalAmount > 0)) throw validationError('Trip total is zero, so nothing can be added to expenses');
+    const stats = await getLiveSplitTripExpenseStats(client, tid, uid);
+    const totalAmount = normalizeAmount(stats.total_amount || 0);
+    const myShareAmount = normalizeAmount(stats.my_share_amount || 0);
+    if (!(myShareAmount > 0)) throw validationError('Your trip share is zero, so nothing can be added to expenses');
     const tripName = String(access.name || 'Live Split Trip').trim() || 'Live Split Trip';
-    const purchaseDate = access.end_date || access.start_date || new Date().toISOString().slice(0, 10);
+    const purchaseDate = stats.latest_divide_date || access.end_date || access.start_date || new Date().toISOString().slice(0, 10);
     const isExtra = String(data?.expense_type || '').trim().toLowerCase() === 'extra';
     const existingR = await client.query(
       `SELECT id
@@ -1364,18 +1409,18 @@ async function addLiveSplitTripToExpense(userId, tripId, data = {}) {
              is_extra = $5,
              updated_at = NOW(),
              updated_by = $6
-         WHERE id = $7`,
-        [tripName, 'Live Split Trip', totalAmount, purchaseDate, isExtra, uid, Number(existingR.rows[0].id)]
+          WHERE id = $7`,
+        [tripName, 'Live Split Trip', myShareAmount, purchaseDate, isExtra, uid, Number(existingR.rows[0].id)]
       );
-      return { id: Number(existingR.rows[0].id), total_amount: totalAmount, updated: true, is_extra: isExtra };
+      return { id: Number(existingR.rows[0].id), total_amount: totalAmount, my_share_amount: myShareAmount, updated: true, is_extra: isExtra };
     }
     const insertR = await client.query(
       `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, source, source_id, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, 'live_split_trip', $7, $1, $1)
        RETURNING id`,
-      [uid, tripName, 'Live Split Trip', totalAmount, purchaseDate, isExtra, tid]
+      [uid, tripName, 'Live Split Trip', myShareAmount, purchaseDate, isExtra, tid]
     );
-    return { id: Number(insertR.rows[0].id), total_amount: totalAmount, updated: false, is_extra: isExtra };
+    return { id: Number(insertR.rows[0].id), total_amount: totalAmount, my_share_amount: myShareAmount, updated: false, is_extra: isExtra };
   });
 }
 
@@ -2524,6 +2569,7 @@ async function getReceivedLiveSplitShares(userId) {
          g.details,
          g.paid_by,
          g.total_amount,
+         g.split_mode,
          g.heading,
          g.session_id,
          g.owner_added_to_expense,
@@ -2600,6 +2646,7 @@ async function getReceivedLiveSplitShares(userId) {
          g.details,
          g.paid_by,
          g.total_amount,
+         g.split_mode,
          g.heading,
          g.session_id,
          g.owner_added_to_expense,
@@ -3457,6 +3504,38 @@ function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
   };
 }
 
+function normalizeTripItineraryTitle(value) {
+  return normalizeText(value, 'Itinerary title', 140);
+}
+
+function normalizeTripItineraryTime(value, fieldLabel) {
+  if (value === undefined || value === null || value === '') return null;
+  const text = String(value).trim();
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(text)) throw validationError(`${fieldLabel} is invalid`);
+  const [hourText, minuteText] = text.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw validationError(`${fieldLabel} is invalid`);
+  }
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+}
+
+function normalizeTripItineraryPayload(data = {}) {
+  const itineraryDate = normalizeDateValue(data.itinerary_date || data.date, 'Itinerary date');
+  const startTime = normalizeTripItineraryTime(data.start_time, 'Start time');
+  const endTime = normalizeTripItineraryTime(data.end_time, 'End time');
+  if (startTime && endTime && startTime > endTime) throw validationError('End time cannot be before start time');
+  return {
+    title: normalizeTripItineraryTitle(data.title || data.name),
+    itinerary_date: itineraryDate,
+    start_time: startTime,
+    end_time: endTime,
+    location: normalizeOptionalText(data.location, 140),
+    notes: normalizeOptionalText(data.notes, 400),
+  };
+}
+
 async function _assertTripOwner(userId, tripId, client = { query }) {
   const tripR = await client.query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]);
   if (!tripR.rows[0]) throw validationError('Trip not found');
@@ -3566,10 +3645,17 @@ async function getTrips(userId) {
 }
 
 async function getTripById(userId, tripId) {
-  const [tripR, membersR, expenses] = await Promise.all([
+  const [tripR, membersR, expenses, itineraryR] = await Promise.all([
     query('SELECT * FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]),
     query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]),
     _loadNormalizedTripExpenses({ query }, tripId),
+    query(
+      `SELECT id, title, itinerary_date, start_time, end_time, location, notes, created_at, updated_at
+       FROM trip_itinerary_items
+       WHERE trip_id = $1
+       ORDER BY itinerary_date ASC, start_time ASC NULLS LAST, id ASC`,
+      [tripId]
+    ),
   ]);
   const trip = tripR.rows[0];
   if (!trip) return null;
@@ -3614,6 +3700,17 @@ async function getTripById(userId, tripId) {
     destination: trip.destination || trip.name,
     total_distance: trip.total_distance == null ? null : num(trip.total_distance),
     members: membersR.rows,
+    itinerary_items: itineraryR.rows.map((row) => ({
+      id: Number(row.id),
+      title: row.title || '',
+      itinerary_date: row.itinerary_date,
+      start_time: row.start_time ? String(row.start_time).slice(0, 5) : null,
+      end_time: row.end_time ? String(row.end_time).slice(0, 5) : null,
+      location: row.location || null,
+      notes: row.notes || null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })),
     expenses,
     expense_groups,
     grand_total: Math.round(grandTotal * 100) / 100,
@@ -3676,10 +3773,72 @@ async function updateTrip(userId, id, data) {
 
 async function deleteTrip(userId, id) {
   await withTransaction(async (client) => {
+    await client.query('DELETE FROM trip_itinerary_items WHERE trip_id = $1', [id]);
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id = $1)', [id]);
     await client.query('DELETE FROM trip_expenses WHERE trip_id = $1', [id]);
     await client.query('DELETE FROM trip_members WHERE trip_id = $1', [id]);
     await client.query('DELETE FROM trips WHERE id = $1 AND user_id = $2', [id, userId]);
+  });
+}
+
+async function addTripItineraryItem(userId, tripId, data) {
+  await _assertTripOwner(userId, tripId);
+  return withTransaction(async (client) => {
+    const payload = normalizeTripItineraryPayload(data);
+    const result = await client.query(
+      `INSERT INTO trip_itinerary_items (trip_id, title, itinerary_date, start_time, end_time, location, notes, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING id`,
+      [tripId, payload.title, payload.itinerary_date, payload.start_time, payload.end_time, payload.location, payload.notes]
+    );
+    await client.query('UPDATE trips SET updated_at = NOW() WHERE id = $1', [tripId]);
+    return Number(result.rows[0].id);
+  });
+}
+
+async function updateTripItineraryItem(userId, itemId, data) {
+  return withTransaction(async (client) => {
+    const currentR = await client.query(
+      `SELECT ti.id, ti.trip_id
+       FROM trip_itinerary_items ti
+       JOIN trips t ON t.id = ti.trip_id
+       WHERE ti.id = $1 AND t.user_id = $2
+       LIMIT 1`,
+      [itemId, userId]
+    );
+    const current = currentR.rows[0];
+    if (!current) throw validationError('Itinerary item not found');
+    const payload = normalizeTripItineraryPayload(data);
+    await client.query(
+      `UPDATE trip_itinerary_items
+       SET title = $1,
+           itinerary_date = $2,
+           start_time = $3,
+           end_time = $4,
+           location = $5,
+           notes = $6,
+           updated_at = NOW()
+       WHERE id = $7`,
+      [payload.title, payload.itinerary_date, payload.start_time, payload.end_time, payload.location, payload.notes, itemId]
+    );
+    await client.query('UPDATE trips SET updated_at = NOW() WHERE id = $1', [current.trip_id]);
+  });
+}
+
+async function deleteTripItineraryItem(userId, itemId) {
+  return withTransaction(async (client) => {
+    const currentR = await client.query(
+      `SELECT ti.id, ti.trip_id
+       FROM trip_itinerary_items ti
+       JOIN trips t ON t.id = ti.trip_id
+       WHERE ti.id = $1 AND t.user_id = $2
+       LIMIT 1`,
+      [itemId, userId]
+    );
+    const current = currentR.rows[0];
+    if (!current) throw validationError('Itinerary item not found');
+    await client.query('DELETE FROM trip_itinerary_items WHERE id = $1', [itemId]);
+    await client.query('UPDATE trips SET updated_at = NOW() WHERE id = $1', [current.trip_id]);
   });
 }
 
@@ -4628,6 +4787,9 @@ module.exports = {
   getTripById,
   updateTrip,
   deleteTrip,
+  addTripItineraryItem,
+  updateTripItineraryItem,
+  deleteTripItineraryItem,
   addTripExpense,
   updateTripExpense,
   deleteTripExpense,

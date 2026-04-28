@@ -152,6 +152,685 @@ function parseReceiptDraftFromText(text) {
   };
 }
 
+function sanitizeReceiptItems(items, fallbackDate = null) {
+  return (Array.isArray(items) ? items : [])
+    .map((row) => {
+      const amount = normalizeOcrAmount(row?.amount);
+      const itemName = String(row?.item_name || '').trim();
+      const purchaseDate = parseReceiptDateFromText(String(row?.purchase_date || '')) || fallbackDate;
+      if (!itemName || !amount) return null;
+      return {
+        item_name: itemName,
+        amount,
+        purchase_date: purchaseDate,
+        category: String(row?.category || '').trim() || null,
+        is_extra: !!row?.is_extra,
+        selected: row?.selected !== false,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeReceiptDraftShape(draft, rawText = '') {
+  const purchaseDate = parseReceiptDateFromText(String(draft?.purchase_date || '')) || parseReceiptDateFromText(rawText);
+  const merchant = String(draft?.merchant || '').trim() || 'Scanned receipt';
+  const totalAmount = normalizeOcrAmount(draft?.total_amount);
+  let items = sanitizeReceiptItems(draft?.items, purchaseDate);
+
+  if (!items.length && totalAmount) {
+    items = [{
+      item_name: merchant,
+      amount: totalAmount,
+      purchase_date: purchaseDate,
+      category: null,
+      is_extra: false,
+      selected: true,
+    }];
+  }
+
+  return {
+    merchant,
+    purchase_date: purchaseDate,
+    total_amount: totalAmount,
+    items,
+    raw_text: String(rawText || draft?.raw_text || '').trim(),
+  };
+}
+
+function mergeReceiptDrafts(localDraft, aiDraft) {
+  if (!aiDraft) return localDraft;
+  return {
+    merchant: aiDraft.merchant || localDraft.merchant,
+    purchase_date: aiDraft.purchase_date || localDraft.purchase_date,
+    total_amount: aiDraft.total_amount || localDraft.total_amount,
+    items: aiDraft.items?.length ? aiDraft.items : localDraft.items,
+    raw_text: aiDraft.raw_text || localDraft.raw_text,
+  };
+}
+
+function isTransactionListDraft(draft) {
+  const rawText = String(draft?.raw_text || '');
+  const items = Array.isArray(draft?.items) ? draft.items : [];
+  const transactionKeywords = /\b(payment history|payment|checkout|razorpay|wallet|transactions?|statement|apr '?26|may '?26|jun '?26|am|pm)\b/i;
+  const datedRows = items.filter((row) => parseReceiptDateFromText(String(row?.purchase_date || ''))).length;
+  const repeatedShortNames = items.filter((row) => String(row?.item_name || '').trim().length >= 2 && String(row?.item_name || '').trim().length <= 40).length;
+  return items.length >= 2 && (
+    transactionKeywords.test(rawText) ||
+    datedRows >= 2 ||
+    repeatedShortNames >= 3
+  );
+}
+
+function finalizeReceiptDraft(draft) {
+  if (!draft) return draft;
+  const rawText = String(draft.raw_text || '');
+  const hasExplicitTotalLabel = /\b(total|grand total|net total|amount due|bill total|balance due|subtotal)\b/i.test(rawText);
+  const items = Array.isArray(draft.items) ? [...draft.items] : [];
+  const totalAmount = normalizeOcrAmount(draft.total_amount);
+  const isTransactionList = isTransactionListDraft(draft);
+  const merchant = String(draft.merchant || '').trim();
+
+  if (items.length > 1 && totalAmount && (isTransactionList || !hasExplicitTotalLabel)) {
+    const totalMatchesSingleRow = items.some((row) => {
+      const rowAmount = normalizeOcrAmount(row?.amount);
+      return rowAmount && Math.abs(rowAmount - totalAmount) < 0.01;
+    });
+    if (isTransactionList || totalMatchesSingleRow) {
+      const merchantAlreadyPresent = items.some((row) => String(row?.item_name || '').trim().toLowerCase() === merchant.toLowerCase());
+      if (merchant && totalAmount && !merchantAlreadyPresent) {
+        items.unshift({
+          item_name: merchant,
+          amount: totalAmount,
+          purchase_date: draft.purchase_date || '',
+          category: null,
+          is_extra: false,
+          selected: true,
+        });
+      }
+      return {
+        ...draft,
+        merchant: isTransactionList ? 'Scanned transactions' : draft.merchant,
+        total_amount: null,
+        items,
+      };
+    }
+  }
+
+  if (isTransactionList && merchant) {
+    return {
+      ...draft,
+      merchant: 'Scanned transactions',
+    };
+  }
+
+  return draft;
+}
+
+function normalizeSmartCaptureText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[|]+/g, ' ')
+    .trim();
+}
+
+function getOpenAiSmartCaptureConfig() {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  const model = String(process.env.OPENAI_SMART_CAPTURE_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
+  return {
+    apiKey,
+    model,
+    enabled: !!apiKey,
+  };
+}
+
+function getOpenAiReceiptScanModel() {
+  return String(
+    process.env.OPENAI_RECEIPT_SCAN_MODEL ||
+    process.env.OPENAI_SMART_CAPTURE_MODEL ||
+    process.env.OPENAI_MODEL ||
+    'gpt-4.1-mini'
+  ).trim();
+}
+
+function getOpenAiAiLookupConfig() {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  const model = String(
+    process.env.OPENAI_AI_LOOKUP_MODEL ||
+    process.env.OPENAI_MODEL ||
+    'gpt-4.1-mini'
+  ).trim();
+  return {
+    apiKey,
+    model,
+    enabled: !!apiKey,
+  };
+}
+
+function enrichAiLookupStatus(status) {
+  const config = getOpenAiAiLookupConfig();
+  const allowed = status?.allowed_modes || { offline: true, online: true };
+  return {
+    ...(status || {}),
+    allowed_modes: allowed,
+    modes: {
+      offline: !!allowed.offline,
+      online: !!allowed.online && !!config.enabled,
+    },
+    online_model: allowed.online && config.enabled ? config.model : '',
+  };
+}
+
+function extractOpenAiOutputText(payload) {
+  if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+  const parts = [];
+  for (const item of (payload?.output || [])) {
+    if (item?.type !== 'message') continue;
+    for (const content of (item?.content || [])) {
+      if (content?.type === 'output_text' && typeof content?.text === 'string') {
+        parts.push(content.text);
+      }
+      if (content?.type === 'refusal' && content?.refusal) {
+        throw new Error(content.refusal);
+      }
+    }
+  }
+  return parts.join('\n').trim();
+}
+
+function buildAiLookupOpenAiContext(summary, currentUser) {
+  const safeArray = (value, limit = 50) => (Array.isArray(value) ? value.slice(0, limit) : []);
+  return {
+    user: {
+      id: Number(currentUser?.id || 0),
+      username: currentUser?.username || '',
+      display_name: currentUser?.display_name || '',
+      currency_code: currentUser?.currency_code || 'INR',
+      locale_code: currentUser?.locale_code || 'en-IN',
+      time_zone: currentUser?.time_zone || 'Asia/Kolkata',
+    },
+    as_of: summary?.as_of || new Date().toISOString().slice(0, 10),
+    current_month: summary?.current_month || '',
+    totals: {
+      total_expense_current_month: Number(summary?.total_expense_current_month || 0),
+      total_expense_current_year: Number(summary?.total_expense_current_year || 0),
+      fair_spend_current_month: Number(summary?.fair_spend_current_month || 0),
+      extra_spend_current_month: Number(summary?.extra_spend_current_month || 0),
+      monthly_savings_current_month: Number(summary?.monthly_savings_current_month || 0),
+      total_bank_balance: Number(summary?.total_bank_balance || 0),
+      total_credit_card_due: Number(summary?.total_credit_card_due || 0),
+      total_friend_balance: Number(summary?.total_friend_balance || 0),
+      total_trip_spend: Number(summary?.total_trip_spend || 0),
+    },
+    expense_by_year: safeArray(summary?.expense_by_year, 12),
+    expense_last_6_months: safeArray(summary?.expense_last_6_months, 12),
+    expense_by_day: safeArray(summary?.expense_by_day, 45),
+    expense_by_category: safeArray(summary?.expense_by_category, 20),
+    recent_expenses: safeArray(summary?.recent_expenses, 60),
+    friends_loan_summary: safeArray(summary?.friends_loan_summary, 40),
+    emis: safeArray(summary?.emis, 40),
+    credit_cards: safeArray(summary?.credit_cards, 20),
+    bank_accounts: safeArray(summary?.bank_accounts, 20),
+    active_trips: safeArray(summary?.active_trips, 20),
+    recurring_defaults: safeArray(summary?.recurring_defaults, 30),
+    current_month_planner: safeArray(summary?.current_month_planner, 40),
+  };
+}
+
+function buildAiLookupFactBundle(question, summary, currentUser) {
+  const q = String(question || '').trim();
+  const normalized = q.toLowerCase();
+  const tokens = aiTokens(q);
+  const asksAboutExpense = aiHasAnyToken(tokens, ['expense', 'expenses', 'spend', 'spent', 'spending']);
+  const dateKey = aiExtractDateKey(q, summary);
+  const monthKey = aiExtractMonthKey(q, summary);
+  const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
+  const today = summary?.as_of || new Date().toISOString().slice(0, 10);
+
+  if (asksAboutExpense && dateKey) {
+    const dayRow = aiFindDayRow(summary, dateKey);
+    const rows = recentExpenses
+      .filter((row) => aiDateKeyValue(row?.purchase_date) === aiDateKeyValue(dateKey))
+      .slice(0, 20)
+      .map((row) => ({
+        item_name: row.item_name || '',
+        amount: aiNum(row.amount),
+        amount_label: aiCurrency(summary, currentUser, row.amount),
+        is_extra: !!row.is_extra,
+        purchase_date: aiDateKeyValue(row.purchase_date),
+      }));
+    return {
+      query_type: dateKey === today ? 'expense_today' : 'expense_by_day',
+      found: !!dayRow,
+      date: dateKey,
+      date_label: aiDateLabel(dateKey),
+      total: dayRow ? aiNum(dayRow.total) : 0,
+      total_label: dayRow ? aiCurrency(summary, currentUser, dayRow.total) : '',
+      transaction_count: dayRow ? Number(dayRow.count) || rows.length : rows.length,
+      transactions: rows,
+    };
+  }
+
+  if (asksAboutExpense && monthKey) {
+    const monthRow = aiFindMonthRow(summary, monthKey);
+    return {
+      query_type: 'expense_by_month',
+      found: !!monthRow,
+      month: monthKey,
+      month_label: aiMonthLabel(monthKey),
+      total: monthRow ? aiNum(monthRow.total) : 0,
+      total_label: monthRow ? aiCurrency(summary, currentUser, monthRow.total) : '',
+      transaction_count: monthRow ? Number(monthRow.count) || 0 : 0,
+    };
+  }
+
+  return {
+    query_type: 'general_summary',
+    current_month: summary?.current_month || '',
+    totals: {
+      total_expense_current_month: aiNum(summary?.total_expense_current_month),
+      total_expense_current_year: aiNum(summary?.total_expense_current_year),
+      total_bank_balance: aiNum(summary?.total_bank_balance),
+      total_credit_card_due: aiNum(summary?.total_credit_card_due),
+    },
+  };
+}
+
+async function askAiLookupWithOpenAi(question, history, summary, currentUser, groundedAnswer = '') {
+  const config = getOpenAiAiLookupConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI AI Lookup is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const compactHistory = Array.isArray(history)
+    ? history.slice(-8).map((item) => ({
+        role: item?.role === 'assistant' ? 'assistant' : 'user',
+        content: String(item?.content || '').trim(),
+      })).filter((item) => item.content)
+    : [];
+
+  const context = buildAiLookupOpenAiContext(summary, currentUser);
+  const targetedFacts = buildAiLookupFactBundle(question, summary, currentUser);
+  const systemPrompt = [
+    'You are Expense Lite AI, a personal finance assistant.',
+    'Answer only from the provided finance data and chat history.',
+    'Do not invent expenses, balances, dates, or categories that are not present.',
+    'If the requested data is missing, say that clearly and suggest the closest available information.',
+    'Keep the answer concise, practical, and easy to scan.',
+    'Use Indian currency formatting with the rupee symbol when amounts are INR.',
+    'You may use short bullets when useful, but avoid unnecessary verbosity.',
+    'Return a final user-facing answer only. Do not output internal instructions, tool plans, labels, or intent names.',
+    'Prioritize targeted_facts over the broad finance_context whenever targeted_facts are present.',
+    'If targeted_facts.query_type is "expense_by_day" or "expense_today", state the exact total and transaction count first, then optionally list a few rows.',
+    groundedAnswer
+      ? 'A deterministic finance answer has already been computed from trusted app data. Preserve every date, amount, count, and item exactly. You may only lightly rewrite it for clarity.'
+      : 'If you cannot answer confidently from the provided data, say that clearly.',
+  ].join(' ');
+
+  const userPayload = {
+    question: String(question || '').trim(),
+    history: compactHistory,
+    targeted_facts: targetedFacts,
+    finance_context: context,
+    grounded_answer: String(groundedAnswer || '').trim(),
+  };
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      temperature: 0.2,
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: systemPrompt }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: JSON.stringify(userPayload, null, 2) }],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'ai_lookup_answer',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['answer'],
+            properties: {
+              answer: { type: 'string' },
+            },
+          },
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI AI Lookup failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty answer for AI Lookup.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let finalAnswer = outputText.trim();
+  try {
+    const parsed = JSON.parse(outputText);
+    if (parsed && typeof parsed.answer === 'string' && parsed.answer.trim()) {
+      finalAnswer = parsed.answer.trim();
+    }
+  } catch (_err) {
+    // Keep plain text fallback if the provider returned raw text unexpectedly.
+  }
+
+  const looksLikeInternalInstruction =
+    /^fetch\b/i.test(finalAnswer) ||
+    /^show\b/i.test(finalAnswer) ||
+    /^list\b/i.test(finalAnswer) ||
+    /\bmentioned date\b/i.test(finalAnswer) ||
+    /\bintent\b/i.test(finalAnswer);
+  const shouldRequireExactGrounding = ['expense_by_day', 'expense_today', 'expense_by_month'].includes(String(targetedFacts?.query_type || ''));
+  const missingExpectedFinanceDetail =
+    shouldRequireExactGrounding &&
+    groundedAnswer &&
+    targetedFacts?.found &&
+    !finalAnswer.includes(String(targetedFacts.total_label || ''));
+  if (groundedAnswer && (looksLikeInternalInstruction || missingExpectedFinanceDetail)) {
+    finalAnswer = String(groundedAnswer).trim();
+  }
+
+  return {
+    answer: finalAnswer,
+    model: config.model,
+  };
+}
+
+async function parseExpenseMessageWithOpenAi(message, banks = [], cards = []) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI parsing is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const bankOptions = (banks || []).map((bank) => ({
+    id: String(bank.id),
+    label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+    bank_name: bank.bank_name || '',
+    account_name: bank.account_name || '',
+    is_default: !!bank.is_default,
+  }));
+  const cardOptions = (cards || []).map((card) => ({
+    id: String(card.id),
+    label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+    card_name: card.card_name || '',
+    bank_name: card.bank_name || '',
+    last4: String(card.last4 || ''),
+    default_discount_pct: Number(card.default_discount_pct || 0),
+  }));
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'item_name',
+      'merchant',
+      'amount',
+      'purchase_date',
+      'category',
+      'source_type',
+      'matched_bank_id',
+      'matched_card_id',
+      'card_discount_pct',
+      'confidence',
+      'notes',
+    ],
+    properties: {
+      item_name: { type: 'string' },
+      merchant: { type: 'string' },
+      amount: { type: 'number' },
+      purchase_date: { type: 'string' },
+      category: { type: 'string' },
+      source_type: { type: 'string', enum: ['bank', 'credit_card', 'none'] },
+      matched_bank_id: { type: 'string' },
+      matched_card_id: { type: 'string' },
+      card_discount_pct: { type: 'number' },
+      confidence: { type: 'number' },
+      notes: { type: 'string' },
+    },
+  };
+
+  const systemPrompt = [
+    'You extract structured expense suggestions from bank, UPI, and credit card payment messages.',
+    'Return only data that can help prefill an expense form.',
+    'Treat outgoing spend/debit/purchase messages as expenses.',
+    'Use only the provided bank ids or card ids when matching a source. If unsure, return an empty string for the match id.',
+    'If a credit card matches, prefer source_type "credit_card". Otherwise use "bank" when a bank account matches. Use "none" if no source matches.',
+    'Keep purchase_date in YYYY-MM-DD format. If the exact date is missing, infer the most likely date from the message. If still missing, use today.',
+    'If category is unclear, return an empty string.',
+    'confidence should be between 0 and 100.',
+  ].join(' ');
+
+  const userPrompt = JSON.stringify({
+    today: new Date().toISOString().slice(0, 10),
+    message: String(message || ''),
+    available_banks: bankOptions,
+    available_cards: cardOptions,
+  });
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      input: [
+        {
+          role: 'system',
+          content: [
+            { type: 'input_text', text: systemPrompt },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text', text: userPrompt },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'smart_capture_parse',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI request failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty parse result.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    const err = new Error('OpenAI returned invalid JSON for smart capture.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const matchedBank = bankOptions.find((bank) => bank.id === String(parsed.matched_bank_id || '')) || null;
+  const matchedCard = cardOptions.find((card) => card.id === String(parsed.matched_card_id || '')) || null;
+  const sourceType = matchedCard ? 'credit_card' : (matchedBank ? 'bank' : 'none');
+
+  return {
+    raw_text: String(message || ''),
+    parsed_text: normalizeSmartCaptureText(message),
+    detected_type: sourceType === 'credit_card' ? 'credit_card' : 'bank',
+    transaction_direction: 'debit',
+    amount: Number(parsed.amount || 0) || 0,
+    purchase_date: String(parsed.purchase_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+    item_name: String(parsed.item_name || parsed.merchant || 'Payment').trim() || 'Payment',
+    merchant: String(parsed.merchant || '').trim(),
+    category: String(parsed.category || '').trim(),
+    bank_account_id: matchedBank ? Number(matchedBank.id) : null,
+    bank_label: matchedBank ? matchedBank.label : '',
+    card_id: matchedCard ? Number(matchedCard.id) : null,
+    card_label: matchedCard ? matchedCard.label : '',
+    card_discount_pct: matchedCard ? Number(parsed.card_discount_pct || matchedCard.default_discount_pct || 0) : 0,
+    confidence: Math.max(0, Math.min(100, Number(parsed.confidence || 0) || 0)),
+    status: 'pending',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    source: 'openai',
+    ai_notes: String(parsed.notes || '').trim(),
+  };
+}
+
+async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageBuffer = null, mimeType = 'image/jpeg') {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) return null;
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['merchant', 'purchase_date', 'total_amount', 'items', 'notes'],
+    properties: {
+      merchant: { type: 'string' },
+      purchase_date: { type: 'string' },
+      total_amount: { type: 'number' },
+      notes: { type: 'string' },
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['item_name', 'amount', 'purchase_date', 'category', 'is_extra', 'selected'],
+          properties: {
+            item_name: { type: 'string' },
+            amount: { type: 'number' },
+            purchase_date: { type: 'string' },
+            category: { type: 'string' },
+            is_extra: { type: 'boolean' },
+            selected: { type: 'boolean' },
+          },
+        },
+      },
+    },
+  };
+
+  const systemPrompt = [
+    'You extract expense rows from a bill, receipt, or invoice image.',
+    'Return a clean structured draft for an expense review screen.',
+    'Prefer the actual line items shown in the bill table.',
+    'Do not collapse all rows into a single total row if the image clearly shows individual items.',
+    'If the image is a payment history, bank statement snippet, wallet transaction list, or Razorpay-style transaction feed, treat each visible payment as its own row entry.',
+    'For transaction-list screenshots, do not use the first row, largest row, or merchant header as total_amount unless the image explicitly shows a labeled total.',
+    'Use the OCR text only as supporting context when the image text is hard to read.',
+    'Keep purchase_date in YYYY-MM-DD format. If the exact date is missing, infer the most likely date from the OCR text. If still unknown, return an empty string.',
+    'Use category only if the OCR text strongly suggests one, otherwise return an empty string.',
+    'Set is_extra to false unless the OCR text clearly indicates a luxury or non-essential item.',
+    'Set selected to true for all extracted expense rows.',
+    'If line items are unclear and the image is a single bill/receipt, return a single item using the merchant name and total amount.',
+  ].join(' ');
+
+  const content = [
+    {
+      type: 'input_text',
+      text: JSON.stringify({
+        ocr_text: String(ocrText || ''),
+        fallback_draft: fallbackDraft || null,
+      }),
+    },
+  ];
+
+  if (imageBuffer?.length) {
+    const base64Image = imageBuffer.toString('base64');
+    content.push({
+      type: 'input_image',
+      image_url: `data:${mimeType || 'image/jpeg'};base64,${base64Image}`,
+      detail: 'high',
+    });
+  }
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: getOpenAiReceiptScanModel(),
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: systemPrompt }],
+        },
+        {
+          role: 'user',
+          content,
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'receipt_scan_parse',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || payload?.message || `OpenAI receipt parse failed with HTTP ${response.status}`);
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    throw new Error('OpenAI returned invalid JSON for receipt scan parsing.');
+  }
+
+  return normalizeReceiptDraftShape(parsed, ocrText);
+}
+
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
   if (!value) {
@@ -316,17 +995,59 @@ router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
     const text = String(result?.data?.text || '').trim();
     if (!text) return res.status(422).json({ error: 'Could not read text from this image' });
 
-    const draft = parseReceiptDraftFromText(text);
+    const localDraft = normalizeReceiptDraftShape(parseReceiptDraftFromText(text), text);
+    let aiDraft = null;
+    let aiUsed = false;
+    let aiError = '';
+    if (getOpenAiSmartCaptureConfig().enabled) {
+      try {
+        aiDraft = await parseReceiptDraftWithOpenAi(
+          text,
+          localDraft,
+          req.file.buffer,
+          String(req.file.mimetype || 'image/jpeg')
+        );
+        aiUsed = !!aiDraft;
+      } catch (err) {
+        aiError = err?.message || 'AI receipt parsing failed';
+      }
+    }
+    const draft = finalizeReceiptDraft(mergeReceiptDrafts(localDraft, aiDraft));
     res.json({
       success: true,
       draft: {
         ...draft,
         confidence: Number(result?.data?.confidence || 0),
+        ai_used: aiUsed,
+        ai_error: aiError || null,
       },
     });
   } catch (err) {
     console.error('[expenses/scan-image]', err);
     res.status(500).json({ error: err.message || 'Could not scan image' });
+  }
+});
+
+router.post('/smart-capture/parse-ai', async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+
+    const [banks, cards] = await Promise.all([
+      Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
+      Promise.resolve(getBillingDb().getCreditCards(req.session.userId)),
+    ]);
+
+    const suggestion = await parseExpenseMessageWithOpenAi(message, banks || [], cards || []);
+    res.json({
+      success: true,
+      provider: 'openai',
+      suggestion,
+      configured: true,
+    });
+  } catch (err) {
+    console.error('[smart-capture/parse-ai]', err?.message || err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this payment message with AI.' });
   }
 });
 
@@ -2162,6 +2883,27 @@ router.put('/trips/:id', async (req, res) => {
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
+router.post('/trips/:id/itinerary', async (req, res) => {
+  try {
+    const id = await Promise.resolve(getCoreDb().addTripItineraryItem(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, id });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.put('/trips/:id/itinerary/:iid', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().updateTripItineraryItem(req.session.userId, req.params.iid, req.body || {}));
+    res.json({ success: true });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.delete('/trips/:id/itinerary/:iid', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().deleteTripItineraryItem(req.session.userId, req.params.iid));
+    res.json({ success: true });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
 router.delete('/trips/:id', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().deleteTrip(req.session.userId, req.params.id));
@@ -3068,8 +3810,13 @@ router.get('/auth/me/access', (req, res) => {
   Promise.all([
     Promise.resolve(pgDb.findUserById(req.session.userId)),
     Promise.resolve(pgDb.getUserAccessiblePages(req.session.userId)),
-  ]).then(([user, pages]) => {
-    res.json({ role: user?.role || 'user', pages });
+    Promise.resolve(pgDb.getUserAiLookupModes(req.session.userId)),
+  ]).then(([user, pages, aiLookupModes]) => {
+    res.json({
+      role: user?.role || 'user',
+      pages,
+      ai_lookup_modes: aiLookupModes || { mode: 'none', offline: false, online: false },
+    });
   }).catch((err) => {
     res.status(500).json({ error: err.message });
   });
@@ -3408,13 +4155,19 @@ router.post('/admin/ai-learning/test', requireAdmin, async (req, res) => {
     const question = String(req.body?.question || '').trim();
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
-    const [summary, currentUser] = await Promise.all([
+    let [summary, currentUser] = await Promise.all([
       Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId)),
       Promise.resolve(pgDb.findUserById(req.session.userId)),
     ]);
+    const requestedDateKey = aiExtractDateKey(question, summary);
+    if (requestedDateKey) {
+      summary = await ensureAiSummaryForDate(req.session.userId, summary, requestedDateKey);
+    }
 
     const normalizedQuestion = aiNormalizeQuestion(question);
-    const trainedAnswer = await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
+    const trainedAnswer = lookupMode === 'online'
+      ? null
+      : await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
     if (trainedAnswer?.ideal_answer) {
       return res.json({
         success: true,
@@ -3876,6 +4629,20 @@ function aiDateLabel(value) {
   }
 }
 
+function aiDateKeyValue(value) {
+  if (!value) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const isoMatch = raw.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (isoMatch) return isoMatch[1];
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return raw.slice(0, 10);
+}
+
 function aiExtractDateKey(question, summary) {
   const raw = String(question || '').trim();
   const normalized = raw.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
@@ -3933,7 +4700,33 @@ function aiExtractDateKey(question, summary) {
 
 function aiFindDayRow(summary, dateKey) {
   const rows = Array.isArray(summary?.expense_by_day) ? summary.expense_by_day : [];
-  return rows.find((row) => String(row.day) === String(dateKey)) || null;
+  const target = aiDateKeyValue(dateKey);
+  return rows.find((row) => aiDateKeyValue(row.day) === target) || null;
+}
+
+async function ensureAiSummaryForDate(userId, summary, dateKey) {
+  const target = aiDateKeyValue(dateKey);
+  if (!target) return summary;
+  if (aiFindDayRow(summary, target)) return summary;
+
+  const exactDay = await Promise.resolve(pgFinanceDb.getExpensesForDate(userId, target));
+  if (!exactDay || !Array.isArray(exactDay.expenses) || !exactDay.expenses.length) return summary;
+
+  const expenseByDay = Array.isArray(summary?.expense_by_day) ? [...summary.expense_by_day] : [];
+  expenseByDay.unshift({
+    day: target,
+    total: aiNum(exactDay.total),
+    count: Number(exactDay.count) || exactDay.expenses.length,
+  });
+
+  const recentExpenses = Array.isArray(summary?.recent_expenses) ? [...summary.recent_expenses] : [];
+  const mergedExpenses = [...exactDay.expenses, ...recentExpenses.filter((row) => aiDateKeyValue(row?.purchase_date) !== target)];
+
+  return {
+    ...summary,
+    expense_by_day: expenseByDay,
+    recent_expenses: mergedExpenses,
+  };
 }
 
 function aiFindMonthRow(summary, monthKey) {
@@ -4268,8 +5061,8 @@ function aiAnswerFromSummary(question, summary, currentUser) {
   const namedCard = aiFindCard(summary, q);
   const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
   const today = summary?.as_of || new Date().toISOString().slice(0, 10);
-  const todayExpenses = recentExpenses.filter((row) => String(row?.purchase_date || '') === String(today));
-  const dayExpenses = dateKey ? recentExpenses.filter((row) => String(row?.purchase_date || '') === String(dateKey)) : [];
+  const todayExpenses = recentExpenses.filter((row) => aiDateKeyValue(row?.purchase_date) === aiDateKeyValue(today));
+  const dayExpenses = dateKey ? recentExpenses.filter((row) => aiDateKeyValue(row?.purchase_date) === aiDateKeyValue(dateKey)) : [];
 
   if (asksAboutExpense && dateKey && dateKey !== today) {
     if (!dayRow) return `You do not have any saved expenses for ${aiDateLabel(dateKey)}.`;
@@ -4507,7 +5300,10 @@ function aiAnswerFromSummary(question, summary, currentUser) {
 
 router.get('/ai/lookup/status', (req, res) => {
   Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId)).then((status) => {
-    res.json({ success: true, ...status });
+    res.json({
+      success: true,
+      ...enrichAiLookupStatus(status),
+    });
   }).catch((err) => {
     res.status(500).json({ error: err.message });
   });
@@ -4524,10 +5320,19 @@ router.get('/ai/lookup/history', (req, res) => {
 
 router.post('/ai/lookup', async (req, res) => {
   try {
-    const { question } = req.body;
+    const { question, history, mode } = req.body;
     if (!question) return res.status(400).json({ error: 'Question is required' });
+    const lookupMode = String(mode || 'offline').toLowerCase() === 'online' ? 'online' : 'offline';
 
-    const aiStatus = await Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId));
+    const aiStatus = enrichAiLookupStatus(await Promise.resolve(getOpsDb().getAiLookupStatus(req.session.userId)));
+    if (!aiStatus?.modes?.[lookupMode]) {
+      return res.status(403).json({
+        error: lookupMode === 'online'
+          ? 'Online AI Lookup is not included in your current plan.'
+          : 'Offline AI Lookup is not included in your current plan.',
+        ai_status: aiStatus,
+      });
+    }
     if (!aiStatus.canAsk) {
       return res.status(402).json({
         error: `You have used all ${aiStatus.dailyFreeLimit} free AI lookups for today. Buy a paid plan for more queries.`,
@@ -4541,7 +5346,9 @@ router.post('/ai/lookup', async (req, res) => {
     ]);
 
     const normalizedQuestion = aiNormalizeQuestion(question);
-    const trainedAnswer = await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
+    const trainedAnswer = lookupMode === 'online'
+      ? null
+      : await Promise.resolve(getOpsDb().findAiTrainingExample(normalizedQuestion));
     if (trainedAnswer?.ideal_answer) {
       await Promise.resolve(getOpsDb().logAiLookupQuery(req.session.userId, {
         question,
@@ -4551,11 +5358,12 @@ router.post('/ai/lookup', async (req, res) => {
         was_fallback: false,
         response_preview: trainedAnswer.ideal_answer,
       }));
-      const nextStatus = await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId));
+      const nextStatus = enrichAiLookupStatus(await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId)));
       return res.json({
         success: true,
         answer: trainedAnswer.ideal_answer,
         ai_status: nextStatus,
+        lookup_mode: lookupMode,
         ai_meta: {
           detected_intent: trainedAnswer.detected_intent || 'trained_answer',
           detected_confidence: 1,
@@ -4564,12 +5372,44 @@ router.post('/ai/lookup', async (req, res) => {
           resolution_method: 'admin_training_store',
           learned_match: null,
           answer_type: 'admin_trained_answer',
+          provider: 'training',
         },
       });
     }
 
     const detectedResolution = aiResolveIntent(question, summary);
     const detectedIntent = detectedResolution.intent;
+    const groundedAnswer = aiAnswerFromSummary(question, summary, currentUser);
+    if (lookupMode === 'online') {
+      const online = await askAiLookupWithOpenAi(question, history, summary, currentUser, groundedAnswer);
+      await Promise.resolve(getOpsDb().logAiLookupQuery(req.session.userId, {
+        question,
+        normalized_question: normalizedQuestion,
+        detected_intent: detectedIntent,
+        answer_type: 'openai_online',
+        was_fallback: false,
+        response_preview: online.answer,
+      }));
+      const nextStatus = enrichAiLookupStatus(await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId)));
+      return res.json({
+        success: true,
+        answer: online.answer,
+        ai_status: nextStatus,
+        lookup_mode: lookupMode,
+        ai_meta: {
+          detected_intent: detectedIntent,
+          detected_confidence: Number(detectedResolution.confidence || 0),
+          resolved_intent: detectedIntent,
+          resolved_confidence: Number(detectedResolution.confidence || 0),
+          resolution_method: 'openai_online',
+          learned_match: null,
+          answer_type: 'openai_online',
+          provider: 'openai',
+          model: online.model,
+        },
+      });
+    }
+
     let resolvedIntent = detectedIntent;
     let learnedMatch = null;
     let questionForAnswer = question;
@@ -4587,7 +5427,7 @@ router.post('/ai/lookup', async (req, res) => {
       }
     }
 
-    const answer = aiAnswerFromSummary(questionForAnswer, summary, currentUser);
+    const answer = questionForAnswer === question ? groundedAnswer : aiAnswerFromSummary(questionForAnswer, summary, currentUser);
     const wasFallback = aiIsFallbackAnswer(answer);
     const answerType = learnedMatch?.intent && !wasFallback ? 'learned_rule' : (wasFallback ? 'fallback' : 'structured_rule');
     await Promise.resolve(getOpsDb().logAiLookupQuery(req.session.userId, {
@@ -4598,11 +5438,12 @@ router.post('/ai/lookup', async (req, res) => {
       was_fallback: wasFallback,
       response_preview: answer,
     }));
-    const nextStatus = await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId));
+    const nextStatus = enrichAiLookupStatus(await Promise.resolve(getOpsDb().recordAiLookupUsage(req.session.userId)));
     res.json({
       success: true,
       answer,
       ai_status: nextStatus,
+      lookup_mode: lookupMode,
       ai_meta: {
         detected_intent: detectedIntent,
         detected_confidence: Number(detectedResolution.confidence || 0),
@@ -4615,6 +5456,7 @@ router.post('/ai/lookup', async (req, res) => {
           example: learnedMatch.example,
         } : null,
         answer_type: answerType,
+        provider: 'offline',
       },
     });
   } catch (err) {

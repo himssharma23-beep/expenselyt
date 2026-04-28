@@ -5,6 +5,7 @@
 let currentTab = 'dashboard';
 let _userRole = 'user';
 let _accessiblePages = ['dashboard', 'expenses'];
+let _aiLookupAccessModes = { mode: 'none', offline: false, online: false };
 let _currentUserId = null;
 let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
@@ -18,6 +19,10 @@ let _expenseCategoryHideTimer = null;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
 let _expenseScanCommonBankId = '';
+let _expenseScanCommonDate = '';
+let _expenseScanCommonChargeMode = 'none';
+let _expenseScanCommonCardId = '';
+let _expenseScanCommonCardDiscount = 0;
 let _notificationItems = [];
 let _notificationUnread = 0;
 let _notificationPreferences = { push_enabled: true };
@@ -134,7 +139,19 @@ function handleExpenseCategoryAutocompleteKeydown(event) {
 document.addEventListener('pointerdown', (event) => {
   const wrap = event.target?.closest?.('.combo-wrap');
   if (!wrap) hideExpenseCategoryAutocomplete();
+  if (!event.target?.closest?.('.expense-more-menu')) {
+    document.querySelectorAll('.expense-more-menu[open]').forEach((menu) => {
+      menu.removeAttribute('open');
+    });
+  }
 }, true);
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  document.querySelectorAll('.expense-more-menu[open]').forEach((menu) => {
+    menu.removeAttribute('open');
+  });
+});
 let friendSort = 'name';
 let selectedFriend = null;
 const DIVIDE_DRAFT_STORAGE_KEY = 'expense-lite.divide-draft.v1';
@@ -145,6 +162,7 @@ let dividePaidBy = 'self';
 function canAccessTab(tab) {
   if (_userRole === 'admin') return true;
   if (tab === 'admin') return false;
+  if (tab === 'ailookup') return _accessiblePages.includes(tab) && (_aiLookupAccessModes.offline || _aiLookupAccessModes.online);
   return _accessiblePages.includes(tab);
 }
 
@@ -251,6 +269,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (access && !access.error) {
       _userRole = access.role || 'user';
       _accessiblePages = access.pages || ['dashboard'];
+      _aiLookupAccessModes = access.ai_lookup_modes || { mode: 'none', offline: false, online: false };
     }
   } catch (err) {
     console.error('[app:init] startup failed', err);
@@ -798,6 +817,12 @@ async function loadExpenses() {
   const searchFocused = document.activeElement?.id === 'expSearch';
   const searchCursor = searchFocused ? document.getElementById('expSearch')?.selectionStart : null;
 
+  const expenseMoreItems = [
+    canAccessFeature('expense_scan') ? `<button class="expense-more-item" onclick="showExpenseScanModal()">Scan Image</button>` : '',
+    `<button class="expense-more-item" onclick="showImportForm()">Import CSV</button>`,
+    `<button class="expense-more-item" onclick="showExcelImport()">Import Excel</button>`,
+  ].filter(Boolean).join('');
+
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div class="summary-card">
@@ -817,27 +842,40 @@ async function loadExpenses() {
         </div>
       </div>
 
-      <div class="filter-row">
-        <div class="chip-group">
-          <button class="chip ${f.year===null?'active':''}" onclick="expFilters.year=null;expFilters.page=1;loadExpenses()">All</button>
-          ${getYears().map(y => `<button class="chip ${f.year===y?'active':''}" onclick="expFilters.year=${y};expFilters.page=1;loadExpenses()">${y}</button>`).join('')}
+      <div class="expense-toolbar-card">
+        <div class="expense-period-grid">
+          <div class="expense-filter-block">
+            <div class="expense-filter-label">Year</div>
+            <div class="chip-group">
+              <button class="chip ${f.year===null?'active':''}" onclick="expFilters.year=null;expFilters.page=1;loadExpenses()">All</button>
+              ${getYears().map(y => `<button class="chip ${f.year===y?'active':''}" onclick="expFilters.year=${y};expFilters.page=1;loadExpenses()">${y}</button>`).join('')}
+            </div>
+          </div>
+          <div class="expense-filter-block">
+            <div class="expense-filter-label">Month</div>
+            <div class="chip-group">
+              <button class="chip ${f.month===null?'active':''}" onclick="expFilters.month=null;expFilters.page=1;loadExpenses()">All</button>
+              ${MONTHS.map((m,i) => `<button class="chip ${f.month===i?'active':''}" onclick="expFilters.month=${i};expFilters.page=1;loadExpenses()">${m}</button>`).join('')}
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="filter-row">
-        <div class="chip-group">
-          <button class="chip ${f.month===null?'active':''}" onclick="expFilters.month=null;expFilters.page=1;loadExpenses()">All</button>
-          ${MONTHS.map((m,i) => `<button class="chip ${f.month===i?'active':''}" onclick="expFilters.month=${i};expFilters.page=1;loadExpenses()">${m}</button>`).join('')}
+        <div class="expense-toolbar-main">
+          <div class="expense-search-wrap">
+            <input id="expSearch" class="search-input expense-search-input" placeholder="Search item or category..." value="${f.search}" oninput="expFilters.search=this.value;expFilters.page=1;loadExpenses()">
+          </div>
+          <div class="expense-type-tabs" role="tablist" aria-label="Expense type filter">
+            ${['all','fair','extra'].map(t => `<button class="expense-type-tab ${f.spendType===t?'active':''}" onclick="expFilters.spendType='${t}';expFilters.page=1;loadExpenses()">${t==='all'?'All':t==='fair'?'Fair':'Extra'}</button>`).join('')}
+          </div>
+          <div class="expense-toolbar-actions">
+            <button class="btn btn-p btn-sm" onclick="showExpenseForm()">+ Add</button>
+            <details class="expense-more-menu">
+              <summary class="btn btn-s btn-sm">More</summary>
+              <div class="expense-more-popover">
+                ${expenseMoreItems}
+              </div>
+            </details>
+          </div>
         </div>
-      </div>
-      <div class="filter-row">
-        <input id="expSearch" class="search-input" placeholder="Search item or category..." value="${f.search}" oninput="expFilters.search=this.value;expFilters.page=1;loadExpenses()">
-        <div class="chip-group">
-          ${['all','fair','extra'].map(t => `<button class="chip ${f.spendType===t?'active':''}" onclick="expFilters.spendType='${t}';expFilters.page=1;loadExpenses()">${t==='all'?'All':t==='fair'?'Fair':'Extra'}</button>`).join('')}
-        </div>
-        <button class="btn btn-p btn-sm" onclick="showExpenseForm()">+ Add</button>
-        <button class="btn btn-s btn-sm" onclick="showExpenseScanModal()">Scan Image</button>
-        <button class="btn btn-s btn-sm" onclick="showImportForm()">Import CSV</button>
-        <button class="btn btn-s btn-sm" onclick="showExcelImport()">Import Excel</button>
       </div>
 
       <div class="table-wrap">
@@ -1103,6 +1141,10 @@ async function saveExpense(id) {
 }
 
 async function showExpenseScanModal() {
+  if (!canAccessFeature('expense_scan')) {
+    toast('Only admins can use Scan Image.', 'error');
+    return;
+  }
   if (!_expenseCategories.length) {
     try { await loadExpenseCategories(); } catch (_) {}
   }
@@ -1112,8 +1154,13 @@ async function showExpenseScanModal() {
       _bankAccounts = banksData?.accounts || [];
     } catch (_) {}
   }
+  await getCcCardsForForm();
   _expenseScanDraft = null;
   _expenseScanCommonBankId = '';
+  _expenseScanCommonDate = todayStr();
+  _expenseScanCommonChargeMode = 'none';
+  _expenseScanCommonCardId = '';
+  _expenseScanCommonCardDiscount = 0;
   openModal('Scan Expense From Image', `
     <div style="display:grid;gap:14px">
       <div style="font-size:13px;color:var(--t2)">Upload a receipt, bill, or expense screenshot. We will read the image, extract draft expense rows, and let you review them before anything is saved.</div>
@@ -1131,9 +1178,47 @@ function expenseScanBankOptionsHtml() {
   return `<option value="">-- Do not deduct from bank --</option>${(_bankAccounts || []).map((account) => `<option value="${account.id}" ${String(_expenseScanCommonBankId || '') === String(account.id) ? 'selected' : ''}>${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''}${account.is_default ? ' (Default)' : ''}</option>`).join('')}`;
 }
 
+function expenseScanRowBankOptionsHtml(selectedValue) {
+  return `<option value="">-- Use overall bank setting --</option>${(_bankAccounts || []).map((account) => `<option value="${account.id}" ${String(selectedValue || '') === String(account.id) ? 'selected' : ''}>${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''}${account.is_default ? ' (Default)' : ''}</option>`).join('')}`;
+}
+
+function expenseScanCardOptionsHtml(selectedValue, includeOverallOption = false) {
+  const prefix = includeOverallOption
+    ? '<option value="">-- Use overall credit card setting --</option>'
+    : '<option value="">-- Select credit card --</option>';
+  return `${prefix}${(_ccCards || []).map((card) => `<option value="${card.id}" data-disc="${card.default_discount_pct || 0}" ${String(selectedValue || '') === String(card.id) ? 'selected' : ''}>${escHtml(card.card_name)} (${escHtml(card.bank_name)} **${escHtml(card.last4)})</option>`).join('')}`;
+}
+
+function expenseScanEffectiveDate(row) {
+  return String(row?.purchase_date || _expenseScanCommonDate || _expenseScanDraft?.purchase_date || todayStr()).trim();
+}
+
+function expenseScanEffectiveBankId(row) {
+  return row?.bank_account_id ? String(row.bank_account_id) : String(_expenseScanCommonBankId || '');
+}
+
+function expenseScanEffectiveChargeMode(row) {
+  const rowMode = String(row?.charge_mode || '').trim();
+  if (rowMode === 'card' || rowMode === 'none') return rowMode;
+  return _expenseScanCommonChargeMode === 'card' ? 'card' : 'none';
+}
+
+function expenseScanEffectiveCardId(row) {
+  return row?.card_id ? String(row.card_id) : String(_expenseScanCommonCardId || '');
+}
+
+function expenseScanEffectiveCardDiscount(row) {
+  if (row?.card_discount_pct !== '' && row?.card_discount_pct != null && Number.isFinite(Number(row.card_discount_pct))) {
+    return Number(row.card_discount_pct);
+  }
+  return Number(_expenseScanCommonCardDiscount || 0);
+}
+
 function renderExpenseScanReviewModal() {
   const draft = _expenseScanDraft || {};
   const rows = Array.isArray(draft.items) ? draft.items : [];
+  const commonDate = _expenseScanCommonDate || draft.purchase_date || todayStr();
+  const commonCardSelected = _expenseScanCommonChargeMode === 'card';
   openModal('Review Scanned Expenses', `
     <div style="display:grid;gap:14px">
       <div style="display:grid;gap:8px;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--bg)">
@@ -1143,9 +1228,39 @@ function renderExpenseScanReviewModal() {
           <div><b style="color:var(--t1)">Total:</b> ${draft.total_amount ? fmtCur(draft.total_amount) : 'Not found'}</div>
           <div><b style="color:var(--t1)">Confidence:</b> ${Math.round(Number(draft.confidence || 0))}%</div>
         </div>
-        <label class="fl full">Deduct From Bank
-          <select class="fi" id="expenseScanBank" onchange="expenseScanSetCommonBank(this.value)">${expenseScanBankOptionsHtml()}</select>
-        </label>
+        ${draft.ai_used
+          ? `<div style="display:inline-flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border-radius:999px;background:var(--green-light);color:var(--green);font-size:12px;font-weight:800">
+               <span>AI enhanced</span>
+             </div>`
+          : draft.ai_error
+            ? `<div style="display:inline-flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border-radius:999px;background:var(--red-light);color:var(--red);font-size:12px;font-weight:700">
+                 <span>AI fallback used</span>
+               </div>`
+            : ''}
+        <div class="fg">
+          <label class="fl">Overall Date
+            <input class="fi" type="date" id="expenseScanCommonDate" value="${escHtml(commonDate)}" oninput="expenseScanSetCommonDate(this.value)">
+          </label>
+          <label class="fl">Deduct From Bank
+            <select class="fi" id="expenseScanBank" onchange="expenseScanSetCommonBank(this.value)">${expenseScanBankOptionsHtml()}</select>
+          </label>
+        </div>
+        ${_ccCards.length ? `
+          <div style="display:grid;gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--white)">
+            <label class="fc" style="margin:0">
+              <input type="checkbox" ${commonCardSelected ? 'checked' : ''} onchange="expenseScanSetCommonChargeMode(this.checked ? 'card' : 'none')">
+              <span style="font-weight:600">Overall: Also charge rows to Credit Card</span>
+            </label>
+            <div class="fg" style="${commonCardSelected ? '' : 'display:none'}" id="expenseScanCommonCardFields">
+              <label class="fl">Credit Card
+                <select class="fi" id="expenseScanCommonCardId" onchange="expenseScanSetCommonCardId(this.value)">${expenseScanCardOptionsHtml(_expenseScanCommonCardId)}</select>
+              </label>
+              <label class="fl">Discount %
+                <input class="fi" type="number" step="0.1" min="0" max="100" id="expenseScanCommonCardDiscount" value="${escHtml(String(_expenseScanCommonCardDiscount || 0))}" oninput="expenseScanSetCommonCardDiscount(this.value)">
+              </label>
+            </div>
+          </div>`
+          : `<div style="font-size:12px;color:var(--t3)">No credit cards found. Add one in Credit Cards if you want scanned rows charged to a card.</div>`}
       </div>
       <div style="font-size:12px;color:var(--t3)">Edit anything below. Only checked rows will be saved.</div>
       <datalist id="expenseCategoryList">${(_expenseCategories || []).map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
@@ -1160,7 +1275,27 @@ function renderExpenseScanReviewModal() {
               <label class="fl">Item Name<input class="fi" value="${escHtml(row.item_name || '')}" oninput="expenseScanSetField(${index}, 'item_name', this.value)"></label>
               <label class="fl">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(row.amount || ''))}" oninput="expenseScanSetField(${index}, 'amount', this.value)"></label>
               <label class="fl">Category<input class="fi" list="expenseCategoryList" value="${escHtml(row.category || '')}" maxlength="80" placeholder="Type category" oninput="expenseScanSetField(${index}, 'category', this.value)"></label>
-              <label class="fl">Date<input class="fi" type="date" value="${escHtml(row.purchase_date || draft.purchase_date || todayStr())}" oninput="expenseScanSetField(${index}, 'purchase_date', this.value)"></label>
+              <label class="fl">Date<input class="fi" type="date" value="${escHtml(expenseScanEffectiveDate(row))}" oninput="expenseScanSetField(${index}, 'purchase_date', this.value)"></label>
+              <label class="fl full">Deduct From Bank
+                <select class="fi" onchange="expenseScanSetField(${index}, 'bank_account_id', this.value)">${expenseScanRowBankOptionsHtml(row.bank_account_id || '')}</select>
+              </label>
+              ${_ccCards.length ? `
+                <label class="fl">Credit Card
+                  <select class="fi" onchange="expenseScanSetField(${index}, 'charge_mode', this.value);renderExpenseScanReviewModal()">
+                    <option value="" ${String(row.charge_mode || '') === '' ? 'selected' : ''}>Use overall setting</option>
+                    <option value="none" ${String(row.charge_mode || '') === 'none' ? 'selected' : ''}>Do not charge</option>
+                    <option value="card" ${String(row.charge_mode || '') === 'card' ? 'selected' : ''}>Charge to card</option>
+                  </select>
+                </label>
+                ${expenseScanEffectiveChargeMode(row) === 'card' ? `
+                  <label class="fl">Card
+                    <select class="fi" onchange="expenseScanSetRowCard(${index}, this.value)">${expenseScanCardOptionsHtml(row.card_id || '', true)}</select>
+                  </label>
+                  <label class="fl">Card Discount %
+                    <input class="fi" type="number" step="0.1" min="0" max="100" value="${escHtml(String(expenseScanEffectiveCardDiscount(row)))}" oninput="expenseScanSetField(${index}, 'card_discount_pct', this.value)">
+                  </label>`
+                  : ''}`
+                : ''}
             </div>
             <div class="chip-group" style="margin-top:10px">
               <button class="chip ${row.is_extra ? '' : 'active'}" onclick="expenseScanSetType(${index}, false)">Fair / Regular</button>
@@ -1196,12 +1331,21 @@ async function scanExpenseImage() {
       items: data.draft.items.map((row) => ({
         item_name: String(row.item_name || '').trim(),
         amount: Number(row.amount || 0),
-        purchase_date: row.purchase_date || data.draft.purchase_date || todayStr(),
+        purchase_date: row.purchase_date || '',
         category: row.category || '',
         is_extra: !!row.is_extra,
+        bank_account_id: row.bank_account_id || '',
+        charge_mode: row.card_id ? 'card' : '',
+        card_id: row.card_id || '',
+        card_discount_pct: row.card_discount_pct ?? '',
         selected: row.selected !== false,
       })),
     };
+    _expenseScanCommonDate = data.draft.purchase_date || todayStr();
+    _expenseScanCommonBankId = '';
+    _expenseScanCommonChargeMode = 'none';
+    _expenseScanCommonCardId = '';
+    _expenseScanCommonCardDiscount = 0;
     renderExpenseScanReviewModal();
   } catch (error) {
     if (scanBtn) {
@@ -1216,6 +1360,29 @@ function expenseScanSetCommonBank(value) {
   _expenseScanCommonBankId = value || '';
 }
 
+function expenseScanSetCommonDate(value) {
+  _expenseScanCommonDate = value || todayStr();
+  renderExpenseScanReviewModal();
+}
+
+function expenseScanSetCommonChargeMode(mode) {
+  _expenseScanCommonChargeMode = mode === 'card' ? 'card' : 'none';
+  renderExpenseScanReviewModal();
+}
+
+function expenseScanSetCommonCardId(value) {
+  _expenseScanCommonCardId = value || '';
+  if (value) {
+    const selected = (_ccCards || []).find((card) => String(card.id) === String(value));
+    if (selected) _expenseScanCommonCardDiscount = Number(selected.default_discount_pct || 0);
+  }
+  renderExpenseScanReviewModal();
+}
+
+function expenseScanSetCommonCardDiscount(value) {
+  _expenseScanCommonCardDiscount = value === '' ? 0 : Number(value);
+}
+
 function expenseScanToggleRow(index, checked) {
   if (!_expenseScanDraft?.items?.[index]) return;
   _expenseScanDraft.items[index].selected = !!checked;
@@ -1223,11 +1390,23 @@ function expenseScanToggleRow(index, checked) {
 
 function expenseScanSetField(index, field, value) {
   if (!_expenseScanDraft?.items?.[index]) return;
-  if (field === 'amount') {
+  if (field === 'amount' || field === 'card_discount_pct') {
     _expenseScanDraft.items[index][field] = value === '' ? '' : Number(value);
     return;
   }
   _expenseScanDraft.items[index][field] = value;
+}
+
+function expenseScanSetRowCard(index, value) {
+  if (!_expenseScanDraft?.items?.[index]) return;
+  _expenseScanDraft.items[index].card_id = value || '';
+  if (value) {
+    const selected = (_ccCards || []).find((card) => String(card.id) === String(value));
+    if (selected && (_expenseScanDraft.items[index].card_discount_pct === '' || _expenseScanDraft.items[index].card_discount_pct == null)) {
+      _expenseScanDraft.items[index].card_discount_pct = Number(selected.default_discount_pct || 0);
+    }
+  }
+  renderExpenseScanReviewModal();
 }
 
 function expenseScanSetType(index, isExtra) {
@@ -1244,28 +1423,68 @@ async function saveScannedExpenses() {
     if (!String(row.item_name || '').trim()) { toast('Each selected row needs an item name', 'warning'); return; }
     const amount = Number(row.amount || 0);
     if (!Number.isFinite(amount) || amount <= 0) { toast('Each selected row needs a valid amount', 'warning'); return; }
-    if (!String(row.purchase_date || '').trim()) { toast('Each selected row needs a date', 'warning'); return; }
+    if (!String(expenseScanEffectiveDate(row) || '').trim()) { toast('Each selected row needs a date', 'warning'); return; }
+    if (expenseScanEffectiveChargeMode(row) === 'card' && !expenseScanEffectiveCardId(row)) {
+      toast('Each row charged to a credit card must have a card selected', 'warning');
+      return;
+    }
   }
   _expenseScanSaving = true;
   renderExpenseScanReviewModal();
   try {
+    const savedMonths = new Set();
     for (const row of rows) {
+      const effectiveDate = expenseScanEffectiveDate(row);
+      const effectiveBankId = expenseScanEffectiveBankId(row);
+      const effectiveChargeMode = expenseScanEffectiveChargeMode(row);
+      const effectiveCardId = effectiveChargeMode === 'card' ? expenseScanEffectiveCardId(row) : '';
+      const effectiveCardDiscount = effectiveChargeMode === 'card' ? expenseScanEffectiveCardDiscount(row) : 0;
       const body = {
         item_name: String(row.item_name || '').trim(),
         category: String(row.category || '').trim() || null,
         amount: Number(row.amount || 0),
-        purchase_date: String(row.purchase_date || '').trim(),
+        purchase_date: String(effectiveDate || '').trim(),
         is_extra: !!row.is_extra,
-        bank_account_id: _expenseScanCommonBankId ? Number(_expenseScanCommonBankId) : null,
+        bank_account_id: effectiveBankId ? Number(effectiveBankId) : null,
       };
       const result = await api('/api/expenses', { method: 'POST', body });
       if (!result?.id) throw new Error(result?.error || `Could not save "${body.item_name}"`);
+      if (effectiveChargeMode === 'card' && effectiveCardId) {
+        const ccTxnResult = await api('/api/cc/txns', { method: 'POST', body: {
+          card_id: Number(effectiveCardId),
+          txn_date: body.purchase_date,
+          description: body.item_name,
+          amount: body.amount,
+          discount_pct: Number(effectiveCardDiscount || 0),
+          source: 'expense',
+          source_id: result.id,
+        }});
+        if (!ccTxnResult?.id && !ccTxnResult?.success) {
+          throw new Error(ccTxnResult?.error || `Saved "${body.item_name}" but could not link it to the selected credit card`);
+        }
+      }
+      const ym = String(body.purchase_date || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(ym)) savedMonths.add(ym);
     }
     _expenseScanSaving = false;
     _expenseScanDraft = null;
     _expenseScanCommonBankId = '';
+    _expenseScanCommonDate = '';
+    _expenseScanCommonChargeMode = 'none';
+    _expenseScanCommonCardId = '';
+    _expenseScanCommonCardDiscount = 0;
     closeModal();
-    toast(`Saved ${rows.length} scanned expense${rows.length === 1 ? '' : 's'}`, 'success');
+    const currentMonthKey = `${expFilters.year}-${String(Number(expFilters.month) + 1).padStart(2, '0')}`;
+    if (savedMonths.size === 1 && !savedMonths.has(currentMonthKey)) {
+      const [year, month] = [...savedMonths][0].split('-').map(Number);
+      const savedMonthLabel = new Date(year, Math.max(0, month - 1), 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      expFilters.year = year;
+      expFilters.month = month - 1;
+      expFilters.page = 1;
+      toast(`Saved ${rows.length} scanned expense${rows.length === 1 ? '' : 's'} and switched to ${savedMonthLabel}`, 'success', 4500);
+    } else {
+      toast(`Saved ${rows.length} scanned expense${rows.length === 1 ? '' : 's'}`, 'success');
+    }
     loadExpenses();
   } catch (error) {
     _expenseScanSaving = false;
@@ -4380,8 +4599,14 @@ let _tripBulkSel = new Set();
 let _tripBulkMode = 'equal';
 let _tripBulkValues = {};
 let _tripCurrencies = null;
+let _tripItineraryCollapsed = false;
 let _adminCurrencies = [];
 const TRIP_BULK_SPLIT_MODES = SPLIT_MODES.filter((mode) => mode.key !== 'amount');
+
+function getTripItineraryItemById(itemId) {
+  if (!_tripDetail?.itinerary_items?.length || itemId == null) return null;
+  return _tripDetail.itinerary_items.find((item) => String(item.id) === String(itemId)) || null;
+}
 
 function _findTripExpenseById(expenseId) {
   if (!_tripDetail?.expenses?.length || expenseId == null) return null;
@@ -4393,6 +4618,7 @@ async function loadTrips() {
   _trips = data?.trips || [];
   _selectedTripId = null;
   _tripDetail = null;
+  _tripItineraryCollapsed = false;
   renderTripList();
 }
 
@@ -4428,12 +4654,13 @@ function renderTripList() {
     const netLabel = t.selfNet > 0.01 ? `+${fmtCur(t.selfNet)} net` : t.selfNet < -0.01 ? `${fmtCur(Math.abs(t.selfNet))} owed` : 'Settled';
     const memberNames = t.members.map(m => m.member_name).join(', ');
     const dateStr = t.end_date ? `${fmtDate(t.start_date)} -> ${fmtDate(t.end_date)}` : `From ${fmtDate(t.start_date)}`;
+    const countdownText = tripStartsInLabel(t.start_date);
     return `<div class="card" style="cursor:pointer;margin-bottom:10px" onclick="openTripDetail(${t.id})">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
         <div style="font-size:16px;font-weight:700">${t.name} ${statusBadge}${sharedBadge}</div>
         <div style="font-size:16px;font-weight:700;color:${netColor}">${netLabel}</div>
       </div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${dateStr}${countdownText ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(countdownText)}</span>` : ''}</div>
       <div style="font-size:12px;color:var(--t3)">
         <span style="margin-right:12px">${t.members.length} members: ${memberNames}</span>
         <span>${fmtCur(t.totalExpenses)} total &middot; ${t.expenseCount} expense${t.expenseCount !== 1 ? 's' : ''}</span>
@@ -5889,31 +6116,24 @@ function renderTripList() {
   const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
 
   const tripActionButtons = (trip) => `
-    <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
-      <button class="trip-icon-btn" title="View details" aria-label="View details" onclick="openTripDetail(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128065;</span>
-      </button>
-      <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128279;</span>
-      </button>
-      <button class="trip-icon-btn" title="Download trip PDF" aria-label="Download trip PDF" onclick="downloadTripPdfById(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:10px">PDF</span>
-      </button>
-      <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:13px">&#8644;</span>
-      </button>
-      <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:13px">&#9998;</span>
-      </button>
-      <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})" style="width:30px;height:30px;min-width:30px;padding:0;border-radius:10px">
-        <span class="trip-icon-btn-glyph" style="font-size:13px">&#128465;</span>
-      </button>
+    <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
+      <button class="btn btn-s btn-sm" onclick="openTripDetail(${trip.id})">Open</button>
+      <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)" style="min-width:128px">
+        <option value="">More</option>
+        <option value="share">Share link</option>
+        <option value="itinerary">Add itinerary</option>
+        <option value="pdf">Download PDF</option>
+        <option value="settle">Settle trip</option>
+        <option value="edit">Edit trip</option>
+        <option value="delete">Delete trip</option>
+      </select>
     </div>
     <div class="trip-table-actions-mobile">
       <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)">
         <option value="">Actions</option>
         <option value="view">View details</option>
         <option value="share">Share link</option>
+        <option value="itinerary">Add itinerary</option>
         <option value="pdf">Download PDF</option>
         <option value="settle">Settle trip</option>
         <option value="edit">Edit trip</option>
@@ -5927,6 +6147,7 @@ function renderTripList() {
     const datesText = trip.start_date && trip.end_date
       ? `${startText} to ${endText}`
       : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
+    const countdownText = tripStartsInLabel(trip.start_date);
     const displayAmount = tripDisplayAmount(trip, displayMember);
     return `
       <tr>
@@ -5934,7 +6155,7 @@ function renderTripList() {
         <td style="min-width:150px">
           <button class="btn-d" style="font-weight:700;color:var(--green);text-align:left">${escHtml(trip.destination || trip.name || '-')}</button>
         </td>
-        <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}</td>
+        <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}${countdownText ? `<div style="margin-top:4px;font-size:12px;font-weight:700;color:var(--green)">${escHtml(countdownText)}</div>` : ''}</td>
         <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(displayAmount)}</td>
         <td style="min-width:120px">${tripStatusBadge(trip.status)}</td>
         <td style="min-width:180px;max-width:220px;color:var(--t2);white-space:normal;line-height:1.35">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
@@ -6045,6 +6266,7 @@ function handleTripRowAction(tripId, action, el) {
   if (!action) return;
   if (action === 'view') openTripDetail(tripId);
   else if (action === 'share') showTripShareModal(tripId);
+  else if (action === 'itinerary') showTripItineraryModal(null, tripId);
   else if (action === 'pdf') downloadTripPdfById(tripId);
   else if (action === 'settle') showTripSettlementModal(tripId);
   else if (action === 'edit') showTripModal(tripId);
@@ -6095,9 +6317,34 @@ function syncTripListRowFromDetail(trip) {
       grand_total: Number(trip.grand_total ?? trip.total_expenditure ?? row.grand_total ?? 0),
       expense_count: Array.isArray(trip.expenses) ? trip.expenses.length : Number(trip.expense_count ?? row.expense_count ?? 0),
       members,
+      itinerary_items: Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [],
       member_share_totals: memberShareTotals,
     };
   });
+}
+
+function fmtTripItineraryTimeRange(item) {
+  const start = item?.start_time ? String(item.start_time).slice(0, 5) : '';
+  const end = item?.end_time ? String(item.end_time).slice(0, 5) : '';
+  if (start && end) return `${start} - ${end}`;
+  return start || end || 'Any time';
+}
+
+function tripStartsInLabel(startDate) {
+  const raw = normalizeInputDate(startDate);
+  if (!raw) return '';
+  const today = normalizeInputDate(todayStr());
+  const start = new Date(`${raw}T00:00:00`);
+  const current = new Date(`${today}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(current.getTime())) return '';
+  const diff = Math.round((start.getTime() - current.getTime()) / 86400000);
+  if (diff <= 0) return '';
+  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+}
+
+function toggleTripItineraryCollapse() {
+  _tripItineraryCollapsed = !_tripItineraryCollapsed;
+  renderTripDetail();
 }
 
 function renderTripDetail() {
@@ -6150,6 +6397,39 @@ function renderTripDetail() {
   const summaryCards = [
     ['Transport', escHtml(trip.transport_mode || '-')],
   ].map(([label, value]) => `<div class="card" style="padding:12px 14px;min-height:0"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">${label}</div><div style="font-size:14px;font-weight:700;line-height:1.2">${value}</div></div>`).join('');
+
+  const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
+  const itineraryGroups = itineraryItems.reduce((acc, item) => {
+    const key = item.itinerary_date || '';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+  const itineraryHtml = itineraryItems.length
+    ? Object.entries(itineraryGroups).map(([dateKey, items]) => `
+      <div class="card" style="padding:12px 14px;margin-bottom:10px">
+        <div style="font-size:14px;font-weight:800;margin-bottom:10px">${fmtDate(dateKey)}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${items.map((item) => `
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff">
+              <div style="min-width:0;flex:1">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                  <span style="font-size:12px;font-weight:700;color:var(--em)">${escHtml(fmtTripItineraryTimeRange(item))}</span>
+                  <span style="font-size:14px;font-weight:700">${escHtml(item.title || '')}</span>
+                </div>
+                ${item.location ? `<div style="font-size:12px;color:var(--t2);margin-bottom:3px">${escHtml(item.location)}</div>` : ''}
+                ${item.notes ? `<div style="font-size:12px;color:var(--t3);line-height:1.45">${escHtml(item.notes)}</div>` : ''}
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn btn-g btn-sm" onclick="showTripItineraryModal(${item.id})">Edit</button>
+                <button class="btn btn-g btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteItinerary(${item.id})">Del</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('')
+    : `<div class="card" style="text-align:center;color:var(--t3);padding:24px 18px">No itinerary planned yet. Add date and time slots to plan this trip in advance.</div>`;
 
   const groupHtml = groups.length
     ? groups.map((group, index) => {
@@ -6244,7 +6524,7 @@ function renderTripDetail() {
             </div>
             ${tripStatusBadge(trip.status)}
           </div>
-          <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}</div>
+          <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
         </div>
         <div class="trip-detail-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <div class="trip-detail-actions-desktop" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -6253,6 +6533,7 @@ function renderTripDetail() {
             </button>
             <button class="btn btn-s btn-sm" onclick="showTripShareModal(${trip.id})">Share Link</button>
             <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
+            <button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>
             <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
             <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
             ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
@@ -6266,6 +6547,7 @@ function renderTripDetail() {
             <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
             <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})"><span class="trip-icon-btn-glyph">&#128279;</span></button>
             <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()"><span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span></button>
+            <button class="trip-icon-btn" title="Add itinerary" aria-label="Add itinerary" onclick="showTripItineraryModal()"><span class="trip-icon-btn-glyph">&#128197;</span></button>
             <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})"><span class="trip-icon-btn-glyph">&#8644;</span></button>
             <button class="trip-icon-btn" title="Add expense" aria-label="Add expense" onclick="showTripExpenseModal()"><span class="trip-icon-btn-glyph">+</span></button>
             ${(trip.expenses || []).length ? `<button class="trip-icon-btn" title="Bulk edit shares" aria-label="Bulk edit shares" onclick="showTripBulkShareModal()"><span class="trip-icon-btn-glyph">&#8942;</span></button>` : ''}
@@ -6289,6 +6571,15 @@ function renderTripDetail() {
         </div>
         ${summaryCards}
       </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <div style="font-size:18px;font-weight:800">Itinerary</div>
+          <div style="font-size:13px;color:var(--t2)">Plan trip activities by date and time before you travel.</div>
+        </div>
+        <button class="btn btn-g btn-sm" onclick="toggleTripItineraryCollapse()">${_tripItineraryCollapsed ? 'Show Itinerary' : 'Hide Itinerary'}</button>
+      </div>
+      ${_tripItineraryCollapsed ? '' : itineraryHtml}
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div>
@@ -6509,6 +6800,94 @@ async function saveTripModal(tripId = null) {
   toast(tripId ? 'Trip updated' : 'Trip created', 'success');
   await loadTrips();
   if (tripId && wasDetailView) await openTripDetail(tripId);
+}
+
+async function showTripItineraryModal(itemId = null, tripId = null) {
+  const targetTripId = tripId || _selectedTripId;
+  if (!targetTripId) {
+    toast('Open a trip first', 'warning');
+    return;
+  }
+  if (!_tripDetail || String(_tripDetail.id) !== String(targetTripId)) {
+    const result = await api(`/api/trips/${targetTripId}`);
+    if (!result?.trip) {
+      toast(result?.error || 'Could not load trip details', 'error');
+      return;
+    }
+    _tripDetail = result.trip;
+    syncTripListRowFromDetail(_tripDetail);
+  }
+  const item = itemId ? getTripItineraryItemById(itemId) : null;
+  const defaultDate = item?.itinerary_date ? normalizeInputDate(item.itinerary_date) : normalizeInputDate(_tripDetail?.start_date || todayStr());
+  openModal(item ? 'Edit Itinerary' : 'Add Itinerary', `
+    <div class="fg">
+      <label class="fl full">Activity / Title *
+        <input class="fi" id="tripItineraryTitle" placeholder="Airport pickup, Check-in, Dinner..." value="${escHtml(item?.title || '')}">
+      </label>
+      <label class="fl">Date *
+        <input class="fi" type="date" id="tripItineraryDate" value="${escHtml(defaultDate)}">
+      </label>
+      <label class="fl">Start Time
+        <input class="fi" type="time" id="tripItineraryStartTime" value="${escHtml(item?.start_time || '')}">
+      </label>
+      <label class="fl">End Time
+        <input class="fi" type="time" id="tripItineraryEndTime" value="${escHtml(item?.end_time || '')}">
+      </label>
+      <label class="fl full">Location
+        <input class="fi" id="tripItineraryLocation" placeholder="Hotel, museum, airport, cafe..." value="${escHtml(item?.location || '')}">
+      </label>
+      <label class="fl full">Notes
+        <textarea class="fi" id="tripItineraryNotes" rows="4" placeholder="Extra details, booking info, reminders...">${escHtml(item?.notes || '')}</textarea>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTripItinerary(${item?.id || 'null'}, ${Number(targetTripId)})">${item ? 'Save Changes' : 'Add Itinerary'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function saveTripItinerary(itemId = null, tripId = null) {
+  const targetTripId = tripId || _selectedTripId;
+  const body = {
+    title: document.getElementById('tripItineraryTitle')?.value.trim(),
+    itinerary_date: document.getElementById('tripItineraryDate')?.value,
+    start_time: document.getElementById('tripItineraryStartTime')?.value || null,
+    end_time: document.getElementById('tripItineraryEndTime')?.value || null,
+    location: document.getElementById('tripItineraryLocation')?.value.trim() || null,
+    notes: document.getElementById('tripItineraryNotes')?.value.trim() || null,
+  };
+  if (!body.title) {
+    toast('Enter itinerary title', 'warning');
+    return;
+  }
+  if (!body.itinerary_date) {
+    toast('Select itinerary date', 'warning');
+    return;
+  }
+  const result = await api(itemId ? `/api/trips/${targetTripId}/itinerary/${itemId}` : `/api/trips/${targetTripId}/itinerary`, {
+    method: itemId ? 'PUT' : 'POST',
+    body,
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  closeModal();
+  toast(itemId ? 'Itinerary updated' : 'Itinerary added', 'success');
+  await openTripDetail(targetTripId);
+}
+
+async function tripDeleteItinerary(itemId) {
+  if (!_selectedTripId || !itemId) return;
+  if (!await confirmDialog('Delete this itinerary item?')) return;
+  const result = await api(`/api/trips/${_selectedTripId}/itinerary/${itemId}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Itinerary item deleted', 'success');
+  await openTripDetail(_selectedTripId);
 }
 
 function _findTripExpenseById(expenseId) {
@@ -7293,9 +7672,17 @@ const ALL_PAGES = [
   { key: 'planner',     label: 'Planner' },
   { key: 'tracker',     label: 'Daily Tracker' },
   { key: 'habittracker', label: 'Habit Tracker' },
+  { key: 'expense_scan', label: 'Scan Image' },
+  { key: 'smartcapture', label: 'Smart Capture' },
   { key: 'recurring',   label: 'Recurring' },
   { key: 'ailookup',    label: 'AI Lookup' },
   { key: 'notifications', label: 'Notifications' },
+];
+const AI_LOOKUP_MODE_OPTIONS = [
+  { key: 'none', label: 'None' },
+  { key: 'offline', label: 'Offline only' },
+  { key: 'online', label: 'Online only' },
+  { key: 'both', label: 'Both' },
 ];
 
 async function loadAdmin() {
@@ -8568,10 +8955,12 @@ async function loadAdminPlans() {
     ...plan,
     description: cleanMojibakeText(plan.description),
     pages: Array.isArray(plan.pages) ? plan.pages : [],
+    ai_lookup_mode: AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan.ai_lookup_mode)?.key || 'both',
   }));
 
   const cards = normalizedPlans.length ? normalizedPlans.map(p => {
     const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'â€”';
+    const aiModeLabel = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === p.ai_lookup_mode)?.label || 'Both';
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -8586,6 +8975,7 @@ async function loadAdminPlans() {
             Monthly: <b>${p.price_monthly>0?fmtCur(p.price_monthly):'Free'}</b>
             &nbsp;|&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
             &nbsp;|&nbsp; AI Queries/day: <b>${p.ai_query_limit===-1||p.ai_query_limit==null?'Unlimited':p.ai_query_limit===0?'None':p.ai_query_limit}</b>
+            &nbsp;|&nbsp; AI Mode: <b>${escHtml(aiModeLabel)}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -8609,44 +8999,83 @@ async function showPlanModal(planId) {
   const data = await api('/api/admin/plans');
   const plan = planId ? data?.plans?.find(p => p.id === planId) : null;
   const pageCheckboxes = ALL_PAGES.map(pg =>
-    `<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
-      <input type="checkbox" class="plan-page-cb" value="${pg.key}" ${plan?.pages?.includes(pg.key)?'checked':''}> ${pg.label}
-    </label>`
+      `<label class="plan-page-tile ${plan?.pages?.includes(pg.key)?'checked':''}">
+        <input type="checkbox" class="plan-page-cb" value="${pg.key}" ${plan?.pages?.includes(pg.key)?'checked':''} onchange="this.closest('.plan-page-tile')?.classList.toggle('checked', this.checked)">
+        <span>${pg.label}</span>
+      </label>`
   ).join('');
   const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
+  const aiLookupModeVal = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan?.ai_lookup_mode)?.key || 'both';
+  window.__modalClassName = 'modal-wide plan-editor-modal';
   openModal(plan ? `Edit Plan: ${plan.name}` : 'New Plan', `
-    <div class="fg">
-      <label class="fl full">Plan Name *<input class="fi" id="pName" value="${plan?.name||''}"></label>
-      <label class="fl full">Description<input class="fi" id="pDesc" value="${plan?.description||''}" placeholder="Brief description..."></label>
-      <label class="fl">Monthly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly||0}"></label>
-      <label class="fl">Yearly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly||0}"></label>
-      <label class="fl full">AI Queries per day
-        <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
-          <input class="fi" type="number" id="pAiLimit" value="${aiLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateAiLimitHint(this.value)">
-          <span id="pAiLimitHint" style="font-size:12px;color:var(--t3);white-space:nowrap">${aiLimitVal===-1?'Unlimited':aiLimitVal===0?'No AI access':aiLimitVal+' queries/day'}</span>
+    <div class="plan-modal-shell">
+      <div class="plan-modal-card">
+        <div class="plan-modal-card-title">Plan Basics</div>
+        <div class="fg">
+          <label class="fl full">Plan Name *<input class="fi" id="pName" value="${plan?.name||''}" placeholder="Pro, Premium, Family..."></label>
+          <label class="fl full">Description<input class="fi" id="pDesc" value="${plan?.description||''}" placeholder="Short value proposition for this plan"></label>
+          <label class="fl">Monthly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly||0}"></label>
+          <label class="fl">Yearly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly||0}"></label>
         </div>
-        <div style="font-size:11px;color:var(--t3);margin-top:3px">-1 = Unlimited &nbsp;&middot;&nbsp; 0 = Disable AI &nbsp;&middot;&nbsp; Any positive number = daily cap</div>
-      </label>
-    </div>
-    <div style="display:flex;gap:16px;margin:12px 0">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="pFree" ${plan?.is_free?'checked':''} style="width:15px;height:15px"> Free plan (all users)
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="pActive" ${(plan===null||plan?.is_active)?'checked':''} style="width:15px;height:15px"> Active
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="pSignupDefault" ${plan?.auto_assign_on_signup?'checked':''} style="width:15px;height:15px"> Auto assign on signup
-      </label>
-    </div>
-    <div>
-      <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:8px">Pages Included</div>
-      <div style="border:1px solid var(--br);border-radius:6px;padding:10px 14px">${pageCheckboxes}</div>
+      </div>
+
+      <div class="plan-modal-card">
+        <div class="plan-modal-card-title">AI Access</div>
+        <label class="fl full">AI Queries per day
+          <div class="plan-ai-limit-row">
+            <input class="fi" type="number" id="pAiLimit" value="${aiLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateAiLimitHint(this.value)">
+            <span id="pAiLimitHint" class="plan-ai-limit-badge">${aiLimitVal===-1?'Unlimited':aiLimitVal===0?'No AI access':aiLimitVal+' queries/day'}</span>
+          </div>
+          <div class="plan-field-help">-1 = Unlimited &middot; 0 = Disable AI &middot; Any positive number = daily cap</div>
+        </label>
+        <div class="plan-mode-group">
+          <div class="plan-mode-label">AI Lookup mode</div>
+          <input type="hidden" id="pAiMode" value="${aiLookupModeVal}">
+          <div class="plan-mode-grid">
+            ${AI_LOOKUP_MODE_OPTIONS.map((opt) => `
+              <button type="button" data-mode="${opt.key}" class="plan-mode-chip ${aiLookupModeVal===opt.key?'active':''}" onclick="setPlanAiMode('${opt.key}')">${opt.label}</button>
+            `).join('')}
+          </div>
+          <div class="plan-field-help">Choose whether this plan sees Offline AI, Online AI, both, or neither.</div>
+        </div>
+      </div>
+
+      <div class="plan-modal-card">
+        <div class="plan-modal-card-title">Plan Behavior</div>
+        <div class="plan-toggle-grid">
+          <label class="plan-toggle-tile ${plan?.is_free?'checked':''}">
+            <input type="checkbox" id="pFree" ${plan?.is_free?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+            <span class="plan-toggle-title">Free plan</span>
+            <span class="plan-toggle-sub">Available to all users</span>
+          </label>
+          <label class="plan-toggle-tile ${(plan===null||plan?.is_active)?'checked':''}">
+            <input type="checkbox" id="pActive" ${(plan===null||plan?.is_active)?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+            <span class="plan-toggle-title">Active</span>
+            <span class="plan-toggle-sub">Plan can be assigned now</span>
+          </label>
+          <label class="plan-toggle-tile ${plan?.auto_assign_on_signup?'checked':''}">
+            <input type="checkbox" id="pSignupDefault" ${plan?.auto_assign_on_signup?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+            <span class="plan-toggle-title">Auto assign on signup</span>
+            <span class="plan-toggle-sub">New users get this by default</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="plan-modal-card">
+        <div class="plan-section-head">
+          <div>
+            <div class="plan-modal-card-title" style="margin-bottom:2px">Pages Included</div>
+            <div class="plan-field-help">Pick the app areas this plan unlocks.</div>
+          </div>
+        </div>
+        <div class="plan-pages-grid">${pageCheckboxes}</div>
+      </div>
     </div>
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="adminSavePlan(${planId||'null'})">Save Plan</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
+  window.__modalClassName = '';
 }
 
 function _updateAiLimitHint(val) {
@@ -8654,6 +9083,15 @@ function _updateAiLimitHint(val) {
   const hint = document.getElementById('pAiLimitHint');
   if (!hint) return;
   hint.textContent = isNaN(n) ? '' : n === -1 ? 'Unlimited' : n === 0 ? 'No AI access' : `${n} queries/day`;
+}
+
+function setPlanAiMode(mode) {
+  const input = document.getElementById('pAiMode');
+  if (!input) return;
+  input.value = String(mode || 'both');
+  document.querySelectorAll('.plan-mode-chip').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === input.value);
+  });
 }
 
 async function adminSavePlan(planId) {
@@ -8670,6 +9108,7 @@ async function adminSavePlan(planId) {
     is_active: document.getElementById('pActive').checked ? 1 : 0,
     auto_assign_on_signup: document.getElementById('pSignupDefault').checked ? 1 : 0,
     ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
+    ai_lookup_mode: document.getElementById('pAiMode')?.value || 'both',
     pages,
   };
   const r = planId
@@ -12280,6 +12719,17 @@ let _aiHistory = []; // { role: 'user'|'assistant', content: string }
 let _aiStatus = null;
 let _aiPastHistory = []; // from DB
 let _aiHistoryExpanded = false;
+let _aiLookupMode = 'offline';
+
+function _pickAllowedAiMode(preferred = 'offline') {
+  if (_userRole === 'admin') return preferred === 'online' ? 'online' : 'offline';
+  const wantsOnline = String(preferred || '').toLowerCase() === 'online';
+  if (wantsOnline && _aiLookupAccessModes.online) return 'online';
+  if (!wantsOnline && _aiLookupAccessModes.offline) return 'offline';
+  if (_aiLookupAccessModes.online) return 'online';
+  if (_aiLookupAccessModes.offline) return 'offline';
+  return 'offline';
+}
 
 function _aiRewriteQuestion(question) {
   const raw = String(question || '').trim();
@@ -12299,12 +12749,22 @@ async function loadAiLookup() {
   ]);
   _aiStatus = statusRes?.success ? statusRes : null;
   _aiPastHistory = histRes?.history || [];
+  try {
+    const savedMode = localStorage.getItem('ai_lookup_mode');
+    _aiLookupMode = _pickAllowedAiMode(savedMode === 'online' ? 'online' : 'offline');
+  } catch {
+    _aiLookupMode = _pickAllowedAiMode('offline');
+  }
+  const finalModes = _aiStatus?.modes || { offline: !!_aiLookupAccessModes.offline, online: !!_aiLookupAccessModes.online };
+  if (_aiLookupMode === 'online' && !finalModes.online) _aiLookupMode = finalModes.offline ? 'offline' : 'online';
+  if (_aiLookupMode === 'offline' && !finalModes.offline) _aiLookupMode = finalModes.online ? 'online' : 'offline';
   document.getElementById('main').innerHTML = `
     <div class="tab-content" style="display:flex;flex-direction:column;height:calc(100vh - 40px);max-height:900px">
       <div style="margin-bottom:10px">
         <div style="font-size:22px;font-weight:700;color:var(--t1)">AI Lookup</div>
         <div style="font-size:13px;color:var(--t3);margin-top:2px">Ask anything about your expenses, loans, EMIs, credit cards, trips, and more.</div>
         ${_renderAiStatusBanner()}
+        ${_renderAiModeToggle()}
       </div>
 
       ${_renderAiHistoryPanel()}
@@ -12425,7 +12885,7 @@ async function doAiAsk() {
   const btn = document.getElementById('aiSendBtn');
   if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
 
-  const r = await api('/api/ai/lookup', { method: 'POST', body: { question: lookupQuestion, history: _aiHistory } });
+  const r = await api('/api/ai/lookup', { method: 'POST', body: { question: lookupQuestion, history: _aiHistory, mode: _aiLookupMode } });
 
   // Update history
   _aiHistory.push({ role: 'user', content: question });
@@ -12434,13 +12894,16 @@ async function doAiAsk() {
   const thinkingEl = document.getElementById(thinkingId);
   if (r?.success && r.answer) {
     _aiStatus = r.ai_status || _aiStatus;
+    if (r.lookup_mode === 'online' || r.lookup_mode === 'offline') _aiLookupMode = r.lookup_mode;
     _refreshAiStatusBanner();
+    _refreshAiModeToggle();
     _aiHistory.push({ role: 'assistant', content: r.answer });
     if (thinkingEl) thinkingEl.outerHTML = _aiAssistantBubble(r.answer);
   } else {
     const errMsg = r?.error || 'Something went wrong. Please try again.';
     if (r?.ai_status) _aiStatus = r.ai_status;
     _refreshAiStatusBanner();
+    _refreshAiModeToggle();
     if (thinkingEl) thinkingEl.outerHTML = _aiAssistantBubble(errMsg, true);
   }
 
@@ -12460,6 +12923,9 @@ function _renderAiStatusBanner() {
   const bgColor = isAdmin ? 'var(--orange-l,#fff3e0)' : isUnlimited ? 'var(--green-l)' : 'var(--blue-l)';
   const fgColor = isAdmin ? 'var(--orange,#e65100)' : isUnlimited ? 'var(--green)' : 'var(--blue)';
   const planLabel = _aiStatus.planName ? `Plan: <b>${escHtml(_aiStatus.planName)}</b> &middot; ` : '';
+  const modeLabel = _aiLookupMode === 'online'
+    ? `Mode: <b>Online</b>${_aiStatus?.online_model ? ` &middot; Model: <b>${escHtml(_aiStatus.online_model)}</b>` : ''}`
+    : 'Mode: <b>Offline</b> &middot; Uses local on-server finance logic';
   const headline = isAdmin
     ? 'Admin — Unlimited AI queries'
     : isUnlimited
@@ -12471,6 +12937,7 @@ function _renderAiStatusBanner() {
     <div id="aiStatusBanner" style="margin-top:12px;background:${bgColor};color:${fgColor};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6">
       <div style="font-weight:700">${headline}</div>
       <div style="margin-top:2px">${planLabel}${escHtml(_aiStatus.message || '')}</div>
+      <div style="margin-top:4px;color:var(--t2)">${modeLabel}</div>
       ${upsell}
     </div>`;
 }
@@ -12479,6 +12946,59 @@ function _refreshAiStatusBanner() {
   const node = document.getElementById('aiStatusBanner');
   if (!node || !_aiStatus) return;
   node.outerHTML = _renderAiStatusBanner();
+}
+
+function _renderAiModeToggle() {
+  const offlineEnabled = !!_aiStatus?.modes?.offline;
+  const onlineEnabled = !!_aiStatus?.modes?.online;
+  const modeHint = !_aiStatus?.allowed_modes?.offline && !_aiStatus?.allowed_modes?.online
+    ? 'AI Lookup is not included in this user plan.'
+    : !_aiStatus?.allowed_modes?.online
+      ? 'This plan allows Offline AI only.'
+      : !_aiStatus?.allowed_modes?.offline
+        ? 'This plan allows Online AI only.'
+        : !onlineEnabled
+          ? 'Online mode is available after configuring a valid OpenAI API key on the server.'
+          : '';
+  return `
+    <div id="aiModeToggle" style="margin-top:10px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--card)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--t1)">Answer Engine</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">Switch between local offline answers and OpenAI-powered online answers.</div>
+        </div>
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:4px;background:var(--bg2);border-radius:999px;border:1px solid var(--border)">
+          <button class="btn ${_aiLookupMode === 'offline' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${offlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('offline')" ${offlineEnabled ? '' : 'disabled'}>Offline</button>
+          <button class="btn ${_aiLookupMode === 'online' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${onlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('online')" ${onlineEnabled ? '' : 'disabled'}>Online</button>
+        </div>
+      </div>
+      ${modeHint ? `<div style="font-size:11px;color:var(--t3);margin-top:6px">${modeHint}</div>` : ''}
+    </div>`;
+}
+
+function _refreshAiModeToggle() {
+  const node = document.getElementById('aiModeToggle');
+  if (!node) return;
+  node.outerHTML = _renderAiModeToggle();
+}
+
+function setAiLookupMode(mode) {
+  const nextMode = String(mode || 'offline').toLowerCase() === 'online' ? 'online' : 'offline';
+  if (!_aiStatus?.modes?.[nextMode]) {
+    const msg = nextMode === 'online'
+      ? (!_aiStatus?.allowed_modes?.online
+          ? 'Online AI mode is not included in this user plan.'
+          : 'Online AI mode is not available yet. Add an OpenAI API key on the server first.')
+      : 'Offline AI mode is not included in this user plan.';
+    toast(msg, 'warning');
+    return;
+  }
+  _aiLookupMode = nextMode;
+  try {
+    localStorage.setItem('ai_lookup_mode', _aiLookupMode);
+  } catch {}
+  _refreshAiStatusBanner();
+  _refreshAiModeToggle();
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

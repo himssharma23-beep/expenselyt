@@ -53,6 +53,21 @@ function normalizePlan(row) {
     price_monthly: Number(row.price_monthly || 0),
     price_yearly: Number(row.price_yearly || 0),
     ai_query_limit: row.ai_query_limit != null ? Number(row.ai_query_limit) : -1,
+    ai_lookup_mode: normalizeAiLookupMode(row.ai_lookup_mode),
+  };
+}
+
+function normalizeAiLookupMode(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  return ['none', 'offline', 'online', 'both'].includes(value) ? value : 'both';
+}
+
+function aiLookupModesFromMode(mode) {
+  const normalized = normalizeAiLookupMode(mode);
+  return {
+    mode: normalized,
+    offline: normalized === 'offline' || normalized === 'both',
+    online: normalized === 'online' || normalized === 'both',
   };
 }
 
@@ -874,8 +889,8 @@ async function createPlan(data) {
       await client.query('UPDATE plans SET auto_assign_on_signup = FALSE');
     }
     const result = await client.query(
-      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit, ai_lookup_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         data.name,
@@ -886,6 +901,7 @@ async function createPlan(data) {
         data.is_active != null ? !!data.is_active : true,
         !!data.auto_assign_on_signup,
         data.ai_query_limit != null ? Number(data.ai_query_limit) : -1,
+        normalizeAiLookupMode(data.ai_lookup_mode),
       ]
     );
     const planId = Number(result.rows[0].id);
@@ -934,6 +950,10 @@ async function updatePlan(id, data) {
     if (data.ai_query_limit !== undefined) {
       params.push(Number(data.ai_query_limit));
       fields.push(`ai_query_limit = $${params.length}`);
+    }
+    if (data.ai_lookup_mode !== undefined) {
+      params.push(normalizeAiLookupMode(data.ai_lookup_mode));
+      fields.push(`ai_lookup_mode = $${params.length}`);
     }
     if (fields.length > 0) {
       params.push(id);
@@ -1076,8 +1096,46 @@ async function getUserAccessiblePages(userId) {
   for (const row of result.rows) {
     pages.add(row.page_key);
   }
+  if (pages.has('ailookup')) {
+    const modes = await getUserAiLookupModes(userId);
+    if (!modes.offline && !modes.online) pages.delete('ailookup');
+  }
   if (pages.has('tracker')) pages.add('habittracker');
   return [...pages];
+}
+
+async function getUserAiLookupModes(userId) {
+  const userResult = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const user = userResult.rows[0];
+  if (!user) return aiLookupModesFromMode('none');
+  if (user.role === 'admin') return aiLookupModesFromMode('both');
+
+  const result = await query(
+    `SELECT p.ai_lookup_mode
+     FROM plans p
+     JOIN plan_pages pp
+       ON pp.plan_id = p.id
+      AND pp.page_key = 'ailookup'
+     LEFT JOIN user_subscriptions s
+       ON s.plan_id = p.id
+      AND s.user_id = $1
+      AND s.status = 'active'
+      AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+     WHERE (p.is_free = TRUE AND p.is_active = TRUE) OR s.id IS NOT NULL`,
+    [userId]
+  );
+
+  let allowOffline = false;
+  let allowOnline = false;
+  for (const row of result.rows) {
+    const modes = aiLookupModesFromMode(row.ai_lookup_mode);
+    allowOffline = allowOffline || modes.offline;
+    allowOnline = allowOnline || modes.online;
+  }
+  if (allowOffline && allowOnline) return aiLookupModesFromMode('both');
+  if (allowOnline) return aiLookupModesFromMode('online');
+  if (allowOffline) return aiLookupModesFromMode('offline');
+  return aiLookupModesFromMode('none');
 }
 
 async function generateOtp(userId, purpose, channel) {
@@ -1204,6 +1262,7 @@ module.exports = {
   createPlan,
   updatePlan,
   deletePlan,
+  getUserAiLookupModes,
   getSubscriptions,
   createSubscription,
   assignSignupPlanToUser,
