@@ -5818,8 +5818,8 @@ router.post('/recurring', (req, res) => {
       reminder_silent,
     })).then(async (id) => {
       if (apply_current_month) {
-        await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));
-        sendRecurringAppliedEmailForUser(req.session.userId, [Number(id)]).catch(() => {});
+        const applied = await Promise.resolve(getOpsDb().applyRecurringEntryForCurrentMonth(req.session.userId, id));
+        if (applied) sendRecurringAppliedEmailForUser(req.session.userId, [Number(id)]).catch(() => {});
       }
       res.json({ success: true, id });
     }).catch((err) => { res.status(500).json({ error: err.message }); });

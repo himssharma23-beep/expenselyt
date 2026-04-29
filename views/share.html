@@ -101,6 +101,25 @@ function fmtShareDate(value) {
   });
 }
 
+function tripStartsInLabel(startDate) {
+  const raw = String(startDate || '').trim();
+  if (!raw) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return '';
+  const diff = Math.round((start.getTime() - today.getTime()) / 86400000);
+  if (diff <= 0) return '';
+  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+}
+
+function itineraryTimeLabel(item) {
+  const start = String(item?.start_time || '').trim();
+  const end = String(item?.end_time || '').trim();
+  if (start && end) return `${start} - ${end}`;
+  return start || end || 'Any time';
+}
+
 function nameKey(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -214,6 +233,7 @@ function renderTrip(data) {
   const trip = data.trip || {};
   const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   const members = Array.isArray(trip.members) ? trip.members : [];
+  const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
   const settlementRows = computeTripSettlementRows(trip);
   const total = Number(trip.grand_total || 0);
   const grouped = {};
@@ -224,7 +244,15 @@ function renderTrip(data) {
   });
   const subtitleParts = [];
   if (trip.start_date || trip.end_date) subtitleParts.push(`${fmtShareDate(trip.start_date)}${trip.end_date ? ` to ${fmtShareDate(trip.end_date)}` : ''}`);
+  if (tripStartsInLabel(trip.start_date)) subtitleParts.push(tripStartsInLabel(trip.start_date));
   if (data.expires_at) subtitleParts.push(`Expires ${fmtShareDate(data.expires_at)}`);
+  const itineraryGroups = itineraryItems.reduce((acc, item) => {
+    const key = String(item?.itinerary_date || '');
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
   let html = `
     <div class="page-header">
       <h1>${esc(data.owner_name || 'Shared')}'s Trip: ${esc(trip.destination || trip.name || 'Trip')}</h1>
@@ -247,6 +275,32 @@ function renderTrip(data) {
       </div>
       ${trip.notes ? `<div class="friend-label" style="margin-top:10px;line-height:1.5;color:var(--t2)">${esc(trip.notes)}</div>` : ''}
     </div>`;
+  if (itineraryItems.length) {
+    html += `<div class="friend-card open">
+      <div class="friend-header" style="cursor:default">
+        <div class="friend-main"><div class="friend-meta"><div class="friend-name">Itinerary</div><div class="friend-label">${itineraryItems.length} item${itineraryItems.length !== 1 ? 's' : ''}</div></div></div>
+      </div>
+      <div class="txn-list" style="display:block">
+        ${Object.keys(itineraryGroups).sort().map((dateKey) => `
+          <div style="padding:14px 20px;border-bottom:1px solid #f0f0f0">
+            <div style="font-size:13px;font-weight:700;color:var(--em);margin-bottom:10px">${fmtShareDate(dateKey)}</div>
+            <div style="display:grid;gap:10px">
+              ${itineraryGroups[dateKey].map((item) => `
+                <div style="padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#f8fafc">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                    <span style="font-size:12px;font-weight:700;color:var(--em)">${esc(itineraryTimeLabel(item))}</span>
+                    <span style="font-size:14px;font-weight:700;color:var(--t1)">${esc(item.title || '-')}</span>
+                  </div>
+                  ${item.location ? `<div style="font-size:12px;color:var(--t2);margin-bottom:4px">${esc(item.location)}</div>` : ''}
+                  ${item.notes ? `<div style="font-size:12px;color:var(--t3);line-height:1.45">${esc(item.notes)}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+  }
   if (!expenses.length) {
     html += '<div class="friend-card"><div class="no-txn">No trip expenses to display.</div></div>';
   } else {

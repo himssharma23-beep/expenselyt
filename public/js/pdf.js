@@ -366,6 +366,25 @@ function downloadSplitSessionPdf(sessionKey) {
   _P.save(doc, `Split_${title}`);
 }
 
+function tripStartsInPdfLabel(startDate) {
+  const raw = String(startDate || '').trim();
+  if (!raw) return '';
+  const today = new Date();
+  const current = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const start = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return '';
+  const diff = Math.round((start.getTime() - current.getTime()) / 86400000);
+  if (diff <= 0) return '';
+  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+}
+
+function tripItineraryTimeLabel(item) {
+  const start = String(item?.start_time || '').trim();
+  const end = String(item?.end_time || '').trim();
+  if (start && end) return `${start} - ${end}`;
+  return start || end || 'Any time';
+}
+
 // ── Trips Overview ───────────────────────────────────────────
 function downloadTripsPdf(tripsArr) {
   const trips = tripsArr || _trips || [];
@@ -394,7 +413,7 @@ function downloadTripsPdf(tripsArr) {
     trips.map(t=>[
       (t.destination || t.name || '-') + (t.is_owner===0 ? ' (Shared)' : ''),
       String(t.status || 'upcoming').replace(/\b\w/g, (m) => m.toUpperCase()),
-      _P.dt(t.start_date),
+      `${_P.dt(t.start_date)}${tripStartsInPdfLabel(t.start_date) ? `\n${tripStartsInPdfLabel(t.start_date)}` : ''}`,
       t.end_date?_P.dt(t.end_date):'—',
       (t.members||[]).map(m=>m.member_name).join(', '),
       t.expense_count ?? t.expenseCount ?? 0,
@@ -411,8 +430,9 @@ function downloadTripDetailPdf() {
   const trip = _tripDetail;
   if (!trip) return;
   const doc = _P.init(true);
+  const startsIn = tripStartsInPdfLabel(trip.start_date);
   let y = _P.header(doc, `Trip: ${trip.destination || trip.name || 'Trip'}`,
-    `${_P.dt(trip.start_date)}${trip.end_date?' → '+_P.dt(trip.end_date):''}  ·  ${trip.status}`);
+    `${_P.dt(trip.start_date)}${trip.end_date?' → '+_P.dt(trip.end_date):''}${startsIn ? `  ·  ${startsIn}` : ''}  ·  ${trip.status}`);
 
   const memberStr = (trip.members||[]).map(m=>m.member_name).join('  ·  ');
   y = _P.note(doc, y, `Members: ${memberStr}`);
@@ -423,6 +443,30 @@ function downloadTripDetailPdf() {
     { label:'Total Amount',   value:_P.cur(total),              color:'' },
     { label:'Members',        value:(trip.members||[]).length,  color:'' },
   ]);
+
+  const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
+  if (itineraryItems.length) {
+    y = _P.section(doc, y, 'Itinerary');
+    y = _P.table(doc, y,
+      [['Date','Time','Title','Location','Notes']],
+      itineraryItems
+        .slice()
+        .sort((a, b) => {
+          const aKey = `${String(a?.itinerary_date || '')} ${String(a?.start_time || '99:99')}`;
+          const bKey = `${String(b?.itinerary_date || '')} ${String(b?.start_time || '99:99')}`;
+          return aKey.localeCompare(bKey);
+        })
+        .map((item) => [
+          _P.dt(item.itinerary_date),
+          tripItineraryTimeLabel(item),
+          item.title || '-',
+          item.location || '—',
+          item.notes || '—',
+        ]),
+      { 4:{fontSize:7} },
+      true
+    );
+  }
 
   y = _P.section(doc, y, 'Expenses');
   y = _P.table(doc, y,

@@ -39,6 +39,14 @@ function recurringDueDateForMonth(month, dueDay) {
   return `${month}-${String(safeDay).padStart(2, '0')}`;
 }
 
+function localIsoToday() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function normalizeDueDay(value) {
   return Math.max(1, Math.min(28, parseInt(value, 10) || 1));
 }
@@ -1559,19 +1567,21 @@ async function addRecurringEntry(userId, data) {
 async function applyRecurringEntryForCurrentMonth(userId, entryId) {
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const day1 = `${currentMonth}-01`;
   const entryR = await query('SELECT * FROM recurring_entries WHERE id = $1 AND user_id = $2 LIMIT 1', [entryId, userId]);
   const entry = entryR.rows[0];
   if (!entry || !entry.is_active) throw new Error('Recurring entry not found');
   if (entry.last_applied === currentMonth) return false;
   if (!recurringEntryAppliesToMonth(entry, currentMonth)) return false;
+  const postingDate = recurringDueDateForMonth(currentMonth, entry.due_day);
+  if (!postingDate) return false;
+  if (postingDate > localIsoToday()) return false;
   await withTransaction(async (client) => {
     if (entry.type === 'expense') {
       const bankAccountId = normalizeBankAccountId(entry.bank_account_id);
       await client.query(
         `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $1, $1)`,
-        [userId, entry.description, entry.expense_category || null, entry.amount, day1, !!entry.is_extra, bankAccountId]
+        [userId, entry.description, entry.expense_category || null, entry.amount, postingDate, !!entry.is_extra, bankAccountId]
       );
       if (bankAccountId) {
         await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
@@ -1580,7 +1590,7 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
       const billingDb = require('./postgres-billing');
       await billingDb.addCcTxn(userId, {
         card_id: entry.card_id,
-        txn_date: day1,
+        txn_date: postingDate,
         description: entry.description,
         amount: num(entry.amount),
         discount_pct: num(entry.discount_pct),
@@ -1592,7 +1602,7 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
         await client.query(
           `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
            VALUES ($1, $2, $3, $4, $5, FALSE, $6, $1, $1)`,
-          [userId, entry.description, entry.expense_category || null, entry.amount, day1, bankAccountId]
+          [userId, entry.description, entry.expense_category || null, entry.amount, postingDate, bankAccountId]
         );
         if (bankAccountId) await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
       }
