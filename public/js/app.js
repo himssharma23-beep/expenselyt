@@ -6747,6 +6747,7 @@ function renderTripDetail() {
         </div>
         ${summaryCards}
       </div>
+      
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div>
