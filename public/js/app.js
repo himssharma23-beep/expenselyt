@@ -15,6 +15,11 @@ let _expenseCategories = [];
 let _activeExpenseForm = null;
 let _editingExpCcTxnId = null;
 let _editingExpCcLink = null;
+let _expenseVoiceRecorder = null;
+let _expenseVoiceStream = null;
+let _expenseVoiceChunks = [];
+let _expenseVoiceBusy = false;
+let _expenseVoiceContext = 'expense';
 let _expenseCategoryHideTimer = null;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
@@ -76,6 +81,170 @@ function expenseCategoryDatalistHtml(selected = '') {
         <div id="eCategoryEmpty" style="display:none;padding:9px 10px;color:var(--t3);font-size:13px">No matching categories</div>
       </div>
     </div>`;
+}
+
+function renderExpenseVoiceCard(context = 'expense') {
+  const label = context === 'trip'
+    ? 'Say something like "Taxi from airport 1200 on 31 July paid by card" and we’ll fill the trip expense fields.'
+    : 'Say something like "Groceries 850 today from HDFC bank" and we’ll fill the expense fields.';
+  return `
+    <div style="margin-bottom:14px;padding:14px;border:1px solid var(--border);border-radius:14px;background:linear-gradient(180deg,#fbfdfc 0%,#f3f9f6 100%)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:14px;font-weight:800;color:var(--em)">Voice AI Fill</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:3px">${label}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-s btn-sm" id="expenseVoiceStartBtn" onclick="startExpenseVoiceCapture('${context}')">Start Voice</button>
+          <button type="button" class="btn btn-g btn-sm" id="expenseVoiceStopBtn" onclick="stopExpenseVoiceCapture()" disabled>Stop</button>
+        </div>
+      </div>
+      <div id="expenseVoiceStatus" style="font-size:12px;color:var(--t3);margin-top:10px">Voice capture is idle.</div>
+      <div id="expenseVoiceTranscript" style="display:none;margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--border);font-size:12px;color:var(--t2);line-height:1.45"></div>
+    </div>`;
+}
+
+function setExpenseVoiceUi({ status = '', transcript = '', recording = false, busy = false } = {}) {
+  const statusEl = document.getElementById('expenseVoiceStatus');
+  const transcriptEl = document.getElementById('expenseVoiceTranscript');
+  const startBtn = document.getElementById('expenseVoiceStartBtn');
+  const stopBtn = document.getElementById('expenseVoiceStopBtn');
+  if (statusEl && status) statusEl.textContent = status;
+  if (transcriptEl) {
+    if (transcript) {
+      transcriptEl.style.display = '';
+      transcriptEl.textContent = transcript;
+    } else {
+      transcriptEl.style.display = 'none';
+      transcriptEl.textContent = '';
+    }
+  }
+  if (startBtn) {
+    startBtn.disabled = recording || busy;
+    startBtn.textContent = recording ? 'Recording...' : (busy ? 'Processing...' : 'Start Voice');
+  }
+  if (stopBtn) stopBtn.disabled = !recording || busy;
+}
+
+async function startExpenseVoiceCapture(context = 'expense') {
+  if (_expenseVoiceBusy || _expenseVoiceRecorder?.state === 'recording') return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    toast('Voice capture is not supported in this browser', 'error');
+    return;
+  }
+  try {
+    _expenseVoiceContext = context === 'trip' ? 'trip' : 'expense';
+    _expenseVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _expenseVoiceChunks = [];
+    _expenseVoiceRecorder = new MediaRecorder(_expenseVoiceStream);
+    _expenseVoiceRecorder.ondataavailable = (event) => {
+      if (event.data?.size) _expenseVoiceChunks.push(event.data);
+    };
+    _expenseVoiceRecorder.onerror = () => {
+      setExpenseVoiceUi({ status: 'Voice capture failed. Try again.' });
+      cleanupExpenseVoiceCapture();
+    };
+    _expenseVoiceRecorder.onstop = async () => {
+      const blob = _expenseVoiceChunks.length ? new Blob(_expenseVoiceChunks, { type: _expenseVoiceRecorder?.mimeType || 'audio/webm' }) : null;
+      cleanupExpenseVoiceCapture();
+      if (!blob || !blob.size) {
+        setExpenseVoiceUi({ status: 'No audio captured. Please try again.' });
+        return;
+      }
+      await parseExpenseVoiceBlob(blob, _expenseVoiceContext);
+    };
+    _expenseVoiceRecorder.start();
+    setExpenseVoiceUi({ status: 'Listening... tap Stop when done.', recording: true });
+  } catch (err) {
+    cleanupExpenseVoiceCapture();
+    toast(err?.message || 'Could not start microphone', 'error');
+    setExpenseVoiceUi({ status: 'Microphone permission is needed to use voice fill.' });
+  }
+}
+
+function cleanupExpenseVoiceCapture() {
+  try {
+    _expenseVoiceRecorder = null;
+    if (_expenseVoiceStream) {
+      _expenseVoiceStream.getTracks().forEach((track) => track.stop());
+    }
+  } catch (_err) {}
+  _expenseVoiceStream = null;
+  _expenseVoiceChunks = [];
+}
+
+function stopExpenseVoiceCapture() {
+  if (!_expenseVoiceRecorder || _expenseVoiceRecorder.state !== 'recording') return;
+  setExpenseVoiceUi({ status: 'Processing voice note...', recording: false, busy: true });
+  _expenseVoiceRecorder.stop();
+}
+
+async function parseExpenseVoiceBlob(blob, context = 'expense') {
+  try {
+    _expenseVoiceBusy = true;
+    setExpenseVoiceUi({ status: 'Transcribing and filling fields...', busy: true });
+    const fd = new FormData();
+    const ext = blob.type.includes('mp4') || blob.type.includes('m4a') ? 'm4a' : 'webm';
+    fd.append('file', blob, `expense-voice.${ext}`);
+    const res = await fetch('/api/expenses/voice-prefill', { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Voice parse failed with HTTP ${res.status}`);
+    const transcript = String(data?.transcript || '').trim();
+    const suggestion = data?.suggestion || null;
+    if (!suggestion) throw new Error('Voice parse did not return any fields.');
+    if (context === 'trip') applyTripVoiceSuggestion(suggestion);
+    else applyExpenseVoiceSuggestion(suggestion);
+    setExpenseVoiceUi({
+      status: 'Voice fields applied. Review and save.',
+      transcript: transcript || '',
+      busy: false,
+    });
+    toast('Voice details added', 'success');
+  } catch (err) {
+    setExpenseVoiceUi({ status: err?.message || 'Could not parse this voice note.', busy: false });
+    toast(err?.message || 'Could not parse this voice note.', 'error');
+  } finally {
+    _expenseVoiceBusy = false;
+  }
+}
+
+function applyExpenseVoiceSuggestion(suggestion) {
+  const itemName = String(suggestion?.item_name || suggestion?.merchant || '').trim();
+  const category = String(suggestion?.category || '').trim();
+  const amount = Number(suggestion?.amount || 0);
+  const date = String(suggestion?.purchase_date || '').slice(0, 10);
+  if (itemName && document.getElementById('eName')) document.getElementById('eName').value = itemName;
+  if (category && document.getElementById('eCategory')) document.getElementById('eCategory').value = category;
+  if (amount > 0 && document.getElementById('eAmount')) document.getElementById('eAmount').value = String(Math.round(amount * 100) / 100);
+  if (date && document.getElementById('eDate')) document.getElementById('eDate').value = date;
+  if (suggestion?.bank_account_id && document.getElementById('eBank')) {
+    document.getElementById('eBank').value = String(suggestion.bank_account_id);
+  }
+  if (suggestion?.card_id && document.getElementById('ccLink')) {
+    document.getElementById('ccLink').checked = true;
+    toggleCcLinkSection();
+    if (document.getElementById('ccLinkCard')) document.getElementById('ccLinkCard').value = String(suggestion.card_id);
+    if (document.getElementById('ccLinkDisc')) document.getElementById('ccLinkDisc').value = String(suggestion.card_discount_pct || 0);
+    ccLinkPreview();
+  } else {
+    ccLinkPreview();
+  }
+}
+
+function applyTripVoiceSuggestion(suggestion) {
+  const details = String(suggestion?.item_name || suggestion?.merchant || '').trim();
+  const category = String(suggestion?.category || '').trim();
+  const amount = Number(suggestion?.amount || 0);
+  const date = String(suggestion?.purchase_date || '').slice(0, 10);
+  if (details && document.getElementById('tripExpenseDetails')) document.getElementById('tripExpenseDetails').value = details;
+  if (category && document.getElementById('tripExpenseType')) document.getElementById('tripExpenseType').value = category;
+  if (date && document.getElementById('tripExpenseDate')) document.getElementById('tripExpenseDate').value = date;
+  if (amount > 0) {
+    if (document.getElementById('tripExpenseOrigAmount')) document.getElementById('tripExpenseOrigAmount').value = String(Math.round(amount * 100) / 100);
+    if (document.getElementById('tripExpenseQty')) document.getElementById('tripExpenseQty').value = '1';
+    if (document.getElementById('tripExpensePrice')) document.getElementById('tripExpensePrice').value = String(Math.round(amount * 100) / 100);
+    tripExpenseCurrencyChanged();
+  }
 }
 
 function _expenseCategoryAutocompleteItems() {
@@ -950,6 +1119,8 @@ function _findExpenseById(id) {
 }
 
 async function showExpenseForm(id) {
+  cleanupExpenseVoiceCapture();
+  _expenseVoiceBusy = false;
   let e = { item_name: '', category: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
     const cached = _findExpenseById(id);
@@ -989,6 +1160,7 @@ async function showExpenseForm(id) {
       </div>
     `}
     <div id="expenseFormExpenseSection">
+    ${renderExpenseVoiceCard('expense')}
     <div class="fg">
       <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
       <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
@@ -6994,6 +7166,8 @@ function recalcTripExpenseConvertedTotal() {
 
 async function showTripExpenseModal(expenseId = null) {
   if (!_tripDetail) return;
+  cleanupExpenseVoiceCapture();
+  _expenseVoiceBusy = false;
   await ensureTripCurrenciesLoaded();
   const expense = expenseId ? _findTripExpenseById(expenseId) : null;
   const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
@@ -7057,6 +7231,7 @@ async function showTripExpenseModal(expenseId = null) {
     </button>`;
   }).join('');
   openModal(expense ? 'Edit Trip Expense' : 'Add Trip Expense', `
+    ${renderExpenseVoiceCard('trip')}
     <div class="fg">
       <label class="fl">Expense Type *
         <input class="fi" id="tripExpenseType" list="tripExpenseTypeList" placeholder="Travel, Stay, Food..." value="${escHtml(expense?.expense_type || '')}">

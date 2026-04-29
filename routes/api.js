@@ -617,9 +617,10 @@ async function parseExpenseMessageWithOpenAi(message, banks = [], cards = []) {
   };
 
   const systemPrompt = [
-    'You extract structured expense suggestions from bank, UPI, and credit card payment messages.',
+    'You extract structured expense suggestions from spoken expense notes, typed expense descriptions, and bank, UPI, or credit card payment messages.',
     'Return only data that can help prefill an expense form.',
     'Treat outgoing spend/debit/purchase messages as expenses.',
+    'If the user simply describes an expense in plain language, infer the most likely item name, amount, date, and category from that description.',
     'Use only the provided bank ids or card ids when matching a source. If unsure, return an empty string for the match id.',
     'If a credit card matches, prefer source_type "credit_card". Otherwise use "bank" when a bank account matches. Use "none" if no source matches.',
     'Keep purchase_date in YYYY-MM-DD format. If the exact date is missing, infer the most likely date from the message. If still missing, use today.',
@@ -716,6 +717,58 @@ async function parseExpenseMessageWithOpenAi(message, banks = [], cards = []) {
     source: 'openai',
     ai_notes: String(parsed.notes || '').trim(),
   };
+}
+
+async function transcribeAudioWithOpenAi(file) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI voice parsing is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+  if (!file?.buffer || !file?.originalname) {
+    const err = new Error('Audio file is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const model = String(process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe').trim();
+  const form = new FormData();
+  const blob = new Blob([file.buffer], { type: String(file.mimetype || 'application/octet-stream') });
+  form.append('file', blob, String(file.originalname || 'expense-voice.webm'));
+  form.append('model', model);
+  form.append('response_format', 'json');
+  form.append('prompt', 'This is a short spoken expense description for a personal finance app. Preserve merchant names, dates, amounts, and payment sources accurately.');
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: form,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI transcription failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const transcript = String(payload?.text || '').trim();
+  if (!transcript) {
+    const err = new Error('OpenAI returned an empty transcript.');
+    err.statusCode = 502;
+    throw err;
+  }
+  return transcript;
+}
+
+function isSupportedAudioUpload(file) {
+  const mime = String(file?.mimetype || '').toLowerCase();
+  const name = String(file?.originalname || '').toLowerCase();
+  if (mime.startsWith('audio/')) return true;
+  return ['.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm', '.ogg'].some((ext) => name.endsWith(ext));
 }
 
 async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageBuffer = null, mimeType = 'image/jpeg') {
@@ -1048,6 +1101,32 @@ router.post('/smart-capture/parse-ai', async (req, res) => {
   } catch (err) {
     console.error('[smart-capture/parse-ai]', err?.message || err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this payment message with AI.' });
+  }
+});
+
+router.post('/expenses/voice-prefill', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Audio file is required' });
+    if (!isSupportedAudioUpload(req.file)) {
+      return res.status(400).json({ error: 'Supported audio formats are mp3, mp4, m4a, wav, webm, and related audio files.' });
+    }
+
+    const transcript = await transcribeAudioWithOpenAi(req.file);
+    const [banks, cards] = await Promise.all([
+      Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
+      Promise.resolve(getBillingDb().getCreditCards(req.session.userId)),
+    ]);
+    const suggestion = await parseExpenseMessageWithOpenAi(transcript, banks || [], cards || []);
+    res.json({
+      success: true,
+      provider: 'openai',
+      configured: true,
+      transcript,
+      suggestion,
+    });
+  } catch (err) {
+    console.error('[expenses/voice-prefill]', err?.message || err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this voice note into expense fields.' });
   }
 });
 
