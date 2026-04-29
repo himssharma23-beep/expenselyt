@@ -732,7 +732,11 @@ async function transcribeAudioWithOpenAi(file) {
     throw err;
   }
 
-  const model = String(process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe').trim();
+  const model = String(
+    process.env.OPENAI_WHISPER_MODEL ||
+    process.env.OPENAI_TRANSCRIBE_MODEL ||
+    'whisper-1'
+  ).trim();
   const form = new FormData();
   const blob = new Blob([file.buffer], { type: String(file.mimetype || 'application/octet-stream') });
   form.append('file', blob, String(file.originalname || 'expense-voice.webm'));
