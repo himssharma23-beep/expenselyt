@@ -3870,6 +3870,66 @@ router.delete('/admin/currencies/:code', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/admin/currencies/sync-latest', requireAdmin, async (_req, res) => {
+  try {
+    const currencies = await Promise.resolve(getCoreDb().getAdminCurrencyRates());
+    const targets = (currencies || [])
+      .map((item) => String(item.currency_code || '').toUpperCase())
+      .filter((code) => code && code !== 'INR');
+
+    if (!targets.length) {
+      return res.json({ success: true, updated: 0, message: 'No non-INR currencies to update.' });
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetch(`https://api.frankfurter.dev/v1/latest?base=INR&symbols=${encodeURIComponent(targets.join(','))}`, {
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      throw new Error(`Rate provider failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const rates = payload?.rates && typeof payload.rates === 'object' ? payload.rates : {};
+    let updated = 0;
+
+    await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({
+      currency_code: 'INR',
+      rate_to_inr: 1,
+      is_active: 1,
+    }));
+
+    for (const code of targets) {
+      const perInr = Number(rates[code]);
+      if (!Number.isFinite(perInr) || perInr <= 0) continue;
+      const rateToInr = Math.round((1 / perInr) * 1000000) / 1000000;
+      await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({
+        currency_code: code,
+        rate_to_inr: rateToInr,
+        is_active: currencies.find((item) => String(item.currency_code || '').toUpperCase() === code)?.is_active ? 1 : 0,
+      }));
+      updated += 1;
+    }
+
+    res.json({
+      success: true,
+      updated,
+      provider: 'Frankfurter',
+      base: 'INR',
+      rate_date: payload?.date || null,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not sync currency rates.' });
+  }
+});
+
 router.get('/admin/expense-stats', requireAdmin, async (req, res) => {
   try {
     const stats = await Promise.resolve(getCoreDb().getAdminExpenseStats());

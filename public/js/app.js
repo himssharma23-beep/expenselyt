@@ -6117,7 +6117,7 @@ function renderTripList() {
 
   const tripActionButtons = (trip) => `
     <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
-      <button class="btn btn-s btn-sm" onclick="openTripDetail(${trip.id})">Open</button>
+      <button type="button" class="btn btn-s btn-sm" onclick="openTripDetail(${trip.id})">Open</button>
       <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)" style="min-width:128px">
         <option value="">More</option>
         <option value="share">Share link</option>
@@ -6282,6 +6282,15 @@ async function openTripDetail(tripId) {
     return;
   }
   _tripDetail = data.trip;
+  const detailMembers = Array.isArray(_tripDetail.members) ? _tripDetail.members : [];
+  _tripExpSel = new Set(detailMembers.map((member) => _memberKey(member)));
+  const linkedMember = !_tripDetail.isOwner
+    ? detailMembers.find((member) => String(member?.linked_user_id || '') === String(_currentUserId || ''))
+    : null;
+  _tripExpPaidBy = linkedMember ? _memberKey(linkedMember) : 'self';
+  _tripExpMode = 'equal';
+  _tripExpValues = {};
+  _tripExpEditId = null;
   syncTripListRowFromDetail(_tripDetail);
   renderTripDetail();
 }
@@ -6350,6 +6359,8 @@ function toggleTripItineraryCollapse() {
 function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
+  const canEdit = !!(trip.isOwner || trip.userPermission !== 'view');
+  const canManageExpenses = canEdit && String(trip.status || '').toLowerCase() === 'active';
   const members = trip.members || [];
   const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
   const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
@@ -6388,9 +6399,10 @@ function renderTripDetail() {
     ? members.map((member) => {
         const key = memberShareKey(member);
         const totals = peopleMap[key] || { totalShare: 0, totalGave: 0 };
-        return `<div style="display:flex;flex-direction:column;gap:2px;padding:6px 10px;border-radius:12px;background:var(--bg2);border:1px solid var(--br);min-width:96px">
+        return `<div style="display:flex;flex-direction:column;gap:3px;padding:8px 10px;border-radius:14px;background:linear-gradient(180deg,#fbfdfc 0%,#f3f9f6 100%);border:1px solid #d8e8df;min-width:112px">
           <span style="font-size:12px;font-weight:700;line-height:1.2">${escHtml(member.member_name)}</span>
-          <span style="font-size:11px;color:var(--t3);line-height:1.2">Share: ${fmtCur(totals.totalShare || 0)}</span>
+          <span style="font-size:10px;color:var(--t3);line-height:1.2;text-transform:uppercase;letter-spacing:.04em">Share</span>
+          <span style="font-size:17px;font-weight:900;color:var(--green);line-height:1.1">${fmtCur(totals.totalShare || 0)}</span>
         </div>`;
       }).join('')
     : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
@@ -6412,6 +6424,14 @@ function renderTripDetail() {
         <div style="display:flex;flex-direction:column;gap:8px">
           ${items.map((item) => `
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff">
+              ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-self:stretch;align-items:flex-start">
+                <button class="trip-icon-btn" title="Edit itinerary" aria-label="Edit itinerary" onclick="showTripItineraryModal(${item.id})">
+                  <span class="trip-icon-btn-glyph">&#9998;</span>
+                </button>
+                <button class="trip-icon-btn danger" title="Delete itinerary" aria-label="Delete itinerary" onclick="tripDeleteItinerary(${item.id})">
+                  <span class="trip-icon-btn-glyph">&#128465;</span>
+                </button>
+              </div>` : ''}
               <div style="min-width:0;flex:1">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
                   <span style="font-size:12px;font-weight:700;color:var(--em)">${escHtml(fmtTripItineraryTimeRange(item))}</span>
@@ -6419,10 +6439,6 @@ function renderTripDetail() {
                 </div>
                 ${item.location ? `<div style="font-size:12px;color:var(--t2);margin-bottom:3px">${escHtml(item.location)}</div>` : ''}
                 ${item.notes ? `<div style="font-size:12px;color:var(--t3);line-height:1.45">${escHtml(item.notes)}</div>` : ''}
-              </div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <button class="btn btn-g btn-sm" onclick="showTripItineraryModal(${item.id})">Edit</button>
-                <button class="btn btn-g btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteItinerary(${item.id})">Del</button>
               </div>
             </div>
           `).join('')}
@@ -6518,42 +6534,30 @@ function renderTripDetail() {
       <div class="trip-detail-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
         <div class="trip-detail-title-block">
           <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">Back</button>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <div style="font-size:24px;font-weight:800">
-              ${escHtml(trip.destination || trip.name || '')}${trip.total_distance != null ? ` <span style="font-size:18px;font-weight:700;color:var(--t2)">(${escHtml(String(trip.total_distance))} km)</span>` : ''}
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <div style="font-size:24px;font-weight:800">
+                  ${escHtml(trip.destination || trip.name || '')}${trip.total_distance != null ? ` <span style="font-size:18px;font-weight:700;color:var(--t2)">(${escHtml(String(trip.total_distance))} km)</span>` : ''}
+                </div>
+                ${tripStatusBadge(trip.status)}
+              </div>
+              <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
             </div>
-            ${tripStatusBadge(trip.status)}
-          </div>
-          <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
-        </div>
-        <div class="trip-detail-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <div class="trip-detail-actions-desktop" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
-              <span class="trip-icon-btn-glyph">&#9998;</span>
-            </button>
-            <button class="btn btn-s btn-sm" onclick="showTripShareModal(${trip.id})">Share Link</button>
-            <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
-            <button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>
-            <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
-            <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
-            ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
-            <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
-            ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
-            <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
-              <span class="trip-icon-btn-glyph">&#128465;</span>
-            </button>
-          </div>
-          <div class="trip-detail-actions-mobile">
-            <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
-            <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})"><span class="trip-icon-btn-glyph">&#128279;</span></button>
-            <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()"><span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span></button>
-            <button class="trip-icon-btn" title="Add itinerary" aria-label="Add itinerary" onclick="showTripItineraryModal()"><span class="trip-icon-btn-glyph">&#128197;</span></button>
-            <button class="trip-icon-btn" title="Settle trip" aria-label="Settle trip" onclick="showTripSettlementModal(${trip.id})"><span class="trip-icon-btn-glyph">&#8644;</span></button>
-            <button class="trip-icon-btn" title="Add expense" aria-label="Add expense" onclick="showTripExpenseModal()"><span class="trip-icon-btn-glyph">+</span></button>
-            ${(trip.expenses || []).length ? `<button class="trip-icon-btn" title="Bulk edit shares" aria-label="Bulk edit shares" onclick="showTripBulkShareModal()"><span class="trip-icon-btn-glyph">&#8942;</span></button>` : ''}
-            <button class="trip-icon-btn" title="Import Excel" aria-label="Import Excel" onclick="showTripExpenseExcelImport(${trip.id})"><span class="trip-icon-btn-glyph">&#8681;</span></button>
-            ${(trip.expenses || []).length ? `<button class="trip-icon-btn danger" title="Delete all expenses" aria-label="Delete all expenses" onclick="tripDeleteAllExpenses()"><span class="trip-icon-btn-glyph">&#128465;</span></button>` : ''}
-            <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})"><span class="trip-icon-btn-glyph">&#10006;</span></button>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+              <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
+                <span class="trip-icon-btn-glyph">&#9998;</span>
+              </button>
+              <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})">
+                <span class="trip-icon-btn-glyph">&#128279;</span>
+              </button>
+              <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()">
+                <span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span>
+              </button>
+              <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
+                <span class="trip-icon-btn-glyph">&#128465;</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -6577,7 +6581,10 @@ function renderTripDetail() {
           <div style="font-size:18px;font-weight:800">Itinerary</div>
           <div style="font-size:13px;color:var(--t2)">Plan trip activities by date and time before you travel.</div>
         </div>
-        <button class="btn btn-g btn-sm" onclick="toggleTripItineraryCollapse()">${_tripItineraryCollapsed ? 'Show Itinerary' : 'Hide Itinerary'}</button>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>
+          <button class="btn btn-g btn-sm" onclick="toggleTripItineraryCollapse()">${_tripItineraryCollapsed ? 'Show Itinerary' : 'Hide Itinerary'}</button>
+        </div>
       </div>
       ${_tripItineraryCollapsed ? '' : itineraryHtml}
 
@@ -6585,6 +6592,13 @@ function renderTripDetail() {
         <div>
           <div style="font-size:18px;font-weight:800">Expense Breakdown</div>
           <div style="font-size:13px;color:var(--t2)">Subtotals by expense type, with each trip item visible underneath.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
+          <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
+          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
+          <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
+          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
         </div>
       </div>
       ${groupHtml}
@@ -7749,7 +7763,10 @@ function renderAdminCurrencies() {
           <div class="card-title">Currency Master</div>
           <div style="font-size:12px;color:var(--t3)">Manage currency rates once here. Trip expense forms will use these saved rates automatically.</div>
         </div>
-        <button class="btn btn-p btn-sm" onclick="openAdminCurrencyModal()">Add Currency</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="syncAdminCurrencyRates()">Sync Latest Rates</button>
+          <button class="btn btn-p btn-sm" onclick="openAdminCurrencyModal()">Add Currency</button>
+        </div>
       </div>
       <div style="overflow:auto">
         <table style="width:100%;border-collapse:collapse;min-width:640px">
@@ -7766,6 +7783,17 @@ function renderAdminCurrencies() {
         </table>
       </div>
     </div>`;
+}
+
+async function syncAdminCurrencyRates() {
+  const result = await api('/api/admin/currencies/sync-latest', { method: 'POST' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  const dateLabel = result?.rate_date ? ` for ${result.rate_date}` : '';
+  toast(`Updated ${result?.updated || 0} currency rate(s)${dateLabel}`, 'success');
+  await loadAdminCurrencies();
 }
 
 function openAdminCurrencyModal(currencyCode = '') {
@@ -9145,6 +9173,11 @@ async function loadAdminSubscriptions() {
 }
 
 function _renderAdminSubsPage() {
+  const prevInput = document.getElementById('adminSubSearch');
+  const hadFocus = document.activeElement === prevInput;
+  const selStart = hadFocus ? prevInput.selectionStart : null;
+  const selEnd = hadFocus ? prevInput.selectionEnd : null;
+
   const q = _adminSubSearch.toLowerCase();
   const filtered = q
     ? _adminSubsData.filter(s =>
@@ -9186,6 +9219,14 @@ function _renderAdminSubsPage() {
       <thead><tr><th>User</th><th>Plan</th><th>Cycle</th><th>Start</th><th>End</th><th>Status</th><th style="width:100px">Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
+
+  if (hadFocus) {
+    const nextInput = document.getElementById('adminSubSearch');
+    if (nextInput) {
+      nextInput.focus();
+      if (selStart !== null && selEnd !== null) nextInput.setSelectionRange(selStart, selEnd);
+    }
+  }
 }
 
 function _buildSubSelects(selPlanId) {
@@ -11943,11 +11984,9 @@ function cancelBalanceEdit() {
 function _localYM(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 function _addMonths(ym, n) { const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-1+n,1); return _localYM(d); }
 let _plannerMonth = _localYM();
-let _plannerView  = 'monthly'; // 'monthly' | 'defaults'
 const _todayMonth = _localYM();
 let _previewBankBalances = {}; // in-memory overrides for preview mode {bankId: balance}
 let _previewDataCache   = null; // cached preview response
-let _defaultsCount = null; // cached count of active default payments
 
 function invalidatePlannerPreviewCache() {
   _previewDataCache = null;
@@ -11988,43 +12027,27 @@ async function renderPlanner() {
       <button class="btn btn-g btn-sm" ${canGoNext ? `onclick="_plannerMonth='${nextMonth}';_previewBankBalances={};_previewDataCache=null;renderPlanner()"` : 'disabled style="opacity:0.3;cursor:default"'}>&rsaquo;</button>
     </div>`;
 
-  const defaultsLabel = `Default Payments${_defaultsCount !== null ? ` (${_defaultsCount})` : ''}`;
-  const tabs = [['monthly','This Month'],['defaults', defaultsLabel]].map(([k,l]) =>
-    `<button class="chip ${_plannerView===k?'active':''}" onclick="_plannerView='${k}';renderPlanner()">${l}</button>`
-  ).join('');
-
   let bodyHtml = '';
-  if (_plannerView === 'monthly') {
-    if (isFuture) {
-      // Preview mode: fetch projected data, no DB writes
-      if (!_previewDataCache) {
-        _previewDataCache = await api(`/api/planner/preview?month=${_plannerMonth}`);
-      }
-      const pd = _previewDataCache || {};
-      _bankAccounts = pd.accounts || [];
-      bodyHtml = renderPlannerPreview(pd.projectedDefaults || [], _bankAccounts, pd.projectedCcDues || [], pd.emiDues || []);
-    } else {
-      const [data, banksData, dData] = await Promise.all([
-        api(`/api/planner/monthly?month=${_plannerMonth}`),
-        api('/api/banks'),
-        _defaultsCount === null ? api('/api/planner/defaults') : Promise.resolve(null),
-      ]);
-      _bankAccounts = banksData?.accounts || [];
-      if (dData) _defaultsCount = (dData.defaults || []).filter(d => d.is_active).length;
-      bodyHtml = renderPlannerMonthly(data?.payments || [], _bankAccounts, data?.ccDues || [], data?.skipped || [], data?.emiDues || []);
+  if (isFuture) {
+    // Preview mode: fetch projected data, no DB writes
+    if (!_previewDataCache) {
+      _previewDataCache = await api(`/api/planner/preview?month=${_plannerMonth}`);
     }
+    const pd = _previewDataCache || {};
+    _bankAccounts = pd.accounts || [];
+    bodyHtml = renderPlannerPreview(pd.projectedDefaults || [], _bankAccounts, pd.projectedCcDues || [], pd.emiDues || []);
   } else {
-    const banksData = await api('/api/banks');
+    const [data, banksData] = await Promise.all([
+      api(`/api/planner/monthly?month=${_plannerMonth}`),
+      api('/api/banks'),
+    ]);
     _bankAccounts = banksData?.accounts || [];
-    const dData = await api('/api/planner/defaults');
-    _defaultsCount = (dData?.defaults || []).filter(d => d.is_active).length;
-    bodyHtml = renderPlannerDefaults(dData?.defaults || []);
+    bodyHtml = renderPlannerMonthly(data?.payments || [], _bankAccounts, data?.ccDues || [], data?.skipped || [], data?.emiDues || []);
   }
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       ${monthNav}
-      <div class="chip-group" style="margin-bottom:20px">${tabs}</div>
       ${bodyHtml}
     </div>`;
 }
@@ -14188,6 +14211,7 @@ async function renderTrackerDetail() {
   const today = new Date().toISOString().split('T')[0];
   const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
   const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
+  const actualCurrentMonthKey = today.slice(0, 7);
   const isCurrentMonth = currentMonthKey === today.slice(0, 7);
 
   let rows = '';
@@ -15009,6 +15033,7 @@ async function renderTrackerDetail() {
   const today = new Date().toISOString().split('T')[0];
   const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
   const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
+  const actualCurrentMonthKey = today.slice(0, 7);
   const isCurrentMonth = currentMonthKey === today.slice(0, 7);
 
   let rows = '';
@@ -15049,7 +15074,12 @@ async function renderTrackerDetail() {
   const totalAmt = summary.total_amount || 0;
   const addedToExpense = summary.added_to_expense;
   const monthTiles = tileSummaries
-    .filter(({ key, summary: tile }) => key === currentMonthKey || (tile.total_amount || 0) > 0 || (tile.days || 0) > 0)
+    .filter(({ key, summary: tile }) => (
+      key === currentMonthKey
+      || key === actualCurrentMonthKey
+      || (tile.total_amount || 0) > 0
+      || (tile.days || 0) > 0
+    ))
     .map(({ key, year, month, summary: tile }) => {
     const active = key === currentMonthKey;
     const complete = key < today.slice(0, 7);
