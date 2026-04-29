@@ -775,6 +775,248 @@ function isSupportedAudioUpload(file) {
   return ['.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm', '.ogg'].some((ext) => name.endsWith(ext));
 }
 
+function normalizeMatchText(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function guessBankMatchFromText(text, bankOptions = []) {
+  const source = normalizeMatchText(text);
+  if (!source) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const bank of bankOptions) {
+    const bankName = normalizeMatchText(bank.bank_name);
+    const accountName = normalizeMatchText(bank.account_name);
+    const label = normalizeMatchText(bank.label);
+    let score = 0;
+    if (bankName && source.includes(bankName)) score += 3;
+    if (accountName && source.includes(accountName)) score += 2;
+    if (label && source.includes(label)) score += 1;
+    if (score > bestScore) {
+      best = bank;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function guessCardMatchFromText(text, cardOptions = []) {
+  const source = normalizeMatchText(text);
+  if (!source) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const card of cardOptions) {
+    const cardName = normalizeMatchText(card.card_name);
+    const bankName = normalizeMatchText(card.bank_name);
+    const last4 = String(card.last4 || '').trim();
+    let score = 0;
+    if (cardName && source.includes(cardName)) score += 3;
+    if (bankName && source.includes(bankName)) score += 2;
+    if (last4 && source.includes(last4)) score += 1;
+    if (score > bestScore) {
+      best = card;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function normalizeVoiceExpenseDate(value) {
+  const cleaned = String(value || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(cleaned) ? cleaned : new Date().toISOString().slice(0, 10);
+}
+
+function normalizeVoiceExpenseEntry(raw, transcript, bankOptions = [], cardOptions = []) {
+  const lineText = [
+    raw?.item_name,
+    raw?.merchant,
+    raw?.notes,
+    transcript,
+  ].filter(Boolean).join(' ');
+  const explicitBank = bankOptions.find((bank) => bank.id === String(raw?.matched_bank_id || '')) || null;
+  const explicitCard = cardOptions.find((card) => card.id === String(raw?.matched_card_id || '')) || null;
+  const guessedCard = explicitCard || guessCardMatchFromText(lineText, cardOptions);
+  const guessedBank = explicitBank || (!guessedCard ? guessBankMatchFromText(lineText, bankOptions) : null);
+  const sourceType = guessedCard
+    ? 'credit_card'
+    : guessedBank
+      ? 'bank'
+      : String(raw?.source_type || '').trim().toLowerCase() === 'credit_card'
+        ? 'credit_card'
+        : String(raw?.source_type || '').trim().toLowerCase() === 'bank'
+          ? 'bank'
+          : 'none';
+  const inferredExtra = /\b(extra|non essential|non-essential|luxury|treat as extra|mark as extra)\b/i.test(lineText);
+  return {
+    item_name: String(raw?.item_name || raw?.merchant || 'Expense').trim() || 'Expense',
+    merchant: String(raw?.merchant || '').trim(),
+    amount: Math.round((Number(raw?.amount || 0) || 0) * 100) / 100,
+    purchase_date: normalizeVoiceExpenseDate(raw?.purchase_date),
+    category: String(raw?.category || '').trim(),
+    is_extra: !!raw?.is_extra || inferredExtra,
+    source_type: sourceType,
+    bank_account_id: guessedBank ? Number(guessedBank.id) : null,
+    bank_label: guessedBank ? guessedBank.label : '',
+    card_id: guessedCard ? Number(guessedCard.id) : null,
+    card_label: guessedCard ? guessedCard.label : '',
+    card_discount_pct: guessedCard ? Number(raw?.card_discount_pct || guessedCard.default_discount_pct || 0) : 0,
+    confidence: Math.max(0, Math.min(100, Number(raw?.confidence || 0) || 0)),
+    ai_notes: String(raw?.notes || '').trim(),
+  };
+}
+
+async function parseVoiceExpenseEntriesWithOpenAi(message, banks = [], cards = []) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI parsing is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const bankOptions = (banks || []).map((bank) => ({
+    id: String(bank.id),
+    label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+    bank_name: bank.bank_name || '',
+    account_name: bank.account_name || '',
+    is_default: !!bank.is_default,
+  }));
+  const cardOptions = (cards || []).map((card) => ({
+    id: String(card.id),
+    label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+    card_name: card.card_name || '',
+    bank_name: card.bank_name || '',
+    last4: String(card.last4 || ''),
+    default_discount_pct: Number(card.default_discount_pct || 0),
+  }));
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['entries', 'notes'],
+    properties: {
+      notes: { type: 'string' },
+      entries: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'item_name',
+            'merchant',
+            'amount',
+            'purchase_date',
+            'category',
+            'is_extra',
+            'source_type',
+            'matched_bank_id',
+            'matched_card_id',
+            'card_discount_pct',
+            'confidence',
+            'notes',
+          ],
+          properties: {
+            item_name: { type: 'string' },
+            merchant: { type: 'string' },
+            amount: { type: 'number' },
+            purchase_date: { type: 'string' },
+            category: { type: 'string' },
+            is_extra: { type: 'boolean' },
+            source_type: { type: 'string', enum: ['bank', 'credit_card', 'none'] },
+            matched_bank_id: { type: 'string' },
+            matched_card_id: { type: 'string' },
+            card_discount_pct: { type: 'number' },
+            confidence: { type: 'number' },
+            notes: { type: 'string' },
+          },
+        },
+      },
+    },
+  };
+
+  const systemPrompt = [
+    'You extract one or more structured expense entries from a spoken expense note.',
+    'Return only data that can help prefill expense forms.',
+    'If the user mentions multiple expenses, return one entry per expense item in order.',
+    'Capture whether the user explicitly marks an item as extra or non-essential.',
+    'Use only the provided bank ids or card ids when matching a payment source. If unsure, return an empty string.',
+    'If a credit card matches, prefer source_type "credit_card". Otherwise use "bank" when a bank account matches. Use "none" if no source matches.',
+    'Keep purchase_date in YYYY-MM-DD format. If not stated, use today.',
+    'If category is unclear, return an empty string.',
+    'confidence should be between 0 and 100.',
+  ].join(' ');
+
+  const userPrompt = JSON.stringify({
+    today: new Date().toISOString().slice(0, 10),
+    voice_note_transcript: String(message || ''),
+    available_banks: bankOptions,
+    available_cards: cardOptions,
+  });
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+        { role: 'user', content: [{ type: 'input_text', text: userPrompt }] },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'voice_expense_entries',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI voice parse failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty voice parse result.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    const err = new Error('OpenAI returned invalid JSON for voice expense parsing.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const entries = (Array.isArray(parsed?.entries) ? parsed.entries : [])
+    .map((entry) => normalizeVoiceExpenseEntry(entry, message, bankOptions, cardOptions))
+    .filter((entry) => entry.item_name && Number(entry.amount || 0) > 0);
+
+  if (!entries.length) {
+    const err = new Error('Voice parse did not find any valid expense entries.');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  return {
+    transcript: String(message || '').trim(),
+    notes: String(parsed?.notes || '').trim(),
+    suggestions: entries,
+    suggestion: entries[0],
+  };
+}
+
 async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageBuffer = null, mimeType = 'image/jpeg') {
   const config = getOpenAiSmartCaptureConfig();
   if (!config.enabled) return null;
@@ -1120,13 +1362,15 @@ router.post('/expenses/voice-prefill', upload.single('file'), async (req, res) =
       Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
       Promise.resolve(getBillingDb().getCreditCards(req.session.userId)),
     ]);
-    const suggestion = await parseExpenseMessageWithOpenAi(transcript, banks || [], cards || []);
+    const voiceResult = await parseVoiceExpenseEntriesWithOpenAi(transcript, banks || [], cards || []);
     res.json({
       success: true,
       provider: 'openai',
       configured: true,
       transcript,
-      suggestion,
+      suggestion: voiceResult.suggestion,
+      suggestions: voiceResult.suggestions,
+      notes: voiceResult.notes || '',
     });
   } catch (err) {
     console.error('[expenses/voice-prefill]', err?.message || err);

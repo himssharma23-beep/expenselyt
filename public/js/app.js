@@ -20,6 +20,7 @@ let _expenseVoiceStream = null;
 let _expenseVoiceChunks = [];
 let _expenseVoiceBusy = false;
 let _expenseVoiceContext = 'expense';
+let _expenseVoiceBatch = [];
 let _expenseCategoryHideTimer = null;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
@@ -126,6 +127,15 @@ function setExpenseVoiceUi({ status = '', transcript = '', recording = false, bu
   if (stopBtn) stopBtn.disabled = !recording || busy;
 }
 
+function clearExpenseVoiceBatch() {
+  _expenseVoiceBatch = [];
+  const transcriptEl = document.getElementById('expenseVoiceTranscript');
+  if (transcriptEl) {
+    transcriptEl.style.display = 'none';
+    transcriptEl.textContent = '';
+  }
+}
+
 async function startExpenseVoiceCapture(context = 'expense') {
   if (_expenseVoiceBusy || _expenseVoiceRecorder?.state === 'recording') return;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
@@ -134,6 +144,7 @@ async function startExpenseVoiceCapture(context = 'expense') {
   }
   try {
     _expenseVoiceContext = context === 'trip' ? 'trip' : 'expense';
+    if (_expenseVoiceContext === 'expense') _expenseVoiceBatch = [];
     _expenseVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     _expenseVoiceChunks = [];
     _expenseVoiceRecorder = new MediaRecorder(_expenseVoiceStream);
@@ -190,12 +201,21 @@ async function parseExpenseVoiceBlob(blob, context = 'expense') {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Voice parse failed with HTTP ${res.status}`);
     const transcript = String(data?.transcript || '').trim();
-    const suggestion = data?.suggestion || null;
+    const suggestions = Array.isArray(data?.suggestions) && data.suggestions.length
+      ? data.suggestions
+      : (data?.suggestion ? [data.suggestion] : []);
+    const suggestion = suggestions[0] || null;
     if (!suggestion) throw new Error('Voice parse did not return any fields.');
-    if (context === 'trip') applyTripVoiceSuggestion(suggestion);
-    else applyExpenseVoiceSuggestion(suggestion);
+    if (context === 'trip') {
+      applyTripVoiceSuggestion(suggestion);
+    } else {
+      _expenseVoiceBatch = suggestions;
+      applyExpenseVoiceSuggestion(suggestion);
+    }
     setExpenseVoiceUi({
-      status: 'Voice fields applied. Review and save.',
+      status: suggestions.length > 1
+        ? `${suggestions.length} voice expenses detected. Review the first item; save will add all detected entries.`
+        : 'Voice fields applied. Review and save.',
       transcript: transcript || '',
       busy: false,
     });
@@ -217,8 +237,9 @@ function applyExpenseVoiceSuggestion(suggestion) {
   if (category && document.getElementById('eCategory')) document.getElementById('eCategory').value = category;
   if (amount > 0 && document.getElementById('eAmount')) document.getElementById('eAmount').value = String(Math.round(amount * 100) / 100);
   if (date && document.getElementById('eDate')) document.getElementById('eDate').value = date;
-  if (suggestion?.bank_account_id && document.getElementById('eBank')) {
-    document.getElementById('eBank').value = String(suggestion.bank_account_id);
+  if (document.getElementById('eExtra')) document.getElementById('eExtra').checked = !!suggestion?.is_extra;
+  if (document.getElementById('eBank')) {
+    document.getElementById('eBank').value = suggestion?.bank_account_id ? String(suggestion.bank_account_id) : '';
   }
   if (suggestion?.card_id && document.getElementById('ccLink')) {
     document.getElementById('ccLink').checked = true;
@@ -227,6 +248,10 @@ function applyExpenseVoiceSuggestion(suggestion) {
     if (document.getElementById('ccLinkDisc')) document.getElementById('ccLinkDisc').value = String(suggestion.card_discount_pct || 0);
     ccLinkPreview();
   } else {
+    if (document.getElementById('ccLink')) {
+      document.getElementById('ccLink').checked = false;
+      toggleCcLinkSection();
+    }
     ccLinkPreview();
   }
 }
@@ -1121,6 +1146,7 @@ function _findExpenseById(id) {
 async function showExpenseForm(id) {
   cleanupExpenseVoiceCapture();
   _expenseVoiceBusy = false;
+  _expenseVoiceBatch = [];
   let e = { item_name: '', category: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
     const cached = _findExpenseById(id);
@@ -1242,6 +1268,25 @@ function updateIncomeBankPreview() {
   if (nextBalanceEl) nextBalanceEl.textContent = fmtCur(currentBalance + amount);
 }
 
+async function createExpenseWithOptionalCard(body, cardMeta = {}) {
+  const response = await api('/api/expenses', { method: 'POST', body });
+  if (!response?.id) throw new Error(response?.error || 'Save failed');
+  const createdId = response.id;
+  const cardId = Number(cardMeta?.cardId || 0) || 0;
+  if (cardId) {
+    await api('/api/cc/txns', { method: 'POST', body: {
+      card_id: cardId,
+      txn_date: body.purchase_date,
+      description: body.item_name,
+      amount: Number(cardMeta?.amount) || Number(body.amount) || 0,
+      discount_pct: Number(cardMeta?.cardDiscount) || 0,
+      source: 'expense',
+      source_id: createdId,
+    }});
+  }
+  return createdId;
+}
+
 async function saveExpense(id) {
   if (!id && window._expenseEntryMode === 'income') {
     const incomeBankId = parseInt(document.getElementById('eIncomeBank')?.value || '', 10) || null;
@@ -1274,16 +1319,62 @@ async function saveExpense(id) {
   if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
   const amountValue = parseFloat(body.amount);
   if (!Number.isFinite(amountValue) || amountValue <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
+  const ccChecked = !!document.getElementById('ccLink')?.checked;
+  const manualCardId = parseInt(document.getElementById('ccLinkCard')?.value || '', 10) || 0;
+  const manualDiscPct = parseFloat(document.getElementById('ccLinkDisc')?.value || '0') || 0;
+  if (!id && Array.isArray(_expenseVoiceBatch) && _expenseVoiceBatch.length > 1) {
+    const batchRows = _expenseVoiceBatch
+      .map((entry, index) => {
+        if (index === 0) {
+          return {
+            body: { ...body, amount: amountValue },
+            card: {
+              cardId: ccChecked ? manualCardId : Number(entry?.card_id || 0),
+              cardDiscount: ccChecked ? manualDiscPct : Number(entry?.card_discount_pct || 0),
+              amount: amountValue,
+            },
+          };
+        }
+        const entryAmount = Number(entry?.amount || 0);
+        return {
+          body: {
+            item_name: String(entry?.item_name || '').trim(),
+            category: String(entry?.category || '').trim() || null,
+            amount: entryAmount,
+            purchase_date: String(entry?.purchase_date || '').slice(0, 10) || todayStr(),
+            is_extra: !!entry?.is_extra,
+            bank_account_id: entry?.bank_account_id ? Number(entry.bank_account_id) : null,
+          },
+          card: {
+            cardId: ccChecked ? manualCardId : Number(entry?.card_id || 0),
+            cardDiscount: ccChecked ? manualDiscPct : Number(entry?.card_discount_pct || 0),
+            amount: entryAmount,
+          },
+        };
+      })
+      .filter((row) => row.body.item_name && Number.isFinite(Number(row.body.amount)) && Number(row.body.amount) > 0 && row.body.purchase_date);
+    if (!batchRows.length) { toast('Could not find valid voice expenses to save', 'error'); return; }
+    for (const row of batchRows) {
+      await createExpenseWithOptionalCard(row.body, row.card);
+    }
+    _activeExpenseForm = null;
+    _editingExpCcTxnId = null;
+    _editingExpCcLink = null;
+    _expenseVoiceBatch = [];
+    closeModal();
+    loadExpenses();
+    toast(`${batchRows.length} expenses added`, 'success');
+    return;
+  }
   let r;
   if (id) {
     r = await api(`/api/expenses/${id}`, { method: 'PUT', body });
     if (!r?.success) { toast(r?.error || 'Update failed', 'error'); return; }
     const refreshed = await api(`/api/expenses/${id}`);
     if (refreshed?.expense) _activeExpenseForm = refreshed.expense;
-    const ccChecked = document.getElementById('ccLink')?.checked;
     if (ccChecked) {
-      const cardId = parseInt(document.getElementById('ccLinkCard')?.value);
-      const discPct = parseFloat(document.getElementById('ccLinkDisc')?.value) || 0;
+      const cardId = manualCardId;
+      const discPct = manualDiscPct;
       if (_editingExpCcTxnId && _editingExpCcLink?.card_id == cardId) {
         await api(`/api/cc/txns/${_editingExpCcTxnId}`, { method: 'PUT', body: { discount_pct: discPct, txn_date: body.purchase_date, description: body.item_name, amount: amountValue } });
       } else {
@@ -1295,9 +1386,12 @@ async function saveExpense(id) {
     }
   }
   else {
-    r = await api('/api/expenses', { method: 'POST', body });
-    if (!r?.id) { toast(r?.error || 'Save failed', 'error'); return; }
-    await saveCcLinkIfChecked(body.item_name, amountValue, body.purchase_date, 'expense', r?.id);
+    const createdId = await createExpenseWithOptionalCard(body, {
+      cardId: ccChecked ? manualCardId : 0,
+      cardDiscount: ccChecked ? manualDiscPct : 0,
+      amount: amountValue,
+    });
+    r = { id: createdId };
   }
   const nextId = id || r?.id;
   if (nextId) {
@@ -1309,6 +1403,7 @@ async function saveExpense(id) {
   _activeExpenseForm = null;
   _editingExpCcTxnId = null;
   _editingExpCcLink = null;
+  _expenseVoiceBatch = [];
   closeModal(); loadExpenses();
 }
 
