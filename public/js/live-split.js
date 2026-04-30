@@ -50,6 +50,12 @@
     friendFilter: 'all',
     tripCreate: null,
     tripManage: null,
+    voiceRecorder: null,
+    voiceStream: null,
+    voiceChunks: [],
+    voiceBusy: false,
+    voiceIgnoreNextResult: false,
+    voiceMode: 'split',
   };
 
   function n(v) {
@@ -612,6 +618,7 @@
     return {
       step: 1,
       selected: new Set(['self']),
+      voice_preferred_friend_id: null,
       date: todayLocalIso(),
       details: '',
       amount: '',
@@ -626,6 +633,9 @@
       bank_account_id: null,
       card_id: firstCard ? Number(firstCard.id) : null,
       card_discount_pct: firstCard ? Number(firstCard.default_discount_pct || 0) : 0,
+      voice_only: false,
+      voice_drafts: [],
+      voice_transcript: '',
     };
   }
 
@@ -636,6 +646,9 @@
       end_date: '',
       show_add_to_expense_option: true,
       selected: new Set(),
+      voice_only: false,
+      voice_drafts: [],
+      voice_transcript: '',
     };
   }
 
@@ -698,6 +711,31 @@
       target_user_id: linkedUserId > 0 ? linkedUserId : null,
       permission: linkedUserId > 0 ? 'edit' : 'view',
     };
+  }
+
+  function buildVoiceTripMembersPayload(draft) {
+    const memberIds = Array.isArray(draft?.selected) ? draft.selected : [];
+    return [...new Map(memberIds
+      .map((id) => state.friends.find((friend) => String(friend.id) === String(id)))
+      .filter(Boolean)
+      .map((friend) => mapFriendToTripMemberPayload(friend))
+      .map((member) => [String(member?.friend_id || member?.target_user_id || member?.member_name || ''), member])).values()];
+  }
+
+  function validateVoiceTripDrafts(entries = []) {
+    for (const draft of (Array.isArray(entries) ? entries : [])) {
+      const tripName = String(draft?.name || 'Trip').trim() || 'Trip';
+      const unresolved = (Array.isArray(draft?.unresolved_member_names) ? draft.unresolved_member_names : [])
+        .map((name) => String(name || '').trim())
+        .filter(Boolean);
+      if (unresolved.length) {
+        return {
+          valid: false,
+          error: `Trip "${tripName}" has unknown member${unresolved.length === 1 ? '' : 's'}: ${unresolved.join(', ')}. Use existing Live Split friends only.`,
+        };
+      }
+    }
+    return { valid: true };
   }
 
   async function ensureFinanceOptionsLoaded() {
@@ -1379,7 +1417,6 @@
 
   function inferEditSplitMode(totalAmount, splitValues = {}, persistedMode = '') {
     const saved = String(persistedMode || '').trim().toLowerCase();
-    if (['equal', 'percent', 'fraction', 'amount', 'parts'].includes(saved)) return saved;
     const values = Object.values(splitValues).map((value) => r2(value)).filter((value) => value >= 0);
     if (values.length > 1) {
       const first = values[0];
@@ -1387,6 +1424,13 @@
       const sum = r2(values.reduce((acc, value) => acc + value, 0));
       if (Math.abs(sum - r2(totalAmount)) <= 0.009) return 'amount';
     }
+    if (['percent', 'fraction', 'parts'].includes(saved)) return saved;
+    if (saved === 'equal' && values.length > 1) {
+      const first = values[0];
+      if (!values.every((value) => Math.abs(value - first) <= 0.009)) return 'amount';
+    }
+    if (saved === 'amount') return 'amount';
+    if (saved === 'equal') return 'equal';
     return 'amount';
   }
 
@@ -2109,6 +2153,9 @@
             </div>
           </div>
           <div class="live-split-card-actions" style="display:flex;align-items:center;gap:10px" onclick="event.stopPropagation()">
+            ${friendId > 0 ? `<button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceForFriend(${friendId})">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+            </button>` : ''}
             ${canSettle ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenSettle(${friendId})">Settle</button>` : ''}
             <button class="btn btn-g btn-sm" ${friendId > 0 && state.friendDeleteBusy.has(friendId) ? 'disabled' : ''} onclick="${friendId > 0 ? `liveSplitDeleteFriend(${friendId})` : 'return false'}">${friendId > 0 && state.friendDeleteBusy.has(friendId) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>
             <div class="friend-bal" style="color:${tone}">${fmtCur(amount)}</div>
@@ -2125,7 +2172,12 @@
         <div style="margin-top:14px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
             <div style="font-size:13px;font-weight:800;color:var(--t2)">Trips</div>
-            <button class="btn btn-s btn-sm" onclick="liveSplitOpenTripCreate()">+ New Trip</button>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="live-split-icon-btn soft" title="Voice trip" aria-label="Voice trip" onclick="liveSplitOpenVoiceTripCreate()">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+              </button>
+              <button class="btn btn-s btn-sm" onclick="liveSplitOpenTripCreate()">+ New Trip</button>
+            </div>
           </div>
           <div class="card" style="text-align:center;color:var(--t3);padding:18px">No Trips yet.</div>
         </div>`;
@@ -2134,7 +2186,12 @@
       <div style="margin-top:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div style="font-size:13px;font-weight:800;color:var(--t2)">Trips</div>
-          <button class="btn btn-s btn-sm" onclick="liveSplitOpenTripCreate()">+ New Trip</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="live-split-icon-btn soft" title="Voice trip" aria-label="Voice trip" onclick="liveSplitOpenVoiceTripCreate()">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+            </button>
+            <button class="btn btn-s btn-sm" onclick="liveSplitOpenTripCreate()">+ New Trip</button>
+          </div>
         </div>
         <div style="display:grid;gap:8px">
           ${trips.map((trip) => {
@@ -2170,6 +2227,9 @@
                 </div>
                 <div class="live-split-card-actions live-split-trip-action-wrap" onclick="event.stopPropagation()">
                   <div class="live-split-trip-actions">
+                    <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${Number(trip.id)})">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+                    </button>
                     <button class="btn btn-p btn-sm" onclick="liveSplitUseTrip(${Number(trip.id)})">Add Split</button>
                     ${trip.added_to_expense
                       ? `<button class="btn btn-s btn-sm" disabled>${trip.added_to_expense_is_extra ? 'Added Extra' : 'Added Fair'}</button>`
@@ -2241,6 +2301,318 @@
     `);
   }
 
+  function peopleForVoiceSplitDraft(draft) {
+    const selected = Array.isArray(draft?.selected_keys) ? draft.selected_keys : ['self'];
+    return selected.map((key) => {
+      if (String(key) === 'self') return { key: 'self', name: 'You' };
+      const friend = (state.friends || []).find((item) => String(item.id) === String(key));
+      return friend ? { key: String(friend.id), name: friend.name } : null;
+    }).filter(Boolean);
+  }
+
+  function validateLiveSplitVoiceDraft(draft) {
+    const people = peopleForVoiceSplitDraft(draft);
+    const preview = computeShares(n(draft?.total_amount), String(draft?.split_mode || 'equal'), people, draft?.split_values || {});
+    return {
+      valid: !!preview?.valid,
+      error: preview?.error || '',
+      preview,
+    };
+  }
+
+  function validateLiveSplitVoiceDrafts(drafts = []) {
+    const issues = (Array.isArray(drafts) ? drafts : [])
+      .map((draft, index) => {
+        const validation = validateLiveSplitVoiceDraft(draft);
+        if (validation.valid) return null;
+        return {
+          index,
+          details: String(draft?.details || `Split ${index + 1}`).trim() || `Split ${index + 1}`,
+          error: validation.error || 'Invalid split values.',
+        };
+      })
+      .filter(Boolean);
+    return {
+      valid: !issues.length,
+      issues,
+    };
+  }
+
+  function renderLiveSplitVoiceCard(mode = 'split', drafts = [], transcript = '') {
+    const isTrip = mode === 'trip';
+    const isRecording = state.voiceRecorder?.state === 'recording' && String(state.voiceMode || 'split') === String(mode || 'split');
+    const draftValidation = isTrip ? validateVoiceTripDrafts(drafts) : validateLiveSplitVoiceDrafts(drafts);
+    const hint = isTrip ? 'Create trip using your voice.' : 'Add split using your voice.';
+    const title = isTrip ? 'Voice AI Trip' : 'Voice AI Split';
+    const preview = (Array.isArray(drafts) ? drafts : []).map((item, index) => {
+      if (isTrip) {
+        return `
+          <div style="padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--line)">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+              <div style="min-width:0">
+                <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.name || 'Trip'))}</div>
+                <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.start_date || todayLocalIso()))}${item?.end_date ? ` to ${escHtml(String(item.end_date))}` : ''}</div>
+                <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml((item?.member_names || []).join(', ') || 'No members')}</div>
+                ${Array.isArray(item?.unresolved_member_names) && item.unresolved_member_names.length ? `<div style="font-size:11px;color:var(--red);font-weight:700;margin-top:6px">Unknown friends: ${escHtml(item.unresolved_member_names.join(', '))}</div>` : ''}
+              </div>
+              <div style="font-size:11px;font-weight:700;color:${item?.show_add_to_expense_option === false ? 'var(--t2)' : 'var(--green)'};white-space:nowrap">${item?.show_add_to_expense_option === false ? 'Live Split only' : 'Add my share on'}</div>
+            </div>
+          </div>`;
+      }
+      const validation = validateLiveSplitVoiceDraft(item);
+      return `
+        <div style="padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--line)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.details || 'Split expense'))}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} · ${escHtml(String(item?.paid_by || 'You'))}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml((item?.participants || []).map((p) => `${p.name}: ${p.share_value}`).join(', ') || 'No participants')}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${item?.card_id ? `Card: ${escHtml(String(item.card_id))}` : item?.bank_account_id ? `Bank: ${escHtml(String(item.bank_account_id))}` : 'No bank/card selected'}${item?.trip_name ? ` · Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` · ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
+              ${validation.valid ? '' : `<div style="font-size:11px;color:var(--red);font-weight:700;margin-top:6px">${escHtml(validation.error || 'Invalid split values')}</div>`}
+            </div>
+            <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.total_amount || 0))}</div>
+          </div>
+        </div>`;
+    }).join('');
+    return `
+      <div style="margin-bottom:14px;padding:14px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#fbfdfc 0%,#f3f9f6 100%)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:14px;font-weight:800;color:var(--em)">${title}</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">${hint}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn btn-s btn-sm" onclick="liveSplitVoiceStart('${mode}')" ${isRecording || state.voiceBusy ? 'disabled' : ''}>${state.voiceBusy ? 'Processing...' : isRecording ? 'Recording...' : 'Start Voice'}</button>
+            <button type="button" class="btn btn-g btn-sm" onclick="liveSplitVoiceStop()" ${isRecording && !state.voiceBusy ? '' : 'disabled'}>Stop</button>
+            <button type="button" class="btn btn-g btn-sm" onclick="liveSplitVoiceReset('${mode}')" ${state.voiceBusy ? 'disabled' : ''}>Reset</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--t3);margin-top:10px">${isRecording ? 'Listening now. Tap Stop when you finish speaking.' : state.voiceBusy ? 'Transcribing and updating draft list...' : 'Voice capture is idle.'}</div>
+        ${transcript ? `<div style="margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--line);font-size:12px;color:var(--t2);line-height:1.45;white-space:pre-wrap">${escHtml(transcript)}</div>` : ''}
+        ${(drafts || []).length ? `<div style="font-size:12px;color:var(--t2);font-weight:700;margin-top:10px">${drafts.length} detected ${isTrip ? `trip${drafts.length === 1 ? '' : 's'}` : `split${drafts.length === 1 ? '' : 's'}`}. Save will add all detected entries.</div>` : ''}
+        ${!draftValidation.valid ? `<div style="font-size:12px;color:var(--red);font-weight:700;margin-top:8px">${isTrip ? escHtml(draftValidation.error || 'Fix the detected trip members before saving.') : `Fix the detected split values before saving. ${escHtml(draftValidation.issues[0]?.error || '')}`}</div>` : ''}
+        ${preview ? `<div style="display:grid;gap:8px;margin-top:10px">${preview}</div>` : ''}
+      </div>`;
+  }
+
+  function liveSplitVoiceTargetForm(mode = 'split') {
+    return mode === 'trip' ? state.tripCreate : state.create;
+  }
+
+  function renderLiveSplitVoiceCurrentModal(mode = 'split') {
+    if (mode === 'trip') renderTripCreateModal();
+    else renderCreateModal();
+  }
+
+  function cleanupLiveSplitVoiceCapture() {
+    try {
+      state.voiceRecorder = null;
+      if (state.voiceStream) state.voiceStream.getTracks().forEach((track) => track.stop());
+    } catch (_err) {}
+    state.voiceStream = null;
+    state.voiceChunks = [];
+  }
+
+  async function parseLiveSplitVoiceBlob(blob, mode = 'split') {
+    const form = liveSplitVoiceTargetForm(mode);
+    if (!form) return;
+    state.voiceBusy = true;
+    renderLiveSplitVoiceCurrentModal(mode);
+    try {
+      const fd = new FormData();
+      const ext = blob.type.includes('mp4') || blob.type.includes('m4a') ? 'm4a' : 'webm';
+      fd.append('file', blob, `live-split-voice.${ext}`);
+      fd.append('mode', mode);
+      if (Array.isArray(form.voice_drafts) && form.voice_drafts.length) fd.append('current_entries', JSON.stringify(form.voice_drafts));
+      if (mode === 'split') {
+        const anchoredFriendId = Number(form.voice_preferred_friend_id || 0);
+        const preselectedFriendIds = anchoredFriendId > 0
+          ? [anchoredFriendId]
+          : [...(form.selected || new Set())]
+              .map((value) => Number(value))
+              .filter((value) => value > 0);
+        if (preselectedFriendIds.length) fd.append('preselected_friend_ids', JSON.stringify(preselectedFriendIds));
+        if (anchoredFriendId > 0) fd.append('preferred_friend_id', String(anchoredFriendId));
+        else if (preselectedFriendIds.length === 1) fd.append('preferred_friend_id', String(preselectedFriendIds[0]));
+        if (Number(form.trip_id || 0) > 0) fd.append('preferred_trip_id', String(Number(form.trip_id)));
+      }
+      const res = await fetch('/api/live-split/voice-prefill', { method: 'POST', body: fd });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(result?.error || `Voice parse failed with HTTP ${res.status}`);
+      const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+      if (!suggestions.length) throw new Error('Voice parse did not return any live split entries.');
+      form.voice_drafts = suggestions;
+      form.voice_transcript = [form.voice_transcript || '', String(result?.transcript || '').trim()].filter(Boolean).join('\n');
+      toast('Voice details added', 'success');
+    } catch (error) {
+      toast(error?.message || 'Could not parse live split voice note', 'error');
+    } finally {
+      state.voiceBusy = false;
+      renderLiveSplitVoiceCurrentModal(mode);
+    }
+  }
+
+  async function startLiveSplitVoiceCapture(mode = 'split') {
+    if (state.voiceBusy || state.voiceRecorder?.state === 'recording') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast('Voice capture is not supported in this browser', 'error');
+      return;
+    }
+    try {
+      state.voiceMode = mode;
+      state.voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.voiceChunks = [];
+      state.voiceRecorder = new MediaRecorder(state.voiceStream);
+      state.voiceRecorder.ondataavailable = (event) => {
+        if (event.data?.size) state.voiceChunks.push(event.data);
+      };
+      state.voiceRecorder.onstop = async () => {
+        const blob = state.voiceChunks.length ? new Blob(state.voiceChunks, { type: state.voiceRecorder?.mimeType || 'audio/webm' }) : null;
+        cleanupLiveSplitVoiceCapture();
+        if (state.voiceIgnoreNextResult) {
+          state.voiceIgnoreNextResult = false;
+          renderLiveSplitVoiceCurrentModal(mode);
+          return;
+        }
+        if (!blob || !blob.size) {
+          toast('No audio captured. Please try again.', 'warning');
+          renderLiveSplitVoiceCurrentModal(mode);
+          return;
+        }
+        await parseLiveSplitVoiceBlob(blob, mode);
+      };
+      state.voiceRecorder.start();
+      renderLiveSplitVoiceCurrentModal(mode);
+    } catch (error) {
+      cleanupLiveSplitVoiceCapture();
+      toast(error?.message || 'Could not start microphone', 'error');
+      renderLiveSplitVoiceCurrentModal(mode);
+    }
+  }
+
+  function stopLiveSplitVoiceCapture() {
+    if (!state.voiceRecorder || state.voiceRecorder.state !== 'recording') return;
+    state.voiceBusy = true;
+    renderLiveSplitVoiceCurrentModal(state.voiceMode || 'split');
+    state.voiceRecorder.stop();
+  }
+
+  function resetLiveSplitVoice(mode = 'split') {
+    const form = liveSplitVoiceTargetForm(mode);
+    if (!form) return;
+    if (state.voiceRecorder?.state === 'recording') state.voiceIgnoreNextResult = true;
+    if (state.voiceRecorder?.state === 'recording') {
+      try { state.voiceRecorder.stop(); } catch (_err) {}
+    }
+    form.voice_drafts = [];
+    form.voice_transcript = '';
+    renderLiveSplitVoiceCurrentModal(mode);
+  }
+
+  function hasLiveSplitVoiceDrafts(form) {
+    return !!(form && Array.isArray(form.voice_drafts) && form.voice_drafts.length);
+  }
+
+  async function persistLiveSplitEntry(entry) {
+    const total = r2(entry?.total_amount);
+    const normalizedDate = toLocalIsoDate(entry?.divide_date, todayLocalIso());
+    const details = String(entry?.details || '').trim() || 'Split expense';
+    const shares = Array.isArray(entry?.participants) ? entry.participants : [];
+    const selfShare = r2((shares.find((share) => String(share?.key || '') === 'self') || {}).share_value || 0);
+    const splitsPayload = shares
+      .filter((share) => String(share?.key || '') !== 'self' && Number(share?.share_value || 0) > 0)
+      .map((share) => ({
+        friend_id: Number(share.key),
+        friend_name: share.name,
+        share_amount: r2(share.share_value),
+      }));
+    const sessionKey = `live_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+    const createBody = {
+      divide_date: normalizedDate,
+      details,
+      paid_by: String(entry?.paid_by || 'You').trim() || 'You',
+      total_amount: total,
+      split_mode: String(entry?.split_mode || 'equal'),
+      trip_id: Number(entry?.trip_id || 0) > 0 ? Number(entry.trip_id) : null,
+      splits: splitsPayload,
+      heading: details,
+      session_id: sessionKey,
+      owner_added_to_expense: !!(entry?.addExpense && selfShare > 0),
+    };
+    let createResult = await api('/api/live-split/groups', {
+      method: 'POST',
+      body: createBody,
+    });
+    if (createResult?.status === 409 && isLiveSplitDuplicateWarning(createResult)) {
+      const shouldAddAgain = await confirmDialog(liveSplitDuplicateConfirmHtml(createResult.error));
+      if (!shouldAddAgain) return { skipped: true };
+      createResult = await api('/api/live-split/groups', {
+        method: 'POST',
+        body: { ...createBody, allow_duplicate: true },
+      });
+    }
+    if (!createResult || createResult.error) {
+      throw new Error(createResult?.error || 'Could not save live split');
+    }
+
+    const linkedFriendIds = splitsPayload
+      .map((split) => state.appFriends.find((friend) => Number(friend.id) === Number(split.friend_id)))
+      .filter((friend) => friend && Number(friend.linked_user_id) > 0)
+      .map((friend) => Number(friend.id));
+    if (linkedFriendIds.length) {
+      const shareResult = await api('/api/live-split/groups/share-session', {
+        method: 'POST',
+        body: { session_key: sessionKey, friend_ids: [...new Set(linkedFriendIds)] },
+      });
+      if (shareResult?.error) throw new Error(shareResult.error);
+    }
+
+    if (entry?.addExpense && selfShare > 0) {
+      const expenseResult = await api('/api/expenses', {
+        method: 'POST',
+        body: {
+          item_name: details,
+          category: entry?.category ? String(entry.category).trim() : null,
+          amount: selfShare,
+          purchase_date: normalizedDate,
+          is_extra: String(entry?.expense_type || 'fair') === 'extra',
+          bank_account_id: null,
+        },
+      });
+      if (expenseResult?.error) throw new Error(expenseResult.error);
+    }
+
+    const payerIsSelf = String(entry?.paid_by_key || 'self') === 'self';
+    if (payerIsSelf && total > 0) {
+      if (String(entry?.finance_target || 'none') === 'card' && Number(entry?.card_id || 0) > 0) {
+        const cardTxnResult = await api('/api/cc/txns', {
+          method: 'POST',
+          body: {
+            card_id: Number(entry.card_id),
+            txn_date: normalizedDate,
+            description: details,
+            amount: total,
+            discount_pct: Number(entry?.card_discount_pct || 0),
+            source: 'live_split',
+          },
+        });
+        if (cardTxnResult?.error) throw new Error(cardTxnResult.error);
+      } else if (String(entry?.finance_target || 'none') === 'expense' && Number(entry?.bank_account_id || 0) > 0) {
+        const bankId = Number(entry.bank_account_id);
+        const bank = (state.bankAccounts || []).find((item) => Number(item.id) === bankId);
+        if (bank) {
+          const nextBalance = r2(Number(bank.balance || 0) - total);
+          const bankResult = await api(`/api/banks/${bankId}/balance`, {
+            method: 'PATCH',
+            body: { balance: nextBalance >= 0 ? nextBalance : 0 },
+          });
+          if (bankResult?.error) throw new Error(bankResult.error);
+        }
+      }
+    }
+    return { skipped: false };
+  }
+
   async function openSettleModal(friendId) {
     const id = Number(friendId);
     if (!id) return;
@@ -2267,12 +2639,52 @@
   async function openCreateForFriend(friendId) {
     const id = Number(friendId);
     await Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
-    state.create = createInitialForm();
-    state.createInvite = { query: '', results: [], searching: false, searched: false };
-    if (id > 0) state.create.selected.add(String(id));
-    if ([...state.create.selected].filter((key) => key !== 'self').length > 0) state.create.step = 2;
+    setupCreateForFriend(id);
     closeModal();
     renderCreateModal();
+  }
+
+  function setupCreateForFriend(friendId) {
+    const id = Number(friendId);
+    state.create = createInitialForm();
+    state.createInvite = { query: '', results: [], searching: false, searched: false };
+    if (id > 0) {
+      state.create.selected = new Set(['self', String(id)]);
+      state.create.voice_preferred_friend_id = id;
+    }
+    if ([...state.create.selected].filter((key) => key !== 'self').length > 0) state.create.step = 2;
+  }
+
+  function openVoiceSplitForFriend(friendId) {
+    setupCreateForFriend(friendId);
+    closeModal();
+    if (state.create) {
+      state.create.voice_only = true;
+      state.create.step = 2;
+      renderCreateModal();
+    }
+    startLiveSplitVoiceCapture('split').catch(() => {});
+    Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
+  }
+
+  function openVoiceTripCreate() {
+    openTripCreateModal();
+    if (state.tripCreate) {
+      state.tripCreate.voice_only = true;
+      renderTripCreateModal();
+    }
+    startLiveSplitVoiceCapture('trip').catch(() => {});
+  }
+
+  function openVoiceSplitFromTrip(tripId) {
+    setupCreateFromTrip(tripId);
+    if (state.create) {
+      state.create.voice_only = true;
+      state.create.step = 2;
+      renderCreateModal();
+    }
+    startLiveSplitVoiceCapture('split').catch(() => {});
+    Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
   }
 
   async function saveSettleEntry() {
@@ -2627,6 +3039,8 @@
   function renderCreateModal() {
     const form = state.create;
     if (!form) return;
+    const voiceOnly = !!form.voice_only;
+    const voiceDraftValidation = validateLiveSplitVoiceDrafts(form.voice_drafts || []);
     const people = peopleForForm(form);
     const payerPeople = payerPeopleForForm(form);
     const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
@@ -2637,7 +3051,7 @@
     const friendPeople = people.filter((person) => person.key !== 'self');
     const payerOptions = payerPeople.map((person) => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('');
     const tripAllowsExpenseOption = Number(form.trip_id || 0) > 0 ? tripAllowsOwnerExpenseOption(form.trip_id) : true;
-    if (form.step === 1) {
+    if (form.step === 1 && !voiceOnly) {
       const outgoingNames = new Set((state.outgoingInvites || []).map((invite) => String(invite.target_name || invite.target_display_name || invite.target_username || '').trim().toLowerCase()).filter(Boolean));
       const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
       const selectableFriends = (state.friends || [])
@@ -2645,6 +3059,7 @@
         .filter((friend) => !scopedFriendIds || scopedFriendIds.has(Number(friend.id)));
       openModal('Live Split - Select Friends', `
         <div style="display:grid;gap:10px">
+          ${renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript)}
           <div style="font-size:12px;color:var(--t3)">${Number(form.trip_id || 0) > 0 ? 'Pick any trip members you want in this split. You can also keep only yourself selected.' : 'Pick people for this split. You are selected by default.'}</div>
           <label class="fc"><input type="checkbox" checked disabled><span>You</span></label>
           ${selectableFriends.map((friend) => {
@@ -2676,6 +3091,20 @@
     }
 
     openModal('Live Split - Add Expense', `
+      ${renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript)}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
+        <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
+          Voice split drafts are ready below. Save will add every detected split. Record again to append or update the list, or use Reset to clear it and return to manual entry.
+        </div>
+        ${form.voice_drafts?.length ? `
+          <div class="fa" style="margin-bottom:12px">
+            <button class="btn btn-p" ${state.saveBusy || !voiceDraftValidation.valid ? 'disabled' : ''} onclick="liveSplitSave()">${state.saveBusy ? liveSplitBusyLabel('Saving...') : 'Save Detected Splits'}</button>
+            <button class="btn btn-g" ${state.saveBusy ? 'disabled' : ''} onclick="closeModal()">Cancel</button>
+          </div>
+          ${voiceDraftValidation.valid ? '' : `<div style="font-size:12px;color:var(--red);font-weight:700;margin:-4px 0 12px">Detected split totals do not match. ${escHtml(voiceDraftValidation.issues[0]?.error || '')}</div>`}
+        ` : ''}
+      ` : ''}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
       <div class="fg">
         <label class="fl">Date<input class="fi" type="date" value="${escHtml(form.date)}" onchange="liveSplitSetDate(this.value)"></label>
         <label class="fl">Amount<input class="fi" type="number" step="0.01" value="${escHtml(form.amount)}" placeholder="0.00" onchange="liveSplitSetAmount(this.value)"></label>
@@ -2774,7 +3203,8 @@
       <div class="fa" style="margin-top:14px">
         <button class="btn btn-g" onclick="liveSplitBackStep()">Back</button>
         <button class="btn btn-p" ${state.saveBusy ? 'disabled' : ''} onclick="liveSplitSave()">${state.saveBusy ? liveSplitBusyLabel('Saving...') : 'Save'}</button>
-      </div>`);
+      </div>
+      `}`);
   }
 
   function openTripCreateModal() {
@@ -2785,8 +3215,26 @@
   function renderTripCreateModal() {
     const form = state.tripCreate;
     if (!form) return;
+    const voiceOnly = !!form.voice_only;
     const selectableFriends = (state.friends || []);
     openModal('Live Split Trip - New', `
+      ${renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript)}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
+        <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
+          Voice trip drafts are ready below. Create Trip will add every detected trip. Record again to append or update the list, or use Reset to clear it and return to manual entry.
+        </div>
+        ${form.voice_drafts?.length ? `
+          ${(() => {
+            const tripValidation = validateVoiceTripDrafts(form.voice_drafts);
+            return tripValidation.valid ? '' : `<div style="margin-bottom:12px;padding:10px 12px;border:1px solid rgba(220,38,38,.18);border-radius:12px;background:#fff5f5;font-size:12px;color:#991b1b">${escHtml(tripValidation.error || 'Voice trip drafts are invalid.')}</div>`;
+          })()}
+          <div class="fa" style="margin-bottom:12px">
+            <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : 'Create Detected Trips'}</button>
+            <button class="btn btn-g" ${state.tripSaveBusy ? 'disabled' : ''} onclick="closeModal()">Cancel</button>
+          </div>
+        ` : ''}
+      ` : ''}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
       <div class="fg">
         <label class="fl full">Trip Name
           <input class="fi" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." onchange="liveSplitTripField('name', this.value)">
@@ -2823,12 +3271,50 @@
         <button class="btn btn-g" onclick="closeModal()">Cancel</button>
         <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : 'Create Trip'}</button>
       </div>
-    `);
+    `}`);
   }
 
   async function saveLiveSplitTrip() {
     const form = state.tripCreate;
     if (!form) return;
+    const voiceDrafts = Array.isArray(form.voice_drafts) ? form.voice_drafts : [];
+    if (voiceDrafts.length) {
+      try {
+        const validation = validateVoiceTripDrafts(voiceDrafts);
+        if (!validation.valid) throw new Error(validation.error || 'Voice trip drafts are invalid.');
+        state.tripSaveBusy = true;
+        renderTripCreateModal();
+        for (const draft of voiceDrafts) {
+          const startDate = toLocalIsoDate(draft?.start_date, todayLocalIso());
+          const endDate = draft?.end_date ? toLocalIsoDate(draft.end_date, '') : '';
+          if (endDate && endDate < startDate) {
+            throw new Error(`Trip "${String(draft?.name || 'Trip').trim() || 'Trip'}" has an end date before its start date.`);
+          }
+          const members = buildVoiceTripMembersPayload(draft);
+          const result = await api('/api/live-split/trips', {
+            method: 'POST',
+            body: {
+              name: String(draft?.name || '').trim() || 'Trip',
+              start_date: startDate,
+              end_date: endDate || null,
+              show_add_to_expense_option: draft?.show_add_to_expense_option !== false,
+              members,
+            },
+          });
+          if (!result || result.error) throw new Error(result?.error || 'Could not create live split trip');
+        }
+        state.tripSaveBusy = false;
+        state.tripCreate = null;
+        closeModal();
+        await loadLiveSplit();
+        toast(voiceDrafts.length === 1 ? 'Live split trip created' : `${voiceDrafts.length} live split trips created`, 'success');
+      } catch (error) {
+        state.tripSaveBusy = false;
+        if (state.tripCreate) renderTripCreateModal();
+        toast(error?.message || 'Could not create live split trip', 'error');
+      }
+      return;
+    }
     const name = String(form.name || '').trim();
     if (!name) {
       toast('Trip name is required', 'warning');
@@ -2880,9 +3366,18 @@
       return;
     }
     await Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {});
+    setupCreateFromTrip(id);
+    renderCreateModal();
+  }
+
+  function setupCreateFromTrip(tripId) {
+    const id = Number(tripId);
+    const trip = (state.liveTrips || []).find((item) => Number(item.id) === id);
+    if (!trip) return;
     state.create = createInitialForm();
     state.createInvite = { query: '', results: [], searching: false, searched: false };
     state.create.trip_id = id;
+    state.create.voice_preferred_friend_id = null;
     state.create.addExpense = trip.show_add_to_expense_option !== false;
     (trip.members || []).forEach((member) => {
       const targetUserId = Number(member?.target_user_id || 0);
@@ -2895,7 +3390,6 @@
       if (friendId > 0) state.create.selected.add(String(friendId));
     });
     if ([...state.create.selected].some((key) => key !== 'self')) state.create.step = 2;
-    renderCreateModal();
   }
 
   async function updateLiveSplitTripStatus(tripId, status) {
@@ -3139,6 +3633,34 @@
 
   async function saveLiveSplit() {
     const form = state.create;
+    const voiceDrafts = Array.isArray(form?.voice_drafts) ? form.voice_drafts : [];
+    if (voiceDrafts.length) {
+      const validation = validateLiveSplitVoiceDrafts(voiceDrafts);
+      if (!validation.valid) {
+        toast(validation.issues[0]?.error || 'Fix the detected split values before saving.', 'warning');
+        renderCreateModal();
+        return;
+      }
+      try {
+        state.saveBusy = true;
+        renderCreateModal();
+        let savedCount = 0;
+        for (const draft of voiceDrafts) {
+          const result = await persistLiveSplitEntry(draft);
+          if (!result?.skipped) savedCount += 1;
+        }
+        closeModal();
+        state.create = null;
+        state.saveBusy = false;
+        await loadLiveSplit();
+        toast(savedCount > 0 ? `${savedCount} live split${savedCount === 1 ? '' : 's'} saved` : 'No live split was added', savedCount > 0 ? 'success' : 'warning');
+      } catch (error) {
+        state.saveBusy = false;
+        if (state.create) renderCreateModal();
+        toast(error?.message || 'Could not save live split', 'error');
+      }
+      return;
+    }
     const people = peopleForForm(form);
     const payerPeople = payerPeopleForForm(form);
     const preview = computeShares(n(form.amount), form.splitMode, people, form.splitValues);
@@ -3171,100 +3693,30 @@
       share_amount: r2(share.share),
     }));
 
-    let splitCreated = false;
     try {
       state.saveBusy = true;
       renderCreateModal();
-      const sessionKey = `live_${Date.now()}`;
-      const createBody = {
+      await persistLiveSplitEntry({
         divide_date: normalizedDate,
         details: form.details.trim(),
-        paid_by: payerPerson.name,
         total_amount: total,
+        paid_by: payerPerson.name,
+        paid_by_key: payerKey,
         split_mode: String(form.splitMode || 'equal'),
         trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,
-        splits: splitsPayload,
-        heading: form.details.trim(),
-        session_id: sessionKey,
-        owner_added_to_expense: !!(form.addExpense && selfShare > 0),
-      };
-      let createResult = await api('/api/live-split/groups', {
-        method: 'POST',
-        body: createBody,
+        participants: shares.map((share) => ({
+          key: share.key,
+          name: share.name,
+          share_value: r2(share.share),
+        })),
+        addExpense: !!form.addExpense,
+        expense_type: form.expense_type,
+        category: form.category,
+        finance_target: form.finance_target,
+        bank_account_id: form.bank_account_id,
+        card_id: form.card_id,
+        card_discount_pct: form.card_discount_pct,
       });
-      if (createResult?.status === 409 && isLiveSplitDuplicateWarning(createResult)) {
-        const shouldAddAgain = await confirmDialog(liveSplitDuplicateConfirmHtml(createResult.error));
-        if (!shouldAddAgain) {
-          state.saveBusy = false;
-          renderCreateModal();
-          return;
-        }
-        createResult = await api('/api/live-split/groups', {
-          method: 'POST',
-          body: { ...createBody, allow_duplicate: true },
-        });
-      }
-      if (!createResult || createResult.error) {
-        throw new Error(createResult?.error || 'Could not save live split');
-      }
-      splitCreated = true;
-
-      const linkedFriendIds = splitsPayload
-        .map((split) => state.appFriends.find((friend) => Number(friend.id) === Number(split.friend_id)))
-        .filter((friend) => friend && Number(friend.linked_user_id) > 0)
-        .map((friend) => Number(friend.id));
-      if (linkedFriendIds.length) {
-        const shareResult = await api('/api/live-split/groups/share-session', {
-          method: 'POST',
-          body: { session_key: sessionKey, friend_ids: [...new Set(linkedFriendIds)] },
-        });
-        if (shareResult?.error) throw new Error(shareResult.error);
-      }
-
-      if (form.addExpense && selfShare > 0) {
-        const expenseResult = await api('/api/expenses', {
-          method: 'POST',
-          body: {
-            item_name: form.details.trim(),
-            category: form.category ? form.category.trim() : null,
-            amount: selfShare,
-            purchase_date: normalizedDate,
-            is_extra: String(form.expense_type || 'fair') === 'extra',
-            bank_account_id: null,
-          },
-        });
-        if (expenseResult?.error) throw new Error(expenseResult.error);
-      }
-
-      const payerIsSelf = String(form.paidBy || '') === 'self';
-      if (payerIsSelf && total > 0) {
-        if (form.finance_target === 'card' && Number(form.card_id || 0) > 0) {
-          const cardId = Number(form.card_id || 0);
-          const cardTxnResult = await api('/api/cc/txns', {
-            method: 'POST',
-            body: {
-              card_id: cardId,
-              txn_date: normalizedDate,
-              description: form.details.trim(),
-              amount: total,
-              discount_pct: Number(form.card_discount_pct || 0),
-              source: 'live_split',
-            },
-          });
-          if (cardTxnResult?.error) throw new Error(cardTxnResult.error);
-        } else if (form.bank_account_id) {
-          const bankId = Number(form.bank_account_id);
-          const bank = (state.bankAccounts || []).find((item) => Number(item.id) === bankId);
-          if (bank) {
-            const nextBalance = r2(Number(bank.balance || 0) - total);
-            const bankResult = await api(`/api/banks/${bankId}/balance`, {
-              method: 'PATCH',
-              body: { balance: nextBalance >= 0 ? nextBalance : 0 },
-            });
-            if (bankResult?.error) throw new Error(bankResult.error);
-          }
-        }
-      }
 
       closeModal();
       state.create = null;
@@ -3273,13 +3725,6 @@
       toast('Live split saved', 'success');
     } catch (error) {
       state.saveBusy = false;
-      if (splitCreated) {
-        closeModal();
-        state.create = null;
-        await loadLiveSplit();
-        toast(error?.message || 'Live split saved, but a follow-up step failed', 'warning');
-        return;
-      }
       if (state.create) renderCreateModal();
       toast(error?.message || 'Could not save live split', 'error');
     }
@@ -3292,7 +3737,7 @@
 
   function nextStep() {
     if (!state.create) return;
-    if (!(Number(state.create.trip_id || 0) > 0) && !friendPeopleCount()) {
+    if (!(Number(state.create.trip_id || 0) > 0) && !friendPeopleCount() && !hasLiveSplitVoiceDrafts(state.create)) {
       toast('Select at least one friend to continue', 'warning');
       return;
     }
@@ -3967,6 +4412,7 @@
     });
   };
   window.liveSplitOpenTripCreate = openTripCreateModal;
+  window.liveSplitOpenVoiceTripCreate = openVoiceTripCreate;
   window.liveSplitTripField = function liveSplitTripField(field, value) {
     if (!state.tripCreate) return;
     state.tripCreate[field] = value || '';
@@ -3987,6 +4433,7 @@
   window.liveSplitOpenTripDetails = openTripDetails;
   window.liveSplitOpenTripEvent = openTripEventDetails;
   window.liveSplitUseTrip = openCreateFromTrip;
+  window.liveSplitOpenVoiceFromTrip = openVoiceSplitFromTrip;
   window.liveSplitToggleTripStatus = updateLiveSplitTripStatus;
   window.liveSplitDeleteTrip = deleteLiveSplitTrip;
   window.liveSplitManageTripMembers = openTripMembersModal;
@@ -4089,6 +4536,9 @@
     if (!state.create) return;
     state.create.card_discount_pct = Number(value || 0);
   };
+  window.liveSplitVoiceStart = startLiveSplitVoiceCapture;
+  window.liveSplitVoiceStop = stopLiveSplitVoiceCapture;
+  window.liveSplitVoiceReset = resetLiveSplitVoice;
   window.liveSplitSave = saveLiveSplit;
   window.liveSplitSetSort = function liveSplitSetSort(sort) {
     state.sort = sort;
@@ -4274,6 +4724,7 @@
   window.liveSplitDeleteFriend = deleteLiveSplitFriend;
   window.liveSplitOpenSettle = openSettleModal;
   window.liveSplitOpenCreateForFriend = openCreateForFriend;
+  window.liveSplitOpenVoiceForFriend = openVoiceSplitForFriend;
   window.liveSplitCancelSettle = function liveSplitCancelSettle() {
     state.settle = null;
     closeModal();

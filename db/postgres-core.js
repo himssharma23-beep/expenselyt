@@ -1062,6 +1062,7 @@ async function normalizeLiveSplitTripMembersForOwner(client, ownerUserId, member
 
     memberName = memberName.replace(/\s+/g, ' ').trim();
     if (!memberName) continue;
+    if (['you', 'me', 'self'].includes(memberName.toLowerCase())) continue;
     // If a friend is accidentally linked to owner account, keep the member entry
     // but avoid self-link so it does not get dropped from trip membership.
     if (targetUserId === Number(ownerUserId)) targetUserId = 0;
@@ -1078,6 +1079,32 @@ async function normalizeLiveSplitTripMembersForOwner(client, ownerUserId, member
     });
   }
   return normalized;
+}
+
+function isLiveSplitTripMembersPrimaryKeyError(err) {
+  return err?.code === '23505' && String(err?.constraint || '').trim() === 'live_split_trip_members_pkey';
+}
+
+async function ensureLiveSplitTripMembersIdSequence(client) {
+  await client.query(
+    `SELECT setval(
+       pg_get_serial_sequence('live_split_trip_members', 'id'),
+       COALESCE((SELECT MAX(id) FROM live_split_trip_members), 0) + 1,
+       FALSE
+     )`
+  );
+}
+
+async function insertLiveSplitTripMemberRow(client, params) {
+  const sql = `INSERT INTO live_split_trip_members (trip_id, friend_id, member_name, target_user_id, permission, is_locked, updated_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`;
+  try {
+    await client.query(sql, params);
+  } catch (err) {
+    if (!isLiveSplitTripMembersPrimaryKeyError(err)) throw err;
+    await ensureLiveSplitTripMembersIdSequence(client);
+    await client.query(sql, params);
+  }
 }
 
 async function createLiveSplitTrip(userId, data) {
@@ -1098,18 +1125,11 @@ async function createLiveSplitTrip(userId, data) {
     );
     const tripId = Number(tripResult.rows[0].id);
 
-    await client.query(
-      `INSERT INTO live_split_trip_members (trip_id, friend_id, member_name, target_user_id, permission, is_locked, updated_by)
-       VALUES ($1, NULL, $2, $3, 'owner', TRUE, $3)`,
-      [tripId, 'You', userId]
-    );
+    await ensureLiveSplitTripMembersIdSequence(client);
+    await insertLiveSplitTripMemberRow(client, [tripId, null, 'You', userId, 'owner', true, userId]);
 
     for (const member of members) {
-      await client.query(
-        `INSERT INTO live_split_trip_members (trip_id, friend_id, member_name, target_user_id, permission, is_locked, updated_by)
-         VALUES ($1, $2, $3, $4, $5, FALSE, $6)`,
-        [tripId, member.friend_id, member.member_name, member.target_user_id, member.permission, userId]
-      );
+      await insertLiveSplitTripMemberRow(client, [tripId, member.friend_id, member.member_name, member.target_user_id, member.permission, false, userId]);
     }
 
     return tripId;
@@ -1331,17 +1351,14 @@ async function addLiveSplitTripMembers(userId, tripId, members = []) {
     );
     const existing = existingResult.rows || [];
     let added = 0;
+    await ensureLiveSplitTripMembersIdSequence(client);
     for (const member of normalized) {
       const duplicate = existing.find((row) => (
         (Number(row.target_user_id || 0) > 0 && Number(member.target_user_id || 0) > 0 && Number(row.target_user_id) === Number(member.target_user_id))
         || String(row.member_name || '').trim().toLowerCase() === String(member.member_name || '').trim().toLowerCase()
       ));
       if (duplicate) continue;
-      await client.query(
-        `INSERT INTO live_split_trip_members (trip_id, friend_id, member_name, target_user_id, permission, is_locked, updated_by)
-         VALUES ($1, $2, $3, $4, $5, FALSE, $6)`,
-        [tid, member.friend_id, member.member_name, member.target_user_id, member.permission, uid]
-      );
+      await insertLiveSplitTripMemberRow(client, [tid, member.friend_id, member.member_name, member.target_user_id, member.permission, false, uid]);
       added += 1;
     }
     return { added, attempted, normalized: normalized.length, skipped: Math.max(0, normalized.length - added) };
@@ -1958,7 +1975,11 @@ function normalizeLiveSplitPayerName(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function buildLiveSplitDuplicateSignature(ownerUserId, totalAmount, splits = []) {
+function normalizeLiveSplitDuplicateDetails(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function buildLiveSplitDuplicateSignature(ownerUserId, totalAmount, splits = [], paidBy = '', details = '') {
   const normalizedTotal = Math.round(num(totalAmount) * 100) / 100;
   const normalizedShares = (splits || [])
     .map((split) => Math.round(num(split?.share_amount) * 100) / 100)
@@ -1981,6 +2002,8 @@ function buildLiveSplitDuplicateSignature(ownerUserId, totalAmount, splits = [])
     participantCount: participantTokens.length,
     participantKey: participantTokens.join('|'),
     sharesKey: signatureShares.map((value) => value.toFixed(2)).join('|'),
+    paidByKey: normalizeLiveSplitPayerName(paidBy),
+    detailsKey: normalizeLiveSplitDuplicateDetails(details),
   };
 }
 
@@ -2039,7 +2062,7 @@ async function runLiveSplitGroupShareUpsertWithRecovery(client, sql, params = []
 
 async function assertNoDuplicateLiveSplitGroup(client, userId, data, excludeGroupId = null) {
   const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
-  const target = buildLiveSplitDuplicateSignature(userId, data.total_amount, data.splits || []);
+  const target = buildLiveSplitDuplicateSignature(userId, data.total_amount, data.splits || [], data.paid_by, data.details);
   const params = [Number(userId), divideDate];
   let excludeSql = '';
   if (Number(excludeGroupId || 0) > 0) {
@@ -2051,6 +2074,7 @@ async function assertNoDuplicateLiveSplitGroup(client, userId, data, excludeGrou
        g.id,
        g.user_id,
        g.details,
+       g.paid_by,
        g.divide_date,
        g.total_amount,
        owner.display_name AS owner_name,
@@ -2100,11 +2124,13 @@ async function assertNoDuplicateLiveSplitGroup(client, userId, data, excludeGrou
   );
 
   for (const row of result.rows || []) {
-    const candidate = buildLiveSplitDuplicateSignature(row.user_id, row.total_amount, row.splits || []);
+    const candidate = buildLiveSplitDuplicateSignature(row.user_id, row.total_amount, row.splits || [], row.paid_by, row.details);
     if (candidate.totalAmount !== target.totalAmount) continue;
     if (candidate.participantCount !== target.participantCount) continue;
     if (candidate.participantKey !== target.participantKey) continue;
     if (candidate.sharesKey !== target.sharesKey) continue;
+    if (candidate.paidByKey !== target.paidByKey) continue;
+    if (candidate.detailsKey !== target.detailsKey) continue;
     const ownerName = String(row.owner_name || '').trim() || 'Someone';
     const details = String(row.details || 'this split').trim();
     throw duplicateError(`This live split expense looks already added on ${row.divide_date} for ${candidate.totalAmount.toFixed(2)} with the same participant split. Existing item: "${details}" by ${ownerName}.`);

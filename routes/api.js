@@ -742,9 +742,9 @@ async function transcribeAudioWithOpenAi(file) {
   form.append('file', blob, String(file.originalname || 'expense-voice.webm'));
   form.append('model', model);
   form.append('response_format', 'json');
-  form.append('prompt', 'This is a short spoken expense description for a personal finance app. Preserve merchant names, dates, amounts, and payment sources accurately.');
+  form.append('prompt', 'Translate the spoken expense note into English while preserving merchant names, dates, amounts, and payment sources accurately.');
 
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const response = await fetch('https://api.openai.com/v1/audio/translations', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -938,6 +938,7 @@ async function parseVoiceExpenseEntriesWithOpenAi(message, banks = [], cards = [
     'You extract one or more structured expense entries from a spoken expense note.',
     'Return only data that can help prefill expense forms.',
     'If the user mentions multiple expenses, return one entry per expense item in order.',
+    'Always translate the user meaning into English in item_name, merchant, category, and notes while preserving brand names and proper nouns.',
     'Capture whether the user explicitly marks an item as extra or non-essential.',
     'Use only the provided bank ids or card ids when matching a payment source. If unsure, return an empty string.',
     'If a credit card matches, prefer source_type "credit_card". Otherwise use "bank" when a bank account matches. Use "none" if no source matches.',
@@ -1009,6 +1010,686 @@ async function parseVoiceExpenseEntriesWithOpenAi(message, banks = [], cards = [
     throw err;
   }
 
+  return {
+    transcript: String(message || '').trim(),
+    notes: String(parsed?.notes || '').trim(),
+    suggestions: entries,
+    suggestion: entries[0],
+  };
+}
+
+function normalizeExistingVoiceEntries(entries = [], bankOptions = [], cardOptions = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => normalizeVoiceExpenseEntry({
+      item_name: entry?.item_name,
+      merchant: entry?.merchant,
+      amount: entry?.amount,
+      purchase_date: entry?.purchase_date,
+      category: entry?.category,
+      is_extra: entry?.is_extra,
+      source_type: entry?.source_type,
+      matched_bank_id: entry?.bank_account_id ? String(entry.bank_account_id) : '',
+      matched_card_id: entry?.card_id ? String(entry.card_id) : '',
+      card_discount_pct: entry?.card_discount_pct,
+      confidence: entry?.confidence,
+      notes: entry?.ai_notes || entry?.notes || '',
+    }, `${entry?.item_name || ''} ${entry?.merchant || ''}`, bankOptions, cardOptions))
+    .filter((entry) => entry.item_name && Number(entry.amount || 0) > 0);
+}
+
+function cloneVoiceEntry(entry) {
+  return {
+    ...entry,
+    amount: Math.round((Number(entry?.amount || 0) || 0) * 100) / 100,
+    purchase_date: normalizeVoiceExpenseDate(entry?.purchase_date),
+    is_extra: !!entry?.is_extra,
+    bank_account_id: entry?.bank_account_id ? Number(entry.bank_account_id) : null,
+    card_id: entry?.card_id ? Number(entry.card_id) : null,
+    card_discount_pct: Number(entry?.card_discount_pct || 0) || 0,
+    source_type: String(entry?.source_type || '').trim().toLowerCase() || 'none',
+  };
+}
+
+function getVoiceEditTargets(message, entries = []) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return [];
+  const ordinalMap = {
+    first: 0, '1st': 0, one: 0,
+    second: 1, '2nd': 1, two: 1,
+    third: 2, '3rd': 2, three: 2,
+    fourth: 3, '4th': 3, four: 3,
+    fifth: 4, '5th': 4, five: 4,
+  };
+  for (const [token, index] of Object.entries(ordinalMap)) {
+    if (text.includes(token) && entries[index]) return [index];
+  }
+  const matches = [];
+  entries.forEach((entry, index) => {
+    const name = String(entry?.item_name || entry?.merchant || '').trim().toLowerCase();
+    if (name && text.includes(name)) matches.push(index);
+  });
+  return matches;
+}
+
+function applyHeuristicVoiceExpenseEdit(message, currentEntries = [], banks = [], cards = []) {
+  const text = String(message || '').trim().toLowerCase();
+  const entries = (Array.isArray(currentEntries) ? currentEntries : []).map(cloneVoiceEntry);
+  if (!text || !entries.length) return null;
+
+  const asksExtra = /\b(extra|non essential|non-essential|mark as extra|convert .* extra|make .* extra)\b/i.test(text);
+  const asksFair = /\b(fair|regular|essential|not extra|mark as fair|convert .* fair|make .* fair)\b/i.test(text);
+  const mentionsCard = /\b(card|credit card)\b/i.test(text);
+  const mentionsBank = /\b(bank|account)\b/i.test(text);
+  const appliesAll = /\b(all|every|everything|all of them|all expenses)\b/i.test(text) || (!getVoiceEditTargets(text, entries).length);
+  const targets = appliesAll ? entries.map((_, index) => index) : getVoiceEditTargets(text, entries);
+  const guessedCard = mentionsCard ? guessCardMatchFromText(text, cards) : null;
+  const guessedBank = !guessedCard && mentionsBank ? guessBankMatchFromText(text, banks) : null;
+
+  if (!targets.length) return null;
+  if (!asksExtra && !asksFair && !guessedCard && !guessedBank && !mentionsCard && !mentionsBank) return null;
+
+  const updated = entries.map((entry, index) => {
+    if (!targets.includes(index)) return entry;
+    const next = { ...entry };
+    if (asksExtra) next.is_extra = true;
+    if (asksFair) next.is_extra = false;
+    if (guessedCard) {
+      next.source_type = 'credit_card';
+      next.card_id = Number(guessedCard.id);
+      next.card_label = guessedCard.label;
+      next.card_discount_pct = Number(guessedCard.default_discount_pct || next.card_discount_pct || 0);
+      next.bank_account_id = null;
+      next.bank_label = '';
+    } else if (guessedBank) {
+      next.source_type = 'bank';
+      next.bank_account_id = Number(guessedBank.id);
+      next.bank_label = guessedBank.label;
+      next.card_id = null;
+      next.card_label = '';
+      next.card_discount_pct = 0;
+    } else if (mentionsCard && !guessedCard) {
+      next.source_type = 'credit_card';
+      next.bank_account_id = null;
+      next.bank_label = '';
+    } else if (mentionsBank && !guessedBank) {
+      next.source_type = 'bank';
+      next.card_id = null;
+      next.card_label = '';
+      next.card_discount_pct = 0;
+    }
+    return next;
+  });
+
+  return {
+    transcript: String(message || '').trim(),
+    notes: 'Applied heuristic voice edit command.',
+    suggestions: updated,
+    suggestion: updated[0],
+  };
+}
+
+async function applyVoiceExpenseEditsWithOpenAi(message, currentEntries = [], banks = [], cards = []) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI parsing is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const bankOptions = (banks || []).map((bank) => ({
+    id: String(bank.id),
+    label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+    bank_name: bank.bank_name || '',
+    account_name: bank.account_name || '',
+    is_default: !!bank.is_default,
+  }));
+  const cardOptions = (cards || []).map((card) => ({
+    id: String(card.id),
+    label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+    card_name: card.card_name || '',
+    bank_name: card.bank_name || '',
+    last4: String(card.last4 || ''),
+    default_discount_pct: Number(card.default_discount_pct || 0),
+  }));
+  const normalizedCurrent = normalizeExistingVoiceEntries(currentEntries, bankOptions, cardOptions);
+  const heuristicResult = applyHeuristicVoiceExpenseEdit(message, normalizedCurrent, bankOptions, cardOptions);
+  if (heuristicResult) return heuristicResult;
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['notes', 'entries'],
+    properties: {
+      notes: { type: 'string' },
+      entries: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'item_name',
+            'merchant',
+            'amount',
+            'purchase_date',
+            'category',
+            'is_extra',
+            'source_type',
+            'matched_bank_id',
+            'matched_card_id',
+            'card_discount_pct',
+            'confidence',
+            'notes',
+          ],
+          properties: {
+            item_name: { type: 'string' },
+            merchant: { type: 'string' },
+            amount: { type: 'number' },
+            purchase_date: { type: 'string' },
+            category: { type: 'string' },
+            is_extra: { type: 'boolean' },
+            source_type: { type: 'string', enum: ['bank', 'credit_card', 'none'] },
+            matched_bank_id: { type: 'string' },
+            matched_card_id: { type: 'string' },
+            card_discount_pct: { type: 'number' },
+            confidence: { type: 'number' },
+            notes: { type: 'string' },
+          },
+        },
+      },
+    },
+  };
+
+  const systemPrompt = [
+    'You update an existing list of structured expense entries using a new spoken instruction.',
+    'Always return the full final list after applying the instruction.',
+    'The instruction may add new expenses, update all expenses, update one expense by order, or update by item name.',
+    'Support commands such as mark all extra, make all fair, charge all to a specific bank, charge all to a credit card, or update only one matching expense.',
+    'If the instruction refers to "first", "second", "third" or similar, apply it to that numbered expense in the current list.',
+    'If the instruction names an item, update the matching entry or entries.',
+    'If the instruction adds new expenses, append them after the existing ones.',
+    'Preserve all existing entries unless the instruction changes them.',
+    'Always translate the user meaning into English in item_name, merchant, category, and notes while preserving brand names and proper nouns.',
+    'Use only the provided bank ids or card ids when matching a payment source. If unsure, keep the existing source for unchanged items or return empty for new ones.',
+    'Keep purchase_date in YYYY-MM-DD format.',
+    'confidence should be between 0 and 100.',
+  ].join(' ');
+
+  const userPrompt = JSON.stringify({
+    today: new Date().toISOString().slice(0, 10),
+    voice_note_transcript: String(message || ''),
+    current_entries: normalizedCurrent,
+    available_banks: bankOptions,
+    available_cards: cardOptions,
+  });
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+        { role: 'user', content: [{ type: 'input_text', text: userPrompt }] },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'voice_expense_edits',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI voice edit failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty voice edit result.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    const err = new Error('OpenAI returned invalid JSON for voice expense edits.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const entries = (Array.isArray(parsed?.entries) ? parsed.entries : [])
+    .map((entry) => normalizeVoiceExpenseEntry(entry, message, bankOptions, cardOptions))
+    .filter((entry) => entry.item_name && Number(entry.amount || 0) > 0);
+
+  if (!entries.length) {
+    const fallbackResult = applyHeuristicVoiceExpenseEdit(message, normalizedCurrent, bankOptions, cardOptions);
+    if (fallbackResult) return fallbackResult;
+    const err = new Error('Voice edit did not leave any valid expense entries.');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  return {
+    transcript: String(message || '').trim(),
+    notes: String(parsed?.notes || '').trim(),
+    suggestions: entries,
+    suggestion: entries[0],
+  };
+}
+
+function normalizeLiveSplitPersonName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function inferLiveSplitDetailsFromTranscript(transcript = '') {
+  const text = String(transcript || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  const patterns = [
+    /\b(?:for|on)\s+([a-z][a-z0-9 &'\/-]{2,60}?)(?=\s+(?:of|for|rs|rupees?|inr|paid|pay|divide|split|among|between|with|to|from|on|dated?)\b|[,.]|$)/i,
+    /\b(?:add|create|record)\s+split\s+(?:for\s+)?([a-z][a-z0-9 &'\/-]{2,60}?)(?=\s+(?:of|for|rs|rupees?|inr|paid|pay|divide|split|among|between|with|to|from|on|dated?)\b|[,.]|$)/i,
+    /\b(?:add|create|record)\s+trip\s+split\s+(?:for\s+)?([a-z][a-z0-9 &'\/-]{2,60}?)(?=\s+(?:of|for|rs|rupees?|inr|paid|pay|divide|split|among|between|with|to|from|on|dated?)\b|[,.]|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const value = String(match?.[1] || '').trim().replace(/\s+/g, ' ');
+    if (value && !/^(split|expense|shared split|trip split)$/i.test(value)) {
+      return value.replace(/^(a|an|the)\s+/i, '').trim();
+    }
+  }
+  return '';
+}
+
+function normalizeLiveSplitDetails(rawDetails, transcript = '') {
+  const details = String(rawDetails || '').trim().replace(/\s+/g, ' ');
+  if (details && !/^(split|split expense|shared split|expense|trip split)$/i.test(details)) return details;
+  const inferred = inferLiveSplitDetailsFromTranscript(transcript);
+  return inferred || 'Split expense';
+}
+
+function inferLiveSplitVoiceMode(rawMode, participantRows = [], totalAmount = 0) {
+  const explicit = String(rawMode || '').trim().toLowerCase();
+  const shares = (participantRows || [])
+    .map((person) => Math.round((Number(person?.share_value || 0) || 0) * 100) / 100)
+    .filter((value) => value >= 0);
+  const validExplicit = ['equal', 'percent', 'fraction', 'amount', 'parts'].includes(explicit) ? explicit : '';
+  if (shares.length > 1) {
+    const first = shares[0];
+    const allEqual = shares.every((value) => Math.abs(value - first) <= 0.009);
+    if (allEqual) return 'equal';
+  }
+  const total = Math.round((Number(totalAmount || 0) || 0) * 100) / 100;
+  const sum = Math.round(shares.reduce((acc, value) => acc + value, 0) * 100) / 100;
+  if (shares.length && total > 0 && Math.abs(sum - total) <= 0.02) return 'amount';
+  if (validExplicit) return validExplicit;
+  return shares.length > 1 ? 'amount' : 'equal';
+}
+
+function buildLiveSplitFriendOptions(friends = []) {
+  return (friends || []).map((friend) => ({
+    id: Number(friend.id),
+    name: normalizeLiveSplitPersonName(friend.name || 'Friend'),
+    linked_user_id: Number(friend.linked_user_id || 0) || null,
+  }));
+}
+
+function buildLiveSplitTripOptions(trips = []) {
+  return (trips || []).map((trip) => ({
+    id: Number(trip.id),
+    name: String(trip.name || '').trim(),
+    start_date: normalizeVoiceExpenseDate(trip.start_date),
+    end_date: trip.end_date ? normalizeVoiceExpenseDate(trip.end_date) : '',
+    show_add_to_expense_option: trip.show_add_to_expense_option !== false,
+    members: (trip.members || []).map((member) => normalizeLiveSplitPersonName(member.member_name || '')).filter(Boolean),
+  }));
+}
+
+function findLiveSplitFriendByName(name, options = []) {
+  const target = normalizeLiveSplitPersonName(name).toLowerCase();
+  if (!target) return null;
+  return options.find((friend) => normalizeLiveSplitPersonName(friend.name).toLowerCase() === target)
+    || options.find((friend) => target.includes(normalizeLiveSplitPersonName(friend.name).toLowerCase()) || normalizeLiveSplitPersonName(friend.name).toLowerCase().includes(target))
+    || null;
+}
+
+function findLiveSplitTripByName(name, options = []) {
+  const target = String(name || '').trim().toLowerCase();
+  if (!target) return null;
+  return options.find((trip) => String(trip.name || '').trim().toLowerCase() === target)
+    || options.find((trip) => target.includes(String(trip.name || '').trim().toLowerCase()) || String(trip.name || '').trim().toLowerCase().includes(target))
+    || null;
+}
+
+function extractMentionedLiveSplitFriendIds(message, options = []) {
+  const text = normalizeLiveSplitPersonName(message).toLowerCase();
+  if (!text) return new Set();
+  const mentioned = new Set();
+  (options || []).forEach((friend) => {
+    const name = normalizeLiveSplitPersonName(friend?.name || '').toLowerCase();
+    if (!name) return;
+    const first = name.split(' ')[0] || '';
+    if (text.includes(name) || (first && first.length > 2 && text.includes(first))) {
+      mentioned.add(Number(friend.id));
+    }
+  });
+  return mentioned;
+}
+
+function normalizeLiveSplitVoiceDraft(raw, context = {}) {
+  const {
+    friendOptions = [],
+    tripOptions = [],
+    bankOptions = [],
+    cardOptions = [],
+    preferredFriendId = null,
+    preferredTripId = null,
+    mentionedFriendIds = new Set(),
+    transcript = '',
+  } = context;
+  const participants = Array.isArray(raw?.participants) ? raw.participants : [];
+  let splitValues = {};
+  let selectedKeys = new Set(['self']);
+  let participantRows = participants.map((person) => {
+    const name = normalizeLiveSplitPersonName(person?.name || '');
+    const matchedFriend = name && name.toLowerCase() !== 'me' && name.toLowerCase() !== 'self' && name.toLowerCase() !== 'you'
+      ? findLiveSplitFriendByName(name, friendOptions)
+      : null;
+    const key = matchedFriend ? String(matchedFriend.id) : 'self';
+    if (key) selectedKeys.add(key);
+    if (key && person?.share_value != null) splitValues[key] = Number(person.share_value || 0);
+    return {
+      key,
+      name: key === 'self' ? 'You' : (matchedFriend?.name || name || 'Friend'),
+      share_value: Number(person?.share_value || 0),
+    };
+  });
+  const preferredFriend = Number(preferredFriendId || 0) > 0
+    ? friendOptions.find((friend) => Number(friend.id) === Number(preferredFriendId))
+    : null;
+  const nonSelfParticipants = participantRows.filter((person) => String(person.key) !== 'self');
+  if (preferredFriend && (!mentionedFriendIds || !mentionedFriendIds.size)) {
+    if (!nonSelfParticipants.length) {
+      participantRows.push({
+        key: String(preferredFriend.id),
+        name: preferredFriend.name,
+        share_value: 0,
+      });
+      selectedKeys.add(String(preferredFriend.id));
+      splitValues[String(preferredFriend.id)] = 0;
+    } else if (nonSelfParticipants.length === 1 && String(nonSelfParticipants[0].key) !== String(preferredFriend.id)) {
+      const oldKey = String(nonSelfParticipants[0].key);
+      const nextKey = String(preferredFriend.id);
+      const shareValue = Number(nonSelfParticipants[0].share_value || 0);
+      participantRows = participantRows.map((person) => (
+        String(person.key) === oldKey
+          ? { ...person, key: nextKey, name: preferredFriend.name, share_value: shareValue }
+          : person
+      ));
+      selectedKeys.delete(oldKey);
+      selectedKeys.add(nextKey);
+      delete splitValues[oldKey];
+      splitValues[nextKey] = shareValue;
+    } else if (nonSelfParticipants.length > 1) {
+      const nextKey = String(preferredFriend.id);
+      const explicitMode = String(raw?.split_mode || '').trim().toLowerCase();
+      const totalAmount = Math.round((Number(raw?.total_amount || 0) || 0) * 100) / 100;
+      let preferredShare = Number(nonSelfParticipants[0]?.share_value || 0);
+      if (totalAmount > 0 && ['equal', 'percent', 'fraction', 'parts'].includes(explicitMode)) {
+        preferredShare = Math.round((totalAmount / 2) * 100) / 100;
+      }
+      participantRows = [
+        { key: 'self', name: 'You', share_value: Math.max(0, Math.round((totalAmount - preferredShare) * 100) / 100) },
+        { key: nextKey, name: preferredFriend.name, share_value: preferredShare },
+      ];
+      selectedKeys = new Set(['self', nextKey]);
+      splitValues = { [nextKey]: preferredShare };
+    }
+  }
+  const trip = raw?.trip_name
+    ? findLiveSplitTripByName(raw.trip_name, tripOptions)
+    : (Number(preferredTripId || 0) > 0 ? tripOptions.find((item) => Number(item.id) === Number(preferredTripId)) : null);
+  const payerName = normalizeLiveSplitPersonName(raw?.paid_by_name || '');
+  const payerFriend = payerName && !['me', 'self', 'you'].includes(payerName.toLowerCase()) ? findLiveSplitFriendByName(payerName, friendOptions) : null;
+  const matchedBank = raw?.bank_name ? guessBankMatchFromText(raw.bank_name, bankOptions) : null;
+  const matchedCard = raw?.card_name ? guessCardMatchFromText(raw.card_name, cardOptions) : null;
+  const normalizedTotalAmount = Math.round((Number(raw?.total_amount || 0) || 0) * 100) / 100;
+  const normalizedSplitMode = inferLiveSplitVoiceMode(raw?.split_mode, participantRows, normalizedTotalAmount);
+  return {
+    details: normalizeLiveSplitDetails(raw?.details, transcript),
+    divide_date: normalizeVoiceExpenseDate(raw?.divide_date),
+    total_amount: normalizedTotalAmount,
+    paid_by: payerFriend ? payerFriend.name : (['me', 'self', 'you'].includes(payerName.toLowerCase()) ? 'You' : (payerName || 'You')),
+    paid_by_key: payerFriend ? String(payerFriend.id) : 'self',
+    split_mode: normalizedSplitMode,
+    selected_keys: [...selectedKeys],
+    split_values: splitValues,
+    addExpense: !!raw?.add_to_expense,
+    expense_type: String(raw?.expense_type || '').toLowerCase() === 'extra' ? 'extra' : 'fair',
+    category: String(raw?.category || '').trim(),
+    finance_target: matchedCard ? 'card' : matchedBank ? 'expense' : 'none',
+    bank_account_id: matchedBank ? Number(matchedBank.id) : null,
+    card_id: matchedCard ? Number(matchedCard.id) : null,
+    card_discount_pct: matchedCard ? Number(raw?.card_discount_pct || matchedCard.default_discount_pct || 0) : 0,
+    trip_id: trip ? Number(trip.id) : null,
+    trip_name: trip ? trip.name : String(raw?.trip_name || '').trim(),
+    notes: String(raw?.notes || '').trim(),
+    participants: participantRows,
+  };
+}
+
+function normalizeLiveSplitTripDraft(raw, context = {}) {
+  const friendOptions = context.friendOptions || [];
+  const members = Array.isArray(raw?.members) ? raw.members : [];
+  const selected = [...new Set(members
+    .map((name) => findLiveSplitFriendByName(name, friendOptions))
+    .filter(Boolean)
+    .map((friend) => String(friend.id)))];
+  const unresolvedMemberNames = [...new Set(members
+    .map((name) => normalizeLiveSplitPersonName(name))
+    .filter(Boolean)
+    .filter((name) => !['you', 'me', 'self'].includes(name.toLowerCase()))
+    .filter((name) => !findLiveSplitFriendByName(name, friendOptions)))];
+  return {
+    name: String(raw?.name || 'Trip').trim() || 'Trip',
+    start_date: normalizeVoiceExpenseDate(raw?.start_date),
+    end_date: raw?.end_date ? normalizeVoiceExpenseDate(raw.end_date) : '',
+    show_add_to_expense_option: raw?.show_add_to_expense_option !== false,
+    selected,
+    member_names: members.map((name) => normalizeLiveSplitPersonName(name)).filter(Boolean),
+    unresolved_member_names: unresolvedMemberNames,
+    notes: String(raw?.notes || '').trim(),
+  };
+}
+
+async function parseLiveSplitVoiceWithOpenAi({ message, mode = 'split', currentEntries = [], friendOptions = [], tripOptions = [], bankOptions = [], cardOptions = [], preferredFriendId = null, preferredTripId = null, preselectedFriendIds = [] }) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI parsing is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+  const isTripMode = mode === 'trip';
+  const schema = isTripMode
+    ? {
+        type: 'object',
+        additionalProperties: false,
+        required: ['notes', 'entries'],
+        properties: {
+          notes: { type: 'string' },
+          entries: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['name', 'start_date', 'end_date', 'show_add_to_expense_option', 'members', 'notes'],
+              properties: {
+                name: { type: 'string' },
+                start_date: { type: 'string' },
+                end_date: { type: 'string' },
+                show_add_to_expense_option: { type: 'boolean' },
+                members: { type: 'array', items: { type: 'string' } },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+      }
+    : {
+        type: 'object',
+        additionalProperties: false,
+        required: ['notes', 'entries'],
+        properties: {
+          notes: { type: 'string' },
+          entries: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['details', 'divide_date', 'total_amount', 'paid_by_name', 'split_mode', 'participants', 'add_to_expense', 'expense_type', 'category', 'bank_name', 'card_name', 'card_discount_pct', 'trip_name', 'notes'],
+              properties: {
+                details: { type: 'string' },
+                divide_date: { type: 'string' },
+                total_amount: { type: 'number' },
+                paid_by_name: { type: 'string' },
+                split_mode: { type: 'string' },
+                participants: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['name', 'share_value'],
+                    properties: {
+                      name: { type: 'string' },
+                      share_value: { type: 'number' },
+                    },
+                  },
+                },
+                add_to_expense: { type: 'boolean' },
+                expense_type: { type: 'string' },
+                category: { type: 'string' },
+                bank_name: { type: 'string' },
+                card_name: { type: 'string' },
+                card_discount_pct: { type: 'number' },
+                trip_name: { type: 'string' },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+      };
+  const systemPrompt = isTripMode
+    ? [
+        'You convert spoken instructions into one or more live-split trip drafts.',
+        'Always translate the meaning into English.',
+        'If current entries are provided, treat the new voice note as instructions to update that trip draft list and return the full final list.',
+        'Support adding trips, changing dates, changing members, and changing the add-my-share-to-expense option.',
+        'If the user mentions multiple trips in one note, return one entry per trip.',
+        'Keep dates in YYYY-MM-DD.',
+      ].join(' ')
+    : [
+        'You convert spoken instructions into one or more live-split expense drafts.',
+        'Always translate the meaning into English.',
+        'If current entries are provided, treat the new voice note as instructions to update that split draft list and return the full final list.',
+        'Always fill details with the actual spoken item or service name such as chicken, petrol, dinner, hotel, taxi, groceries, or ticket. Do not use generic labels like "Split expense" unless the user truly never mentioned any item.',
+        'Support commands like paid by me, divide equally, divide by amount, divide by percent, fraction, parts, add to expense, fair or extra, bank, credit card, trip name, and date changes.',
+        'If preferred_friend_id is provided because the user tapped a specific friend microphone and the transcript does not explicitly name a different friend, keep that friend in the split.',
+        'If preferred_trip_id is provided and the transcript does not explicitly name another trip, keep the split under that trip.',
+        'Use participant names exactly as normal readable English names.',
+        'For participants, include You when the user says me/self/you.',
+        'If current entries exist and the user says mark all extra/fair or charge all to bank/card, return the full updated list.',
+        'If the user mentions multiple split items in one note, return one entry per split item.',
+        'Keep dates in YYYY-MM-DD.',
+      ].join(' ');
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: JSON.stringify({
+            today: new Date().toISOString().slice(0, 10),
+            mode,
+            voice_note_transcript: String(message || ''),
+            current_entries: currentEntries,
+            preferred_friend_id: Number(preferredFriendId || 0) || null,
+            preferred_trip_id: Number(preferredTripId || 0) || null,
+            preselected_friend_ids: (Array.isArray(preselectedFriendIds) ? preselectedFriendIds : []).map((value) => Number(value)).filter((value) => value > 0),
+            available_friends: friendOptions,
+            available_trips: tripOptions,
+            available_banks: bankOptions,
+            available_cards: cardOptions,
+          }) }],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: isTripMode ? 'live_split_trip_voice' : 'live_split_split_voice',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI live split voice parse failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty live split voice parse result.');
+    err.statusCode = 502;
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    const err = new Error('OpenAI returned invalid JSON for live split voice parsing.');
+    err.statusCode = 502;
+    throw err;
+  }
+  const mentionedFriendIds = extractMentionedLiveSplitFriendIds(message, friendOptions);
+  const entries = (Array.isArray(parsed?.entries) ? parsed.entries : [])
+    .map((entry) => isTripMode
+      ? normalizeLiveSplitTripDraft(entry, { friendOptions })
+      : normalizeLiveSplitVoiceDraft(entry, {
+          friendOptions,
+          tripOptions,
+          bankOptions,
+          cardOptions,
+          preferredFriendId,
+          preferredTripId,
+          mentionedFriendIds,
+          transcript: message,
+        }))
+    .filter((entry) => isTripMode ? !!entry.name : (!!entry.details && Number(entry.total_amount || 0) > 0));
+  if (!entries.length) {
+    const err = new Error('Voice parse did not find any valid live split entries.');
+    err.statusCode = 422;
+    throw err;
+  }
   return {
     transcript: String(message || '').trim(),
     notes: String(parsed?.notes || '').trim(),
@@ -1356,13 +2037,26 @@ router.post('/expenses/voice-prefill', upload.single('file'), async (req, res) =
     if (!isSupportedAudioUpload(req.file)) {
       return res.status(400).json({ error: 'Supported audio formats are mp3, mp4, m4a, wav, webm, and related audio files.' });
     }
+    const voiceAccess = await Promise.resolve(pgDb.getUserVoiceAiAccess(req.session.userId));
+    if (!voiceAccess?.can_use) {
+      return res.status(403).json({ error: voiceAccess?.message || 'Voice AI is not available in your current plan.' });
+    }
 
     const transcript = await transcribeAudioWithOpenAi(req.file);
     const [banks, cards] = await Promise.all([
       Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
       Promise.resolve(getBillingDb().getCreditCards(req.session.userId)),
     ]);
-    const voiceResult = await parseVoiceExpenseEntriesWithOpenAi(transcript, banks || [], cards || []);
+    let currentEntries = [];
+    try {
+      currentEntries = req.body?.current_entries ? JSON.parse(String(req.body.current_entries || '[]')) : [];
+    } catch (_err) {
+      currentEntries = [];
+    }
+    const voiceResult = Array.isArray(currentEntries) && currentEntries.length
+      ? await applyVoiceExpenseEditsWithOpenAi(transcript, currentEntries, banks || [], cards || [])
+      : await parseVoiceExpenseEntriesWithOpenAi(transcript, banks || [], cards || []);
+    await Promise.resolve(pgDb.consumeUserVoiceAiUsage(req.session.userId, 'expense_voice', 'expense'));
     res.json({
       success: true,
       provider: 'openai',
@@ -1375,6 +2069,79 @@ router.post('/expenses/voice-prefill', upload.single('file'), async (req, res) =
   } catch (err) {
     console.error('[expenses/voice-prefill]', err?.message || err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this voice note into expense fields.' });
+  }
+});
+
+router.post('/live-split/voice-prefill', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Audio file is required' });
+    if (!isSupportedAudioUpload(req.file)) {
+      return res.status(400).json({ error: 'Supported audio formats are mp3, mp4, m4a, wav, webm, and related audio files.' });
+    }
+    const voiceAccess = await Promise.resolve(pgDb.getUserVoiceAiAccess(req.session.userId));
+    if (!voiceAccess?.can_use) {
+      return res.status(403).json({ error: voiceAccess?.message || 'Voice AI is not available in your current plan.' });
+    }
+    const mode = String(req.body?.mode || 'split').trim().toLowerCase() === 'trip' ? 'trip' : 'split';
+    const transcript = await transcribeAudioWithOpenAi(req.file);
+    const [friends, trips, banks, cards] = await Promise.all([
+      Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId)),
+      Promise.resolve(getCoreDb().getLiveSplitTrips(req.session.userId)),
+      Promise.resolve(getOpsDb().getBankAccounts(req.session.userId)),
+      Promise.resolve(getBillingDb().getCreditCards(req.session.userId)),
+    ]);
+    let currentEntries = [];
+    try {
+      currentEntries = req.body?.current_entries ? JSON.parse(String(req.body.current_entries || '[]')) : [];
+    } catch (_err) {
+      currentEntries = [];
+    }
+    const preferredFriendId = Number(req.body?.preferred_friend_id || 0) || null;
+    const preferredTripId = Number(req.body?.preferred_trip_id || 0) || null;
+    let preselectedFriendIds = [];
+    try {
+      preselectedFriendIds = req.body?.preselected_friend_ids ? JSON.parse(String(req.body.preselected_friend_ids || '[]')) : [];
+    } catch (_err) {
+      preselectedFriendIds = [];
+    }
+    const voiceResult = await parseLiveSplitVoiceWithOpenAi({
+      message: transcript,
+      mode,
+      currentEntries,
+      preferredFriendId,
+      preferredTripId,
+      preselectedFriendIds,
+      friendOptions: buildLiveSplitFriendOptions(friends || []),
+      tripOptions: buildLiveSplitTripOptions(trips || []),
+      bankOptions: (banks || []).map((bank) => ({
+        id: String(bank.id),
+        label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+        bank_name: bank.bank_name || '',
+        account_name: bank.account_name || '',
+        is_default: !!bank.is_default,
+      })),
+      cardOptions: (cards || []).map((card) => ({
+        id: String(card.id),
+        label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+        card_name: card.card_name || '',
+        bank_name: card.bank_name || '',
+        last4: String(card.last4 || ''),
+        default_discount_pct: Number(card.default_discount_pct || 0),
+      })),
+    });
+    await Promise.resolve(pgDb.consumeUserVoiceAiUsage(req.session.userId, 'live_split_voice', mode));
+    res.json({
+      success: true,
+      provider: 'openai',
+      configured: true,
+      transcript,
+      suggestion: voiceResult.suggestion,
+      suggestions: voiceResult.suggestions,
+      notes: voiceResult.notes || '',
+    });
+  } catch (err) {
+    console.error('[live-split/voice-prefill]', err?.message || err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this live split voice note.' });
   }
 });
 
@@ -4138,11 +4905,13 @@ router.get('/auth/me/access', (req, res) => {
     Promise.resolve(pgDb.findUserById(req.session.userId)),
     Promise.resolve(pgDb.getUserAccessiblePages(req.session.userId)),
     Promise.resolve(pgDb.getUserAiLookupModes(req.session.userId)),
-  ]).then(([user, pages, aiLookupModes]) => {
+    Promise.resolve(pgDb.getUserVoiceAiAccess(req.session.userId)),
+  ]).then(([user, pages, aiLookupModes, voiceAiAccess]) => {
     res.json({
       role: user?.role || 'user',
       pages,
       ai_lookup_modes: aiLookupModes || { mode: 'none', offline: false, online: false },
+      voice_ai: voiceAiAccess || { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false },
     });
   }).catch((err) => {
     res.status(500).json({ error: err.message });

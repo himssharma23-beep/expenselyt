@@ -21,6 +21,7 @@ let _expenseVoiceChunks = [];
 let _expenseVoiceBusy = false;
 let _expenseVoiceContext = 'expense';
 let _expenseVoiceBatch = [];
+let _expenseVoiceIgnoreNextResult = false;
 let _expenseCategoryHideTimer = null;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
@@ -98,18 +99,22 @@ function renderExpenseVoiceCard(context = 'expense') {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn btn-s btn-sm" id="expenseVoiceStartBtn" onclick="startExpenseVoiceCapture('${context}')">Start Voice</button>
           <button type="button" class="btn btn-g btn-sm" id="expenseVoiceStopBtn" onclick="stopExpenseVoiceCapture()" disabled>Stop</button>
+          <button type="button" class="btn btn-g btn-sm" id="expenseVoiceResetBtn" onclick="resetExpenseVoiceFill('${context}')">Reset</button>
         </div>
       </div>
       <div id="expenseVoiceStatus" style="font-size:12px;color:var(--t3);margin-top:10px">Voice capture is idle.</div>
       <div id="expenseVoiceTranscript" style="display:none;margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--border);font-size:12px;color:var(--t2);line-height:1.45"></div>
+      <div id="expenseVoicePreview" style="display:none;margin-top:10px"></div>
     </div>`;
 }
 
 function setExpenseVoiceUi({ status = '', transcript = '', recording = false, busy = false } = {}) {
   const statusEl = document.getElementById('expenseVoiceStatus');
   const transcriptEl = document.getElementById('expenseVoiceTranscript');
+  const previewEl = document.getElementById('expenseVoicePreview');
   const startBtn = document.getElementById('expenseVoiceStartBtn');
   const stopBtn = document.getElementById('expenseVoiceStopBtn');
+  const resetBtn = document.getElementById('expenseVoiceResetBtn');
   if (statusEl && status) statusEl.textContent = status;
   if (transcriptEl) {
     if (transcript) {
@@ -120,20 +125,108 @@ function setExpenseVoiceUi({ status = '', transcript = '', recording = false, bu
       transcriptEl.textContent = '';
     }
   }
+  if (previewEl && (!_expenseVoiceBatch || !_expenseVoiceBatch.length)) {
+    previewEl.style.display = 'none';
+    previewEl.innerHTML = '';
+  }
   if (startBtn) {
     startBtn.disabled = recording || busy;
     startBtn.textContent = recording ? 'Recording...' : (busy ? 'Processing...' : 'Start Voice');
   }
   if (stopBtn) stopBtn.disabled = !recording || busy;
+  if (resetBtn) resetBtn.disabled = busy;
 }
 
 function clearExpenseVoiceBatch() {
   _expenseVoiceBatch = [];
   const transcriptEl = document.getElementById('expenseVoiceTranscript');
+  const previewEl = document.getElementById('expenseVoicePreview');
   if (transcriptEl) {
     transcriptEl.style.display = 'none';
     transcriptEl.textContent = '';
   }
+  if (previewEl) {
+    previewEl.style.display = 'none';
+    previewEl.innerHTML = '';
+  }
+  updateExpenseVoiceFormVisibility();
+}
+
+function resetExpenseVoiceFill(context = 'expense') {
+  if (_expenseVoiceRecorder?.state === 'recording') _expenseVoiceIgnoreNextResult = true;
+  if (_expenseVoiceRecorder?.state === 'recording') {
+    try { _expenseVoiceRecorder.stop(); } catch (_err) {}
+  }
+  clearExpenseVoiceBatch();
+  _expenseVoiceBusy = false;
+  if (context === 'trip') {
+    if (document.getElementById('tripExpenseType')) document.getElementById('tripExpenseType').value = '';
+    if (document.getElementById('tripExpenseDate')) document.getElementById('tripExpenseDate').value = todayStr();
+    if (document.getElementById('tripExpenseDetails')) document.getElementById('tripExpenseDetails').value = '';
+    if (document.getElementById('tripExpenseQty')) document.getElementById('tripExpenseQty').value = '1';
+    if (document.getElementById('tripExpensePrice')) document.getElementById('tripExpensePrice').value = '';
+    if (document.getElementById('tripExpenseOrigAmount')) document.getElementById('tripExpenseOrigAmount').value = '';
+    if (document.getElementById('tripExpenseAmount')) document.getElementById('tripExpenseAmount').value = '';
+    if (typeof tripExpenseCurrencyChanged === 'function') tripExpenseCurrencyChanged();
+  } else {
+    if (document.getElementById('eName')) document.getElementById('eName').value = '';
+    if (document.getElementById('eCategory')) document.getElementById('eCategory').value = '';
+    if (document.getElementById('eAmount')) document.getElementById('eAmount').value = '';
+    if (document.getElementById('eDate')) document.getElementById('eDate').value = todayStr();
+    if (document.getElementById('eExtra')) document.getElementById('eExtra').checked = false;
+    if (document.getElementById('eBank')) document.getElementById('eBank').value = '';
+    if (document.getElementById('ccLink')) {
+      document.getElementById('ccLink').checked = false;
+      if (typeof toggleCcLinkSection === 'function') toggleCcLinkSection();
+    }
+    if (document.getElementById('ccLinkCard')) document.getElementById('ccLinkCard').value = '';
+    if (document.getElementById('ccLinkDisc')) document.getElementById('ccLinkDisc').value = '0';
+    if (typeof ccLinkPreview === 'function') ccLinkPreview();
+  }
+  setExpenseVoiceUi({ status: 'Voice AI reset. Ready for a new recording.', transcript: '', recording: false, busy: false });
+  updateExpenseVoiceFormVisibility();
+}
+
+function updateExpenseVoiceFormVisibility() {
+  const formSection = document.getElementById('expenseVoiceManagedFields');
+  const helper = document.getElementById('expenseVoiceManagedHint');
+  const shouldHide = !window._editingExpenseVoiceForm && Array.isArray(_expenseVoiceBatch) && _expenseVoiceBatch.length > 0;
+  if (formSection) formSection.style.display = shouldHide ? 'none' : '';
+  if (helper) helper.style.display = shouldHide ? '' : 'none';
+}
+
+function renderExpenseVoicePreview() {
+  const previewEl = document.getElementById('expenseVoicePreview');
+  if (!previewEl) return;
+  const rows = Array.isArray(_expenseVoiceBatch) ? _expenseVoiceBatch : [];
+  if (!rows.length) {
+    previewEl.style.display = 'none';
+    previewEl.innerHTML = '';
+    return;
+  }
+  previewEl.style.display = '';
+  previewEl.innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px">Detected expenses</div>
+    <div style="display:grid;gap:8px">
+      ${rows.map((item, index) => `
+        <div style="padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.item_name || item?.merchant || 'Expense'))}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">
+                ${escHtml(String(item?.purchase_date || todayStr()))}
+                ${item?.category ? ` • ${escHtml(String(item.category))}` : ''}
+                ${item?.is_extra ? ' • Extra' : ' • Fair'}
+              </div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">
+                ${item?.card_label ? `Card: ${escHtml(String(item.card_label))}` : item?.bank_label ? `Bank: ${escHtml(String(item.bank_label))}` : 'No bank/card selected'}
+              </div>
+            </div>
+            <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.amount || 0))}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
 }
 
 async function startExpenseVoiceCapture(context = 'expense') {
@@ -144,7 +237,6 @@ async function startExpenseVoiceCapture(context = 'expense') {
   }
   try {
     _expenseVoiceContext = context === 'trip' ? 'trip' : 'expense';
-    if (_expenseVoiceContext === 'expense') _expenseVoiceBatch = [];
     _expenseVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     _expenseVoiceChunks = [];
     _expenseVoiceRecorder = new MediaRecorder(_expenseVoiceStream);
@@ -158,6 +250,11 @@ async function startExpenseVoiceCapture(context = 'expense') {
     _expenseVoiceRecorder.onstop = async () => {
       const blob = _expenseVoiceChunks.length ? new Blob(_expenseVoiceChunks, { type: _expenseVoiceRecorder?.mimeType || 'audio/webm' }) : null;
       cleanupExpenseVoiceCapture();
+      if (_expenseVoiceIgnoreNextResult) {
+        _expenseVoiceIgnoreNextResult = false;
+        setExpenseVoiceUi({ status: 'Voice AI reset. Ready for a new recording.', transcript: '', busy: false });
+        return;
+      }
       if (!blob || !blob.size) {
         setExpenseVoiceUi({ status: 'No audio captured. Please try again.' });
         return;
@@ -197,6 +294,9 @@ async function parseExpenseVoiceBlob(blob, context = 'expense') {
     const fd = new FormData();
     const ext = blob.type.includes('mp4') || blob.type.includes('m4a') ? 'm4a' : 'webm';
     fd.append('file', blob, `expense-voice.${ext}`);
+    if (context === 'expense' && Array.isArray(_expenseVoiceBatch) && _expenseVoiceBatch.length) {
+      fd.append('current_entries', JSON.stringify(_expenseVoiceBatch));
+    }
     const res = await fetch('/api/expenses/voice-prefill', { method: 'POST', body: fd });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Voice parse failed with HTTP ${res.status}`);
@@ -210,15 +310,16 @@ async function parseExpenseVoiceBlob(blob, context = 'expense') {
       applyTripVoiceSuggestion(suggestion);
     } else {
       _expenseVoiceBatch = suggestions;
-      applyExpenseVoiceSuggestion(suggestion);
+      renderExpenseVoicePreview();
     }
     setExpenseVoiceUi({
-      status: suggestions.length > 1
-        ? `${suggestions.length} voice expenses detected. Review the first item; save will add all detected entries.`
-        : 'Voice fields applied. Review and save.',
-      transcript: transcript || '',
+      status: _expenseVoiceBatch.length > 1
+        ? `${_expenseVoiceBatch.length} voice expenses detected. Save will add all detected entries.`
+        : '1 voice expense detected. Save will add it.',
+      transcript: [document.getElementById('expenseVoiceTranscript')?.textContent || '', transcript || ''].filter(Boolean).join('\n'),
       busy: false,
     });
+    updateExpenseVoiceFormVisibility();
     toast('Voice details added', 'success');
   } catch (err) {
     setExpenseVoiceUi({ status: err?.message || 'Could not parse this voice note.', busy: false });
@@ -1147,6 +1248,7 @@ async function showExpenseForm(id) {
   cleanupExpenseVoiceCapture();
   _expenseVoiceBusy = false;
   _expenseVoiceBatch = [];
+  window._editingExpenseVoiceForm = !!id;
   let e = { item_name: '', category: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
     const cached = _findExpenseById(id);
@@ -1187,6 +1289,8 @@ async function showExpenseForm(id) {
     `}
     <div id="expenseFormExpenseSection">
     ${renderExpenseVoiceCard('expense')}
+    <div id="expenseVoiceManagedHint" style="display:none;margin-bottom:14px;padding:12px 14px;border-radius:14px;background:var(--green-l);color:var(--em);font-size:12px;font-weight:700">Voice expenses are ready below. Save will add every detected row. Click Reset to clear this list and return to manual entry.</div>
+    <div id="expenseVoiceManagedFields">
     <div class="fg">
       <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
       <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
@@ -1196,6 +1300,7 @@ async function showExpenseForm(id) {
       <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
     </div>
     ${ccFormSection(existingCcLink)}
+    </div>
     </div>
     ${id ? '' : `
         <div id="expenseFormIncomeSection" style="display:none">
@@ -1224,6 +1329,7 @@ async function showExpenseForm(id) {
     updateIncomeBankPreview();
   }
   bindModalSubmit(() => saveExpense(id || null));
+  updateExpenseVoiceFormVisibility();
 }
 
 function setExpenseEntryMode(mode) {
@@ -1315,30 +1421,16 @@ async function saveExpense(id) {
     is_extra: document.getElementById('eExtra').checked,
     bank_account_id: bankVal ? parseInt(bankVal, 10) : null,
   };
-  if (body.category && body.category.length > 80) { toast('Category must be 80 characters or fewer', 'warning'); return; }
-  if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
-  const amountValue = parseFloat(body.amount);
-  if (!Number.isFinite(amountValue) || amountValue <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
   const ccChecked = !!document.getElementById('ccLink')?.checked;
   const manualCardId = parseInt(document.getElementById('ccLinkCard')?.value || '', 10) || 0;
   const manualDiscPct = parseFloat(document.getElementById('ccLinkDisc')?.value || '0') || 0;
-  if (!id && Array.isArray(_expenseVoiceBatch) && _expenseVoiceBatch.length > 1) {
+  if (!id && Array.isArray(_expenseVoiceBatch) && _expenseVoiceBatch.length) {
     const batchRows = _expenseVoiceBatch
-      .map((entry, index) => {
-        if (index === 0) {
-          return {
-            body: { ...body, amount: amountValue },
-            card: {
-              cardId: ccChecked ? manualCardId : Number(entry?.card_id || 0),
-              cardDiscount: ccChecked ? manualDiscPct : Number(entry?.card_discount_pct || 0),
-              amount: amountValue,
-            },
-          };
-        }
+      .map((entry) => {
         const entryAmount = Number(entry?.amount || 0);
         return {
           body: {
-            item_name: String(entry?.item_name || '').trim(),
+            item_name: String(entry?.item_name || entry?.merchant || '').trim(),
             category: String(entry?.category || '').trim() || null,
             amount: entryAmount,
             purchase_date: String(entry?.purchase_date || '').slice(0, 10) || todayStr(),
@@ -1346,8 +1438,8 @@ async function saveExpense(id) {
             bank_account_id: entry?.bank_account_id ? Number(entry.bank_account_id) : null,
           },
           card: {
-            cardId: ccChecked ? manualCardId : Number(entry?.card_id || 0),
-            cardDiscount: ccChecked ? manualDiscPct : Number(entry?.card_discount_pct || 0),
+            cardId: Number(entry?.card_id || 0),
+            cardDiscount: Number(entry?.card_discount_pct || 0),
             amount: entryAmount,
           },
         };
@@ -1366,6 +1458,10 @@ async function saveExpense(id) {
     toast(`${batchRows.length} expenses added`, 'success');
     return;
   }
+  if (body.category && body.category.length > 80) { toast('Category must be 80 characters or fewer', 'warning'); return; }
+  if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
+  const amountValue = parseFloat(body.amount);
+  if (!Number.isFinite(amountValue) || amountValue <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
   let r;
   if (id) {
     r = await api(`/api/expenses/${id}`, { method: 'PUT', body });
@@ -9255,11 +9351,19 @@ async function loadAdminPlans() {
     description: cleanMojibakeText(plan.description),
     pages: Array.isArray(plan.pages) ? plan.pages : [],
     ai_lookup_mode: AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan.ai_lookup_mode)?.key || 'both',
+    voice_ai_enabled: !!plan.voice_ai_enabled,
+    voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
+    voice_ai_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day',
   }));
 
   const cards = normalizedPlans.length ? normalizedPlans.map(p => {
     const pageLabels = p.pages.map(k => ALL_PAGES.find(x => x.key === k)?.label || k).join(', ') || 'â€”';
     const aiModeLabel = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === p.ai_lookup_mode)?.label || 'Both';
+    const voiceLabel = !p.voice_ai_enabled || p.voice_ai_limit === 0
+      ? 'Disabled'
+      : p.voice_ai_limit === -1
+        ? 'Unlimited'
+        : `${p.voice_ai_limit}/${p.voice_ai_limit_period}`;
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -9275,6 +9379,7 @@ async function loadAdminPlans() {
             &nbsp;|&nbsp; Yearly: <b>${p.price_yearly>0?fmtCur(p.price_yearly):'Free'}</b>
             &nbsp;|&nbsp; AI Queries/day: <b>${p.ai_query_limit===-1||p.ai_query_limit==null?'Unlimited':p.ai_query_limit===0?'None':p.ai_query_limit}</b>
             &nbsp;|&nbsp; AI Mode: <b>${escHtml(aiModeLabel)}</b>
+            &nbsp;|&nbsp; Voice AI: <b>${escHtml(voiceLabel)}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -9305,6 +9410,9 @@ async function showPlanModal(planId) {
   ).join('');
   const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
   const aiLookupModeVal = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan?.ai_lookup_mode)?.key || 'both';
+  const voiceEnabledVal = !!plan?.voice_ai_enabled;
+  const voiceLimitVal = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
+  const voicePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day';
   window.__modalClassName = 'modal-wide plan-editor-modal';
   openModal(plan ? `Edit Plan: ${plan.name}` : 'New Plan', `
     <div class="plan-modal-shell">
@@ -9336,6 +9444,31 @@ async function showPlanModal(planId) {
             `).join('')}
           </div>
           <div class="plan-field-help">Choose whether this plan sees Offline AI, Online AI, both, or neither.</div>
+        </div>
+        <div class="plan-mode-group" style="margin-top:16px">
+          <div class="plan-mode-label">Voice AI</div>
+          <div class="plan-toggle-grid" style="margin-bottom:12px">
+            <label class="plan-toggle-tile ${voiceEnabledVal?'checked':''}">
+              <input type="checkbox" id="pVoiceEnabled" ${voiceEnabledVal?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked);_toggleVoicePlanFields()">
+              <span class="plan-toggle-title">Enable Voice AI</span>
+              <span class="plan-toggle-sub">Allow voice-based expense and live split insertion</span>
+            </label>
+          </div>
+          <div id="pVoiceFields" style="${voiceEnabledVal ? '' : 'opacity:.6'}">
+            <label class="fl full">Voice AI usage limit
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pVoiceLimit" value="${voiceLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateVoiceLimitHint()">
+                <select class="fi" id="pVoicePeriod" style="max-width:180px" onchange="_updateVoiceLimitHint()">
+                  <option value="day" ${voicePeriodVal==='day'?'selected':''}>Per day</option>
+                  <option value="week" ${voicePeriodVal==='week'?'selected':''}>Per week</option>
+                  <option value="month" ${voicePeriodVal==='month'?'selected':''}>Per month</option>
+                  <option value="year" ${voicePeriodVal==='year'?'selected':''}>Per year</option>
+                </select>
+                <span id="pVoiceLimitHint" class="plan-ai-limit-badge"></span>
+              </div>
+              <div class="plan-field-help">-1 = Unlimited · 0 = No voice usage · Positive number = cap for the selected time period</div>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -9375,6 +9508,7 @@ async function showPlanModal(planId) {
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
   window.__modalClassName = '';
+  _updateVoiceLimitHint();
 }
 
 function _updateAiLimitHint(val) {
@@ -9382,6 +9516,30 @@ function _updateAiLimitHint(val) {
   const hint = document.getElementById('pAiLimitHint');
   if (!hint) return;
   hint.textContent = isNaN(n) ? '' : n === -1 ? 'Unlimited' : n === 0 ? 'No AI access' : `${n} queries/day`;
+}
+
+function _toggleVoicePlanFields() {
+  const enabled = !!document.getElementById('pVoiceEnabled')?.checked;
+  const wrap = document.getElementById('pVoiceFields');
+  if (wrap) wrap.style.opacity = enabled ? '1' : '.6';
+  _updateVoiceLimitHint();
+}
+
+function _updateVoiceLimitHint() {
+  const enabled = !!document.getElementById('pVoiceEnabled')?.checked;
+  const rawLimit = parseInt(document.getElementById('pVoiceLimit')?.value ?? '0', 10);
+  const period = document.getElementById('pVoicePeriod')?.value || 'day';
+  const hint = document.getElementById('pVoiceLimitHint');
+  if (!hint) return;
+  if (!enabled) {
+    hint.textContent = 'Disabled';
+    return;
+  }
+  if (Number.isNaN(rawLimit)) {
+    hint.textContent = '';
+    return;
+  }
+  hint.textContent = rawLimit === -1 ? 'Unlimited' : rawLimit === 0 ? 'No voice access' : `${rawLimit}/${period}`;
 }
 
 function setPlanAiMode(mode) {
@@ -9408,6 +9566,9 @@ async function adminSavePlan(planId) {
     auto_assign_on_signup: document.getElementById('pSignupDefault').checked ? 1 : 0,
     ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
     ai_lookup_mode: document.getElementById('pAiMode')?.value || 'both',
+    voice_ai_enabled: document.getElementById('pVoiceEnabled')?.checked ? 1 : 0,
+    voice_ai_limit: parseInt(document.getElementById('pVoiceLimit')?.value ?? '0', 10) || 0,
+    voice_ai_limit_period: document.getElementById('pVoicePeriod')?.value || 'day',
     pages,
   };
   const r = planId
@@ -14913,6 +15074,7 @@ function renderHabitTrackerGrid() {
           <button class="btn btn-g btn-sm" onclick="habitMonthStep(-1);loadHabitTracker()">←</button>
           <span style="min-width:120px;text-align:center;font-weight:700">${monthLabel}</span>
           <button class="btn btn-g btn-sm" onclick="habitMonthStep(1);loadHabitTracker()" ${atCurrentMonth ? 'disabled' : ''}>→</button>
+          <button class="btn btn-s btn-sm" onclick="downloadHabitTrackersOverviewPdf(${_habitYear}, ${_habitMonth})">PDF</button>
           <button class="btn btn-p btn-sm" onclick="showHabitTrackerModal()">+ Add Habit</button>
         </div>
       </div>
@@ -15005,6 +15167,7 @@ async function renderHabitTrackerDetail() {
           <div style="font-size:12px;color:var(--t2);margin-top:4px">Default daily value: ${Number(tracker.default_value || 0)} · ${escHtml(tracker.notes || 'No notes')}</div>
         </div>
         <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick='downloadHabitTrackerDetailPdf(${tracker.id}, ${JSON.stringify(tracker.name || 'Habit')}, ${_habitYear}, ${_habitMonth})'>PDF</button>
           <button class="btn btn-s btn-sm" onclick="showHabitImportModal(${tracker.id})">Import Excel</button>
           <button class="btn btn-g btn-sm" onclick="showHabitTrackerModal(${tracker.id})">Edit</button>
         </div>

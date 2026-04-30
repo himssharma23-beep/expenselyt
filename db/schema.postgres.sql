@@ -950,3 +950,18 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_lookup_mode TEXT NOT NULL DEFAULT 
 UPDATE plans
 SET ai_lookup_mode = 'both'
 WHERE ai_lookup_mode IS NULL OR ai_lookup_mode NOT IN ('none', 'offline', 'online', 'both');
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS voice_ai_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS voice_ai_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS voice_ai_limit_period TEXT NOT NULL DEFAULT 'day';
+UPDATE plans
+SET voice_ai_limit_period = 'day'
+WHERE voice_ai_limit_period IS NULL OR voice_ai_limit_period NOT IN ('day', 'week', 'month', 'year');
+
+CREATE TABLE IF NOT EXISTS voice_ai_usage (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  feature_key TEXT NOT NULL DEFAULT 'expense_voice',
+  source_mode TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_voice_ai_usage_user_created ON voice_ai_usage (user_id, created_at DESC);

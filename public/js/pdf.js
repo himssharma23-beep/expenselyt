@@ -1019,3 +1019,89 @@ async function downloadTrackersOverviewPdf(year, month) {
   );
   _P.save(doc, `Trackers_Overview_${label}`);
 }
+
+// —— Habit Tracker — Monthly Overview ————————————————————————————————
+async function downloadHabitTrackersOverviewPdf(year, month) {
+  const label = `${_P.MONTHS[month - 1]} ${year}`;
+  const data = await api(`/api/habit-trackers?year=${year}&month=${month}`);
+  if (!data) return;
+  const trackers = data.trackers || [];
+  const activeTrackers = trackers.filter((item) => !!item.is_active);
+  const totalDaysAtOne = trackers.reduce((sum, item) => sum + Number(item.month_one_days || 0), 0);
+  const totalTrackedDays = trackers.reduce((sum, item) => sum + Number(item.month_total_days || 0), 0);
+
+  const doc = _P.init(true);
+  let y = _P.header(doc, 'Habit Tracker Overview', `${label} · ${trackers.length} habit${trackers.length !== 1 ? 's' : ''}`);
+  y = _P.cards(doc, y, [
+    { label: 'Total Habits', value: trackers.length, color: '' },
+    { label: 'Active Habits', value: activeTrackers.length, color: 'green' },
+    { label: 'Days At 1', value: totalDaysAtOne, color: '' },
+    { label: 'Tracked Days', value: totalTrackedDays, color: '' },
+  ]);
+  _P.table(doc, y,
+    [['Habit', 'Status', 'Default Value', 'Days At 1', 'Month Days', 'Progress']],
+    trackers.map((item) => [
+      item.name || 'Habit',
+      item.is_active ? 'Active' : 'Paused',
+      Number(item.default_value || 0),
+      Number(item.month_one_days || 0),
+      Number(item.month_total_days || 0),
+      `${Number(item.month_percent || 0).toFixed(2)}%`,
+    ]),
+    {
+      2: { halign: 'center', cellWidth: 28 },
+      3: { halign: 'right', cellWidth: 28 },
+      4: { halign: 'right', cellWidth: 28 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 28 },
+    },
+    true
+  );
+  _P.save(doc, `Habit_Tracker_Overview_${label}`);
+}
+
+// —— Habit Tracker — Month Detail —————————————————————————————————————
+async function downloadHabitTrackerDetailPdf(trackerId, trackerName, year, month) {
+  const [trackersRes, entriesRes, summaryRes, yearRes] = await Promise.all([
+    api(`/api/habit-trackers?year=${year}&month=${month}`),
+    api(`/api/habit-trackers/${trackerId}/entries?year=${year}&month=${month}`),
+    api(`/api/habit-trackers/${trackerId}/summary?year=${year}&month=${month}`),
+    api(`/api/habit-trackers/${trackerId}/year-summary?year=${year}`),
+  ]);
+  const tracker = (trackersRes?.trackers || []).find((item) => String(item.id) === String(trackerId)) || {};
+  const entries = entriesRes?.entries || [];
+  const summary = summaryRes?.summary || {};
+  const yearSummary = yearRes?.summary || {};
+  const label = `${_P.MONTHS[month - 1]} ${year}`;
+  const entryMap = {};
+  entries.forEach((entry) => { entryMap[String(entry.entry_date || '').slice(0, 10)] = entry; });
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const doc = _P.init();
+  let y = _P.header(doc, `Habit Tracker - ${trackerName || tracker.name || 'Habit'}`, label);
+  y = _P.note(doc, y, `Default daily value: ${Number(tracker.default_value || 0)} · ${tracker.notes || 'No notes'}`);
+  y = _P.cards(doc, y, [
+    { label: 'Month Days At 1', value: Number(summary.one_days || 0), color: '' },
+    { label: 'Month Progress', value: `${Number(summary.percent || 0).toFixed(2)}%`, color: 'green' },
+    { label: 'Year Days At 1', value: Number(yearSummary.one_days || 0), color: '' },
+    { label: 'Year Progress', value: `${Number(yearSummary.percent || 0).toFixed(2)}%`, color: 'green' },
+  ]);
+  _P.table(doc, y,
+    [['Date', 'Day', 'Value', 'Status']],
+    Array.from({ length: daysInMonth }, (_, index) => {
+      const rawDate = `${year}-${String(month).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`;
+      const entry = entryMap[rawDate] || { entry_value: Number(tracker.default_value || 0), is_auto: true };
+      return [
+        _P.dt(rawDate),
+        new Date(`${rawDate}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short' }),
+        Number(entry.entry_value || 0) ? 1 : 0,
+        entry.is_auto ? 'Default' : 'Edited',
+      ];
+    }),
+    {
+      1: { halign: 'center', cellWidth: 28 },
+      2: { halign: 'center', cellWidth: 24, fontStyle: 'bold' },
+      3: { halign: 'center', cellWidth: 32 },
+    }
+  );
+  _P.save(doc, `Habit_${trackerName || tracker.name || 'Tracker'}_${label}`);
+}

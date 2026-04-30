@@ -15,6 +15,32 @@ const DEFAULT_LOCALE_BY_CURRENCY = {
   CNY: 'zh-CN',
 };
 
+const ADMIN_ACCESS_PAGES = [
+  'dashboard',
+  'expenses',
+  'friends',
+  'divide',
+  'livesplit',
+  'petroldivide',
+  'petrol_fake',
+  'trips',
+  'reports',
+  'emi',
+  'emitracker',
+  'friendemis',
+  'creditcards',
+  'banks',
+  'planner',
+  'tracker',
+  'habittracker',
+  'expense_scan',
+  'smartcapture',
+  'recurring',
+  'ailookup',
+  'notifications',
+  'admin',
+];
+
 function normalizeCurrencyCode(code) {
   if (!code) return null;
   const normalized = String(code).trim().toUpperCase();
@@ -54,6 +80,9 @@ function normalizePlan(row) {
     price_yearly: Number(row.price_yearly || 0),
     ai_query_limit: row.ai_query_limit != null ? Number(row.ai_query_limit) : -1,
     ai_lookup_mode: normalizeAiLookupMode(row.ai_lookup_mode),
+    voice_ai_enabled: !!row.voice_ai_enabled,
+    voice_ai_limit: row.voice_ai_limit != null ? Number(row.voice_ai_limit) : 0,
+    voice_ai_limit_period: normalizeVoiceAiLimitPeriod(row.voice_ai_limit_period),
   };
 }
 
@@ -69,6 +98,16 @@ function aiLookupModesFromMode(mode) {
     offline: normalized === 'offline' || normalized === 'both',
     online: normalized === 'online' || normalized === 'both',
   };
+}
+
+function normalizeVoiceAiLimitPeriod(period) {
+  const value = String(period || '').trim().toLowerCase();
+  return ['day', 'week', 'month', 'year'].includes(value) ? value : 'day';
+}
+
+function isMissingVoiceAiUsageTableError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return err?.code === '42P01' && message.includes('voice_ai_usage');
 }
 
 function normalizeSubscription(row) {
@@ -889,8 +928,8 @@ async function createPlan(data) {
       await client.query('UPDATE plans SET auto_assign_on_signup = FALSE');
     }
     const result = await client.query(
-      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit, ai_lookup_mode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit, ai_lookup_mode, voice_ai_enabled, voice_ai_limit, voice_ai_limit_period)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         data.name,
@@ -902,6 +941,9 @@ async function createPlan(data) {
         !!data.auto_assign_on_signup,
         data.ai_query_limit != null ? Number(data.ai_query_limit) : -1,
         normalizeAiLookupMode(data.ai_lookup_mode),
+        !!data.voice_ai_enabled,
+        data.voice_ai_limit != null ? Number(data.voice_ai_limit) : 0,
+        normalizeVoiceAiLimitPeriod(data.voice_ai_limit_period),
       ]
     );
     const planId = Number(result.rows[0].id);
@@ -954,6 +996,18 @@ async function updatePlan(id, data) {
     if (data.ai_lookup_mode !== undefined) {
       params.push(normalizeAiLookupMode(data.ai_lookup_mode));
       fields.push(`ai_lookup_mode = $${params.length}`);
+    }
+    if (data.voice_ai_enabled !== undefined) {
+      params.push(!!data.voice_ai_enabled);
+      fields.push(`voice_ai_enabled = $${params.length}`);
+    }
+    if (data.voice_ai_limit !== undefined) {
+      params.push(Number(data.voice_ai_limit));
+      fields.push(`voice_ai_limit = $${params.length}`);
+    }
+    if (data.voice_ai_limit_period !== undefined) {
+      params.push(normalizeVoiceAiLimitPeriod(data.voice_ai_limit_period));
+      fields.push(`voice_ai_limit_period = $${params.length}`);
     }
     if (fields.length > 0) {
       params.push(id);
@@ -1077,7 +1131,7 @@ async function getUserAccessiblePages(userId) {
   const user = userResult.rows[0];
   if (!user) return ['dashboard'];
   if (user.role === 'admin') {
-    return ['dashboard', 'expenses', 'friends', 'divide', 'livesplit', 'petroldivide', 'trips', 'reports', 'emi', 'emitracker', 'friendemis', 'creditcards', 'banks', 'planner', 'tracker', 'habittracker', 'recurring', 'ailookup', 'notifications', 'admin'];
+    return [...ADMIN_ACCESS_PAGES];
   }
 
   const pages = new Set(['dashboard']);
@@ -1136,6 +1190,157 @@ async function getUserAiLookupModes(userId) {
   if (allowOnline) return aiLookupModesFromMode('online');
   if (allowOffline) return aiLookupModesFromMode('offline');
   return aiLookupModesFromMode('none');
+}
+
+function voiceAiRangeStart(period = 'day') {
+  const now = new Date();
+  const start = new Date(now);
+  if (period === 'year') {
+    start.setMonth(0, 1);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  if (period === 'month') {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  if (period === 'week') {
+    const day = start.getDay();
+    const diff = (day + 6) % 7;
+    start.setDate(start.getDate() - diff);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+async function ensureVoiceAiUsageTable() {
+  await query(
+    `CREATE TABLE IF NOT EXISTS voice_ai_usage (
+       id BIGSERIAL PRIMARY KEY,
+       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       feature_key TEXT NOT NULL DEFAULT 'expense_voice',
+       source_mode TEXT,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`
+  );
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_voice_ai_usage_user_created
+     ON voice_ai_usage (user_id, created_at DESC)`
+  );
+}
+
+async function getUserVoiceAiAccess(userId) {
+  const userResult = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const user = userResult.rows[0];
+  if (!user) {
+    return { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false, message: 'Voice AI is not available.' };
+  }
+  if (user.role === 'admin') {
+    return { enabled: true, limit: -1, period: 'day', used: 0, remaining: -1, unlimited: true, can_use: true, is_admin: true, message: 'Admin account - unlimited voice AI.' };
+  }
+  const planResult = await query(
+    `SELECT p.name, p.voice_ai_enabled, p.voice_ai_limit, p.voice_ai_limit_period
+     FROM user_subscriptions s
+     JOIN plans p ON p.id = s.plan_id
+     WHERE s.user_id = $1
+       AND s.status = 'active'
+       AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+     ORDER BY s.id DESC
+     LIMIT 1`,
+    [userId]
+  );
+  const plan = planResult.rows[0] || null;
+  const enabled = !!plan?.voice_ai_enabled;
+  const limit = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
+  const period = normalizeVoiceAiLimitPeriod(plan?.voice_ai_limit_period);
+  if (!enabled || limit === 0) {
+    return {
+      enabled: false,
+      limit,
+      period,
+      used: 0,
+      remaining: 0,
+      unlimited: false,
+      can_use: false,
+      is_admin: false,
+      plan_name: plan?.name || null,
+      message: 'Voice AI is not included in your current plan.',
+    };
+  }
+  if (limit === -1) {
+    return {
+      enabled: true,
+      limit: -1,
+      period,
+      used: 0,
+      remaining: -1,
+      unlimited: true,
+      can_use: true,
+      is_admin: false,
+      plan_name: plan?.name || null,
+      message: `Unlimited voice AI on your ${plan?.name || 'plan'}.`,
+    };
+  }
+  const rangeStart = voiceAiRangeStart(period);
+  let usageResult;
+  try {
+    usageResult = await query(
+      `SELECT COUNT(*)::int AS used
+       FROM voice_ai_usage
+       WHERE user_id = $1
+         AND created_at >= $2`,
+      [userId, rangeStart.toISOString()]
+    );
+  } catch (err) {
+    if (!isMissingVoiceAiUsageTableError(err)) throw err;
+    await ensureVoiceAiUsageTable();
+    usageResult = await query(
+      `SELECT COUNT(*)::int AS used
+       FROM voice_ai_usage
+       WHERE user_id = $1
+         AND created_at >= $2`,
+      [userId, rangeStart.toISOString()]
+    );
+  }
+  const used = Number(usageResult.rows[0]?.used || 0);
+  const remaining = Math.max(0, limit - used);
+  return {
+    enabled: true,
+    limit,
+    period,
+    used,
+    remaining,
+    unlimited: false,
+    can_use: remaining > 0,
+    is_admin: false,
+    plan_name: plan?.name || null,
+    message: `${remaining} voice AI use${remaining === 1 ? '' : 's'} remaining this ${period}.`,
+  };
+}
+
+async function consumeUserVoiceAiUsage(userId, featureKey = 'expense_voice', sourceMode = null) {
+  const userResult = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [userId]);
+  if (userResult.rows[0]?.role === 'admin') return true;
+  const params = [userId, String(featureKey || 'expense_voice').trim() || 'expense_voice', sourceMode ? String(sourceMode).trim() : null];
+  try {
+    await query(
+      `INSERT INTO voice_ai_usage (user_id, feature_key, source_mode)
+       VALUES ($1, $2, $3)`,
+      params
+    );
+  } catch (err) {
+    if (!isMissingVoiceAiUsageTableError(err)) throw err;
+    await ensureVoiceAiUsageTable();
+    await query(
+      `INSERT INTO voice_ai_usage (user_id, feature_key, source_mode)
+       VALUES ($1, $2, $3)`,
+      params
+    );
+  }
+  return true;
 }
 
 async function generateOtp(userId, purpose, channel) {
@@ -1263,6 +1468,8 @@ module.exports = {
   updatePlan,
   deletePlan,
   getUserAiLookupModes,
+  getUserVoiceAiAccess,
+  consumeUserVoiceAiUsage,
   getSubscriptions,
   createSubscription,
   assignSignupPlanToUser,
