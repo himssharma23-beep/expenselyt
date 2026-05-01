@@ -467,10 +467,14 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
        SELECT
          f.id,
          f.name,
+         f.deleted_at,
          f.linked_user_id,
          FIRST_VALUE(f.id) OVER (
            PARTITION BY f.linked_user_id
            ORDER BY
+             CASE
+               WHEN f.deleted_at IS NULL THEN 0 ELSE 1
+             END,
              CASE
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.display_name, ''))) THEN 0
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.username, ''))) THEN 1
@@ -482,6 +486,9 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
            PARTITION BY f.linked_user_id
            ORDER BY
              CASE
+               WHEN f.deleted_at IS NULL THEN 0 ELSE 1
+             END,
+             CASE
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.display_name, ''))) THEN 0
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.username, ''))) THEN 1
                ELSE 2
@@ -491,7 +498,6 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
        FROM live_split_friends f
        LEFT JOIN users u ON u.id = f.linked_user_id
        WHERE f.user_id = $1
-         AND f.deleted_at IS NULL
          AND f.linked_user_id IS NOT NULL
          AND f.linked_user_id <> $1
      )
@@ -510,10 +516,49 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
     `WITH ranked AS (
        SELECT
          f.id,
+         f.deleted_at,
          f.linked_user_id,
          FIRST_VALUE(f.id) OVER (
            PARTITION BY f.linked_user_id
            ORDER BY
+             CASE
+               WHEN f.deleted_at IS NULL THEN 0 ELSE 1
+             END,
+             CASE
+               WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.display_name, ''))) THEN 0
+               WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.username, ''))) THEN 1
+               ELSE 2
+             END,
+             f.id
+        ) AS canonical_id
+       FROM live_split_friends f
+       LEFT JOIN users u ON u.id = f.linked_user_id
+       WHERE f.user_id = $1
+         AND f.linked_user_id IS NOT NULL
+         AND f.linked_user_id <> $1
+     )
+     UPDATE live_split_group_shares gs
+     SET friend_id = r.canonical_id,
+         updated_at = NOW()
+     FROM ranked r
+     WHERE gs.owner_user_id = $1
+       AND gs.friend_id = r.id
+       AND r.canonical_id <> r.id`,
+    [ownerId]
+  );
+
+  await query(
+    `WITH ranked AS (
+       SELECT
+         f.id,
+         f.deleted_at,
+         f.linked_user_id,
+         FIRST_VALUE(f.id) OVER (
+           PARTITION BY f.linked_user_id
+           ORDER BY
+             CASE
+               WHEN f.deleted_at IS NULL THEN 0 ELSE 1
+             END,
              CASE
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.display_name, ''))) THEN 0
                WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.username, ''))) THEN 1
@@ -524,16 +569,49 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
        FROM live_split_friends f
        LEFT JOIN users u ON u.id = f.linked_user_id
        WHERE f.user_id = $1
-         AND f.deleted_at IS NULL
          AND f.linked_user_id IS NOT NULL
          AND f.linked_user_id <> $1
      )
-     UPDATE live_split_group_shares gs
-     SET friend_id = r.canonical_id,
-         updated_at = NOW()
+     UPDATE live_split_trip_members tm
+     SET friend_id = r.canonical_id
+     FROM ranked r, live_split_trips t
+     WHERE t.user_id = $1
+       AND t.id = tm.trip_id
+       AND tm.friend_id = r.id
+       AND r.canonical_id <> r.id`,
+    [ownerId]
+  );
+
+  await query(
+    `WITH ranked AS (
+       SELECT
+         f.id,
+         f.deleted_at,
+         f.linked_user_id,
+         FIRST_VALUE(f.id) OVER (
+           PARTITION BY f.linked_user_id
+           ORDER BY
+             CASE
+               WHEN f.deleted_at IS NULL THEN 0 ELSE 1
+             END,
+             CASE
+               WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.display_name, ''))) THEN 0
+               WHEN lower(trim(f.name)) = lower(trim(COALESCE(u.username, ''))) THEN 1
+               ELSE 2
+             END,
+             f.id
+         ) AS canonical_id
+       FROM live_split_friends f
+       LEFT JOIN users u ON u.id = f.linked_user_id
+       WHERE f.user_id = $1
+         AND f.linked_user_id IS NOT NULL
+         AND f.linked_user_id <> $1
+     )
+     UPDATE live_split_friend_activity a
+     SET friend_id = r.canonical_id
      FROM ranked r
-     WHERE gs.owner_user_id = $1
-       AND gs.friend_id = r.id
+     WHERE a.owner_user_id = $1
+       AND a.friend_id = r.id
        AND r.canonical_id <> r.id`,
     [ownerId]
   );
@@ -922,13 +1000,63 @@ async function getLiveSplitFriends(userId) {
 
 async function addLiveSplitFriend(userId, name) {
   const safeName = validateFriendName(name);
-  const result = await query(
-    `INSERT INTO live_split_friends (user_id, name)
-     VALUES ($1, $2)
-     RETURNING id`,
-    [userId, safeName]
-  );
-  return Number(result.rows[0].id);
+  return withTransaction(async (client) => {
+    const activeR = await client.query(
+      `SELECT id
+       FROM live_split_friends
+       WHERE user_id = $1
+         AND deleted_at IS NULL
+         AND lower(trim(name)) = lower(trim($2))
+       ORDER BY id ASC
+       LIMIT 1`,
+      [userId, safeName]
+    );
+    if (activeR.rows[0]?.id) {
+      await reconcileLiveSplitLinksForOwner(Number(userId));
+      await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
+      return Number(activeR.rows[0].id);
+    }
+
+    const deletedR = await client.query(
+      `SELECT id
+       FROM live_split_friends
+       WHERE user_id = $1
+         AND deleted_at IS NOT NULL
+         AND lower(trim(name)) = lower(trim($2))
+       ORDER BY
+         CASE WHEN linked_user_id IS NOT NULL THEN 0 ELSE 1 END,
+         id ASC
+       LIMIT 1`,
+      [userId, safeName]
+    );
+    if (deletedR.rows[0]?.id) {
+      await client.query(
+        `UPDATE live_split_friends
+         SET name = $1,
+             deleted_at = NULL,
+             deleted_by = NULL,
+             is_active = TRUE,
+             updated_at = NOW(),
+             updated_by = $2
+         WHERE id = $3
+           AND user_id = $2`,
+        [safeName, userId, Number(deletedR.rows[0].id)]
+      );
+      await reconcileLiveSplitLinksForOwner(Number(userId));
+      await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
+      return Number(deletedR.rows[0].id);
+    }
+
+    const result = await client.query(
+      `INSERT INTO live_split_friends (user_id, name)
+       VALUES ($1, $2)
+       RETURNING id`,
+      [userId, safeName]
+    );
+    await reconcileLiveSplitLinksForOwner(Number(userId));
+    await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
+    return Number(result.rows[0].id);
+  });
 }
 
 async function updateLiveSplitFriend(userId, id, name) {
@@ -2506,6 +2634,31 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
 }
 
 async function getReceivedLiveSplitShares(userId) {
+  const ownerRowsR = await query(
+    `SELECT DISTINCT g.user_id
+     FROM live_split_groups g
+     JOIN live_split_splits s ON s.group_id = g.id
+     LEFT JOIN live_split_friends f
+       ON f.id = s.friend_id
+      AND f.user_id = g.user_id
+     LEFT JOIN live_split_friends f2
+       ON f2.user_id = g.user_id
+      AND f2.deleted_at IS NULL
+      AND f2.linked_user_id = $1::bigint
+      AND (
+        lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
+        OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+           = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+      )
+     WHERE COALESCE(NULLIF(f.linked_user_id, g.user_id), 0) = $1::bigint
+        OR f2.id IS NOT NULL`,
+    [userId]
+  );
+  for (const row of (ownerRowsR.rows || [])) {
+    const ownerId = Number(row?.user_id || 0);
+    if (ownerId > 0) await canonicalizeLiveSplitFriendRowsForOwner(ownerId);
+  }
+
   const shareHydrationSql = `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id)
      SELECT DISTINCT
        g.id,
