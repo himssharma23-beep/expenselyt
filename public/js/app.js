@@ -671,6 +671,16 @@ function showProfileSettings() {
         <label class="fl full"><input class="fi" id="pfConfirmPwd" type="password" placeholder="Confirm new password"></label>
       </div>
     </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--t2)">LOGGED IN DEVICES</div>
+          <div id="pfSessionSummary" style="font-size:12px;color:var(--t3);margin-top:4px">Loading active devices...</div>
+        </div>
+        <button class="btn" onclick="logoutOtherDevices()" style="white-space:nowrap">Logout All Other Devices</button>
+      </div>
+      <div id="pfSessionsList" style="display:grid;gap:10px"></div>
+    </div>
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="saveProfileSettings()">Save Changes</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
@@ -678,6 +688,7 @@ function showProfileSettings() {
     </div>`);
   const body = document.querySelector('#modalContent .modal-body');
   if (body) body.insertAdjacentHTML('beforeend', formatAuditMeta(_currentUser));
+  setTimeout(() => { loadActiveLoginSessions(); }, 0);
 }
 
 function formatAuditMeta(user) {
@@ -693,6 +704,87 @@ function formatAuditMeta(user) {
         ${rows.map(([label, value]) => `<div><span style="font-weight:600;color:var(--t1)">${label}:</span> ${escHtml(value)}</div>`).join('')}
       </div>
     </div>`;
+}
+
+function formatSessionStamp(value) {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleString();
+}
+
+function renderActiveLoginSessions(payload = {}) {
+  const listEl = document.getElementById('pfSessionsList');
+  const summaryEl = document.getElementById('pfSessionSummary');
+  if (!listEl || !summaryEl) return;
+  const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+  const summary = payload.summary || {};
+  summaryEl.textContent = `${summary.total || sessions.length} active login${(summary.total || sessions.length) === 1 ? '' : 's'} | ${summary.browsers || 0} browser | ${summary.mobile || 0} mobile`;
+  if (!sessions.length) {
+    listEl.innerHTML = `<div style="font-size:13px;color:var(--t3);padding:12px 0">No active sessions found.</div>`;
+    return;
+  }
+  listEl.innerHTML = sessions.map((session) => `
+    <div style="border:1px solid var(--border);border-radius:14px;padding:12px 14px;background:${session.current ? 'var(--greenPale)' : '#fff'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="font-weight:700;color:var(--t1)">${escHtml(session.label || 'Device')}</div>
+            ${session.current ? '<span style="font-size:11px;font-weight:700;color:var(--green);background:#eaf8f0;border:1px solid #cdebd8;border-radius:999px;padding:2px 8px">Current</span>' : ''}
+          </div>
+          <div style="font-size:12px;color:var(--t2);margin-top:4px">${escHtml(session.subtitle || '')}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">Signed in: ${escHtml(formatSessionStamp(session.created_at))}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">Last active: ${escHtml(formatSessionStamp(session.last_seen_at || session.created_at))}</div>
+        </div>
+        <button class="btn" onclick="logoutSingleDevice('${escHtml(session.id)}','${escHtml(session.kind)}',${session.current ? 'true' : 'false'})" style="background:#fff5f5;color:var(--red);border:1px solid #f3c5c5;white-space:nowrap">${session.current ? 'Logout This Device' : 'Logout'}</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadActiveLoginSessions() {
+  const listEl = document.getElementById('pfSessionsList');
+  const summaryEl = document.getElementById('pfSessionSummary');
+  if (!listEl || !summaryEl) return;
+  listEl.innerHTML = `<div style="font-size:13px;color:var(--t3);padding:12px 0">Loading active devices...</div>`;
+  try {
+    const data = await api('/api/auth/sessions');
+    renderActiveLoginSessions(data || {});
+  } catch (err) {
+    summaryEl.textContent = 'Could not load active devices.';
+    listEl.innerHTML = `<div style="font-size:13px;color:var(--red);padding:12px 0">${escHtml(err.message || 'Could not load active devices.')}</div>`;
+  }
+}
+
+async function logoutSingleDevice(sessionId, kind, isCurrent = false) {
+  const confirmed = await confirmDialog(isCurrent ? 'Log out this current device now?' : 'Log out this device?');
+  if (!confirmed) return;
+  try {
+    const data = await api('/api/auth/logout-session', {
+      method: 'POST',
+      body: { session_id: sessionId, kind },
+    });
+    if (data?.current_session_revoked) {
+      window.location.href = data.redirect || '/login';
+      return;
+    }
+    toast('Device logged out', 'success');
+    await loadActiveLoginSessions();
+  } catch (err) {
+    toast(err.message || 'Could not log out that device', 'error');
+  }
+}
+
+async function logoutOtherDevices() {
+  const confirmed = await confirmDialog('Log out every other browser and device except this one?');
+  if (!confirmed) return;
+  try {
+    const data = await api('/api/auth/logout-other-sessions', { method: 'POST' });
+    toast(`Logged out ${Number(data?.revoked_count || 0)} other session${Number(data?.revoked_count || 0) === 1 ? '' : 's'}`, 'success');
+    await loadActiveLoginSessions();
+  } catch (err) {
+    toast(err.message || 'Could not log out other devices', 'error');
+  }
 }
 
 async function uploadCurrentProfilePhoto() {

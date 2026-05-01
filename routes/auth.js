@@ -9,6 +9,16 @@ const { assertPostgresConfigured } = require('../db/provider');
 const { guestOnly, requireAuth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
+
+function buildAuthTokenPayload(userId, displayName, authTag, sessionId = null) {
+  const payload = {
+    userId,
+    displayName,
+    authTag: String(authTag || ''),
+  };
+  if (sessionId) payload.sessionId = String(sessionId);
+  return payload;
+}
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const multer = require('multer');
@@ -97,6 +107,85 @@ function inferPreferences(req) {
     currency_code: currencyCode,
     locale_code: DEFAULT_LOCALE_BY_CURRENCY[currencyCode] || localeCode,
   };
+}
+
+function getAuthTransport(req) {
+  const platform = String(req.headers['x-client-platform'] || '').trim().toLowerCase();
+  if (platform && platform !== 'web') return 'mobile';
+  return 'web';
+}
+
+function parseUserAgent(userAgent) {
+  const ua = String(userAgent || '').trim();
+  const lowered = ua.toLowerCase();
+  let browser = 'Browser';
+  if (lowered.includes('edg/')) browser = 'Edge';
+  else if (lowered.includes('opr/') || lowered.includes('opera')) browser = 'Opera';
+  else if (lowered.includes('chrome/') && !lowered.includes('edg/')) browser = 'Chrome';
+  else if (lowered.includes('firefox/')) browser = 'Firefox';
+  else if (lowered.includes('safari/') && !lowered.includes('chrome/')) browser = 'Safari';
+
+  let os = 'Unknown OS';
+  if (lowered.includes('windows')) os = 'Windows';
+  else if (lowered.includes('android')) os = 'Android';
+  else if (lowered.includes('iphone') || lowered.includes('ipad') || lowered.includes('ios')) os = 'iOS';
+  else if (lowered.includes('mac os') || lowered.includes('macintosh')) os = 'macOS';
+  else if (lowered.includes('linux')) os = 'Linux';
+
+  return { browser, os };
+}
+
+function buildClientInfo(req, transport = getAuthTransport(req)) {
+  const userAgent = String(req.headers['user-agent'] || '').trim();
+  const ipAddress = String((req.headers['x-forwarded-for'] || '').split(',')[0] || req.ip || '').trim() || null;
+  const clientNameHeader = String(req.headers['x-client-name'] || '').trim();
+  const deviceNameHeader = String(req.headers['x-device-name'] || '').trim();
+  const platformHeader = String(req.headers['x-client-platform'] || '').trim().toLowerCase();
+
+  if (transport === 'mobile') {
+    const platform = platformHeader || 'mobile';
+    const clientName = clientNameHeader || 'Expense Lite AI Mobile';
+    const deviceName = deviceNameHeader || `${platform.charAt(0).toUpperCase()}${platform.slice(1)} device`;
+    return {
+      platform,
+      client_name: clientName,
+      device_name: deviceName,
+      user_agent: userAgent || `${clientName} (${platform})`,
+      ip_address: ipAddress,
+      subtitle: `${clientName} - ${platform}`,
+    };
+  }
+
+  const { browser, os } = parseUserAgent(userAgent);
+  return {
+    platform: 'web',
+    client_name: browser,
+    device_name: `${browser} on ${os}`,
+    user_agent: userAgent || `${browser} on ${os}`,
+    ip_address: ipAddress,
+    subtitle: `${browser} - ${os}`,
+  };
+}
+
+function touchWebSessionState(req) {
+  if (!req.session) return;
+  const nowIso = new Date().toISOString();
+  if (!req.session.createdAt) req.session.createdAt = nowIso;
+  req.session.lastSeenAt = nowIso;
+  req.session.deviceInfo = {
+    ...(req.session.deviceInfo || {}),
+    ...buildClientInfo(req, 'web'),
+  };
+}
+
+async function issueAuthToken(req, userId, displayName, authTag) {
+  const transport = getAuthTransport(req);
+  if (transport === 'mobile') {
+    const sessionId = await pgDb.createMobileAuthSession(userId, authTag, buildClientInfo(req, 'mobile'));
+    return jwt.sign(buildAuthTokenPayload(userId, displayName, authTag, sessionId), JWT_SECRET, { expiresIn: '30d' });
+  }
+  touchWebSessionState(req);
+  return jwt.sign(buildAuthTokenPayload(userId, displayName, authTag), JWT_SECRET, { expiresIn: '30d' });
 }
 
 function getAllowedGoogleAudiences() {
@@ -343,10 +432,15 @@ router.post('/api/auth/register', async (req, res) => {
       sendAdminNewUserEmail({ user: { display_name, username, email: normalizedEmail } }),
       sendWelcomeEmail({ to: normalizedEmail, name: display_name }),
     ]);
+    const authTag = await authDb.getUserAuthTag(userId);
+    const transport = getAuthTransport(req);
     req.session.userId = userId;
     req.session.displayName = display_name;
+    req.session.authTag = authTag;
+    req.session.authTransport = transport;
+    if (transport === 'web') touchWebSessionState(req);
 
-    const token = jwt.sign({ userId, displayName: display_name }, JWT_SECRET, { expiresIn: '30d' });
+    const token = await issueAuthToken(req, userId, display_name, authTag);
     res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email: normalizedEmail, mobile: normalizedMobile, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
   } catch (err) {
     console.error('Register error:', err);
@@ -456,10 +550,15 @@ router.post('/api/auth/login', async (req, res) => {
       user = await authDb.updateUserProfile(user.id, prefs);
     }
 
+    const authTag = await authDb.getUserAuthTag(user.id);
+    const transport = getAuthTransport(req);
     req.session.userId = user.id;
     req.session.displayName = user.display_name;
+    req.session.authTag = authTag;
+    req.session.authTransport = transport;
+    if (transport === 'web') touchWebSessionState(req);
 
-    const token = jwt.sign({ userId: user.id, displayName: user.display_name }, JWT_SECRET, { expiresIn: '30d' });
+    const token = await issueAuthToken(req, user.id, user.display_name, authTag);
     res.json({ success: true, redirect: '/', token, user: { id: user.id, display_name: user.display_name, username: user.username, email: user.email, mobile: user.mobile || null, avatar_url: user.avatar_url || null, currency_code: user.currency_code, locale_code: user.locale_code } });
   } catch (err) {
     console.error('Login error:', err);
@@ -565,10 +664,15 @@ router.post('/api/auth/social', async (req, res) => {
       user = await pgDb.updateUserProfile(user.id, prefs);
     }
 
+    const authTag = await pgDb.getUserAuthTag(user.id);
+    const transport = getAuthTransport(req);
     req.session.userId = user.id;
     req.session.displayName = user.display_name;
+    req.session.authTag = authTag;
+    req.session.authTransport = transport;
+    if (transport === 'web') touchWebSessionState(req);
 
-    const token = jwt.sign({ userId: user.id, displayName: user.display_name }, JWT_SECRET, { expiresIn: '30d' });
+    const token = await issueAuthToken(req, user.id, user.display_name, authTag);
     res.json({
       success: true,
       redirect: '/',
@@ -593,18 +697,105 @@ router.post('/api/auth/social', async (req, res) => {
 });
 
 // POST /api/auth/logout
-router.post('/api/auth/logout', (req, res) => {
+router.post('/api/auth/logout', requireAuth, async (req, res) => {
+  try {
+    if (req.session?.authTransport === 'mobile' && req.session?.mobileSessionId) {
+      await pgDb.revokeMobileAuthSession(req.session.userId, req.session.mobileSessionId);
+      return res.json({ success: true, redirect: '/login' });
+    }
+  } catch (_err) {}
   req.session.destroy(() => {
     res.json({ success: true, redirect: '/login' });
   });
 });
 
 // GET /api/auth/me
-router.get('/api/auth/me', async (req, res) => {
+router.get('/api/auth/me', requireAuth, async (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   const user = await pgDb.findUserById(req.session.userId);
   if (!user) return res.status(401).json({ error: 'User not found' });
   res.json(user);
+});
+
+router.get('/api/auth/sessions', requireAuth, async (req, res) => {
+  try {
+    const userId = Number(req.session.userId || 0);
+    const currentBrowserSid = req.session?.authTransport === 'web' ? String(req.sessionID || '') : null;
+    const currentMobileSid = req.session?.authTransport === 'mobile' ? String(req.session.mobileSessionId || '') : null;
+    const [browserSessions, mobileSessions] = await Promise.all([
+      pgDb.listBrowserSessions(userId, currentBrowserSid, req.session?.authTransport === 'web' ? req.session : null),
+      pgDb.listMobileAuthSessions(userId, currentMobileSid),
+    ]);
+    const sessions = [...browserSessions, ...mobileSessions].sort((a, b) => {
+      const aTime = new Date(a.last_seen_at || a.created_at || 0).getTime();
+      const bTime = new Date(b.last_seen_at || b.created_at || 0).getTime();
+      return bTime - aTime;
+    });
+    res.json({
+      success: true,
+      sessions,
+      summary: {
+        total: sessions.length,
+        browsers: browserSessions.length,
+        mobile: mobileSessions.length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load active sessions' });
+  }
+});
+
+router.post('/api/auth/logout-session', requireAuth, async (req, res) => {
+  try {
+    const userId = Number(req.session.userId || 0);
+    const sessionId = String(req.body?.session_id || '').trim();
+    const kind = String(req.body?.kind || '').trim().toLowerCase();
+    if (!sessionId || !['browser', 'mobile'].includes(kind)) {
+      return res.status(400).json({ error: 'Session id and valid kind are required.' });
+    }
+
+    const currentBrowserSid = req.session?.authTransport === 'web' ? String(req.sessionID || '') : '';
+    const currentMobileSid = req.session?.authTransport === 'mobile' ? String(req.session.mobileSessionId || '') : '';
+    const currentSessionRevoked = (
+      (kind === 'browser' && currentBrowserSid && sessionId === currentBrowserSid)
+      || (kind === 'mobile' && currentMobileSid && sessionId === currentMobileSid)
+    );
+
+    let revoked = false;
+    if (kind === 'browser') {
+      if (currentSessionRevoked) {
+        return req.session.destroy(() => {
+          res.json({ success: true, current_session_revoked: true, redirect: '/login' });
+        });
+      }
+      revoked = await pgDb.revokeBrowserSession(userId, sessionId);
+    } else {
+      revoked = await pgDb.revokeMobileAuthSession(userId, sessionId);
+      if (currentSessionRevoked) {
+        return res.json({ success: true, current_session_revoked: true, redirect: '/login' });
+      }
+    }
+
+    if (!revoked) return res.status(404).json({ error: 'That session was not found.' });
+    res.json({ success: true, current_session_revoked: false });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not log out that session' });
+  }
+});
+
+router.post('/api/auth/logout-other-sessions', requireAuth, async (req, res) => {
+  try {
+    const userId = Number(req.session.userId || 0);
+    const currentBrowserSid = req.session?.authTransport === 'web' ? String(req.sessionID || '') : null;
+    const currentMobileSid = req.session?.authTransport === 'mobile' ? String(req.session.mobileSessionId || '') : null;
+    const [browserCount, mobileCount] = await Promise.all([
+      pgDb.revokeOtherBrowserSessions(userId, currentBrowserSid),
+      pgDb.revokeOtherMobileAuthSessions(userId, currentMobileSid),
+    ]);
+    res.json({ success: true, revoked_count: Number(browserCount || 0) + Number(mobileCount || 0) });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not log out other devices' });
+  }
 });
 
 router.put('/api/auth/profile', requireAuth, async (req, res) => {
@@ -620,8 +811,22 @@ router.put('/api/auth/profile', requireAuth, async (req, res) => {
 router.post('/api/auth/change-password', requireAuth, async (req, res) => {
   try {
     const { current_password, new_password } = req.body || {};
-    await pgDb.changeUserPassword(req.session.userId, current_password, new_password);
-    res.json({ success: true });
+    const result = await pgDb.changeUserPassword(req.session.userId, current_password, new_password);
+    const user = await pgDb.findUserById(req.session.userId);
+    const authTag = String(result?.auth_tag || '');
+    if (req.session) {
+      req.session.authTag = authTag;
+      req.session.displayName = user?.display_name || req.session.displayName;
+    }
+    let token;
+    if (req.session?.authTransport === 'mobile' && req.session?.mobileSessionId) {
+      await pgDb.refreshMobileAuthSessionAuthTag(req.session.mobileSessionId, req.session.userId, authTag);
+      token = jwt.sign(buildAuthTokenPayload(req.session.userId, user?.display_name || req.session.displayName || '', authTag, req.session.mobileSessionId), JWT_SECRET, { expiresIn: '30d' });
+    } else {
+      touchWebSessionState(req);
+      token = jwt.sign(buildAuthTokenPayload(req.session.userId, user?.display_name || req.session.displayName || '', authTag), JWT_SECRET, { expiresIn: '30d' });
+    }
+    res.json({ success: true, token });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

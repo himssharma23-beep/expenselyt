@@ -4900,7 +4900,7 @@ router.get('/emi/summary', async (req, res) => {
 });
 
 // ─── Current user access ─────────────────────────────────────
-router.get('/auth/me/access', (req, res) => {
+router.get('/auth/me/access', requireAuth, (req, res) => {
   Promise.all([
     Promise.resolve(pgDb.findUserById(req.session.userId)),
     Promise.resolve(pgDb.getUserAccessiblePages(req.session.userId)),

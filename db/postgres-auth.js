@@ -280,6 +280,298 @@ function verifyPassword(plain, hash) {
   return bcrypt.compareSync(plain, hash);
 }
 
+function buildUserAuthTagFromHash(passwordHash) {
+  const value = String(passwordHash || '').trim();
+  if (!value) return '';
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 24);
+}
+
+const MOBILE_AUTH_SESSION_TABLE = 'mobile_auth_sessions';
+
+function getPgSessionTableName() {
+  const tableName = String(process.env.PGSESSION_TABLE || 'user_sessions').trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
+    throw new Error('Invalid session table name');
+  }
+  return tableName;
+}
+
+function normalizeClientInfo(info = {}) {
+  return {
+    platform: String(info.platform || '').trim().toLowerCase() || 'web',
+    client_name: String(info.client_name || '').trim() || null,
+    device_name: String(info.device_name || '').trim() || null,
+    user_agent: String(info.user_agent || '').trim() || null,
+    ip_address: String(info.ip_address || '').trim() || null,
+  };
+}
+
+function normalizeSessionRow(row, currentId = null) {
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    kind: String(row.kind || '').trim() || 'browser',
+    platform: String(row.platform || '').trim() || (row.kind === 'mobile' ? 'mobile' : 'web'),
+    client_name: row.client_name || null,
+    device_name: row.device_name || null,
+    user_agent: row.user_agent || null,
+    ip_address: row.ip_address || null,
+    label: row.label || (row.kind === 'mobile' ? 'Mobile app' : 'Browser'),
+    subtitle: row.subtitle || '',
+    created_at: row.created_at || null,
+    last_seen_at: row.last_seen_at || null,
+    current: currentId != null && String(row.id) === String(currentId),
+  };
+}
+
+function parsePgSessionPayload(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
+
+async function ensureMobileAuthSessionsTable() {
+  await query(
+    `CREATE TABLE IF NOT EXISTS ${MOBILE_AUTH_SESSION_TABLE} (
+      sid TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      auth_tag TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'mobile',
+      client_name TEXT NULL,
+      device_name TEXT NULL,
+      user_agent TEXT NULL,
+      ip_address TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ NULL
+    )`
+  );
+  await query(`CREATE INDEX IF NOT EXISTS idx_${MOBILE_AUTH_SESSION_TABLE}_user_id ON ${MOBILE_AUTH_SESSION_TABLE}(user_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_${MOBILE_AUTH_SESSION_TABLE}_revoked_at ON ${MOBILE_AUTH_SESSION_TABLE}(revoked_at)`);
+}
+
+async function createMobileAuthSession(userId, authTag, info = {}) {
+  await ensureMobileAuthSessionsTable();
+  const sid = crypto.randomBytes(24).toString('hex');
+  const client = normalizeClientInfo(info);
+  await query(
+    `INSERT INTO ${MOBILE_AUTH_SESSION_TABLE}
+      (sid, user_id, auth_tag, platform, client_name, device_name, user_agent, ip_address)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [sid, userId, String(authTag || ''), client.platform, client.client_name, client.device_name, client.user_agent, client.ip_address]
+  );
+  return sid;
+}
+
+async function getMobileAuthSession(sessionId) {
+  if (!sessionId) return null;
+  await ensureMobileAuthSessionsTable();
+  const result = await query(
+    `SELECT sid, user_id, auth_tag, platform, client_name, device_name, user_agent, ip_address, created_at, last_seen_at, revoked_at
+     FROM ${MOBILE_AUTH_SESSION_TABLE}
+     WHERE sid = $1
+     LIMIT 1`,
+    [String(sessionId)]
+  );
+  return result.rows[0] || null;
+}
+
+async function touchMobileAuthSession(sessionId, userId) {
+  if (!sessionId || !userId) return;
+  await ensureMobileAuthSessionsTable();
+  await query(
+    `UPDATE ${MOBILE_AUTH_SESSION_TABLE}
+     SET last_seen_at = NOW()
+     WHERE sid = $1
+       AND user_id = $2
+       AND revoked_at IS NULL`,
+    [String(sessionId), userId]
+  );
+}
+
+async function refreshMobileAuthSessionAuthTag(sessionId, userId, authTag) {
+  if (!sessionId || !userId) return false;
+  await ensureMobileAuthSessionsTable();
+  const result = await query(
+    `UPDATE ${MOBILE_AUTH_SESSION_TABLE}
+     SET auth_tag = $3,
+         last_seen_at = NOW()
+     WHERE sid = $1
+       AND user_id = $2
+       AND revoked_at IS NULL`,
+    [String(sessionId), userId, String(authTag || '')]
+  );
+  return result.rowCount > 0;
+}
+
+async function revokeMobileAuthSession(userId, sessionId) {
+  if (!sessionId) return false;
+  await ensureMobileAuthSessionsTable();
+  const result = await query(
+    `UPDATE ${MOBILE_AUTH_SESSION_TABLE}
+     SET revoked_at = NOW()
+     WHERE sid = $1
+       AND user_id = $2
+       AND revoked_at IS NULL`,
+    [String(sessionId), userId]
+  );
+  return result.rowCount > 0;
+}
+
+async function revokeOtherMobileAuthSessions(userId, currentSessionId = null) {
+  await ensureMobileAuthSessionsTable();
+  const params = [userId];
+  let sql = `UPDATE ${MOBILE_AUTH_SESSION_TABLE}
+             SET revoked_at = NOW()
+             WHERE user_id = $1
+               AND revoked_at IS NULL`;
+  if (currentSessionId) {
+    params.push(String(currentSessionId));
+    sql += ' AND sid <> $2';
+  }
+  const result = await query(sql, params);
+  return Number(result.rowCount || 0);
+}
+
+async function listMobileAuthSessions(userId, currentSessionId = null) {
+  await ensureMobileAuthSessionsTable();
+  const result = await query(
+    `SELECT
+        sid AS id,
+        'mobile' AS kind,
+        platform,
+        client_name,
+        device_name,
+        user_agent,
+        ip_address,
+        COALESCE(device_name, client_name, 'Mobile app') AS label,
+        CASE
+          WHEN client_name IS NOT NULL AND platform IS NOT NULL THEN client_name || ' - ' || platform
+          WHEN client_name IS NOT NULL THEN client_name
+          WHEN platform IS NOT NULL THEN platform
+          ELSE 'Signed in on mobile'
+        END AS subtitle,
+        created_at,
+        last_seen_at
+     FROM ${MOBILE_AUTH_SESSION_TABLE}
+     WHERE user_id = $1
+       AND revoked_at IS NULL
+     ORDER BY last_seen_at DESC NULLS LAST, created_at DESC NULLS LAST`,
+    [userId]
+  );
+  return result.rows.map((row) => normalizeSessionRow(row, currentSessionId));
+}
+
+async function listBrowserSessions(userId, currentSessionId = null, currentSessionData = null) {
+  const tableName = getPgSessionTableName();
+  const result = await query(
+    `SELECT sid, sess, expire
+     FROM ${tableName}
+     WHERE expire >= NOW()
+     ORDER BY expire DESC`
+  );
+
+  const rows = [];
+  const seen = new Set();
+  for (const row of result.rows) {
+    const sess = parsePgSessionPayload(row.sess);
+    if (!sess || Number(sess.userId || 0) !== Number(userId || 0)) continue;
+    const deviceInfo = sess.deviceInfo && typeof sess.deviceInfo === 'object' ? sess.deviceInfo : {};
+    const normalized = normalizeSessionRow({
+      id: row.sid,
+      kind: 'browser',
+      platform: String(deviceInfo.platform || 'web').trim().toLowerCase() || 'web',
+      client_name: deviceInfo.client_name || null,
+      device_name: deviceInfo.device_name || null,
+      user_agent: deviceInfo.user_agent || null,
+      ip_address: deviceInfo.ip_address || null,
+      label: deviceInfo.device_name || deviceInfo.client_name || 'Browser',
+      subtitle: deviceInfo.subtitle || deviceInfo.user_agent || 'Signed in on web',
+      created_at: sess.createdAt || null,
+      last_seen_at: sess.lastSeenAt || null,
+    }, currentSessionId);
+    rows.push(normalized);
+    seen.add(String(row.sid));
+  }
+
+  if (currentSessionId && currentSessionData && !seen.has(String(currentSessionId))) {
+    const sess = currentSessionData;
+    const deviceInfo = sess.deviceInfo && typeof sess.deviceInfo === 'object' ? sess.deviceInfo : {};
+    rows.unshift(normalizeSessionRow({
+      id: currentSessionId,
+      kind: 'browser',
+      platform: String(deviceInfo.platform || 'web').trim().toLowerCase() || 'web',
+      client_name: deviceInfo.client_name || null,
+      device_name: deviceInfo.device_name || null,
+      user_agent: deviceInfo.user_agent || null,
+      ip_address: deviceInfo.ip_address || null,
+      label: deviceInfo.device_name || deviceInfo.client_name || 'This browser',
+      subtitle: deviceInfo.subtitle || deviceInfo.user_agent || 'Signed in on web',
+      created_at: sess.createdAt || null,
+      last_seen_at: sess.lastSeenAt || null,
+    }, currentSessionId));
+  }
+
+  return rows.sort((a, b) => {
+    const aTime = new Date(a.last_seen_at || a.created_at || 0).getTime();
+    const bTime = new Date(b.last_seen_at || b.created_at || 0).getTime();
+    return bTime - aTime;
+  });
+}
+
+async function revokeBrowserSession(userId, sessionId) {
+  if (!sessionId) return false;
+  const tableName = getPgSessionTableName();
+  const result = await query(
+    `SELECT sid, sess
+     FROM ${tableName}
+     WHERE sid = $1
+     LIMIT 1`,
+    [String(sessionId)]
+  );
+  const row = result.rows[0] || null;
+  const sess = parsePgSessionPayload(row?.sess);
+  if (!row || !sess || Number(sess.userId || 0) !== Number(userId || 0)) return false;
+  const deleted = await query(`DELETE FROM ${tableName} WHERE sid = $1`, [String(sessionId)]);
+  return deleted.rowCount > 0;
+}
+
+async function revokeOtherBrowserSessions(userId, currentSessionId = null) {
+  const tableName = getPgSessionTableName();
+  const result = await query(
+    `SELECT sid, sess
+     FROM ${tableName}
+     WHERE expire >= NOW()`
+  );
+  const sessionIds = [];
+  for (const row of result.rows) {
+    const sess = parsePgSessionPayload(row.sess);
+    if (!sess || Number(sess.userId || 0) !== Number(userId || 0)) continue;
+    if (currentSessionId && String(row.sid) === String(currentSessionId)) continue;
+    sessionIds.push(String(row.sid));
+  }
+  if (!sessionIds.length) return 0;
+  const resultDelete = await query(`DELETE FROM ${tableName} WHERE sid = ANY($1::text[])`, [sessionIds]);
+  return Number(resultDelete.rowCount || 0);
+}
+
+async function getUserAuthTag(userId) {
+  const result = await query(
+    `SELECT password_hash
+     FROM users
+     WHERE id = $1
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [userId]
+  );
+  const row = result.rows[0] || null;
+  return buildUserAuthTagFromHash(row?.password_hash || '');
+}
+
 async function updateUserProfile(userId, data) {
   const currentResult = await query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1', [userId]);
   const current = currentResult.rows[0];
@@ -355,11 +647,15 @@ async function changeUserPassword(userId, currentPassword, newPassword) {
   if (!newPassword || String(newPassword).length < 6) {
     throw new Error('Password must be at least 6 characters');
   }
+  const nextHash = bcrypt.hashSync(String(newPassword), 10);
   await query(
     'UPDATE users SET password_hash = $1, updated_at = NOW(), updated_by = $2 WHERE id = $2',
-    [bcrypt.hashSync(String(newPassword), 10), userId]
+    [nextHash, userId]
   );
-  return true;
+  return {
+    success: true,
+    auth_tag: buildUserAuthTagFromHash(nextHash),
+  };
 }
 
 async function getAllUsers() {
@@ -862,6 +1158,10 @@ async function updateUserAdmin(id, data, actorUserId = null) {
 
 async function resetUserPassword(id, newHash) {
   await query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [newHash, id]);
+  return {
+    success: true,
+    auth_tag: buildUserAuthTagFromHash(newHash),
+  };
 }
 
 async function softDeleteUser(id, actorUserId) {
@@ -1437,6 +1737,17 @@ module.exports = {
   findUserByMobile,
   findUserById,
   verifyPassword,
+  getUserAuthTag,
+  createMobileAuthSession,
+  getMobileAuthSession,
+  touchMobileAuthSession,
+  refreshMobileAuthSessionAuthTag,
+  revokeMobileAuthSession,
+  revokeOtherMobileAuthSessions,
+  listMobileAuthSessions,
+  listBrowserSessions,
+  revokeBrowserSession,
+  revokeOtherBrowserSessions,
   updateUserProfile,
   changeUserPassword,
   getAllUsers,

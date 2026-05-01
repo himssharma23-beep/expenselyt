@@ -34,7 +34,7 @@ if (!fs.existsSync('./public/uploads/profile')) fs.mkdirSync('./public/uploads/p
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-Platform, X-Client-Name, X-Device-Name');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
