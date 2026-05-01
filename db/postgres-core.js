@@ -2856,13 +2856,41 @@ async function getReceivedLiveSplitShares(userId) {
            s.id,
            s.friend_id,
            s.friend_name,
-           NULL::bigint AS linked_user_id,
+           COALESCE(
+             NULLIF(lf.linked_user_id, $2::bigint),
+             (
+               SELECT dgs.target_user_id
+               FROM live_split_group_shares dgs
+               WHERE dgs.group_id = s.group_id
+                 AND dgs.friend_id = s.friend_id
+               ORDER BY dgs.id DESC
+               LIMIT 1
+             ),
+             (
+               SELECT f2.linked_user_id
+               FROM live_split_friends f2
+               WHERE f2.user_id = $2::bigint
+                 AND f2.deleted_at IS NULL
+                 AND f2.linked_user_id IS NOT NULL
+                 AND f2.linked_user_id <> $2::bigint
+                 AND (
+                   lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
+                   OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+                      = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+                 )
+               ORDER BY
+                 CASE WHEN lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, ''))) THEN 0 ELSE 1 END,
+                 f2.id
+               LIMIT 1
+             )
+           ) AS linked_user_id,
            s.share_amount,
            s.is_paid
          FROM live_split_splits s
+         LEFT JOIN live_split_friends lf ON lf.id = s.friend_id
          WHERE s.group_id = $1
          ORDER BY s.id`,
-        [row.id]
+        [row.id, Number(row.owner_user_id || 0)]
       );
       row.splits = (splitsResult.rows || []).map((split) => ({
         ...split,
