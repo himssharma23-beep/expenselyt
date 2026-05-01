@@ -4,6 +4,10 @@ function num(value) {
   return Number(value || 0);
 }
 
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
 function validationError(message) {
   const err = new Error(message);
   err.statusCode = 400;
@@ -369,8 +373,10 @@ async function getCurrentCycleSnapshot(cardId, userId, card, client = null) {
 
 async function updateCycleTotals(cycleId, client = null) {
   const run = client || { query };
-  const cycleR = await run.query('SELECT manual_total_override FROM cc_cycles WHERE id = $1 LIMIT 1', [cycleId]);
-  if (cycleR.rows[0]?.manual_total_override) return;
+  const cycleR = await run.query('SELECT manual_total_override, status FROM cc_cycles WHERE id = $1 LIMIT 1', [cycleId]);
+  const cycle = cycleR.rows[0];
+  if (!cycle) return;
+  if (cycle.manual_total_override && cycle.status !== 'open') return;
   const totalsR = await run.query(
     `SELECT
        COUNT(*)::int AS txn_count,
@@ -493,8 +499,8 @@ async function addCcTxn(userId, txn) {
     if (!cycle) throw new Error('Could not get billing cycle');
     const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card.default_discount_pct);
     const amount = parseFloat(txn.amount);
-    const discAmt = Math.round(amount * discPct / 100 * 100) / 100;
-    const netAmt = Math.round(amount * 100) / 100;
+    const discAmt = roundMoney(amount * discPct / 100);
+    const netAmt = roundMoney(amount - discAmt);
     const result = await client.query(
       `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -512,8 +518,13 @@ async function getCcCurrentCycle(userId, cardId) {
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
     const card = cardR.rows[0];
     if (!card) return null;
-    const cycle = await getCurrentCycleSnapshot(cardId, userId, card, client);
+    let cycle = await getCurrentCycleSnapshot(cardId, userId, card, client);
     if (!cycle) return { card, cycle: null, txns: [] };
+    if (cycle.status === 'open') {
+      await updateCycleTotals(cycle.id, client);
+      const refreshedCycleR = await client.query('SELECT * FROM cc_cycles WHERE id = $1 LIMIT 1', [cycle.id]);
+      cycle = refreshedCycleR.rows[0] || cycle;
+    }
     const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC, id ASC', [cycle.id]);
     return { card, cycle, txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.net_amount) })) };
   });
@@ -526,7 +537,12 @@ async function getCcCycles(userId, cardId) {
     if (!cardR.rows[0]) return [];
     const cyclesR = await client.query('SELECT * FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC, created_at DESC, id DESC', [cardId, userId]);
     const cycles = [];
-    for (const cycle of cyclesR.rows) {
+    for (let cycle of cyclesR.rows) {
+      if (cycle.status === 'open') {
+        await updateCycleTotals(cycle.id, client);
+        const refreshedCycleR = await client.query('SELECT * FROM cc_cycles WHERE id = $1 LIMIT 1', [cycle.id]);
+        cycle = refreshedCycleR.rows[0] || cycle;
+      }
       const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC', [cycle.id]);
       cycles.push({
         ...cycle,
@@ -663,8 +679,8 @@ async function updateCcTxn(userId, id, txn) {
   if (!existing) throw new Error('Transaction not found');
   const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(existing.discount_pct);
   const amount = txn.amount != null ? parseFloat(txn.amount) : num(existing.amount);
-  const discAmt = Math.round(amount * discPct / 100 * 100) / 100;
-  const netAmt = Math.round(amount * 100) / 100;
+  const discAmt = roundMoney(amount * discPct / 100);
+  const netAmt = roundMoney(amount - discAmt);
   await query(
     `UPDATE cc_txns
      SET txn_date = $1, description = $2, amount = $3, discount_pct = $4, discount_amount = $5, net_amount = $6
@@ -691,8 +707,8 @@ async function addCcTxnToCycle(userId, cycleId, txn) {
     const card = cardR.rows[0];
     const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card?.default_discount_pct);
     const amount = parseFloat(txn.amount);
-    const discAmt = Math.round(amount * discPct / 100 * 100) / 100;
-    const netAmt = Math.round(amount * 100) / 100;
+    const discAmt = roundMoney(amount * discPct / 100);
+    const netAmt = roundMoney(amount - discAmt);
     const result = await client.query(
       `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -723,8 +739,8 @@ async function bulkAddCcTxnsToCycle(userId, cycleId, txns, discountPct = null) {
       const nextDiscount = discountPct != null
         ? parseFloat(discountPct)
         : (txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card?.default_discount_pct));
-      const discAmt = Math.round(amount * nextDiscount / 100 * 100) / 100;
-      const netAmt = Math.round(amount * 100) / 100;
+      const discAmt = roundMoney(amount * nextDiscount / 100);
+      const netAmt = roundMoney(amount - discAmt);
       await client.query(
         `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'manual',NULL)`,
