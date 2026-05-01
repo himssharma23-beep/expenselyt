@@ -6,6 +6,8 @@ let currentTab = 'dashboard';
 let _userRole = 'user';
 let _accessiblePages = ['dashboard', 'expenses'];
 let _aiLookupAccessModes = { mode: 'none', offline: false, online: false };
+let _liveSplitAccess = { delete_friend: false };
+window._liveSplitAccess = _liveSplitAccess;
 let _currentUserId = null;
 let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
@@ -565,6 +567,8 @@ window.addEventListener('DOMContentLoaded', async () => {
       _userRole = access.role || 'user';
       _accessiblePages = access.pages || ['dashboard'];
       _aiLookupAccessModes = access.ai_lookup_modes || { mode: 'none', offline: false, online: false };
+      _liveSplitAccess = access.live_split || { delete_friend: false };
+      window._liveSplitAccess = _liveSplitAccess;
     }
   } catch (err) {
     console.error('[app:init] startup failed', err);
@@ -9443,6 +9447,7 @@ async function loadAdminPlans() {
     description: cleanMojibakeText(plan.description),
     pages: Array.isArray(plan.pages) ? plan.pages : [],
     ai_lookup_mode: AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan.ai_lookup_mode)?.key || 'both',
+    allow_live_split_friend_delete: !!plan.allow_live_split_friend_delete,
     voice_ai_enabled: !!plan.voice_ai_enabled,
     voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
     voice_ai_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day',
@@ -9456,6 +9461,7 @@ async function loadAdminPlans() {
       : p.voice_ai_limit === -1
         ? 'Unlimited'
         : `${p.voice_ai_limit}/${p.voice_ai_limit_period}`;
+    const liveSplitDeleteLabel = p.allow_live_split_friend_delete ? 'Allowed' : 'Blocked';
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -9472,6 +9478,7 @@ async function loadAdminPlans() {
             &nbsp;|&nbsp; AI Queries/day: <b>${p.ai_query_limit===-1||p.ai_query_limit==null?'Unlimited':p.ai_query_limit===0?'None':p.ai_query_limit}</b>
             &nbsp;|&nbsp; AI Mode: <b>${escHtml(aiModeLabel)}</b>
             &nbsp;|&nbsp; Voice AI: <b>${escHtml(voiceLabel)}</b>
+            &nbsp;|&nbsp; Delete Live Split Friend: <b>${escHtml(liveSplitDeleteLabel)}</b>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -9502,6 +9509,7 @@ async function showPlanModal(planId) {
   ).join('');
   const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
   const aiLookupModeVal = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan?.ai_lookup_mode)?.key || 'both';
+  const liveSplitDeleteVal = !!plan?.allow_live_split_friend_delete;
   const voiceEnabledVal = !!plan?.voice_ai_enabled;
   const voiceLimitVal = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
   const voicePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day';
@@ -9582,6 +9590,11 @@ async function showPlanModal(planId) {
             <span class="plan-toggle-title">Auto assign on signup</span>
             <span class="plan-toggle-sub">New users get this by default</span>
           </label>
+          <label class="plan-toggle-tile ${liveSplitDeleteVal?'checked':''}">
+            <input type="checkbox" id="pLiveSplitDeleteFriend" ${liveSplitDeleteVal?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+            <span class="plan-toggle-title">Allow deleting Live Split friends</span>
+            <span class="plan-toggle-sub">Users on this plan can remove Live Split friend summaries</span>
+          </label>
         </div>
       </div>
 
@@ -9656,6 +9669,7 @@ async function adminSavePlan(planId) {
     is_free:   document.getElementById('pFree').checked ? 1 : 0,
     is_active: document.getElementById('pActive').checked ? 1 : 0,
     auto_assign_on_signup: document.getElementById('pSignupDefault').checked ? 1 : 0,
+    allow_live_split_friend_delete: document.getElementById('pLiveSplitDeleteFriend')?.checked ? 1 : 0,
     ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
     ai_lookup_mode: document.getElementById('pAiMode')?.value || 'both',
     voice_ai_enabled: document.getElementById('pVoiceEnabled')?.checked ? 1 : 0,

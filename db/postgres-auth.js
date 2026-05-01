@@ -78,6 +78,7 @@ function normalizePlan(row) {
     ...row,
     price_monthly: Number(row.price_monthly || 0),
     price_yearly: Number(row.price_yearly || 0),
+    allow_live_split_friend_delete: !!row.allow_live_split_friend_delete,
     ai_query_limit: row.ai_query_limit != null ? Number(row.ai_query_limit) : -1,
     ai_lookup_mode: normalizeAiLookupMode(row.ai_lookup_mode),
     voice_ai_enabled: !!row.voice_ai_enabled,
@@ -108,6 +109,19 @@ function normalizeVoiceAiLimitPeriod(period) {
 function isMissingVoiceAiUsageTableError(err) {
   const message = String(err?.message || '').toLowerCase();
   return err?.code === '42P01' && message.includes('voice_ai_usage');
+}
+
+function isMissingPlanLiveSplitDeleteColumnError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return err?.code === '42703' && message.includes('allow_live_split_friend_delete');
+}
+
+async function ensurePlanLiveSplitDeleteColumn(client = null) {
+  const runner = client || { query };
+  await runner.query(
+    `ALTER TABLE plans
+     ADD COLUMN IF NOT EXISTS allow_live_split_friend_delete BOOLEAN NOT NULL DEFAULT FALSE`
+  );
 }
 
 function normalizeSubscription(row) {
@@ -1206,15 +1220,30 @@ async function restoreUser(id, actorUserId) {
 }
 
 async function getPlans() {
-  const result = await query(
-    `SELECT
-       p.*,
-       COALESCE(array_agg(pp.page_key ORDER BY pp.id) FILTER (WHERE pp.page_key IS NOT NULL), '{}') AS pages
-     FROM plans p
-     LEFT JOIN plan_pages pp ON pp.plan_id = p.id
-     GROUP BY p.id
-     ORDER BY p.id`
-  );
+  let result;
+  try {
+    result = await query(
+      `SELECT
+         p.*,
+         COALESCE(array_agg(pp.page_key ORDER BY pp.id) FILTER (WHERE pp.page_key IS NOT NULL), '{}') AS pages
+       FROM plans p
+       LEFT JOIN plan_pages pp ON pp.plan_id = p.id
+       GROUP BY p.id
+       ORDER BY p.id`
+    );
+  } catch (err) {
+    if (!isMissingPlanLiveSplitDeleteColumnError(err)) throw err;
+    await ensurePlanLiveSplitDeleteColumn();
+    result = await query(
+      `SELECT
+         p.*,
+         COALESCE(array_agg(pp.page_key ORDER BY pp.id) FILTER (WHERE pp.page_key IS NOT NULL), '{}') AS pages
+       FROM plans p
+       LEFT JOIN plan_pages pp ON pp.plan_id = p.id
+       GROUP BY p.id
+       ORDER BY p.id`
+    );
+  }
   return result.rows.map((row) => ({
     ...normalizePlan(row),
     id: Number(row.id),
@@ -1224,12 +1253,13 @@ async function getPlans() {
 
 async function createPlan(data) {
   return withTransaction(async (client) => {
+    await ensurePlanLiveSplitDeleteColumn(client);
     if (data.auto_assign_on_signup) {
       await client.query('UPDATE plans SET auto_assign_on_signup = FALSE');
     }
     const result = await client.query(
-      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, ai_query_limit, ai_lookup_mode, voice_ai_enabled, voice_ai_limit, voice_ai_limit_period)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, allow_live_split_friend_delete, ai_query_limit, ai_lookup_mode, voice_ai_enabled, voice_ai_limit, voice_ai_limit_period)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         data.name,
@@ -1239,6 +1269,7 @@ async function createPlan(data) {
         !!data.is_free,
         data.is_active != null ? !!data.is_active : true,
         !!data.auto_assign_on_signup,
+        !!data.allow_live_split_friend_delete,
         data.ai_query_limit != null ? Number(data.ai_query_limit) : -1,
         normalizeAiLookupMode(data.ai_lookup_mode),
         !!data.voice_ai_enabled,
@@ -1256,6 +1287,7 @@ async function createPlan(data) {
 
 async function updatePlan(id, data) {
   await withTransaction(async (client) => {
+    await ensurePlanLiveSplitDeleteColumn(client);
     const fields = [];
     const params = [];
     if (data.name !== undefined) {
@@ -1288,6 +1320,10 @@ async function updatePlan(id, data) {
       }
       params.push(!!data.auto_assign_on_signup);
       fields.push(`auto_assign_on_signup = $${params.length}`);
+    }
+    if (data.allow_live_split_friend_delete !== undefined) {
+      params.push(!!data.allow_live_split_friend_delete);
+      fields.push(`allow_live_split_friend_delete = $${params.length}`);
     }
     if (data.ai_query_limit !== undefined) {
       params.push(Number(data.ai_query_limit));
@@ -1490,6 +1526,52 @@ async function getUserAiLookupModes(userId) {
   if (allowOnline) return aiLookupModesFromMode('online');
   if (allowOffline) return aiLookupModesFromMode('offline');
   return aiLookupModesFromMode('none');
+}
+
+async function getUserLiveSplitAccess(userId) {
+  const userResult = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const user = userResult.rows[0];
+  if (!user) return { delete_friend: false };
+  if (user.role === 'admin') return { delete_friend: true };
+
+  let result;
+  try {
+    result = await query(
+      `SELECT p.allow_live_split_friend_delete
+       FROM plans p
+       JOIN plan_pages pp
+         ON pp.plan_id = p.id
+        AND pp.page_key = 'livesplit'
+       LEFT JOIN user_subscriptions s
+         ON s.plan_id = p.id
+        AND s.user_id = $1
+        AND s.status = 'active'
+        AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+       WHERE (p.is_free = TRUE AND p.is_active = TRUE) OR s.id IS NOT NULL`,
+      [userId]
+    );
+  } catch (err) {
+    if (!isMissingPlanLiveSplitDeleteColumnError(err)) throw err;
+    await ensurePlanLiveSplitDeleteColumn();
+    result = await query(
+      `SELECT p.allow_live_split_friend_delete
+       FROM plans p
+       JOIN plan_pages pp
+         ON pp.plan_id = p.id
+        AND pp.page_key = 'livesplit'
+       LEFT JOIN user_subscriptions s
+         ON s.plan_id = p.id
+        AND s.user_id = $1
+        AND s.status = 'active'
+        AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+       WHERE (p.is_free = TRUE AND p.is_active = TRUE) OR s.id IS NOT NULL`,
+      [userId]
+    );
+  }
+
+  return {
+    delete_friend: result.rows.some((row) => !!row.allow_live_split_friend_delete),
+  };
 }
 
 function voiceAiRangeStart(period = 'day') {
@@ -1779,6 +1861,7 @@ module.exports = {
   updatePlan,
   deletePlan,
   getUserAiLookupModes,
+  getUserLiveSplitAccess,
   getUserVoiceAiAccess,
   consumeUserVoiceAiUsage,
   getSubscriptions,

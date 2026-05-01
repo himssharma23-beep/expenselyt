@@ -777,6 +777,7 @@ CREATE TABLE IF NOT EXISTS plans (
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   is_free BOOLEAN NOT NULL DEFAULT FALSE,
   auto_assign_on_signup BOOLEAN NOT NULL DEFAULT FALSE,
+  allow_live_split_friend_delete BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -947,6 +948,7 @@ ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_bank_account_id BIGI
 ALTER TABLE emi_installments ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_query_limit INTEGER NOT NULL DEFAULT -1;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS ai_lookup_mode TEXT NOT NULL DEFAULT 'both';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS allow_live_split_friend_delete BOOLEAN NOT NULL DEFAULT FALSE;
 UPDATE plans
 SET ai_lookup_mode = 'both'
 WHERE ai_lookup_mode IS NULL OR ai_lookup_mode NOT IN ('none', 'offline', 'online', 'both');

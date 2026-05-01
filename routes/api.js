@@ -3349,8 +3349,16 @@ router.post('/petrol-divide/add-to-live-split', async (req, res) => {
 // Live Split (isolated from friends/divide)
 router.get('/live-split/friends', async (req, res) => {
   try {
-    const friends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
-    res.json({ friends });
+    const [friends, liveSplitAccess] = await Promise.all([
+      Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId)),
+      Promise.resolve(pgDb.getUserLiveSplitAccess(req.session.userId)),
+    ]);
+    const canDeleteFriend = !!liveSplitAccess?.delete_friend;
+    const normalizedFriends = (friends || []).map((friend) => ({
+      ...friend,
+      can_delete: canDeleteFriend,
+    }));
+    res.json({ friends: normalizedFriends });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3394,10 +3402,14 @@ router.put('/live-split/friends/:id/link-user', async (req, res) => {
 
 router.delete('/live-split/friends/:id', async (req, res) => {
   try {
+    const liveSplitAccess = await Promise.resolve(pgDb.getUserLiveSplitAccess(req.session.userId));
+    if (!liveSplitAccess?.delete_friend) {
+      return res.status(403).json({ error: 'Your current plan does not allow deleting Live Split friends.' });
+    }
     await Promise.resolve(getCoreDb().deleteLiveSplitFriend(req.session.userId, req.params.id));
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 400).json({ error: err.message });
   }
 });
 
@@ -4905,12 +4917,14 @@ router.get('/auth/me/access', requireAuth, (req, res) => {
     Promise.resolve(pgDb.findUserById(req.session.userId)),
     Promise.resolve(pgDb.getUserAccessiblePages(req.session.userId)),
     Promise.resolve(pgDb.getUserAiLookupModes(req.session.userId)),
+    Promise.resolve(pgDb.getUserLiveSplitAccess(req.session.userId)),
     Promise.resolve(pgDb.getUserVoiceAiAccess(req.session.userId)),
-  ]).then(([user, pages, aiLookupModes, voiceAiAccess]) => {
+  ]).then(([user, pages, aiLookupModes, liveSplitAccess, voiceAiAccess]) => {
     res.json({
       role: user?.role || 'user',
       pages,
       ai_lookup_modes: aiLookupModes || { mode: 'none', offline: false, online: false },
+      live_split: liveSplitAccess || { delete_friend: false },
       voice_ai: voiceAiAccess || { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false },
     });
   }).catch((err) => {

@@ -454,7 +454,11 @@
       if (!key) return;
       if (isSelfLinkedEntity(row)) return;
       if (meId > 0 && Number(row?.linked_user_id || 0) === meId) return;
-      map.set(key, { ...row, amount: r2(row.amount) });
+      const friendMatch = (state.friends || []).find((friend) =>
+        (Number(row?.friend_id || 0) > 0 && Number(friend?.id || 0) === Number(row.friend_id))
+        || (Number(row?.linked_user_id || 0) > 0 && Number(friend?.linked_user_id || 0) === Number(row.linked_user_id))
+      );
+      map.set(key, { ...row, can_delete: friendMatch?.can_delete !== false && row?.can_delete !== false, amount: r2(row.amount) });
     });
 
     (state.friends || [])
@@ -475,6 +479,7 @@
             amount: 0,
             linked_user_id: linkedUserId || null,
             friend_id: Number(friend.id) || null,
+            can_delete: friend?.can_delete !== false,
             linked_user_avatar_url: friend.linked_user_avatar_url || '',
             linked_user_display_name: friend.linked_user_display_name || '',
             linked_user_username: friend.linked_user_username || '',
@@ -483,6 +488,10 @@
       });
 
     return [...map.values()];
+  }
+
+  function canDeleteLiveSplitRow(row) {
+    return Number(resolveFriendIdForRow(row) || 0) > 0 && row?.can_delete !== false;
   }
 
   function buildVisibleLiveSplitRowsFromSummary(summaryRows, friends) {
@@ -2148,6 +2157,7 @@
       const amount = row.amount;
       const friendId = resolveFriendIdForRow(row);
       const canSettle = friendId > 0 && Math.abs(n(amount)) > 0.004;
+      const canDelete = canDeleteLiveSplitRow(row);
       const rowRef = encodeURIComponent(String(row?.key || friendId || row?.name || ''));
       const tone = row.amount > 0 ? 'var(--green)' : row.amount < 0 ? 'var(--red)' : 'var(--t3)';
       const label = row.amount > 0 ? 'They owe' : row.amount < 0 ? 'You owe' : 'Settled';
@@ -2165,7 +2175,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
             </button>` : ''}
             ${canSettle ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenSettle(${friendId})">Settle</button>` : ''}
-            <button class="btn btn-g btn-sm" ${friendId > 0 && state.friendDeleteBusy.has(friendId) ? 'disabled' : ''} onclick="${friendId > 0 ? `liveSplitDeleteFriend(${friendId})` : 'return false'}">${friendId > 0 && state.friendDeleteBusy.has(friendId) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>
+            ${canDelete ? `<button class="btn btn-g btn-sm" ${state.friendDeleteBusy.has(friendId) ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${friendId})">${state.friendDeleteBusy.has(friendId) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>` : ''}
             <div class="friend-bal" style="color:${tone}">${fmtCur(amount)}</div>
           </div>
         </div>`;
@@ -4149,6 +4159,11 @@
   async function deleteLiveSplitFriend(friendId) {
     const id = Number(friendId);
     if (!id) return;
+    const row = buildVisibleLiveSplitRows().find((item) => Number(resolveFriendIdForRow(item) || 0) === id) || null;
+    if (row && row.can_delete === false) {
+      toast('Your current plan does not allow deleting Live Split friends.', 'warning');
+      return;
+    }
     if (!await confirmDialog('Delete this person from your Live Split list?')) return;
     try {
       state.friendDeleteBusy.add(id);
