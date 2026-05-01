@@ -48,6 +48,7 @@
     eventDetailContext: null,
     sort: 'az',
     friendFilter: 'all',
+    showCompletedTrips: false,
     tripCreate: null,
     tripManage: null,
     voiceRecorder: null,
@@ -961,6 +962,17 @@
     return d.toLocaleString('en-US', { month: 'short', day: '2-digit' });
   }
 
+  function groupEventsByMonth(events = [], amountSelector = null) {
+    const grouped = {};
+    (events || []).forEach((event) => {
+      const key = monthLabel(event?.date);
+      if (!grouped[key]) grouped[key] = { events: [], total: 0 };
+      grouped[key].events.push(event);
+      grouped[key].total = r2(grouped[key].total + n(typeof amountSelector === 'function' ? amountSelector(event) : 0));
+    });
+    return Object.entries(grouped);
+  }
+
   function buildRowEvents(row) {
     const rowName = String(row?.name || '').trim();
     if (!rowName) return [];
@@ -1762,12 +1774,7 @@
         friendActivities = [];
       }
     }
-    const grouped = {};
-    events.forEach((event) => {
-      const key = monthLabel(event.date);
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(event);
-    });
+    const grouped = groupEventsByMonth(events, (event) => event.delta);
     window.__modalClassName = 'modal-wide live-split-detail-modal';
     window.__modalOverlayClassName = 'live-split-detail-overlay';
     openModal(`Live Split - ${escHtml(row.name)}`, `
@@ -1779,14 +1786,17 @@
           </button>
         </div>
         <div>
-          ${events.length ? Object.entries(grouped).map(([month, monthEvents]) => `
+          ${events.length ? grouped.map(([month, monthData]) => `
             <div style="margin-bottom:10px">
-              <div style="font-size:14px;font-weight:800;color:var(--t1);margin:6px 0">${escHtml(month)}</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0">
+                <div style="font-size:14px;font-weight:800;color:var(--t1)">${escHtml(month)}</div>
+                <div style="font-size:13px;font-weight:800;color:${monthData.total >= 0 ? 'var(--green)' : 'var(--red)'};text-align:right">${fmtCur(monthData.total)}</div>
+              </div>
               <div class="live-split-table-wrap ls-desktop-event-wrap" style="border-radius:12px;border:1px solid var(--border);background:var(--white);overflow:hidden">
                 <table class="live-split-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
                   <tbody>
-                    ${monthEvents.map((event) => {
+                    ${monthData.events.map((event) => {
                       const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                       const canManage = Number(event.group_id) > 0;
                       const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
@@ -1862,7 +1872,7 @@
                 </table>
               </div>
               <div class="ls-mobile-event-list">
-                ${monthEvents.map((event) => {
+                ${monthData.events.map((event) => {
                   const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                   const canManage = Number(event.group_id) > 0;
                   const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
@@ -1949,12 +1959,7 @@
     state.activeTripDetail = tid;
     const events = buildTripEvents(tid);
     const memberBalances = computeTripMemberBalances(tid);
-    const grouped = {};
-    events.forEach((event) => {
-      const key = monthLabel(event.date);
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(event);
-    });
+    const grouped = groupEventsByMonth(events, (event) => event.total);
     // Build per-member paid/share summary from events
     const memberSummaryMap = {};
     events.forEach((event) => {
@@ -2033,14 +2038,17 @@
           </div>
         ` : ''}
         <div>
-          ${events.length ? Object.entries(grouped).map(([month, monthEvents]) => `
+          ${events.length ? grouped.map(([month, monthData]) => `
             <div style="margin-bottom:10px">
-              <div style="font-size:14px;font-weight:800;color:var(--t1);margin:6px 0">${escHtml(month)}</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0">
+                <div style="font-size:14px;font-weight:800;color:var(--t1)">${escHtml(month)}</div>
+                <div style="font-size:13px;font-weight:800;color:var(--t1);text-align:right">${fmtCur(monthData.total)}</div>
+              </div>
               <div class="live-split-table-wrap ls-desktop-event-wrap" style="border-radius:12px;border:1px solid var(--border);background:var(--white);overflow:hidden">
                 <table class="live-split-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
                   <tbody>
-                    ${monthEvents.map((event) => {
+                    ${monthData.events.map((event) => {
                       const canManage = Number(event.group_id) > 0;
                       const openCall = `liveSplitOpenTripEvent(${tid}, ${Number(event.group_id) || 0})`;
                       const actionHtml = canManage ? `
@@ -2078,7 +2086,7 @@
                 </table>
               </div>
               <div class="ls-mobile-event-list">
-                ${monthEvents.map((event) => {
+                ${monthData.events.map((event) => {
                   const canManage = Number(event.group_id) > 0;
                   const openCall = `liveSplitOpenTripEvent(${tid}, ${Number(event.group_id) || 0})`;
                   const actionHtml = canManage ? `
@@ -2165,9 +2173,16 @@
   }
 
   function renderTripsSection() {
-    const trips = [...(state.liveTrips || [])]
+    const allTrips = [...(state.liveTrips || [])]
       .sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')) || Number(b.id || 0) - Number(a.id || 0));
-    if (!trips.length) {
+    const completedTrips = allTrips.filter((trip) => String(trip?.status || '').toLowerCase() === 'completed');
+    const trips = state.showCompletedTrips
+      ? allTrips
+      : allTrips.filter((trip) => String(trip?.status || '').toLowerCase() !== 'completed');
+    const toggleBtnHtml = completedTrips.length
+      ? `<button class="chip ${state.showCompletedTrips ? 'active' : ''}" onclick="liveSplitToggleCompletedTrips()">${state.showCompletedTrips ? 'Hide Completed Trips' : `Show Completed Trips (${completedTrips.length})`}</button>`
+      : '';
+    if (!allTrips.length) {
       return `
         <div style="margin-top:14px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -2185,7 +2200,10 @@
     return `
       <div style="margin-top:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:13px;font-weight:800;color:var(--t2)">Trips</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="font-size:13px;font-weight:800;color:var(--t2)">Trips</div>
+            ${toggleBtnHtml}
+          </div>
           <div style="display:flex;align-items:center;gap:8px">
             <button class="live-split-icon-btn soft" title="Voice trip" aria-label="Voice trip" onclick="liveSplitOpenVoiceTripCreate()">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
@@ -2193,6 +2211,7 @@
             <button class="btn btn-s btn-sm" onclick="liveSplitOpenTripCreate()">+ New Trip</button>
           </div>
         </div>
+        ${!trips.length ? '<div class="card" style="text-align:center;color:var(--t3);padding:18px">Completed trips are hidden.</div>' : ''}
         <div style="display:grid;gap:8px">
           ${trips.map((trip) => {
             const status = String(trip?.status || 'active').toLowerCase();
@@ -4546,6 +4565,10 @@
   };
   window.liveSplitSetFriendFilter = function liveSplitSetFriendFilter(filterKey) {
     state.friendFilter = filterKey === 'hide_settled' ? 'hide_settled' : 'all';
+    renderMain();
+  };
+  window.liveSplitToggleCompletedTrips = function liveSplitToggleCompletedTrips() {
+    state.showCompletedTrips = !state.showCompletedTrips;
     renderMain();
   };
   window.liveSplitOpenPendingInvites = openPendingInvitesModal;
