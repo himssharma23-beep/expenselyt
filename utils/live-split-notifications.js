@@ -185,17 +185,22 @@ async function notifyMonthlyLiveSplitSummary(user, month) {
   });
 
   if (isEmailEnabled() && user?.email) {
-    await sendLiveSplitMonthlySummaryEmail({
-      to: user.email,
-      name: user.display_name || user.username || '',
-      month,
-      oweToMe,
-      iOwe,
-      net: balance,
-      topRows,
-      currencyCode: user.currency_code,
-      localeCode: user.locale_code,
-    }).catch(() => {});
+    const emailKey = 'live-split-monthly-summary';
+    const alreadySent = await pgAuth.hasEmailNotificationBeenSent(user.id, emailKey, month);
+    if (!alreadySent) {
+      await sendLiveSplitMonthlySummaryEmail({
+        to: user.email,
+        name: user.display_name || user.username || '',
+        month,
+        oweToMe,
+        iOwe,
+        net: balance,
+        topRows,
+        currencyCode: user.currency_code,
+        localeCode: user.locale_code,
+      }).catch(() => {});
+      await pgAuth.markEmailNotificationSent(user.id, emailKey, month, { month, source: 'push-cycle' });
+    }
   }
   return { skipped: false };
 }
