@@ -4557,11 +4557,7 @@ async function getOutgoingLiveSplitInvites(userId) {
          WHERE f.user_id = $1
            AND (
              (i.target_user_id IS NOT NULL AND f.linked_user_id = i.target_user_id)
-             OR (
-               i.target_user_id IS NULL
-               AND lower(f.name) = lower(COALESCE(i.target_name, ''))
-             )
-           )
+            )
            AND f.deleted_at IS NULL
        )
      ORDER BY i.created_at DESC`,

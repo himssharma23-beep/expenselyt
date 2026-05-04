@@ -1995,6 +1995,12 @@
             ${trip.added_to_expense
               ? `<div style="font-size:11px;font-weight:700;color:var(--green);padding:6px 10px;border-radius:999px;background:#edfbf3;border:1px solid #cdeeda">Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}</div>`
               : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}</button>`}
+            <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+            </button>
+            <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+            </button>
             <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="liveSplitUseTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
             </button>
@@ -3088,7 +3094,7 @@
         .filter((friend) => !scopedFriendIds || scopedFriendIds.has(Number(friend.id)));
       openModal('Live Split - Select Friends', `
         <div style="display:grid;gap:10px">
-          ${renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript)}
+          ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript) : ''}
           <div style="font-size:12px;color:var(--t3)">${Number(form.trip_id || 0) > 0 ? 'Pick any trip members you want in this split. You can also keep only yourself selected.' : 'Pick people for this split. You are selected by default.'}</div>
           <label class="fc"><input type="checkbox" checked disabled><span>You</span></label>
           ${selectableFriends.map((friend) => {
@@ -3120,7 +3126,7 @@
     }
 
     openModal('Live Split - Add Expense', `
-      ${renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript)}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('split', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
         <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
           Voice split drafts are ready below. Save will add every detected split. Record again to append or update the list, or use Reset to clear it and return to manual entry.
@@ -3247,7 +3253,7 @@
     const voiceOnly = !!form.voice_only;
     const selectableFriends = (state.friends || []);
     openModal('Live Split Trip - New', `
-      ${renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript)}
+      ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
         <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
           Voice trip drafts are ready below. Create Trip will add every detected trip. Record again to append or update the list, or use Reset to clear it and return to manual entry.

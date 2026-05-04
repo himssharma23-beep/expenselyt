@@ -12443,7 +12443,6 @@ async function saveBankAccount(id) {
   if (body.account_name && body.account_name.length > 80) { toast('Account name must be 80 characters or fewer', 'warning'); return; }
   if (!Number.isFinite(body.balance) || body.balance < 0) { toast('Current balance must be 0 or more', 'warning'); return; }
   if (!Number.isFinite(body.min_balance) || body.min_balance < 0) { toast('Minimum balance must be 0 or more', 'warning'); return; }
-  if (body.min_balance > body.balance) { toast('Minimum balance cannot be greater than current balance', 'warning'); return; }
   const r = id ? await api(`/api/banks/${id}`, { method: 'PUT', body }) : await api('/api/banks', { method: 'POST', body });
   if (r?.success || r?.id) { closeModal(); toast(id ? 'Account updated' : 'Account added', 'success'); loadBankAccounts(); }
   else toast(r?.error || 'Failed', 'error');

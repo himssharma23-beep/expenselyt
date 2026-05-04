@@ -1336,6 +1336,123 @@ function inferLiveSplitVoiceMode(rawMode, participantRows = [], totalAmount = 0)
   return shares.length > 1 ? 'amount' : 'equal';
 }
 
+function defaultLiveSplitBank(bankOptions = []) {
+  const defaults = (bankOptions || []).filter((bank) => !!bank?.is_default);
+  if (defaults.length === 1) return defaults[0];
+  if ((bankOptions || []).length === 1) return bankOptions[0];
+  return defaults[0] || null;
+}
+
+function defaultLiveSplitCard(cardOptions = []) {
+  return (cardOptions || []).length === 1 ? cardOptions[0] : null;
+}
+
+function inferLiveSplitAddToExpensePreference(text = '', currentValue = null) {
+  const source = String(text || '').trim().toLowerCase();
+  if (!source) return currentValue;
+  if (/\b(live split only|dont add to expense|do not add to expense|without expense|no expense|dont track expense|do not track expense)\b/i.test(source)) return false;
+  if (/\b(add to expense|track expense|include expense|add my share|my share to expense)\b/i.test(source)) return true;
+  return currentValue;
+}
+
+function inferLiveSplitExpenseType(text = '', currentValue = 'fair') {
+  const source = String(text || '').trim().toLowerCase();
+  if (!source) return currentValue;
+  if (/\b(extra|non essential|non-essential|luxury|treat as extra|mark as extra|make .* extra|convert .* extra)\b/i.test(source)) return 'extra';
+  if (/\b(fair|regular|essential|not extra|mark as fair|make .* fair|convert .* fair)\b/i.test(source)) return 'fair';
+  return currentValue;
+}
+
+function inferLiveSplitFinanceIntent(text = '') {
+  const source = String(text || '').trim().toLowerCase();
+  return {
+    mentionsCard: /\b(card|credit card|cc)\b/i.test(source),
+    mentionsBank: /\b(bank|bank account|account)\b/i.test(source),
+  };
+}
+
+function cloneLiveSplitVoiceEntry(entry) {
+  const next = entry && typeof entry === 'object' ? { ...entry } : {};
+  return {
+    ...next,
+    total_amount: Math.round((Number(next?.total_amount || 0) || 0) * 100) / 100,
+    addExpense: !!next?.addExpense,
+    expense_type: String(next?.expense_type || '').toLowerCase() === 'extra' ? 'extra' : 'fair',
+    finance_target: String(next?.finance_target || 'none'),
+    bank_account_id: Number(next?.bank_account_id || 0) || null,
+    card_id: Number(next?.card_id || 0) || null,
+    card_discount_pct: Number(next?.card_discount_pct || 0) || 0,
+  };
+}
+
+function getLiveSplitVoiceEditTargets(message, entries = []) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return [];
+  const ordinalMap = {
+    first: 0, '1st': 0, one: 0,
+    second: 1, '2nd': 1, two: 1,
+    third: 2, '3rd': 2, three: 2,
+    fourth: 3, '4th': 3, four: 3,
+    fifth: 4, '5th': 4, five: 4,
+  };
+  for (const [token, index] of Object.entries(ordinalMap)) {
+    if (text.includes(token) && entries[index]) return [index];
+  }
+  const matches = [];
+  entries.forEach((entry, index) => {
+    const name = String(entry?.details || entry?.trip_name || '').trim().toLowerCase();
+    if (name && text.includes(name)) matches.push(index);
+  });
+  return matches;
+}
+
+function applyHeuristicLiveSplitVoiceEdit(message, currentEntries = [], bankOptions = [], cardOptions = []) {
+  const text = String(message || '').trim();
+  const entries = (Array.isArray(currentEntries) ? currentEntries : []).map(cloneLiveSplitVoiceEntry);
+  if (!text || !entries.length) return null;
+
+  const nextAddExpense = inferLiveSplitAddToExpensePreference(text, null);
+  const nextExpenseType = inferLiveSplitExpenseType(text, null);
+  const { mentionsCard, mentionsBank } = inferLiveSplitFinanceIntent(text);
+  const guessedCard = mentionsCard ? (guessCardMatchFromText(text, cardOptions) || defaultLiveSplitCard(cardOptions)) : null;
+  const guessedBank = !guessedCard && mentionsBank ? (guessBankMatchFromText(text, bankOptions) || defaultLiveSplitBank(bankOptions)) : null;
+  const appliesAll = /\b(all|every|everything|all of them)\b/i.test(text) || (!getLiveSplitVoiceEditTargets(text, entries).length);
+  const targets = appliesAll ? entries.map((_, index) => index) : getLiveSplitVoiceEditTargets(text, entries);
+
+  if (!targets.length) return null;
+  if (nextAddExpense === null && !nextExpenseType && !mentionsCard && !mentionsBank && !guessedCard && !guessedBank) return null;
+
+  const updated = entries.map((entry, index) => {
+    if (!targets.includes(index)) return entry;
+    const next = { ...entry };
+    if (nextAddExpense !== null) next.addExpense = nextAddExpense;
+    if (nextExpenseType) next.expense_type = nextExpenseType;
+    if (guessedCard) {
+      next.finance_target = 'card';
+      next.card_id = Number(guessedCard.id);
+      next.card_discount_pct = Number(guessedCard.default_discount_pct || next.card_discount_pct || 0);
+      next.bank_account_id = null;
+    } else if (guessedBank) {
+      next.finance_target = 'expense';
+      next.bank_account_id = Number(guessedBank.id);
+      next.card_id = null;
+      next.card_discount_pct = 0;
+    } else if (mentionsCard) {
+      next.finance_target = 'card';
+    } else if (mentionsBank) {
+      next.finance_target = 'expense';
+    }
+    return next;
+  });
+
+  return {
+    transcript: String(message || '').trim(),
+    notes: 'Applied heuristic live split voice edit command.',
+    suggestions: updated,
+    suggestion: updated[0],
+  };
+}
+
 function buildLiveSplitFriendOptions(friends = []) {
   return (friends || []).map((friend) => ({
     id: Number(friend.id),
@@ -1397,6 +1514,14 @@ function normalizeLiveSplitVoiceDraft(raw, context = {}) {
     mentionedFriendIds = new Set(),
     transcript = '',
   } = context;
+  const combinedText = [
+    raw?.details,
+    raw?.notes,
+    raw?.bank_name,
+    raw?.card_name,
+    raw?.category,
+    transcript,
+  ].filter(Boolean).join(' ');
   const participants = Array.isArray(raw?.participants) ? raw.participants : [];
   let splitValues = {};
   let selectedKeys = new Set(['self']);
@@ -1461,10 +1586,17 @@ function normalizeLiveSplitVoiceDraft(raw, context = {}) {
     : (Number(preferredTripId || 0) > 0 ? tripOptions.find((item) => Number(item.id) === Number(preferredTripId)) : null);
   const payerName = normalizeLiveSplitPersonName(raw?.paid_by_name || '');
   const payerFriend = payerName && !['me', 'self', 'you'].includes(payerName.toLowerCase()) ? findLiveSplitFriendByName(payerName, friendOptions) : null;
-  const matchedBank = raw?.bank_name ? guessBankMatchFromText(raw.bank_name, bankOptions) : null;
-  const matchedCard = raw?.card_name ? guessCardMatchFromText(raw.card_name, cardOptions) : null;
+  const exactCard = raw?.card_name ? guessCardMatchFromText(raw.card_name, cardOptions) : null;
+  const exactBank = raw?.bank_name ? guessBankMatchFromText(raw.bank_name, bankOptions) : null;
+  const { mentionsCard, mentionsBank } = inferLiveSplitFinanceIntent(combinedText);
+  const matchedCard = exactCard || guessCardMatchFromText(combinedText, cardOptions) || (mentionsCard ? defaultLiveSplitCard(cardOptions) : null);
+  const matchedBank = !matchedCard
+    ? (exactBank || guessBankMatchFromText(combinedText, bankOptions) || (mentionsBank ? defaultLiveSplitBank(bankOptions) : null))
+    : null;
   const normalizedTotalAmount = Math.round((Number(raw?.total_amount || 0) || 0) * 100) / 100;
   const normalizedSplitMode = inferLiveSplitVoiceMode(raw?.split_mode, participantRows, normalizedTotalAmount);
+  const inferredAddExpense = inferLiveSplitAddToExpensePreference(combinedText, !!raw?.add_to_expense);
+  const inferredExpenseType = inferLiveSplitExpenseType(combinedText, String(raw?.expense_type || '').toLowerCase() === 'extra' ? 'extra' : 'fair');
   return {
     details: normalizeLiveSplitDetails(raw?.details, transcript),
     divide_date: normalizeVoiceExpenseDate(raw?.divide_date),
@@ -1474,10 +1606,10 @@ function normalizeLiveSplitVoiceDraft(raw, context = {}) {
     split_mode: normalizedSplitMode,
     selected_keys: [...selectedKeys],
     split_values: splitValues,
-    addExpense: !!raw?.add_to_expense,
-    expense_type: String(raw?.expense_type || '').toLowerCase() === 'extra' ? 'extra' : 'fair',
+    addExpense: !!inferredAddExpense,
+    expense_type: inferredExpenseType,
     category: String(raw?.category || '').trim(),
-    finance_target: matchedCard ? 'card' : matchedBank ? 'expense' : 'none',
+    finance_target: matchedCard ? 'card' : matchedBank ? 'expense' : mentionsCard ? 'card' : mentionsBank ? 'expense' : 'none',
     bank_account_id: matchedBank ? Number(matchedBank.id) : null,
     card_id: matchedCard ? Number(matchedCard.id) : null,
     card_discount_pct: matchedCard ? Number(raw?.card_discount_pct || matchedCard.default_discount_pct || 0) : 0,
@@ -2096,6 +2228,22 @@ router.post('/live-split/voice-prefill', upload.single('file'), async (req, res)
     } catch (_err) {
       currentEntries = [];
     }
+    const heuristicVoiceResult = Array.isArray(currentEntries) && currentEntries.length
+      ? applyHeuristicLiveSplitVoiceEdit(transcript, currentEntries, (banks || []).map((bank) => ({
+          id: String(bank.id),
+          label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+          bank_name: bank.bank_name || '',
+          account_name: bank.account_name || '',
+          is_default: !!bank.is_default,
+        })), (cards || []).map((card) => ({
+          id: String(card.id),
+          label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+          card_name: card.card_name || '',
+          bank_name: card.bank_name || '',
+          last4: String(card.last4 || ''),
+          default_discount_pct: Number(card.default_discount_pct || 0),
+        })))
+      : null;
     const preferredFriendId = Number(req.body?.preferred_friend_id || 0) || null;
     const preferredTripId = Number(req.body?.preferred_trip_id || 0) || null;
     let preselectedFriendIds = [];
@@ -2104,7 +2252,22 @@ router.post('/live-split/voice-prefill', upload.single('file'), async (req, res)
     } catch (_err) {
       preselectedFriendIds = [];
     }
-    const voiceResult = await parseLiveSplitVoiceWithOpenAi({
+    const bankOptions = (banks || []).map((bank) => ({
+      id: String(bank.id),
+      label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
+      bank_name: bank.bank_name || '',
+      account_name: bank.account_name || '',
+      is_default: !!bank.is_default,
+    }));
+    const cardOptions = (cards || []).map((card) => ({
+      id: String(card.id),
+      label: `${card.card_name} (${card.bank_name} **${card.last4})`,
+      card_name: card.card_name || '',
+      bank_name: card.bank_name || '',
+      last4: String(card.last4 || ''),
+      default_discount_pct: Number(card.default_discount_pct || 0),
+    }));
+    const voiceResult = heuristicVoiceResult || await parseLiveSplitVoiceWithOpenAi({
       message: transcript,
       mode,
       currentEntries,
@@ -2113,21 +2276,8 @@ router.post('/live-split/voice-prefill', upload.single('file'), async (req, res)
       preselectedFriendIds,
       friendOptions: buildLiveSplitFriendOptions(friends || []),
       tripOptions: buildLiveSplitTripOptions(trips || []),
-      bankOptions: (banks || []).map((bank) => ({
-        id: String(bank.id),
-        label: `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`,
-        bank_name: bank.bank_name || '',
-        account_name: bank.account_name || '',
-        is_default: !!bank.is_default,
-      })),
-      cardOptions: (cards || []).map((card) => ({
-        id: String(card.id),
-        label: `${card.card_name} (${card.bank_name} **${card.last4})`,
-        card_name: card.card_name || '',
-        bank_name: card.bank_name || '',
-        last4: String(card.last4 || ''),
-        default_discount_pct: Number(card.default_discount_pct || 0),
-      })),
+      bankOptions,
+      cardOptions,
     });
     await Promise.resolve(pgDb.consumeUserVoiceAiUsage(req.session.userId, 'live_split_voice', mode));
     res.json({
