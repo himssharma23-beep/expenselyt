@@ -1695,8 +1695,8 @@ async function applyRecurringEntries(userId) {
     if (entry.last_applied === currentMonth) continue;
     if (!recurringEntryAppliesToMonth(entry, currentMonth)) continue;
     try {
-      await applyRecurringEntryForCurrentMonth(userId, entry.id);
-      applied.push(entry.id);
+      const didApply = await applyRecurringEntryForCurrentMonth(userId, entry.id);
+      if (didApply) applied.push(entry.id);
     } catch (_) {
       // Skip unsupported or broken recurring rows for now.
     }

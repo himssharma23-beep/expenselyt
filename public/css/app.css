@@ -767,6 +767,66 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .live-split-request-actions { flex-shrink:0; }
 .live-split-card { justify-content:space-between; }
 .live-split-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; min-width:0; }
+.live-split-pending-card {
+  align-items:flex-start;
+  gap:16px;
+  padding:16px 18px;
+  border-color:#e7ebf0;
+  background:linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+}
+.live-split-pending-main {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex:1;
+  min-width:0;
+}
+.live-split-pending-avatar {
+  flex-shrink:0;
+}
+.live-split-pending-copy {
+  min-width:0;
+}
+.live-split-pending-head {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.live-split-pending-meta {
+  margin-top:4px;
+  font-size:12px;
+  color:var(--t3);
+  line-height:1.45;
+}
+.live-split-pending-status {
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:5px 10px;
+  border-radius:999px;
+  border:1px solid rgba(240,160,48,0.28);
+  background:#fff8ee;
+  color:#b76e05;
+  font-size:11px;
+  font-weight:800;
+}
+.live-split-pending-status svg {
+  width:13px;
+  height:13px;
+  fill:currentColor;
+}
+.live-split-pending-actions {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:5px 6px;
+  border-radius:999px;
+  border:1px solid #e7ebf0;
+  background:linear-gradient(180deg, #ffffff 0%, #f7faf9 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.92);
+  flex-shrink:0;
+}
 .live-split-trip-action-wrap { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .live-split-trip-status { font-size:11px; font-weight:700; text-transform:capitalize; }
 .live-split-trip-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -1525,6 +1585,17 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     width:100%;
     justify-content:flex-start;
   }
+  .live-split-pending-card {
+    gap:12px;
+  }
+  .live-split-pending-main {
+    width:100%;
+  }
+  .live-split-pending-actions {
+    width:auto;
+    max-width:100%;
+    align-self:flex-start;
+  }
   .live-split-card-actions .friend-bal {
     margin-left:auto;
   }
@@ -1913,6 +1984,13 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .live-split-card-actions {
     flex-wrap:wrap;
     gap:8px;
+  }
+  .live-split-pending-head {
+    gap:8px;
+  }
+  .live-split-pending-actions {
+    gap:6px;
+    padding:4px 5px;
   }
   .live-split-card-actions .btn {
     flex:0 0 auto;

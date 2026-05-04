@@ -4474,6 +4474,32 @@ router.put('/trips/:id/members/:mid/link', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get('/trips/:id/shared-users', async (req, res) => {
+  try {
+    const shared_users = await Promise.resolve(getCoreDb().getTripSharedUsers(req.session.userId, req.params.id));
+    res.json({ shared_users });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/trips/:id/shared-users', async (req, res) => {
+  try {
+    const share_id = await Promise.resolve(getCoreDb().shareTripWithUser(
+      req.session.userId,
+      req.params.id,
+      req.body?.linked_user_id,
+      req.body?.permission || 'view'
+    ));
+    res.json({ success: true, share_id });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.delete('/trips/:id/shared-users/:sid', async (req, res) => {
+  try {
+    await Promise.resolve(getCoreDb().unshareTripWithUser(req.session.userId, req.params.id, req.params.sid));
+    res.json({ success: true });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
 router.post('/trips/:id/invite/:mid', async (req, res) => {
   try {
     const token = await Promise.resolve(getCoreDb().createTripInvite(req.session.userId, req.params.id, req.params.mid));

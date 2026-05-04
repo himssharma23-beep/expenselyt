@@ -6574,31 +6574,34 @@ function renderTripList() {
   const displayMember = tripsFilters.member || 'all';
   const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
 
-  const tripActionButtons = (trip) => `
+  const tripActionButtons = (trip) => {
+    const canEditTrip = !!(trip.isOwner || trip.userPermission !== 'view');
+    return `
     <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
       <button type="button" class="btn btn-s btn-sm" onclick="openTripDetail(${trip.id})">Open</button>
       <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)" style="min-width:128px">
         <option value="">More</option>
-        <option value="share">Share link</option>
-        <option value="itinerary">Add itinerary</option>
+        ${trip.isOwner ? '<option value="share">Share trip</option>' : ''}
+        ${canEditTrip ? '<option value="itinerary">Add itinerary</option>' : ''}
         <option value="pdf">Download PDF</option>
-        <option value="settle">Settle trip</option>
-        <option value="edit">Edit trip</option>
-        <option value="delete">Delete trip</option>
+        ${canEditTrip ? '<option value="settle">Settle trip</option>' : ''}
+        ${trip.isOwner ? '<option value="edit">Edit trip</option>' : ''}
+        ${trip.isOwner ? '<option value="delete">Delete trip</option>' : ''}
       </select>
     </div>
     <div class="trip-table-actions-mobile">
       <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)">
         <option value="">Actions</option>
         <option value="view">View details</option>
-        <option value="share">Share link</option>
-        <option value="itinerary">Add itinerary</option>
+        ${trip.isOwner ? '<option value="share">Share trip</option>' : ''}
+        ${canEditTrip ? '<option value="itinerary">Add itinerary</option>' : ''}
         <option value="pdf">Download PDF</option>
-        <option value="settle">Settle trip</option>
-        <option value="edit">Edit trip</option>
-        <option value="delete">Delete trip</option>
+        ${canEditTrip ? '<option value="settle">Settle trip</option>' : ''}
+        ${trip.isOwner ? '<option value="edit">Edit trip</option>' : ''}
+        ${trip.isOwner ? '<option value="delete">Delete trip</option>' : ''}
       </select>
     </div>`;
+  };
 
   const tableRows = pageRows.map((trip) => {
     const startText = trip.start_date ? fmtDate(trip.start_date) : '-';
@@ -6608,11 +6611,16 @@ function renderTripList() {
       : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
     const countdownText = tripStartsInLabel(trip.start_date);
     const displayAmount = tripDisplayAmount(trip, displayMember);
+    const isShared = trip.is_owner === false || trip.isOwner === false;
+    const sharedMeta = isShared
+      ? `<div style="margin-top:4px;font-size:12px;color:var(--blue);font-weight:700">Shared by ${escHtml(trip.owner_name || 'Owner')} &middot; ${escHtml(String(trip.userPermission || 'view'))} access</div>`
+      : '';
     return `
       <tr>
         <td class="trip-actions-cell" style="width:1%;white-space:nowrap">${tripActionButtons(trip)}</td>
         <td style="min-width:150px">
           <button class="btn-d" style="font-weight:700;color:var(--green);text-align:left">${escHtml(trip.destination || trip.name || '-')}</button>
+          ${sharedMeta}
         </td>
         <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}${countdownText ? `<div style="margin-top:4px;font-size:12px;font-weight:700;color:var(--green)">${escHtml(countdownText)}</div>` : ''}</td>
         <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(displayAmount)}</td>
@@ -6643,7 +6651,7 @@ function renderTripList() {
       <div class="trip-page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
         <div>
           <div style="font-size:22px;font-weight:800">My Trips</div>
-          <div style="font-size:13px;color:var(--t2);margin-top:3px">Track only your own trips, members, distance, and total spend.</div>
+          <div style="font-size:13px;color:var(--t2);margin-top:3px">Track your own trips and any trips shared with you, including members, distance, and spend.</div>
         </div>
         <div class="trip-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">PDF</button>
@@ -6868,6 +6876,21 @@ function renderTripDetail() {
   const summaryCards = [
     ['Transport', escHtml(trip.transport_mode || '-')],
   ].map(([label, value]) => `<div class="card" style="padding:12px 14px;min-height:0"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">${label}</div><div style="font-size:14px;font-weight:700;line-height:1.2">${value}</div></div>`).join('');
+  const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
+  const sharedAccessHtml = trip.isOwner
+    ? (sharedUsers.length
+      ? `<div class="card" style="padding:12px 14px;min-height:0">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:6px">Shared With</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${sharedUsers.map((user) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid #d8e8df;background:#f3f9f6;font-size:12px;font-weight:700;color:var(--text)">${escHtml(user.display_name || user.member_name || 'User')} <span style="color:var(--t3);font-weight:600">${escHtml(user.permission === 'edit' ? 'edit' : 'view')}</span></span>`).join('')}
+          </div>
+        </div>`
+      : '')
+    : `<div class="card" style="padding:12px 14px;min-height:0">
+        <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Shared Access</div>
+        <div style="font-size:14px;font-weight:700;line-height:1.35">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>
+        <div style="font-size:12px;color:var(--t2);margin-top:4px">${escHtml(trip.userPermission === 'edit' ? 'Can edit trip details and expenses' : 'View-only access')}</div>
+      </div>`;
 
   const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
   const itineraryGroups = itineraryItems.reduce((acc, item) => {
@@ -6960,12 +6983,12 @@ function renderTripDetail() {
               <tr>
                 <td class="trip-actions-cell">
                   <div class="trip-table-actions" role="group" aria-label="Trip expense actions">
-                    <button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
+                    ${canEdit ? `<button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
                       <span class="trip-icon-btn-glyph">&#9998;</span>
-                    </button>
-                    <button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
+                    </button>` : ''}
+                    ${canEdit ? `<button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
                       <span class="trip-icon-btn-glyph">&#128465;</span>
-                    </button>
+                    </button>` : ''}
                   </div>
                 </td>
                 <td>${fmtTripExpenseDateTime(item.expense_date, item.updated_at || item.created_at)}</td>
@@ -7000,22 +7023,23 @@ function renderTripDetail() {
                   ${escHtml(trip.destination || trip.name || '')}${trip.total_distance != null ? ` <span style="font-size:18px;font-weight:700;color:var(--t2)">(${escHtml(String(trip.total_distance))} km)</span>` : ''}
                 </div>
                 ${tripStatusBadge(trip.status)}
+                ${!trip.isOwner ? `<span class="chip active" style="font-size:11px;padding:6px 10px">Shared</span>` : ''}
               </div>
               <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-              <button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
+              ${trip.isOwner ? `<button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
                 <span class="trip-icon-btn-glyph">&#9998;</span>
-              </button>
-              <button class="trip-icon-btn" title="Share trip link" aria-label="Share trip link" onclick="showTripShareModal(${trip.id})">
+              </button>` : ''}
+              ${trip.isOwner ? `<button class="trip-icon-btn" title="Share trip" aria-label="Share trip" onclick="showTripShareModal(${trip.id})">
                 <span class="trip-icon-btn-glyph">&#128279;</span>
-              </button>
+              </button>` : ''}
               <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()">
                 <span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span>
               </button>
-              <button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
+              ${trip.isOwner ? `<button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
                 <span class="trip-icon-btn-glyph">&#128465;</span>
-              </button>
+              </button>` : ''}
             </div>
           </div>
         </div>
@@ -7034,6 +7058,7 @@ function renderTripDetail() {
         </div>
         ${summaryCards}
       </div>
+      ${sharedAccessHtml}
       
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
@@ -7042,7 +7067,7 @@ function renderTripDetail() {
           <div style="font-size:13px;color:var(--t2)">Plan trip activities by date and time before you travel.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>
+          ${canEdit ? '<button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>' : ''}
           <button class="btn btn-g btn-sm" onclick="toggleTripItineraryCollapse()">${_tripItineraryCollapsed ? 'Show Itinerary' : 'Hide Itinerary'}</button>
         </div>
       </div>
@@ -7054,11 +7079,11 @@ function renderTripDetail() {
           <div style="font-size:13px;color:var(--t2)">Subtotals by expense type, with each trip item visible underneath.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-          <button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>
-          <button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>
-          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
-          <button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>
-          ${(trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
+          ${canEdit ? `<button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>` : ''}
+          ${canManageExpenses ? '<button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>' : ''}
+          ${canEdit && (trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
+          ${canEdit ? `<button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>` : ''}
+          ${trip.isOwner && (trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
         </div>
       </div>
       ${groupHtml}
@@ -7110,6 +7135,66 @@ function tripDefaultShareExpiry() {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function tripSharePermissionPill(permission, active, onclick, disabled = false) {
+  const styles = active
+    ? 'background:var(--em);color:#fff;border-color:var(--em)'
+    : 'background:#fff;color:var(--t2);border-color:var(--br)';
+  return `<button
+    type="button"
+    class="chip"
+    ${disabled ? 'disabled' : ''}
+    onclick="${disabled ? '' : onclick}"
+    style="font-size:11px;padding:7px 10px;border:1px solid;${styles}${disabled ? ';opacity:.55;cursor:not-allowed' : ''}"
+  >${permission === 'edit' ? 'Can Edit' : 'View Only'}</button>`;
+}
+
+function tripDirectSharedUsersHtml(sharedUsers = [], tripId) {
+  if (!sharedUsers.length) {
+    return '<div style="font-size:12px;color:var(--t3);padding:8px 0">This trip is not shared with any app users yet.</div>';
+  }
+  return sharedUsers.map((user) => `
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px;border:1px solid var(--br);border-radius:12px;background:linear-gradient(180deg,#fff 0%,#f7faf8 100%);margin-bottom:8px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:14px;font-weight:700;color:var(--text)">${escHtml(user.display_name || user.member_name || 'User')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:3px">@${escHtml(user.username || 'unknown')} · ${escHtml(user.permission === 'edit' ? 'Can edit' : 'View only')}</div>
+      </div>
+      <button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripUnshareUser(${Number(tripId)}, ${Number(user.id)})">Unshare</button>
+    </div>
+  `).join('');
+}
+
+let _tripShareUserSearchTimer = null;
+function tripShareSearchUsers(tripId) {
+  clearTimeout(_tripShareUserSearchTimer);
+  _tripShareUserSearchTimer = setTimeout(async () => {
+    const q = document.getElementById('tripShareUserQ')?.value.trim() || '';
+    const box = document.getElementById('tripShareUserResults');
+    if (!box) return;
+    if (q.length < 2) {
+      box.innerHTML = '';
+      return;
+    }
+    const currentTrip = (_tripDetail && String(_tripDetail.id) === String(tripId))
+      ? _tripDetail
+      : (_trips.find((row) => String(row.id) === String(tripId)) || null);
+    const sharedIds = new Set((currentTrip?.shared_users || []).map((item) => Number(item?.linked_user_id || 0)).filter((id) => id > 0));
+    sharedIds.add(Number(_currentUserId || 0));
+    const data = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
+    const users = (data?.users || []).filter((user) => !sharedIds.has(Number(user?.id || 0)));
+    box.innerHTML = users.length
+      ? users.map((user) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--br);border-radius:10px;background:#fff;margin-bottom:6px">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:13px;font-weight:700">${escHtml(user.display_name || user.username || 'User')}</div>
+            <div style="font-size:11px;color:var(--t3)">@${escHtml(user.username || 'unknown')}</div>
+          </div>
+          <button class="btn btn-p btn-sm" onclick="tripShareWithUser(${Number(tripId)}, ${Number(user.id)})">Share</button>
+        </div>
+      `).join('')
+      : '<div style="font-size:12px;color:var(--t3);padding:8px 0">No matching app users found.</div>';
+  }, 280);
+}
+
 async function showTripShareModal(tripId = null) {
   const targetId = tripId || _selectedTripId;
   if (!targetId) {
@@ -7119,11 +7204,18 @@ async function showTripShareModal(tripId = null) {
   const trip = (_tripDetail && String(_tripDetail.id) === String(targetId))
     ? _tripDetail
     : (_trips.find((row) => String(row.id) === String(targetId)) || null);
-  const linksData = await api('/api/shares');
+  const [linksData, directShareData] = await Promise.all([
+    api('/api/shares'),
+    trip?.isOwner ? api(`/api/trips/${targetId}/shared-users`) : Promise.resolve({ shared_users: trip?.shared_users || [] }),
+  ]);
   const links = (linksData?.links || []).filter((link) => {
     const filters = parseJsonSafe(link.filters, {});
     return String(link.link_type || '').toLowerCase() === 'trip_detail' && String(filters?.trip_id || '') === String(targetId);
   });
+  const sharedUsers = Array.isArray(directShareData?.shared_users) ? directShareData.shared_users : (trip?.shared_users || []);
+  if (trip) trip.shared_users = sharedUsers;
+  if (_tripDetail && String(_tripDetail.id) === String(targetId)) _tripDetail.shared_users = sharedUsers;
+  const selectedPermission = 'view';
   const rowsHtml = links.length
     ? links.map((link) => {
         const url = `${location.origin}/s/${link.token}`;
@@ -7137,10 +7229,37 @@ async function showTripShareModal(tripId = null) {
         </div>`;
       }).join('')
     : '<div style="font-size:12px;color:var(--t3);padding:8px 0">No trip share links yet.</div>';
+  const directShareIntro = trip?.isOwner
+    ? `
+      <div class="card" style="padding:14px 16px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px">Share With App User</div>
+        <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Give someone direct access to the full trip inside their own Trips page.</div>
+        <label class="fl full" style="margin:0 0 10px">Search app users
+          <input class="fi" id="tripShareUserQ" placeholder="Type name or username..." oninput="tripShareSearchUsers(${Number(targetId)})">
+        </label>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <span style="font-size:12px;color:var(--t2)">Permission:</span>
+          <button id="tripSharePermView" type="button" class="chip active" style="font-size:11px;padding:7px 10px;border:1px solid var(--em);background:var(--em);color:#fff" onclick="document.getElementById('tripSharePermission').value='view';this.style.background='var(--em)';this.style.color='#fff';this.style.borderColor='var(--em)';document.getElementById('tripSharePermEdit').style.background='#fff';document.getElementById('tripSharePermEdit').style.color='var(--t2)';document.getElementById('tripSharePermEdit').style.borderColor='var(--br)'">View Only</button>
+          <button id="tripSharePermEdit" type="button" class="chip" style="font-size:11px;padding:7px 10px;border:1px solid var(--br);background:#fff;color:var(--t2)" onclick="document.getElementById('tripSharePermission').value='edit';this.style.background='var(--em)';this.style.color='#fff';this.style.borderColor='var(--em)';document.getElementById('tripSharePermView').style.background='#fff';document.getElementById('tripSharePermView').style.color='var(--t2)';document.getElementById('tripSharePermView').style.borderColor='var(--br)'">Can Edit</button>
+        </div>
+        <input type="hidden" id="tripSharePermission" value="${selectedPermission}">
+        <div id="tripShareUserResults"></div>
+      </div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">Shared App Users</div>
+      <div id="tripDirectSharedUsersList" style="margin-bottom:16px">${tripDirectSharedUsersHtml(sharedUsers, targetId)}</div>
+    `
+    : `
+      <div class="card" style="padding:14px 16px;margin-bottom:14px;background:linear-gradient(180deg,#fbfefc 0%,#f3f9f6 100%)">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px">Shared Access</div>
+        <div style="font-size:12px;color:var(--t2)">This trip was shared with you by <b>${escHtml(trip?.owner_name || 'the owner')}</b> with <b>${escHtml(trip?.userPermission === 'edit' ? 'edit' : 'view')}</b> access.</div>
+      </div>
+    `;
   openModal(`Share Trip`, `
-    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Create a unique GUID link for <b>${escHtml(trip?.destination || trip?.name || 'this trip')}</b>. Anyone with the link can open a read-only trip view until the expiry date.</div>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Manage sharing for <b>${escHtml(trip?.destination || trip?.name || 'this trip')}</b>.</div>
+    ${directShareIntro}
     <div class="card" style="padding:14px 16px;margin-bottom:14px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px">Create New Link</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">Create Public Link</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Anyone with this GUID link can open a read-only trip view until the expiry date.</div>
       <div class="fg">
         <label class="fl">Expiry Date
           <input class="fi" type="date" id="tripShareExpiry" value="${tripDefaultShareExpiry()}">
@@ -7154,6 +7273,33 @@ async function showTripShareModal(tripId = null) {
     <div style="font-size:13px;font-weight:700;margin-bottom:8px">Existing Links</div>
     <div id="tripShareLinksList">${rowsHtml}</div>
   `);
+}
+
+async function tripShareWithUser(tripId, linkedUserId) {
+  const permission = document.getElementById('tripSharePermission')?.value || 'view';
+  const result = await api(`/api/trips/${tripId}/shared-users`, {
+    method: 'POST',
+    body: { linked_user_id: Number(linkedUserId), permission },
+  });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Trip shared with app user', 'success');
+  await openTripDetail(tripId);
+  await showTripShareModal(tripId);
+}
+
+async function tripUnshareUser(tripId, shareId) {
+  if (!await confirmDialog('Remove this shared trip access?')) return;
+  const result = await api(`/api/trips/${tripId}/shared-users/${shareId}`, { method: 'DELETE' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  toast('Shared trip access removed', 'success');
+  await openTripDetail(tripId);
+  await showTripShareModal(tripId);
 }
 
 async function createTripShareLink(tripId) {

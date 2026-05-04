@@ -3441,7 +3441,7 @@ async function _checkTripEdit(userId, tripId) {
   const owner = await query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]);
   if (owner.rows[0]) return true;
   const member = await query('SELECT permission FROM trip_members WHERE trip_id = $1 AND linked_user_id = $2 LIMIT 1', [tripId, userId]);
-  return !!(member.rows[0] && member.rows[0].permission !== 'view');
+  return !!(member.rows[0] && publicTripPermission(member.rows[0].permission) !== 'view');
 }
 
 async function _getTripStatus(tripId, client = null) {
@@ -3468,7 +3468,13 @@ async function _loadTripFinalizeData(userId, tripId, client) {
   if (!trip) throw new Error('Trip not found');
 
   const [membersR, expenses] = await Promise.all([
-    client.query('SELECT * FROM trip_members WHERE trip_id = $1', [tripId]),
+    client.query(
+      `SELECT *
+       FROM trip_members
+       WHERE trip_id = $1
+         AND permission NOT IN ('share_view', 'share_edit')`,
+      [tripId]
+    ),
     _loadNormalizedTripExpenses(client, tripId),
   ]);
 
@@ -3533,10 +3539,45 @@ function normalizeTripDistance(value) {
 
 function normalizeTripMembers(members) {
   if (!Array.isArray(members)) return [];
-  const cleaned = members
-    .map((member) => normalizeOptionalText(typeof member === 'string' ? member : member?.member_name, 80))
-    .filter(Boolean);
-  return [...new Set(cleaned)];
+  const seen = new Set();
+  const cleaned = [];
+  for (const member of members) {
+    const memberName = normalizeOptionalText(typeof member === 'string' ? member : member?.member_name, 80);
+    if (!memberName) continue;
+    const key = memberName.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push({
+      member_name: memberName,
+      friend_id: typeof member === 'string' ? null : (member?.friend_id != null ? Number(member.friend_id) || null : null),
+      linked_user_id: typeof member === 'string' ? null : (member?.linked_user_id != null ? Number(member.linked_user_id) || null : null),
+      permission: typeof member === 'string' ? 'edit' : String(member?.permission || 'edit').trim().toLowerCase(),
+    });
+  }
+  return cleaned;
+}
+
+function isTripAccessOnlyPermission(permission) {
+  const raw = String(permission || '').trim().toLowerCase();
+  return raw === 'share_view' || raw === 'share_edit';
+}
+
+function normalizeTripStoredPermission(permission, fallback = 'edit') {
+  const raw = String(permission || fallback).trim().toLowerCase();
+  if (['view', 'edit', 'share_view', 'share_edit'].includes(raw)) return raw;
+  return fallback;
+}
+
+function normalizeTripSharedUserPermission(permission, fallback = 'view') {
+  const raw = String(permission || fallback).trim().toLowerCase();
+  return raw === 'edit' ? 'share_edit' : 'share_view';
+}
+
+function publicTripPermission(permission) {
+  const raw = normalizeTripStoredPermission(permission, 'view');
+  if (raw === 'share_edit') return 'edit';
+  if (raw === 'share_view') return 'view';
+  return raw;
 }
 
 function normalizeTripExpenseType(value) {
@@ -3767,11 +3808,17 @@ async function createTrip(userId, data) {
       [userId, destination, startDate, endDate, status, category, transportMode, totalDistance, notes]
     );
     const tripId = Number(tripResult.rows[0].id);
-    for (const memberName of members) {
+    for (const member of members) {
       await client.query(
         `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
-         VALUES ($1, NULL, $2, NULL, 'edit')`,
-        [tripId, memberName]
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          tripId,
+          member.friend_id || null,
+          member.member_name,
+          member.linked_user_id || null,
+          normalizeTripStoredPermission(member.permission, 'edit'),
+        ]
       );
     }
     return tripId;
@@ -3780,14 +3827,47 @@ async function createTrip(userId, data) {
 
 async function getTrips(userId) {
   const tripsResult = await query(
-    `SELECT
+    `WITH accessible_trips AS (
+       SELECT t.id AS trip_id, TRUE AS is_owner, 'owner'::text AS user_permission
+       FROM trips t
+       WHERE t.user_id = $1
+       UNION ALL
+       SELECT t.id AS trip_id,
+              FALSE AS is_owner,
+              CASE
+               WHEN EXISTS (
+                  SELECT 1
+                  FROM trip_members tm2
+                  WHERE tm2.trip_id = t.id
+                    AND tm2.linked_user_id = $1
+                    AND tm2.permission IN ('edit', 'share_edit')
+                ) THEN 'edit'
+                ELSE 'view'
+              END AS user_permission
+       FROM trips t
+       WHERE t.user_id <> $1
+         AND EXISTS (
+           SELECT 1
+           FROM trip_members tm
+           WHERE tm.trip_id = t.id
+             AND tm.linked_user_id = $1
+             AND COALESCE(tm.permission, '') <> ''
+         )
+     )
+     SELECT
        t.*,
+       at.is_owner,
+       at.user_permission,
+       COALESCE(owner_u.display_name, owner_u.username, 'User') AS owner_name,
        COALESCE(t.destination, t.name) AS destination_name,
        COALESCE(exp.total_expenditure, 0) AS total_expenditure,
        COALESCE(exp.expense_count, 0) AS expense_count,
        COALESCE(mem.members_json, '[]'::json) AS members_json,
-       COALESCE(share.member_share_totals_json, '[]'::json) AS member_share_totals_json
-     FROM trips t
+       COALESCE(share.member_share_totals_json, '[]'::json) AS member_share_totals_json,
+       COALESCE(shared.shared_users_json, '[]'::json) AS shared_users_json
+     FROM accessible_trips at
+     JOIN trips t ON t.id = at.trip_id
+     JOIN users owner_u ON owner_u.id = t.user_id
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(amount), 0) AS total_expenditure, COUNT(*) AS expense_count
        FROM trip_expenses
@@ -3795,11 +3875,12 @@ async function getTrips(userId) {
      ) exp ON TRUE
      LEFT JOIN LATERAL (
        SELECT COALESCE(
-         json_agg(json_build_object('id', id, 'member_name', member_name) ORDER BY id),
+         json_agg(json_build_object('id', id, 'member_name', member_name, 'friend_id', friend_id, 'linked_user_id', linked_user_id, 'permission', permission) ORDER BY id),
          '[]'::json
         ) AS members_json
         FROM trip_members
         WHERE trip_id = t.id
+          AND permission NOT IN ('share_view', 'share_edit')
       ) mem ON TRUE
      LEFT JOIN LATERAL (
         SELECT COALESCE(
@@ -3825,15 +3906,38 @@ async function getTrips(userId) {
         ) AS member_share_totals_json
         FROM trip_members tm
         WHERE tm.trip_id = t.id
+          AND tm.permission NOT IN ('share_view', 'share_edit')
       ) share ON TRUE
-     WHERE t.user_id = $1
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(
+         json_agg(
+           json_build_object(
+             'id', tm.id,
+             'linked_user_id', tm.linked_user_id,
+             'member_name', tm.member_name,
+             'permission', CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END,
+             'display_name', COALESCE(u.display_name, u.username, tm.member_name),
+             'username', u.username
+           )
+           ORDER BY tm.id
+         ),
+         '[]'::json
+       ) AS shared_users_json
+       FROM trip_members tm
+       LEFT JOIN users u ON u.id = tm.linked_user_id
+       WHERE tm.trip_id = t.id
+         AND tm.permission IN ('share_view', 'share_edit')
+      ) shared ON TRUE
      ORDER BY t.start_date DESC, t.id DESC`,
     [userId]
   );
 
   return tripsResult.rows.map((row) => ({
     ...row,
-    is_owner: true,
+    is_owner: !!row.is_owner,
+    isOwner: !!row.is_owner,
+    userPermission: row.user_permission || (row.is_owner ? 'owner' : 'view'),
+    owner_name: row.owner_name || null,
     destination: row.destination_name,
     total_distance: row.total_distance == null ? null : num(row.total_distance),
     totalExpenditure: Math.round(num(row.total_expenditure) * 100) / 100,
@@ -3841,6 +3945,16 @@ async function getTrips(userId) {
     expenseCount: Number(row.expense_count || 0),
     expense_count: Number(row.expense_count || 0),
     members: Array.isArray(row.members_json) ? row.members_json : [],
+    shared_users: Array.isArray(row.shared_users_json)
+      ? row.shared_users_json.map((item) => ({
+          id: Number(item?.id || 0),
+          linked_user_id: Number(item?.linked_user_id || 0) || null,
+          member_name: item?.member_name || '',
+          display_name: item?.display_name || item?.member_name || '',
+          username: item?.username || '',
+          permission: item?.permission || 'view',
+        }))
+      : [],
     member_share_totals: Array.isArray(row.member_share_totals_json)
       ? row.member_share_totals_json.map((item) => ({
           member_key: String(item?.member_key || ''),
@@ -3852,9 +3966,62 @@ async function getTrips(userId) {
 }
 
 async function getTripById(userId, tripId) {
-  const [tripR, membersR, expenses, itineraryR] = await Promise.all([
-    query('SELECT * FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, userId]),
-    query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]),
+  const [tripR, membersR, sharedUsersR, expenses, itineraryR] = await Promise.all([
+    query(
+      `SELECT
+         t.*,
+         CASE WHEN t.user_id = $1 THEN TRUE ELSE FALSE END AS is_owner,
+         CASE
+           WHEN t.user_id = $1 THEN 'owner'
+           WHEN EXISTS (
+             SELECT 1
+             FROM trip_members tm
+             WHERE tm.trip_id = t.id
+               AND tm.linked_user_id = $1
+               AND tm.permission IN ('edit', 'share_edit')
+           ) THEN 'edit'
+           ELSE 'view'
+         END AS user_permission,
+         COALESCE(owner_u.display_name, owner_u.username, 'User') AS owner_name
+       FROM trips t
+       JOIN users owner_u ON owner_u.id = t.user_id
+       WHERE t.id = $2
+         AND (
+           t.user_id = $1
+           OR EXISTS (
+             SELECT 1
+             FROM trip_members tm
+             WHERE tm.trip_id = t.id
+               AND tm.linked_user_id = $1
+               AND COALESCE(tm.permission, '') <> ''
+           )
+         )
+       LIMIT 1`,
+      [userId, tripId]
+    ),
+    query(
+      `SELECT id, member_name, friend_id, linked_user_id, permission, is_locked
+       FROM trip_members
+       WHERE trip_id = $1
+         AND permission NOT IN ('share_view', 'share_edit')
+       ORDER BY id`,
+      [tripId]
+    ),
+    query(
+      `SELECT
+         tm.id,
+         tm.linked_user_id,
+         tm.member_name,
+         CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END AS permission,
+         COALESCE(u.display_name, u.username, tm.member_name) AS display_name,
+         u.username
+       FROM trip_members tm
+       LEFT JOIN users u ON u.id = tm.linked_user_id
+       WHERE tm.trip_id = $1
+         AND tm.permission IN ('share_view', 'share_edit')
+       ORDER BY tm.id`,
+      [tripId]
+    ),
     _loadNormalizedTripExpenses({ query }, tripId),
     query(
       `SELECT id, title, itinerary_date, start_time, end_time, location, notes, created_at, updated_at
@@ -3906,7 +4073,22 @@ async function getTripById(userId, tripId) {
     ...trip,
     destination: trip.destination || trip.name,
     total_distance: trip.total_distance == null ? null : num(trip.total_distance),
-    members: membersR.rows,
+    members: membersR.rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+      friend_id: row.friend_id == null ? null : Number(row.friend_id),
+      linked_user_id: row.linked_user_id == null ? null : Number(row.linked_user_id),
+      permission: publicTripPermission(row.permission || 'edit'),
+      is_locked: !!row.is_locked,
+    })),
+    shared_users: sharedUsersR.rows.map((row) => ({
+      id: Number(row.id),
+      linked_user_id: row.linked_user_id == null ? null : Number(row.linked_user_id),
+      member_name: row.member_name || '',
+      display_name: row.display_name || row.member_name || '',
+      username: row.username || '',
+      permission: row.permission || 'view',
+    })),
     itinerary_items: itineraryR.rows.map((row) => ({
       id: Number(row.id),
       title: row.title || '',
@@ -3921,8 +4103,10 @@ async function getTripById(userId, tripId) {
     expenses,
     expense_groups,
     grand_total: Math.round(grandTotal * 100) / 100,
-    isOwner: true,
-    userPermission: 'owner',
+    isOwner: !!trip.is_owner,
+    is_owner: !!trip.is_owner,
+    userPermission: trip.user_permission || (trip.is_owner ? 'owner' : 'view'),
+    owner_name: trip.owner_name || null,
   };
 }
 
@@ -3966,12 +4150,23 @@ async function updateTrip(userId, id, data) {
 
     if (data.members !== undefined) {
       const members = normalizeTripMembers(data.members);
-      await client.query('DELETE FROM trip_members WHERE trip_id = $1', [id]);
-      for (const memberName of members) {
+      await client.query(
+        `DELETE FROM trip_members
+         WHERE trip_id = $1
+           AND permission NOT IN ('share_view', 'share_edit')`,
+        [id]
+      );
+      for (const member of members) {
         await client.query(
           `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
-           VALUES ($1, NULL, $2, NULL, 'edit')`,
-          [id, memberName]
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            id,
+            member.friend_id || null,
+            member.member_name,
+            member.linked_user_id || null,
+            normalizeTripStoredPermission(member.permission, 'edit'),
+          ]
         );
       }
     }
@@ -4146,7 +4341,14 @@ async function bulkUpdateTripExpenseShares(userId, tripId, data = {}) {
     return acc;
   }, {});
   await withTransaction(async (client) => {
-    const membersR = await client.query('SELECT id, member_name FROM trip_members WHERE trip_id = $1 ORDER BY id', [tripId]);
+    const membersR = await client.query(
+      `SELECT id, member_name
+       FROM trip_members
+       WHERE trip_id = $1
+         AND permission NOT IN ('share_view', 'share_edit')
+       ORDER BY id`,
+      [tripId]
+    );
     const memberRows = membersR.rows.map((member) => ({
       member_key: String(member.id),
       member_name: member.member_name,
@@ -4327,7 +4529,88 @@ async function linkTripMember(ownerId, memberId, linkedUserId, permission) {
     [memberId, ownerId]
   );
   if (!result.rows[0]) throw new Error('Member not found');
-  await query('UPDATE trip_members SET linked_user_id = $1, permission = $2 WHERE id = $3', [linkedUserId || null, permission || 'edit', memberId]);
+  await query('UPDATE trip_members SET linked_user_id = $1, permission = $2 WHERE id = $3', [linkedUserId || null, normalizeTripStoredPermission(permission, 'edit'), memberId]);
+}
+
+async function getTripSharedUsers(ownerId, tripId) {
+  const tripR = await query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, ownerId]);
+  if (!tripR.rows[0]) throw new Error('Trip not found');
+  const result = await query(
+    `SELECT
+       tm.id,
+       tm.linked_user_id,
+       tm.member_name,
+       CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END AS permission,
+       COALESCE(u.display_name, u.username, tm.member_name) AS display_name,
+       u.username
+     FROM trip_members tm
+     LEFT JOIN users u ON u.id = tm.linked_user_id
+     WHERE tm.trip_id = $1
+       AND tm.permission IN ('share_view', 'share_edit')
+     ORDER BY tm.id`,
+    [tripId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    linked_user_id: row.linked_user_id == null ? null : Number(row.linked_user_id),
+    member_name: row.member_name || '',
+    display_name: row.display_name || row.member_name || '',
+    username: row.username || '',
+    permission: row.permission || 'view',
+  }));
+}
+
+async function shareTripWithUser(ownerId, tripId, targetUserId, permission = 'view') {
+  const uid = Number(targetUserId || 0);
+  if (!(uid > 0)) throw validationError('Select a valid app user');
+  if (uid === Number(ownerId || 0)) throw validationError('You cannot share a trip with yourself');
+  const tripR = await query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, ownerId]);
+  if (!tripR.rows[0]) throw new Error('Trip not found');
+  const userR = await query('SELECT id, display_name, username FROM users WHERE id = $1 AND is_active = TRUE AND deleted_at IS NULL LIMIT 1', [uid]);
+  const target = userR.rows[0];
+  if (!target) throw validationError('Selected user was not found');
+  const storedPermission = normalizeTripSharedUserPermission(permission, 'view');
+  const label = String(target.display_name || target.username || 'User').trim() || 'User';
+  const existingR = await query(
+    `SELECT id
+     FROM trip_members
+     WHERE trip_id = $1
+       AND linked_user_id = $2
+       AND permission IN ('share_view', 'share_edit')
+     LIMIT 1`,
+    [tripId, uid]
+  );
+  if (existingR.rows[0]) {
+    await query(
+      `UPDATE trip_members
+       SET member_name = $1,
+           permission = $2
+       WHERE id = $3`,
+      [label, storedPermission, Number(existingR.rows[0].id)]
+    );
+    return Number(existingR.rows[0].id);
+  }
+  const result = await query(
+    `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
+     VALUES ($1, NULL, $2, $3, $4)
+     RETURNING id`,
+    [tripId, label, uid, storedPermission]
+  );
+  return Number(result.rows[0].id);
+}
+
+async function unshareTripWithUser(ownerId, tripId, shareRowId) {
+  const tripR = await query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 LIMIT 1', [tripId, ownerId]);
+  if (!tripR.rows[0]) throw new Error('Trip not found');
+  const result = await query(
+    `DELETE FROM trip_members
+     WHERE id = $1
+       AND trip_id = $2
+       AND permission IN ('share_view', 'share_edit')
+     RETURNING id`,
+    [shareRowId, tripId]
+  );
+  if (!result.rows[0]) throw validationError('Shared user not found');
 }
 
 async function createTripInvite(ownerId, tripId, memberId) {
@@ -5001,6 +5284,9 @@ module.exports = {
   finalizeTrip,
   toggleMemberLock,
   linkTripMember,
+  getTripSharedUsers,
+  shareTripWithUser,
+  unshareTripWithUser,
   createTripInvite,
   getTripInviteByToken,
   acceptTripInvite,

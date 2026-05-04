@@ -2805,6 +2805,7 @@
         id: invite.id,
         inviteId: invite.id,
         friendId: (state.friends || []).find((friend) => String(friend?.name || '').trim().toLowerCase() === String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || '').trim().toLowerCase())?.id || null,
+        linked_user_avatar_url: (state.friends || []).find((friend) => String(friend?.name || '').trim().toLowerCase() === String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || '').trim().toLowerCase())?.linked_user_avatar_url || '',
         name: String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || 'Friend').trim(),
         canResend: true,
       })),
@@ -2814,11 +2815,47 @@
           id: `friend-${friend.id}`,
           inviteId: null,
           friendId: friend.id,
+          linked_user_avatar_url: friend.linked_user_avatar_url || '',
           name: friend.name || 'Friend',
           canResend: false,
         })),
     ];
     return merged;
+  }
+
+  function renderPendingInviteCard(friend) {
+    const inviteId = Number(friend?.inviteId || 0);
+    const friendId = Number(friend?.friendId || 0);
+    const cancelBusy = inviteId > 0 && state.outgoingCancelBusy.has(inviteId);
+    const deleteBusy = friendId > 0 && state.friendDeleteBusy.has(friendId);
+    const canDelete = friendId > 0;
+    const resendAction = friend.canResend
+      ? `liveSplitResendInvite(${Number(friend.id)})`
+      : `liveSplitResendInviteByName('${encodeURIComponent(friend.name || '')}')`;
+    return `
+      <div class="friend-card live-split-card live-split-pending-card" style="cursor:default">
+        <div class="live-split-pending-main">
+          <div class="live-split-pending-avatar">
+            ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
+          </div>
+          <div class="friend-info live-split-pending-copy">
+            <div class="live-split-pending-head">
+              <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
+              <div class="live-split-pending-status">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.75a10.25 10.25 0 1 0 10.25 10.25A10.26 10.26 0 0 0 12 1.75Zm0 18.5A8.25 8.25 0 1 1 20.25 12 8.26 8.26 0 0 1 12 20.25Zm.75-13h-1.5v5.19l4.09 2.45.77-1.28-3.36-2.01Z"/></svg>
+                <span>Pending</span>
+              </div>
+            </div>
+            <div class="live-split-pending-meta">Invite sent. Waiting for them to join or link their account.</div>
+          </div>
+        </div>
+        <div class="live-split-pending-actions">
+          ${inviteId ? `<button class="live-split-icon-btn soft" title="${cancelBusy ? 'Cancelling...' : 'Cancel invite'}" aria-label="${cancelBusy ? 'Cancelling...' : 'Cancel invite'}" ${cancelBusy ? 'disabled' : ''} onclick="liveSplitCancelInvite(${inviteId})">${cancelBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.7 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>'}</button>` : ''}
+          <button class="live-split-icon-btn" title="Send invite again" aria-label="Send invite again" onclick="${resendAction}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.42l-1.42 1.42A7 7 0 1 0 12 6z"/></svg></button>
+          ${canDelete ? `<button class="live-split-icon-btn danger" title="${deleteBusy ? 'Deleting...' : 'Delete pending entry'}" aria-label="${deleteBusy ? 'Deleting...' : 'Delete pending entry'}" ${deleteBusy ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${friendId})">${deleteBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12v2H6V7zm2 3h8l-.7 9.1c-.1 1.1-1 1.9-2.1 1.9h-2.4c-1.1 0-2-.8-2.1-1.9L8 10zm3-5h2l1 1h4v2H6V6h4l1-1z"/></svg>'}</button>` : ''}
+        </div>
+      </div>
+    `;
   }
 
   function renderPendingInvites() {
@@ -2828,23 +2865,7 @@
       <div style="margin-top:14px">
         <div style="font-size:13px;font-weight:800;color:var(--t2);margin-bottom:8px">Pending Invites (${pending.length})</div>
         <div style="display:grid;gap:8px">
-          ${pending.map((friend) => `
-            <div class="friend-card live-split-card" style="cursor:default">
-              <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-                ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
-                <div class="friend-info">
-                  <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
-                  <div style="font-size:11px;color:var(--t3)">Invite sent - waiting to join/link</div>
-                </div>
-              </div>
-              <div class="live-split-card-actions" style="display:flex;align-items:center;gap:8px">
-                ${friend.inviteId ? `<button class="btn btn-g btn-sm" ${state.outgoingCancelBusy.has(Number(friend.inviteId)) ? 'disabled' : ''} onclick="liveSplitCancelInvite(${Number(friend.inviteId)})">${state.outgoingCancelBusy.has(Number(friend.inviteId)) ? liveSplitBusyLabel('Cancelling...') : 'Cancel'}</button>` : ''}
-                <button class="btn btn-s btn-sm" onclick="${friend.canResend ? `liveSplitResendInvite(${Number(friend.id)})` : `liveSplitResendInviteByName('${encodeURIComponent(friend.name || '')}')`}">Send Again</button>
-                ${friend.friendId ? `<button class="btn btn-g btn-sm" ${state.friendDeleteBusy.has(Number(friend.friendId)) ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${Number(friend.friendId)})">${state.friendDeleteBusy.has(Number(friend.friendId)) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>` : ''}
-                <div style="font-size:11px;color:var(--orange);font-weight:700">Pending</div>
-              </div>
-            </div>
-          `).join('')}
+          ${pending.map(renderPendingInviteCard).join('')}
         </div>
       </div>
     `;
@@ -2858,23 +2879,7 @@
     }
     openModal(`Pending Invites (${pending.length})`, `
       <div style="display:grid;gap:8px">
-        ${pending.map((friend) => `
-          <div class="friend-card live-split-card" style="cursor:default">
-            <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-              ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
-              <div class="friend-info">
-                <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
-                <div style="font-size:11px;color:var(--t3)">Invite sent - waiting to join/link</div>
-              </div>
-            </div>
-            <div class="live-split-card-actions" style="display:flex;align-items:center;gap:8px">
-              ${friend.inviteId ? `<button class="btn btn-g btn-sm" ${state.outgoingCancelBusy.has(Number(friend.inviteId)) ? 'disabled' : ''} onclick="liveSplitCancelInvite(${Number(friend.inviteId)})">${state.outgoingCancelBusy.has(Number(friend.inviteId)) ? liveSplitBusyLabel('Cancelling...') : 'Cancel'}</button>` : ''}
-              <button class="btn btn-s btn-sm" onclick="${friend.canResend ? `liveSplitResendInvite(${Number(friend.id)})` : `liveSplitResendInviteByName('${encodeURIComponent(friend.name || '')}')`}">Send Again</button>
-              ${friend.friendId ? `<button class="btn btn-g btn-sm" ${state.friendDeleteBusy.has(Number(friend.friendId)) ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${Number(friend.friendId)})">${state.friendDeleteBusy.has(Number(friend.friendId)) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>` : ''}
-              <div style="font-size:11px;color:var(--orange);font-weight:700">Pending</div>
-            </div>
-          </div>
-        `).join('')}
+        ${pending.map(renderPendingInviteCard).join('')}
       </div>
     `);
   }
