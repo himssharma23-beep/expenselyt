@@ -37,6 +37,7 @@ let _notificationUnread = 0;
 let _notificationPreferences = { push_enabled: true };
 let _notificationLoading = false;
 let _notificationPrefsLoading = false;
+let _appUpdateStatus = null;
 
 function cleanMojibakeText(value) {
   const raw = String(value ?? '');
@@ -592,6 +593,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   } else {
     updateNotificationNavBadge();
   }
+  checkAppUpdateStatus().catch(() => {});
   loadTab();
   // Auto-apply recurring entries for the current month (silent, runs in background)
   api('/api/recurring/apply', { method: 'POST' }).then(r => {
@@ -649,6 +651,94 @@ async function refreshCurrentUser() {
     renderUserBox();
   }
   return user;
+}
+
+function getAppUpdateDismissKey(version) {
+  return `app-update-dismissed:${String(version || '').trim()}`;
+}
+
+function isAppUpdateDismissed(version) {
+  try {
+    return !!version && localStorage.getItem(getAppUpdateDismissKey(version)) === '1';
+  } catch (_err) {
+    return false;
+  }
+}
+
+function dismissAppUpdate(version) {
+  try {
+    if (version) localStorage.setItem(getAppUpdateDismissKey(version), '1');
+  } catch (_err) {}
+}
+
+function hideAppUpdateBanner() {
+  const mount = document.getElementById('appUpdateBannerMount');
+  if (mount) mount.innerHTML = '';
+}
+
+function showAppUpdateBanner(info) {
+  const mount = document.getElementById('appUpdateBannerMount');
+  if (!mount) return;
+  const platform = String(info?.platform || '').trim().toLowerCase();
+  const platformLabel = platform === 'ios' ? 'iPhone' : 'Android';
+  const storeLabel = platform === 'ios' ? 'App Store' : 'Google Play';
+  const latestVersion = String(info?.latest_version || '').trim();
+  const currentVersion = String(info?.current_version || '').trim();
+  const storeUrl = String(info?.store_url || '').trim();
+  const force = !!info?.force;
+  const defaultMessage = currentVersion
+    ? `Version ${latestVersion} is now live on ${storeLabel}. You are currently using v${currentVersion}.`
+    : `Version ${latestVersion} is now live on ${storeLabel}.`;
+  const bodyText = String(info?.message || '').trim() || defaultMessage;
+
+  mount.innerHTML = `
+    <div class="app-update-banner" role="status" aria-live="polite">
+      <div class="app-update-banner-copy">
+        <div class="app-update-banner-kicker">${escHtml(platformLabel)} update</div>
+        <div class="app-update-banner-title">New app version available</div>
+        <div class="app-update-banner-text">${escHtml(bodyText)}</div>
+      </div>
+      <div class="app-update-banner-actions">
+        <button class="btn btn-p btn-sm" type="button" id="appUpdateNowBtn">Update now</button>
+        ${force ? '' : '<button class="btn btn-g btn-sm" type="button" id="appUpdateLaterBtn">Later</button>'}
+      </div>
+    </div>`;
+
+  const updateBtn = document.getElementById('appUpdateNowBtn');
+  if (updateBtn) {
+    updateBtn.addEventListener('click', () => {
+      if (storeUrl) window.open(storeUrl, '_blank', 'noopener');
+    });
+  }
+  if (!force) {
+    const laterBtn = document.getElementById('appUpdateLaterBtn');
+    if (laterBtn) {
+      laterBtn.addEventListener('click', () => {
+        dismissAppUpdate(`${platform}:${latestVersion}`);
+        hideAppUpdateBanner();
+      });
+    }
+  }
+}
+
+async function checkAppUpdateStatus() {
+  const result = await api('/api/app-update-status');
+  const candidates = [
+    result?.android ? { ...result.android, platform: 'android' } : null,
+    result?.ios ? { ...result.ios, platform: 'ios' } : null,
+  ].filter(Boolean);
+  const active = candidates.find((item) => item.enabled && item.update_available && item.latest_version) || null;
+  _appUpdateStatus = active;
+  if (!active) {
+    hideAppUpdateBanner();
+    return null;
+  }
+  if (!active.force && isAppUpdateDismissed(`${active.platform}:${active.latest_version}`)) {
+    hideAppUpdateBanner();
+    return active;
+  }
+  showAppUpdateBanner(active);
+  return active;
 }
 
 function showProfileSettings() {

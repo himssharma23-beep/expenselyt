@@ -888,6 +888,37 @@ async function getPushTokensForUsers(userIds = []) {
   }));
 }
 
+async function getLatestPushDeviceForUser(userId, platform = null) {
+  const params = [Number(userId || 0)];
+  let sql = `
+    SELECT
+      platform,
+      device_name,
+      app_version,
+      last_seen_at,
+      updated_at
+    FROM push_device_tokens
+    WHERE user_id = $1
+      AND deleted_at IS NULL`;
+  if (platform) {
+    params.push(String(platform).trim().toLowerCase());
+    sql += ` AND lower(COALESCE(platform, '')) = $${params.length}`;
+  }
+  sql += `
+    ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+    LIMIT 1`;
+  const result = await query(sql, params);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    platform: row.platform || null,
+    device_name: row.device_name || null,
+    app_version: row.app_version || null,
+    last_seen_at: row.last_seen_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
 async function getBasicUsersByIds(userIds = []) {
   const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
   if (!ids.length) return [];
@@ -1843,6 +1874,7 @@ module.exports = {
   deactivatePushDeviceToken,
   getAdminPushUsers,
   getPushTokensForUsers,
+  getLatestPushDeviceForUser,
   ensureUserNotificationPreferences,
   getUserNotificationPreferences,
   updateUserNotificationPreferences,

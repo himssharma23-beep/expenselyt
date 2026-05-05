@@ -320,6 +320,44 @@ function enrichAiLookupStatus(status) {
   };
 }
 
+function normalizeAppVersionValue(value) {
+  return String(value || '').trim().slice(0, 40);
+}
+
+function parseAppVersionParts(version) {
+  return normalizeAppVersionValue(version)
+    .split(/[^0-9A-Za-z]+/)
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part.toLowerCase()));
+}
+
+function compareAppVersions(currentVersion, latestVersion) {
+  const left = parseAppVersionParts(currentVersion);
+  const right = parseAppVersionParts(latestVersion);
+  const maxLen = Math.max(left.length, right.length);
+  for (let i = 0; i < maxLen; i++) {
+    const a = left[i];
+    const b = right[i];
+    if (a === undefined && b === undefined) return 0;
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (typeof a === 'number' && typeof b === 'number') {
+      if (a < b) return -1;
+      if (a > b) return 1;
+      continue;
+    }
+    const textA = String(a);
+    const textB = String(b);
+    if (textA < textB) return -1;
+    if (textA > textB) return 1;
+  }
+  return 0;
+}
+
+function isTruthyEnvFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+}
+
 function extractOpenAiOutputText(payload) {
   if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
     return payload.output_text.trim();
@@ -3075,6 +3113,72 @@ router.delete('/push/devices', async (req, res) => {
     res.json({ success: true, removed });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/app-update-status', async (req, res) => {
+  try {
+    const latestAndroidVersion = normalizeAppVersionValue(process.env.LATEST_ANDROID_APP_VERSION);
+    const latestIosVersion = normalizeAppVersionValue(process.env.LATEST_IOS_APP_VERSION);
+    const latestAndroidDevice = await Promise.resolve(pgDb.getLatestPushDeviceForUser(req.session.userId, 'android'));
+    const latestIosDevice = await Promise.resolve(pgDb.getLatestPushDeviceForUser(req.session.userId, 'ios'));
+    const currentAndroidVersion = normalizeAppVersionValue(latestAndroidDevice?.app_version);
+    const currentIosVersion = normalizeAppVersionValue(latestIosDevice?.app_version);
+    const transport = String(req.session?.authTransport || '').trim().toLowerCase();
+    const platformHeader = String(req.headers['x-client-platform'] || '').trim().toLowerCase();
+    const userAgent = String(req.headers['user-agent'] || '').trim().toLowerCase();
+    const androidSession = platformHeader === 'android'
+      || platformHeader === 'mobile'
+      || transport === 'mobile'
+      || userAgent.includes('android')
+      || String(latestAndroidDevice?.platform || '').trim().toLowerCase() === 'android';
+    const iosSession = platformHeader === 'ios'
+      || platformHeader === 'iphone'
+      || platformHeader === 'ipad'
+      || userAgent.includes('iphone')
+      || userAgent.includes('ipad')
+      || userAgent.includes('ios')
+      || String(latestIosDevice?.platform || '').trim().toLowerCase() === 'ios';
+    const androidUpdateAvailable = !!latestAndroidVersion && androidSession && (
+      currentAndroidVersion
+        ? compareAppVersions(currentAndroidVersion, latestAndroidVersion) < 0
+        : transport === 'mobile'
+    );
+    const iosUpdateAvailable = !!latestIosVersion && iosSession && (
+      currentIosVersion
+        ? compareAppVersions(currentIosVersion, latestIosVersion) < 0
+        : transport === 'mobile'
+    );
+
+    res.json({
+      success: true,
+      android: {
+        enabled: !!latestAndroidVersion,
+        latest_version: latestAndroidVersion || null,
+        current_version: currentAndroidVersion || null,
+        update_available: androidUpdateAvailable,
+        force: isTruthyEnvFlag(process.env.ANDROID_UPDATE_FORCE),
+        message: String(process.env.ANDROID_UPDATE_MESSAGE || '').trim() || null,
+        store_url: String(process.env.ANDROID_PLAY_STORE_URL || 'https://play.google.com/store/apps/details?id=com.expenselyt.app').trim(),
+        device_name: latestAndroidDevice?.device_name || null,
+        last_seen_at: latestAndroidDevice?.last_seen_at || null,
+        session_transport: transport || 'web',
+      },
+      ios: {
+        enabled: !!latestIosVersion,
+        latest_version: latestIosVersion || null,
+        current_version: currentIosVersion || null,
+        update_available: iosUpdateAvailable,
+        force: isTruthyEnvFlag(process.env.IOS_UPDATE_FORCE),
+        message: String(process.env.IOS_UPDATE_MESSAGE || '').trim() || null,
+        store_url: String(process.env.IOS_APP_STORE_URL || 'https://apps.apple.com/us/app/expenselyt/id6761451207').trim(),
+        device_name: latestIosDevice?.device_name || null,
+        last_seen_at: latestIosDevice?.last_seen_at || null,
+        session_transport: transport || 'web',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load app update status' });
   }
 });
 
