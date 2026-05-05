@@ -5280,7 +5280,7 @@ async function renderTripDetail() {
   const myLinkedMember = !trip.isOwner ? trip.members.find(m => m.linked_user_id === _currentUserId) : null;
   const myMemberKey = trip.isOwner ? 'self' : (myLinkedMember ? _memberKey(myLinkedMember) : 'self');
   const canEdit = trip.isOwner || trip.userPermission !== 'view';
-  const canMutateExpenses = canEdit && trip.status === 'active';
+  const canMutateExpenses = canEdit && canEditTripExpensesByStatus(trip.status);
 
   // â”€â”€ Paid-by chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const paidByChips = trip.members.map(m => {
@@ -6908,6 +6908,11 @@ function tripStartsInLabel(startDate) {
   return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
 }
 
+function canEditTripExpensesByStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized !== 'completed' && normalized !== 'cancelled';
+}
+
 function toggleTripItineraryCollapse() {
   _tripItineraryCollapsed = !_tripItineraryCollapsed;
   renderTripDetail();
@@ -6917,7 +6922,7 @@ function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
   const canEdit = !!(trip.isOwner || trip.userPermission !== 'view');
-  const canManageExpenses = canEdit && String(trip.status || '').toLowerCase() === 'active';
+  const canManageExpenses = canEdit && canEditTripExpensesByStatus(trip.status);
   const members = trip.members || [];
   const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
   const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
@@ -7073,10 +7078,10 @@ function renderTripDetail() {
               <tr>
                 <td class="trip-actions-cell">
                   <div class="trip-table-actions" role="group" aria-label="Trip expense actions">
-                    ${canEdit ? `<button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
+                    ${canManageExpenses ? `<button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
                       <span class="trip-icon-btn-glyph">&#9998;</span>
                     </button>` : ''}
-                    ${canEdit ? `<button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
+                    ${canManageExpenses ? `<button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
                       <span class="trip-icon-btn-glyph">&#128465;</span>
                     </button>` : ''}
                   </div>
