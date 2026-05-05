@@ -62,6 +62,7 @@ async function requireAuth(req, res, next) {
           return res.status(401).json({ error: 'Session expired. Please log in again.' });
         }
         await pgDb.touchMobileAuthSession(decoded.sessionId, decoded.userId);
+        req.mobileSession = mobileSession;
       }
       req.session = req.session || {};
       req.session.userId = decoded.userId;
@@ -69,6 +70,7 @@ async function requireAuth(req, res, next) {
       req.session.authTag = currentAuthTag;
       req.session.authTransport = 'mobile';
       req.session.mobileSessionId = decoded.sessionId ? String(decoded.sessionId) : '';
+      req.session.clientPlatform = String(req.mobileSession?.platform || req.headers['x-client-platform'] || '').trim().toLowerCase() || 'mobile';
       return next();
     } catch {
       return res.status(401).json({ error: 'Invalid or expired token' });

@@ -3125,29 +3125,24 @@ router.get('/app-update-status', async (req, res) => {
     const currentAndroidVersion = normalizeAppVersionValue(latestAndroidDevice?.app_version);
     const currentIosVersion = normalizeAppVersionValue(latestIosDevice?.app_version);
     const transport = String(req.session?.authTransport || '').trim().toLowerCase();
-    const platformHeader = String(req.headers['x-client-platform'] || '').trim().toLowerCase();
-    const userAgent = String(req.headers['user-agent'] || '').trim().toLowerCase();
-    const androidSession = platformHeader === 'android'
-      || platformHeader === 'mobile'
-      || transport === 'mobile'
-      || userAgent.includes('android')
-      || String(latestAndroidDevice?.platform || '').trim().toLowerCase() === 'android';
-    const iosSession = platformHeader === 'ios'
-      || platformHeader === 'iphone'
-      || platformHeader === 'ipad'
-      || userAgent.includes('iphone')
-      || userAgent.includes('ipad')
-      || userAgent.includes('ios')
-      || String(latestIosDevice?.platform || '').trim().toLowerCase() === 'ios';
+    const sessionPlatform = String(
+      req.session?.clientPlatform
+      || req.mobileSession?.platform
+      || req.headers['x-client-platform']
+      || ''
+    ).trim().toLowerCase();
+    const isMobileSession = transport === 'mobile';
+    const androidSession = isMobileSession && (sessionPlatform === 'android');
+    const iosSession = isMobileSession && ['ios', 'iphone', 'ipad'].includes(sessionPlatform);
     const androidUpdateAvailable = !!latestAndroidVersion && androidSession && (
       currentAndroidVersion
         ? compareAppVersions(currentAndroidVersion, latestAndroidVersion) < 0
-        : transport === 'mobile'
+        : true
     );
     const iosUpdateAvailable = !!latestIosVersion && iosSession && (
       currentIosVersion
         ? compareAppVersions(currentIosVersion, latestIosVersion) < 0
-        : transport === 'mobile'
+        : true
     );
 
     res.json({
@@ -3163,6 +3158,7 @@ router.get('/app-update-status', async (req, res) => {
         device_name: latestAndroidDevice?.device_name || null,
         last_seen_at: latestAndroidDevice?.last_seen_at || null,
         session_transport: transport || 'web',
+        session_platform: sessionPlatform || null,
       },
       ios: {
         enabled: !!latestIosVersion,
@@ -3175,6 +3171,7 @@ router.get('/app-update-status', async (req, res) => {
         device_name: latestIosDevice?.device_name || null,
         last_seen_at: latestIosDevice?.last_seen_at || null,
         session_transport: transport || 'web',
+        session_platform: sessionPlatform || null,
       },
     });
   } catch (err) {
