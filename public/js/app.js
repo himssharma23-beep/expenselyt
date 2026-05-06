@@ -5190,6 +5190,11 @@ function tripRefreshSelectionChips() {
 
 function tripExpenseSetEntryKind(kind) {
   _tripExpIsSettlement = kind === 'settlement';
+  const entryButtons = document.querySelectorAll('.trip-entry-kind-chip');
+  entryButtons.forEach((button) => {
+    const buttonKind = button.getAttribute('data-entry-kind');
+    button.classList.toggle('active', (_tripExpIsSettlement && buttonKind === 'settlement') || (!_tripExpIsSettlement && buttonKind === 'expense'));
+  });
   const help = document.getElementById('tripExpenseShareHelp');
   if (help) {
     help.textContent = _tripExpIsSettlement
@@ -6981,6 +6986,9 @@ function renderTripDetail() {
   const canEdit = !!(trip.isOwner || trip.userPermission !== 'view');
   const canManageExpenses = canEdit && canEditTripExpensesByStatus(trip.status);
   const members = trip.members || [];
+  const allTripExpenses = Array.isArray(trip.expenses) ? trip.expenses : [];
+  const settlementEntries = allTripExpenses.filter((expense) => isTripSettlementExpense(expense));
+  const spendingExpenseCount = allTripExpenses.filter((expense) => !isTripSettlementExpense(expense)).length;
   const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
   const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
   const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
@@ -6992,7 +7000,7 @@ function renderTripDetail() {
     peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0 };
     memberByName.set(memberNameKey(member.member_name), key);
   });
-  (trip.expenses || []).forEach((expense) => {
+  allTripExpenses.forEach((expense) => {
     (expense.splits || []).forEach((split) => {
       const byNameKey = memberByName.get(memberNameKey(split.member_name));
       const matchedMember = byNameKey
@@ -7161,7 +7169,58 @@ function renderTripDetail() {
       </div>
     `;
     }).join('')
-    : `<div class="card" style="text-align:center;color:var(--t3);padding:28px 18px">No trip expenses yet. Add line items to see grouped totals here.</div>`;
+    : `<div class="card" style="text-align:center;color:var(--t3);padding:28px 18px">${settlementEntries.length ? 'No spending expenses yet. Payment / settlement entries are shown separately below.' : 'No trip expenses yet. Add line items to see grouped totals here.'}</div>`;
+
+  const settlementHtml = settlementEntries.length
+    ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px">
+        <div>
+          <div style="font-size:18px;font-weight:800">Payments / Settlements</div>
+          <div style="font-size:13px;color:var(--t2)">Member-to-member payments. These update balances but do not increase the trip grand total.</div>
+        </div>
+      </div>
+      <div class="card trip-group-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:132px;min-width:132px">Actions</th>
+                <th>Date</th>
+                <th>Details</th>
+                <th>Paid By</th>
+                <th>Received By</th>
+                <th class="td-m">Amount</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>${settlementEntries.map((item) => {
+              const receiverNames = (item.splits || []).map((split) => split.member_name).filter(Boolean).join(' | ') || '-';
+              return `
+                <tr>
+                  <td class="trip-actions-cell">
+                    <div class="trip-table-actions" role="group" aria-label="Trip settlement actions">
+                      ${canManageExpenses ? `<button class="trip-icon-btn" title="Edit payment" aria-label="Edit payment" onclick="showTripExpenseModal(${item.id})">
+                        <span class="trip-icon-btn-glyph">&#9998;</span>
+                      </button>` : ''}
+                      ${canManageExpenses ? `<button class="trip-icon-btn danger" title="Delete payment" aria-label="Delete payment" onclick="tripDeleteExpense(${item.id})">
+                        <span class="trip-icon-btn-glyph">&#128465;</span>
+                      </button>` : ''}
+                    </div>
+                  </td>
+                  <td>${fmtTripExpenseDateTime(item.expense_date, item.updated_at || item.created_at)}</td>
+                  <td style="font-weight:600">${escHtml(item.details || 'Settlement')}</td>
+                  <td>${escHtml(item.paid_by_name || 'You')}</td>
+                  <td>${escHtml(receiverNames)}</td>
+                  <td class="td-m" style="font-weight:700">${fmtCur(item.amount || 0)}</td>
+                  <td>${escHtml(item.notes || '-')}</td>
+                </tr>
+              `;
+            }).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+    `
+    : '';
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content" data-trip-detail-view="1">
@@ -7206,7 +7265,7 @@ function renderTripDetail() {
         <div class="card" style="display:flex;flex-direction:column;justify-content:center;padding:12px 14px;min-height:0">
           <div style="font-size:11px;color:var(--t3);margin-bottom:3px">Grand Total</div>
           <div style="font-size:20px;font-weight:900;color:var(--green);line-height:1.1">${fmtCur(trip.grand_total || 0)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:3px">${(trip.expenses || []).length} item${(trip.expenses || []).length !== 1 ? 's' : ''}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:3px">${spendingExpenseCount} item${spendingExpenseCount !== 1 ? 's' : ''}${settlementEntries.length ? ` · ${settlementEntries.length} payment${settlementEntries.length !== 1 ? 's' : ''}` : ''}</div>
         </div>
         ${summaryCards}
       </div>
@@ -7244,6 +7303,7 @@ function renderTripDetail() {
         </div>
       </div>
       ${groupHtml}
+      ${settlementHtml}
     </div>
   `;
   if (preserveTripSearchFocus) {
@@ -7868,8 +7928,8 @@ async function showTripExpenseModal(expenseId = null) {
       </label>
       <label class="fl full">Entry Type
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          <button type="button" class="chip ${_tripExpIsSettlement ? '' : 'active'}" onclick="tripExpenseSetEntryKind('expense')">Expense</button>
-          <button type="button" class="chip ${_tripExpIsSettlement ? 'active' : ''}" onclick="tripExpenseSetEntryKind('settlement')">Payment / Settlement</button>
+          <button type="button" class="chip trip-entry-kind-chip ${_tripExpIsSettlement ? '' : 'active'}" data-entry-kind="expense" onclick="tripExpenseSetEntryKind('expense')">Expense</button>
+          <button type="button" class="chip trip-entry-kind-chip ${_tripExpIsSettlement ? 'active' : ''}" data-entry-kind="settlement" onclick="tripExpenseSetEntryKind('settlement')">Payment / Settlement</button>
         </div>
       </label>
       <label class="fl full">Notes
