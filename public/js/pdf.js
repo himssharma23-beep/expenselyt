@@ -534,6 +534,130 @@ function downloadTripDetailPdf() {
   _P.save(doc, `Trip_${trip.destination || trip.name || 'Trip'}`);
 }
 
+function downloadTripDetailPdfEnhanced() {
+  const trip = _tripDetail;
+  if (!trip) return;
+  const doc = _P.init(true);
+  const startsIn = tripStartsInPdfLabel(trip.start_date);
+  const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
+  const members = Array.isArray(trip.members) ? trip.members : [];
+  const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
+  const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
+  const expenseGroups = Array.isArray(trip.expense_groups) ? trip.expense_groups : [];
+  const grandTotal = Number(trip.grand_total ?? (expenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0) || 0));
+  let y = _P.header(doc, `Trip: ${trip.destination || trip.name || 'Trip'}`,
+    `${_P.dt(trip.start_date)}${trip.end_date ? ' -> ' + _P.dt(trip.end_date) : ''}${startsIn ? `  ·  ${startsIn}` : ''}  ·  ${trip.status}`);
+
+  y = _P.note(doc, y, `Members: ${members.map((member) => member.member_name).join('  ·  ')}`);
+  if (trip.notes) y = _P.note(doc, y, `Notes: ${trip.notes}`);
+  if (trip.transport_mode) y = _P.note(doc, y, `Transport: ${trip.transport_mode}`);
+  if (trip.total_distance != null && trip.total_distance !== '') y = _P.note(doc, y, `Distance: ${trip.total_distance} km`);
+  if (sharedUsers.length) {
+    y = _P.note(doc, y, `Shared With: ${sharedUsers.map((user) => `${user.display_name || user.member_name || 'User'} (${user.permission === 'edit' ? 'edit' : 'view'})`).join('  ·  ')}`);
+  }
+
+  y = _P.cards(doc, y, [
+    { label:'Grand Total', value:_P.cur(grandTotal), color:'' },
+    { label:'Expenses', value:expenses.length, color:'' },
+    { label:'Members', value:members.length, color:'' },
+    { label:'Transport', value:trip.transport_mode || '-', color:'' },
+  ]);
+
+  if (itineraryItems.length) {
+    y = _P.section(doc, y, 'Itinerary');
+    y = _P.table(doc, y,
+      [['Date','Time','Title','Location','Notes']],
+      itineraryItems
+        .slice()
+        .sort((a, b) => `${String(a?.itinerary_date || '')} ${String(a?.start_time || '99:99')}`.localeCompare(`${String(b?.itinerary_date || '')} ${String(b?.start_time || '99:99')}`))
+        .map((item) => [_P.dt(item.itinerary_date), tripItineraryTimeLabel(item), item.title || '-', item.location || '-', item.notes || '-']),
+      { 4:{fontSize:7} },
+      true
+    );
+  }
+
+  const settlementRows = (() => {
+    const nameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const memberStableKey = (member) => String(member?.id ?? (typeof _memberKey === 'function' ? _memberKey(member) : '') ?? '');
+    const rows = members.map((member) => ({
+      key: memberStableKey(member),
+      fallbackKey: String(typeof _memberKey === 'function' ? _memberKey(member) : member?.member_key || ''),
+      name: member.member_name,
+      share: 0,
+      gave: 0,
+    }));
+    const rowByUiKey = new Map(rows.map((row) => [String(row.key), row]));
+    const rowByFallbackKey = new Map(rows.map((row) => [String(row.fallbackKey), row]));
+    const rowByName = new Map(rows.map((row) => [nameKey(row.name), row]));
+    expenses.forEach((expense) => {
+      (expense.splits || []).forEach((split) => {
+        const target = rowByUiKey.get(String(split?.member_key || ''))
+          || rowByFallbackKey.get(String(split?.member_key || ''))
+          || rowByName.get(nameKey(split?.member_name || ''));
+        if (target) target.share += Number(split?.share_amount || 0);
+      });
+      const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
+        || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
+        || rowByName.get(nameKey(expense?.paid_by_name || ''));
+      if (payer) payer.gave += Number(expense?.amount || 0);
+    });
+    return rows.map((row) => ({
+      ...row,
+      share: Math.round(Number(row.share || 0) * 100) / 100,
+      gave: Math.round(Number(row.gave || 0) * 100) / 100,
+      net: Math.round((Number(row.gave || 0) - Number(row.share || 0)) * 100) / 100,
+    }));
+  })();
+
+  if (settlementRows.length) {
+    y = _P.section(doc, y, 'Member Totals');
+    y = _P.table(doc, y,
+      [['Member','Share','Paid','Net']],
+      settlementRows.map((row) => [row.name + (row.fallbackKey === 'self' ? ' (You)' : ''), _P.cur(row.share), _P.cur(row.gave), (row.net > 0.005 ? '+' : '') + _P.cur(row.net)]),
+      { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
+      true
+    );
+  }
+
+  if (expenseGroups.length) {
+    y = _P.section(doc, y, 'Expense Breakdown');
+    y = _P.table(doc, y,
+      [['Type','Items','Subtotal']],
+      expenseGroups.map((group) => [group.type || '-', Number((group.items || []).length || 0), _P.cur(Number(group.total || 0))]),
+      { 1:{halign:'center'}, 2:{halign:'right',fontStyle:'bold'} },
+      true
+    );
+  }
+
+  y = _P.section(doc, y, 'Expenses');
+  y = _P.table(doc, y,
+    [['Date','Type','Details','Paid By','Amount','Split Mode','Split Details','Notes']],
+    expenses.map((expense) => [
+      _P.dt(expense.expense_date),
+      expense.expense_type || '-',
+      expense.details || '-',
+      expense.paid_by_name || '-',
+      _P.cur(expense.amount),
+      expense.split_mode || 'equal',
+      (expense.splits || []).map((split) => `${split.member_name}: ${_P.cur(split.share_amount)}`).join('\n'),
+      expense.notes || '-',
+    ]),
+    { 4:{halign:'right',fontStyle:'bold'}, 6:{fontSize:7}, 7:{fontSize:7} },
+    true
+  );
+
+  y = _P.section(doc, y, 'Settlement Summary');
+  _P.table(doc, y,
+    [['Member','Total Share (Owes)','Total Paid','Net Balance']],
+    settlementRows.map((row) => [row.name + (row.fallbackKey === 'self' ? ' (You)' : ''), _P.cur(row.share), _P.cur(row.gave), (row.net > 0.005 ? '+' : '') + _P.cur(row.net)]),
+    { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
+    true
+  );
+  _P.save(doc, `Trip_${trip.destination || trip.name || 'Trip'}`);
+}
+
+downloadTripDetailPdf = downloadTripDetailPdfEnhanced;
+
 // ── EMI Overview ─────────────────────────────────────────────
 function downloadEmisPdf(records) {
   const emis = records || _emiRecords || [];

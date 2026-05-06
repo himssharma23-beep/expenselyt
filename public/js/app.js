@@ -7122,7 +7122,7 @@ function renderTripDetail() {
               </div>
               <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <div class="trip-detail-actions trip-detail-actions-desktop" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
               ${trip.isOwner ? `<button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
                 <span class="trip-icon-btn-glyph">&#9998;</span>
               </button>` : ''}
@@ -7154,6 +7154,11 @@ function renderTripDetail() {
         ${summaryCards}
       </div>
       ${sharedAccessHtml}
+      <div class="trip-detail-actions-mobile" style="margin-bottom:14px">
+        ${canManageExpenses ? '<button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>' : ''}
+        ${canEdit ? '<button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>' : ''}
+        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
+      </div>
       
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
