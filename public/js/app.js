@@ -5138,6 +5138,7 @@ const TRIPS_PAGE_SIZE = 10;
 let _tripExpSel = new Set();    // member_key set
 let _tripExpPaidBy = 'self';
 let _tripExpMode = 'equal';
+let _tripExpIsSettlement = false;
 let _tripExpValues = {};
 let _tripExpEditId = null;
 let _tripEditCcTxnId = null;
@@ -5160,6 +5161,57 @@ function getTripItineraryItemById(itemId) {
 function _findTripExpenseById(expenseId) {
   if (!_tripDetail?.expenses?.length || expenseId == null) return null;
   return _tripDetail.expenses.find((expense) => String(expense.id) === String(expenseId)) || null;
+}
+
+function isTripSettlementExpense(expense) {
+  return String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
+}
+
+function tripExpenseSelectionLabel() {
+  return _tripExpIsSettlement ? 'Choose who received this payment.' : 'Choose members who should share this expense.';
+}
+
+function tripRefreshSelectionChips() {
+  const container = document.getElementById('tripDivChips');
+  if (!container) return;
+  container.querySelectorAll('.fr-chip').forEach((btn) => {
+    const match = btn.getAttribute('onclick')?.match(/tripToggleMember\('(.+?)'\)/);
+    if (!match) return;
+    const chipKey = match[1];
+    const selected = _tripExpSel.has(chipKey);
+    btn.classList.toggle('sel', selected);
+    const cbox = btn.querySelector('.cbox');
+    if (cbox) {
+      cbox.classList.toggle('chk', selected);
+      cbox.innerHTML = selected ? '&#10003;' : '';
+    }
+  });
+}
+
+function tripExpenseSetEntryKind(kind) {
+  _tripExpIsSettlement = kind === 'settlement';
+  const help = document.getElementById('tripExpenseShareHelp');
+  if (help) {
+    help.textContent = _tripExpIsSettlement
+      ? 'Select exactly one receiving member. This records a member-to-member payment and updates balances without increasing the trip total.'
+      : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.';
+  }
+  const splitModes = document.getElementById('tripExpenseSplitModes');
+  if (splitModes) splitModes.style.display = _tripExpIsSettlement ? 'none' : '';
+  const splitModesLabel = document.getElementById('tripExpenseSplitModesLabel');
+  if (splitModesLabel) splitModesLabel.style.display = _tripExpIsSettlement ? 'none' : '';
+  const participantTitle = document.getElementById('tripExpenseParticipantTitle');
+  if (participantTitle) participantTitle.textContent = _tripExpIsSettlement ? 'Select Receiver' : 'Share Expense With Members';
+  const payeeHint = document.getElementById('tripExpensePayeeHint');
+  if (payeeHint) payeeHint.style.display = _tripExpIsSettlement ? '' : 'none';
+  if (_tripExpIsSettlement) {
+    if (_tripExpSel.has(_tripExpPaidBy)) _tripExpSel.delete(_tripExpPaidBy);
+    if (_tripExpSel.size > 1) _tripExpSel = new Set([...[..._tripExpSel][0]]);
+  } else {
+    _tripExpSel.add(_tripExpPaidBy);
+  }
+  tripRefreshSelectionChips();
+  tripUpdateSplitInputs();
 }
 
 async function loadTrips() {
@@ -5259,6 +5311,7 @@ async function openTripDetail(tripId) {
   // For linked (non-owner) members, default paid-by to their own member key
   const _myMem = !data.trip.isOwner ? data.trip.members.find(m => m.linked_user_id === _currentUserId) : null;
   _tripExpPaidBy = _myMem ? _memberKey(_myMem) : 'self';
+  _tripExpIsSettlement = false;
   _tripExpMode = 'equal';
   _tripExpValues = {};
   _tripExpEditId = null;
@@ -5465,25 +5518,22 @@ function tripSetPaidBy(key) {
 }
 
 function tripToggleMember(key) {
-  if (_tripExpSel.has(key)) _tripExpSel.delete(key);
-  else _tripExpSel.add(key);
-  // Update chip DOM
-  const container = document.getElementById('tripDivChips');
-  if (container) {
-    container.querySelectorAll('.fr-chip').forEach(btn => {
-      const match = btn.getAttribute('onclick')?.match(/tripToggleMember\('(.+?)'\)/);
-      if (!match) return;
-      const chipKey = match[1];
-      const sel = _tripExpSel.has(chipKey);
-      btn.classList.toggle('sel', sel);
-      const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', sel); cbox.innerHTML = sel ? '&#10003;' : ''; }
-    });
+  if (_tripExpIsSettlement) {
+    if (String(key) === String(_tripExpPaidBy)) {
+      toast('Receiver must be different from paid by member', 'warning');
+      return;
+    }
+    if (_tripExpSel.has(key)) _tripExpSel.delete(key);
+    else _tripExpSel = new Set([key]);
+  } else {
+    if (_tripExpSel.has(key)) _tripExpSel.delete(key);
+    else _tripExpSel.add(key);
   }
+  tripRefreshSelectionChips();
   _tripExpValues = {};
   const amt = parseFloat(document.getElementById('teAmount')?.value || 0);
   const people = _tripSelectedPeople();
-  if (people.length > 0 && amt > 0 && _tripExpMode !== 'equal') _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
+  if (!_tripExpIsSettlement && people.length > 0 && amt > 0 && _tripExpMode !== 'equal') _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
   tripUpdateSplitInputs();
 }
 
@@ -5545,7 +5595,7 @@ function tripHandleAmountChange() {
     }
   }
   const people = _tripSelectedPeople();
-  if (_tripExpMode !== 'equal') {
+  if (!_tripExpIsSettlement && _tripExpMode !== 'equal') {
     _tripExpValues = {};
     if (people.length > 0 && amt > 0) _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
   }
@@ -5579,6 +5629,12 @@ function tripUpdateSplitInputs() {
   const amt = parseFloat((document.getElementById('teAmount') || document.getElementById('tripExpenseAmount'))?.value || 0);
   const people = _tripSelectedPeople();
   if (people.length === 0 || amt <= 0) { el.innerHTML = ''; return; }
+
+  if (_tripExpIsSettlement) {
+    const receiverNames = people.map((person) => person.name).join(', ');
+    el.innerHTML = `<div class="preview-box" style="margin-bottom:12px">This payment will move <b>${fmtCur(amt)}</b> from <b>${escHtml((_tripDetail?.members || []).find((member) => String(_memberKey(member)) === String(_tripExpPaidBy))?.member_name || 'selected payer')}</b> to <b>${escHtml(receiverNames)}</b>.</div>`;
+    return;
+  }
 
   if (_tripExpMode === 'equal') {
     const pp = Math.round((amt / people.length) * 100) / 100;
@@ -6845,6 +6901,7 @@ async function openTripDetail(tripId) {
     ? detailMembers.find((member) => String(member?.linked_user_id || '') === String(_currentUserId || ''))
     : null;
   _tripExpPaidBy = linkedMember ? _memberKey(linkedMember) : 'self';
+  _tripExpIsSettlement = false;
   _tripExpMode = 'equal';
   _tripExpValues = {};
   _tripExpEditId = null;
@@ -7745,8 +7802,11 @@ async function showTripExpenseModal(expenseId = null) {
     ? new Set(resolvedSplitShares.map((split) => split.key))
     : new Set([fallbackPaidByKey]);
   _tripExpSel = selectedKeys;
-  _tripExpPaidBy = selectedKeys.has(fallbackPaidByKey) ? fallbackPaidByKey : [...selectedKeys][0] || fallbackPaidByKey;
-  _tripExpMode = expense?.split_mode || 'equal';
+  _tripExpIsSettlement = isTripSettlementExpense(expense);
+  _tripExpPaidBy = _tripExpIsSettlement
+    ? fallbackPaidByKey
+    : (selectedKeys.has(fallbackPaidByKey) ? fallbackPaidByKey : [...selectedKeys][0] || fallbackPaidByKey);
+  _tripExpMode = _tripExpIsSettlement ? 'equal' : (expense?.split_mode || 'equal');
   _tripExpValues = resolvedSplitShares.length
     ? _restoreSplitValues(
         _tripExpMode,
@@ -7754,6 +7814,7 @@ async function showTripExpenseModal(expenseId = null) {
         parseFloat(expense.amount) || 0
       )
     : {};
+  if (_tripExpIsSettlement && _tripExpSel.has(_tripExpPaidBy)) _tripExpSel.delete(_tripExpPaidBy);
   const splitModeChips = SPLIT_MODES.map((mode) =>
     `<button class="chip split-mode-chip ${_tripExpMode === mode.key ? 'active' : ''}" data-mode="${mode.key}" onclick="tripSetSplitMode('${mode.key}')">${mode.label}</button>`
   ).join('');
@@ -7805,16 +7866,23 @@ async function showTripExpenseModal(expenseId = null) {
           }).join('')}
         </select>
       </label>
+      <label class="fl full">Entry Type
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="chip ${_tripExpIsSettlement ? '' : 'active'}" onclick="tripExpenseSetEntryKind('expense')">Expense</button>
+          <button type="button" class="chip ${_tripExpIsSettlement ? 'active' : ''}" onclick="tripExpenseSetEntryKind('settlement')">Payment / Settlement</button>
+        </div>
+      </label>
       <label class="fl full">Notes
         <textarea class="fi" id="tripExpenseNotes" rows="3" placeholder="Optional notes">${escHtml(expense?.notes || '')}</textarea>
       </label>
     </div>
     <div class="card" style="padding:14px 16px;margin-top:12px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px">Share Expense With Members</div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:10px">Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.</div>
+      <div id="tripExpenseParticipantTitle" style="font-size:13px;font-weight:700;margin-bottom:8px">${_tripExpIsSettlement ? 'Select Receiver' : 'Share Expense With Members'}</div>
+      <div id="tripExpenseShareHelp" style="font-size:12px;color:var(--t2);margin-bottom:10px">${_tripExpIsSettlement ? 'Select exactly one receiving member. This records a member-to-member payment and updates balances without increasing the trip total.' : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.'}</div>
+      <div id="tripExpensePayeeHint" style="font-size:12px;color:var(--t2);margin-bottom:10px;display:${_tripExpIsSettlement ? 'block' : 'none'}">Tip: set Paid By to the person sending money, then select the member receiving it.</div>
       <div id="tripDivChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${participantChips}</div>
-      <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Split Mode</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${splitModeChips}</div>
+      <div id="tripExpenseSplitModesLabel" style="font-size:12px;color:var(--t2);margin-bottom:6px;display:${_tripExpIsSettlement ? 'none' : 'block'}">Split Mode</div>
+      <div id="tripExpenseSplitModes" style="display:${_tripExpIsSettlement ? 'none' : 'flex'};flex-wrap:wrap;gap:6px;margin-bottom:10px">${splitModeChips}</div>
       <div id="tripSplitInputs"></div>
     </div>
     <div class="fa" style="margin-top:16px">
@@ -7823,6 +7891,7 @@ async function showTripExpenseModal(expenseId = null) {
     </div>
   `);
   tripExpenseCurrencyChanged();
+  tripExpenseSetEntryKind(_tripExpIsSettlement ? 'settlement' : 'expense');
   tripUpdateSplitInputs();
 }
 
@@ -7847,19 +7916,12 @@ function tripExpenseCurrencyChanged() {
 
 function tripExpenseChangePaidBy(key) {
   _tripExpPaidBy = key;
-  if (!_tripExpSel.has(key)) _tripExpSel.add(key);
-  const container = document.getElementById('tripDivChips');
-  if (container) {
-    container.querySelectorAll('.fr-chip').forEach((btn) => {
-      const match = btn.getAttribute('onclick')?.match(/tripToggleMember\('(.+?)'\)/);
-      if (!match) return;
-      const chipKey = match[1];
-      const selected = _tripExpSel.has(chipKey);
-      btn.classList.toggle('sel', selected);
-      const cbox = btn.querySelector('.cbox');
-      if (cbox) { cbox.classList.toggle('chk', selected); cbox.innerHTML = selected ? '&#10003;' : ''; }
-    });
+  if (_tripExpIsSettlement) {
+    if (_tripExpSel.has(key)) _tripExpSel.delete(key);
+  } else if (!_tripExpSel.has(key)) {
+    _tripExpSel.add(key);
   }
+  tripRefreshSelectionChips();
   tripHandleAmountChange();
 }
 
@@ -7877,19 +7939,38 @@ async function saveTripExpenseModal(expenseId = null) {
     toast('Select at least one member', 'warning');
     return;
   }
-  if (!_tripExpSel.has(_tripExpPaidBy)) {
+  if (!_tripExpIsSettlement && !_tripExpSel.has(_tripExpPaidBy)) {
     toast('Paid by member must also be included in sharing', 'warning');
     return;
   }
-  const people = _tripSelectedPeople();
   const amountNumber = parseFloat(amountValue || 0);
-  const { valid, error, shares } = computeShares(amountNumber, _tripExpMode, people, _tripExpValues);
-  if (!valid) {
-    toast(error || 'Invalid split', 'warning');
+  if (!(amountNumber > 0)) {
+    toast('Enter a valid amount', 'warning');
     return;
   }
+  let shares = [];
+  if (_tripExpIsSettlement) {
+    const people = _tripSelectedPeople();
+    if (people.length !== 1) {
+      toast('Select exactly one receiving member for a payment entry', 'warning');
+      return;
+    }
+    if (String(people[0].key) === String(_tripExpPaidBy)) {
+      toast('Receiver must be different from paid by member', 'warning');
+      return;
+    }
+    shares = [{ key: people[0].key, name: people[0].name, share: amountNumber }];
+  } else {
+    const people = _tripSelectedPeople();
+    const result = computeShares(amountNumber, _tripExpMode, people, _tripExpValues);
+    if (!result.valid) {
+      toast(result.error || 'Invalid split', 'warning');
+      return;
+    }
+    shares = result.shares;
+  }
   const body = {
-    expense_type: document.getElementById('tripExpenseType')?.value.trim(),
+    expense_type: (document.getElementById('tripExpenseType')?.value.trim() || (_tripExpIsSettlement ? 'Settlement' : '')),
     details: document.getElementById('tripExpenseDetails')?.value.trim(),
     expense_date: document.getElementById('tripExpenseDate')?.value,
     quantity: document.getElementById('tripExpenseQty')?.value || null,
@@ -7901,7 +7982,7 @@ async function saveTripExpenseModal(expenseId = null) {
     notes: document.getElementById('tripExpenseNotes')?.value.trim() || null,
     paid_by_key: _tripExpPaidBy,
     paid_by_name: payer.member_name,
-    split_mode: _tripExpMode,
+    split_mode: _tripExpIsSettlement ? 'settlement' : _tripExpMode,
     splits: shares.map((share) => ({ member_key: share.key, member_name: share.name, share_amount: share.share })),
   };
   if (!body.expense_type || !body.details || !body.expense_date) {
@@ -7917,7 +7998,8 @@ async function saveTripExpenseModal(expenseId = null) {
     return;
   }
   closeModal();
-  toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  toast(expenseId ? (_tripExpIsSettlement ? 'Payment updated' : 'Expense updated') : (_tripExpIsSettlement ? 'Payment added' : 'Expense added'), 'success');
+  _tripExpIsSettlement = false;
   _tripExpMode = 'equal';
   _tripExpValues = {};
   await openTripDetail(_selectedTripId);

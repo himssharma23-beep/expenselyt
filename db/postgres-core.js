@@ -4035,14 +4035,11 @@ async function getTripById(userId, tripId) {
   if (!trip) return null;
   const expenseTypeMap = new Map();
   for (const expense of expenses) {
-    const key = expense.expense_type || 'Other';
-    if (!expenseTypeMap.has(key)) expenseTypeMap.set(key, { type: key, total: 0, items: [] });
-    const group = expenseTypeMap.get(key);
-    group.total += num(expense.amount);
-    group.items.push({
+    const isSettlement = normalizeTripSplitModeValue(expense.split_mode) === 'settlement';
+    const normalizedItem = {
       id: Number(expense.id),
       trip_id: Number(expense.trip_id),
-      expense_type: expense.expense_type || 'Other',
+      expense_type: expense.expense_type || (isSettlement ? 'Settlement' : 'Other'),
       details: expense.details || '',
       quantity: expense.quantity == null ? null : num(expense.quantity),
       unit_price: expense.unit_price == null ? null : num(expense.unit_price),
@@ -4062,7 +4059,14 @@ async function getTripById(userId, tripId) {
         member_name: split.member_name,
         share_amount: num(split.share_amount),
       })),
-    });
+    };
+    if (!isSettlement) {
+      const key = normalizedItem.expense_type || 'Other';
+      if (!expenseTypeMap.has(key)) expenseTypeMap.set(key, { type: key, total: 0, items: [] });
+      const group = expenseTypeMap.get(key);
+      group.total += num(expense.amount);
+      group.items.push(normalizedItem);
+    }
   }
   const expense_groups = Array.from(expenseTypeMap.values()).map((group) => ({
     ...group,
@@ -4100,7 +4104,10 @@ async function getTripById(userId, tripId) {
       created_at: row.created_at,
       updated_at: row.updated_at,
     })),
-    expenses,
+    expenses: expenses.map((expense) => ({
+      ...expense,
+      expense_type: expense.expense_type || (normalizeTripSplitModeValue(expense.split_mode) === 'settlement' ? 'Settlement' : 'Other'),
+    })),
     expense_groups,
     grand_total: Math.round(grandTotal * 100) / 100,
     isOwner: !!trip.is_owner,
