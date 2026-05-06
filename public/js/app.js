@@ -14361,6 +14361,7 @@ function recurringTypeToggle() {
   }
 }
 
+
 function toggleRecurringExpenseCategory() {
   const row = document.getElementById('reCcExpenseCategoryRow');
   if (!row) return;
