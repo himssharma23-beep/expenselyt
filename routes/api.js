@@ -817,8 +817,23 @@ function normalizeMatchText(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function getMatchTokens(value) {
+  return normalizeMatchText(value).split(' ').filter((token) => token.length > 1);
+}
+
+function scoreTokenOverlap(sourceTokens = [], candidateTokens = []) {
+  if (!sourceTokens.length || !candidateTokens.length) return 0;
+  const sourceSet = new Set(sourceTokens);
+  let score = 0;
+  candidateTokens.forEach((token) => {
+    if (sourceSet.has(token)) score += token.length >= 5 ? 2 : 1;
+  });
+  return score;
+}
+
 function guessBankMatchFromText(text, bankOptions = []) {
   const source = normalizeMatchText(text);
+  const sourceTokens = getMatchTokens(text);
   if (!source) return null;
   let best = null;
   let bestScore = 0;
@@ -830,6 +845,7 @@ function guessBankMatchFromText(text, bankOptions = []) {
     if (bankName && source.includes(bankName)) score += 3;
     if (accountName && source.includes(accountName)) score += 2;
     if (label && source.includes(label)) score += 1;
+    score += scoreTokenOverlap(sourceTokens, getMatchTokens(`${bank.bank_name || ''} ${bank.account_name || ''} ${bank.label || ''}`));
     if (score > bestScore) {
       best = bank;
       bestScore = score;
@@ -840,17 +856,21 @@ function guessBankMatchFromText(text, bankOptions = []) {
 
 function guessCardMatchFromText(text, cardOptions = []) {
   const source = normalizeMatchText(text);
+  const sourceTokens = getMatchTokens(text);
   if (!source) return null;
   let best = null;
   let bestScore = 0;
   for (const card of cardOptions) {
     const cardName = normalizeMatchText(card.card_name);
     const bankName = normalizeMatchText(card.bank_name);
+    const label = normalizeMatchText(card.label);
     const last4 = String(card.last4 || '').trim();
     let score = 0;
     if (cardName && source.includes(cardName)) score += 3;
     if (bankName && source.includes(bankName)) score += 2;
+    if (label && source.includes(label)) score += 2;
     if (last4 && source.includes(last4)) score += 1;
+    score += scoreTokenOverlap(sourceTokens, getMatchTokens(`${card.card_name || ''} ${card.bank_name || ''} ${card.label || ''}`));
     if (score > bestScore) {
       best = card;
       bestScore = score;
@@ -1102,9 +1122,17 @@ function getVoiceEditTargets(message, entries = []) {
     if (text.includes(token) && entries[index]) return [index];
   }
   const matches = [];
+  const textTokens = getMatchTokens(text);
   entries.forEach((entry, index) => {
     const name = String(entry?.item_name || entry?.merchant || '').trim().toLowerCase();
-    if (name && text.includes(name)) matches.push(index);
+    if (!name) return;
+    if (text.includes(name)) {
+      matches.push(index);
+      return;
+    }
+    const nameTokens = getMatchTokens(name);
+    const overlap = scoreTokenOverlap(textTokens, nameTokens);
+    if (overlap >= Math.max(2, Math.min(3, nameTokens.length))) matches.push(index);
   });
   return matches;
 }
@@ -1118,8 +1146,15 @@ function applyHeuristicVoiceExpenseEdit(message, currentEntries = [], banks = []
   const asksFair = /\b(fair|regular|essential|not extra|mark as fair|convert .* fair|make .* fair)\b/i.test(text);
   const mentionsCard = /\b(card|credit card)\b/i.test(text);
   const mentionsBank = /\b(bank|account)\b/i.test(text);
-  const appliesAll = /\b(all|every|everything|all of them|all expenses)\b/i.test(text) || (!getVoiceEditTargets(text, entries).length);
-  const targets = appliesAll ? entries.map((_, index) => index) : getVoiceEditTargets(text, entries);
+  const explicitAll = /\b(all|every|everything|all of them|all expenses)\b/i.test(text);
+  const matchedTargets = getVoiceEditTargets(text, entries);
+  const targets = explicitAll
+    ? entries.map((_, index) => index)
+    : matchedTargets.length
+      ? matchedTargets
+      : entries.length === 1
+        ? [0]
+        : [];
   const guessedCard = mentionsCard ? guessCardMatchFromText(text, cards) : null;
   const guessedBank = !guessedCard && mentionsBank ? guessBankMatchFromText(text, banks) : null;
 
@@ -1244,7 +1279,8 @@ async function applyVoiceExpenseEditsWithOpenAi(message, currentEntries = [], ba
     'The instruction may add new expenses, update all expenses, update one expense by order, or update by item name.',
     'Support commands such as mark all extra, make all fair, charge all to a specific bank, charge all to a credit card, or update only one matching expense.',
     'If the instruction refers to "first", "second", "third" or similar, apply it to that numbered expense in the current list.',
-    'If the instruction names an item, update the matching entry or entries.',
+    'If the instruction names an item, update only that matching entry unless the user explicitly says all or multiple entries clearly share the same item name.',
+    'If the instruction does not clearly identify a target and does not explicitly say all, preserve the current entries unchanged rather than applying the change to every entry.',
     'If the instruction adds new expenses, append them after the existing ones.',
     'Preserve all existing entries unless the instruction changes them.',
     'Always translate the user meaning into English in item_name, merchant, category, and notes while preserving brand names and proper nouns.',
