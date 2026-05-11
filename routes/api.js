@@ -291,10 +291,22 @@ function finalizeReceiptDraft(draft) {
   if (!draft) return draft;
   const rawText = String(draft.raw_text || '');
   const hasExplicitTotalLabel = /\b(total|grand total|net total|amount due|bill total|balance due|subtotal)\b/i.test(rawText);
-  const items = Array.isArray(draft.items) ? [...draft.items] : [];
+  let items = Array.isArray(draft.items) ? [...draft.items] : [];
   const totalAmount = normalizeOcrAmount(draft.total_amount);
   const isTransactionList = isTransactionListDraft(draft);
-  const merchant = String(draft.merchant || '').trim();
+
+  if (items.length > 1 && totalAmount) {
+    const smallerRows = items.filter((row) => {
+      const rowAmount = normalizeOcrAmount(row?.amount);
+      return rowAmount && rowAmount < totalAmount - 0.01;
+    });
+    if (smallerRows.length) {
+      items = items.filter((row) => {
+        const rowAmount = normalizeOcrAmount(row?.amount);
+        return !(rowAmount && Math.abs(rowAmount - totalAmount) < 0.01);
+      });
+    }
+  }
 
   if (items.length > 1 && totalAmount && (isTransactionList || !hasExplicitTotalLabel)) {
     const totalMatchesSingleRow = items.some((row) => {
@@ -302,17 +314,6 @@ function finalizeReceiptDraft(draft) {
       return rowAmount && Math.abs(rowAmount - totalAmount) < 0.01;
     });
     if (isTransactionList || totalMatchesSingleRow) {
-      const merchantAlreadyPresent = items.some((row) => String(row?.item_name || '').trim().toLowerCase() === merchant.toLowerCase());
-      if (merchant && totalAmount && !merchantAlreadyPresent) {
-        items.unshift({
-          item_name: merchant,
-          amount: totalAmount,
-          purchase_date: draft.purchase_date || '',
-          category: null,
-          is_extra: false,
-          selected: true,
-        });
-      }
       return {
         ...draft,
         merchant: isTransactionList ? 'Scanned transactions' : draft.merchant,
@@ -322,7 +323,7 @@ function finalizeReceiptDraft(draft) {
     }
   }
 
-  if (isTransactionList && merchant) {
+  if (isTransactionList) {
     return {
       ...draft,
       merchant: 'Scanned transactions',
@@ -330,6 +331,64 @@ function finalizeReceiptDraft(draft) {
   }
 
   return draft;
+}
+
+function normalizeReceiptItemMatchKey(row) {
+  const name = String(row?.item_name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const amount = normalizeOcrAmount(row?.amount);
+  if (!name || !amount) return '';
+  return `${name}|${amount.toFixed(2)}`;
+}
+
+function dedupeReceiptItemsHeuristically(items = []) {
+  const deduped = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const key = normalizeReceiptItemMatchKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function orderReceiptItemsByReference(items = [], referenceItems = []) {
+  const orderMap = new Map();
+  (Array.isArray(referenceItems) ? referenceItems : []).forEach((item, index) => {
+    const key = normalizeReceiptItemMatchKey(item);
+    if (key && !orderMap.has(key)) orderMap.set(key, index);
+  });
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+    const aIndex = orderMap.has(normalizeReceiptItemMatchKey(a)) ? orderMap.get(normalizeReceiptItemMatchKey(a)) : Number.MAX_SAFE_INTEGER;
+    const bIndex = orderMap.has(normalizeReceiptItemMatchKey(b)) ? orderMap.get(normalizeReceiptItemMatchKey(b)) : Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    return 0;
+  });
+}
+
+function mergeReceiptDraftPages(drafts = []) {
+  const pages = (Array.isArray(drafts) ? drafts : []).filter(Boolean);
+  const merchant = pages.map((page) => String(page?.merchant || '').trim()).find(Boolean) || 'Scanned receipt';
+  const purchaseDate = pages.map((page) => String(page?.purchase_date || '').trim()).find(Boolean) || '';
+  const totalAmount = pages
+    .map((page) => normalizeOcrAmount(page?.total_amount))
+    .filter((value) => value > 0)
+    .sort((a, b) => b - a)[0] || null;
+  const combinedItems = dedupeReceiptItemsHeuristically(
+    pages.flatMap((page) => sanitizeReceiptItems(page?.items, purchaseDate))
+  );
+  const rawText = pages.map((page, index) => `--- PAGE ${index + 1} ---\n${String(page?.raw_text || '').trim()}`.trim()).filter(Boolean).join('\n\n');
+  return {
+    merchant,
+    purchase_date: purchaseDate,
+    total_amount: totalAmount,
+    items: combinedItems,
+    raw_text: rawText,
+  };
 }
 
 function normalizeSmartCaptureText(value) {
@@ -2340,6 +2399,158 @@ async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageB
   return normalizeReceiptDraftShape(parsed, ocrText);
 }
 
+async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) return null;
+  const pages = (Array.isArray(drafts) ? drafts : []).filter(Boolean);
+  if (!pages.length) return null;
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['merchant', 'purchase_date', 'total_amount', 'items', 'notes'],
+    properties: {
+      merchant: { type: 'string' },
+      purchase_date: { type: 'string' },
+      total_amount: { type: 'number' },
+      notes: { type: 'string' },
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['item_name', 'amount', 'purchase_date', 'category', 'is_extra', 'selected'],
+          properties: {
+            item_name: { type: 'string' },
+            amount: { type: 'number' },
+            purchase_date: { type: 'string' },
+            category: { type: 'string' },
+            is_extra: { type: 'boolean' },
+            selected: { type: 'boolean' },
+          },
+        },
+      },
+    },
+  };
+
+  const systemPrompt = [
+    'You merge multiple receipt scan drafts that may contain overlapping pages from the same bill.',
+    'Return one combined receipt draft.',
+    'Remove duplicate line items that appear on more than one page.',
+    'Preserve distinct repeated purchases only when the item name, quantity context, or amount indicates they are truly separate bill rows.',
+    'Keep merchant and purchase date if visible across pages.',
+    'Prefer the highest-confidence combined interpretation of the bill.',
+    'Keep selected=true for kept rows.',
+    'Do not invent rows that are not supported by the provided drafts.',
+  ].join(' ');
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: getOpenAiReceiptScanModel(),
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: systemPrompt }],
+        },
+        {
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: JSON.stringify({
+              drafts: pages.map((page, index) => ({
+                page: index + 1,
+                merchant: page?.merchant || '',
+                purchase_date: page?.purchase_date || '',
+                total_amount: page?.total_amount || 0,
+                items: page?.items || [],
+                raw_text: page?.raw_text || '',
+              })),
+            }),
+          }],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'receipt_scan_merge',
+          strict: true,
+          schema,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || payload?.message || `OpenAI receipt merge failed with HTTP ${response.status}`);
+  }
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    throw new Error('OpenAI returned invalid JSON for receipt merge.');
+  }
+  return normalizeReceiptDraftShape(parsed, pages.map((page) => page?.raw_text || '').join('\n\n'));
+}
+
+async function scanReceiptFile(file) {
+  if (!file) {
+    const err = new Error('No image uploaded');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!String(file.mimetype || '').startsWith('image/')) {
+    const err = new Error('Only image files are supported right now');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const result = await Tesseract.recognize(file.buffer, 'eng', {
+    logger: () => {},
+  });
+  const text = String(result?.data?.text || '').trim();
+  if (!text) {
+    const err = new Error('Could not read text from this image');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const localDraft = normalizeReceiptDraftShape(parseReceiptDraftFromText(text), text);
+  let aiDraft = null;
+  let aiUsed = false;
+  let aiError = '';
+  if (getOpenAiSmartCaptureConfig().enabled) {
+    try {
+      aiDraft = await parseReceiptDraftWithOpenAi(
+        text,
+        localDraft,
+        file.buffer,
+        String(file.mimetype || 'image/jpeg')
+      );
+      aiUsed = !!aiDraft;
+    } catch (err) {
+      aiError = err?.message || 'AI receipt parsing failed';
+    }
+  }
+  const draft = finalizeReceiptDraft(mergeReceiptDrafts(localDraft, aiDraft));
+  return {
+    success: true,
+    draft: {
+      ...draft,
+      confidence: Number(result?.data?.confidence || 0),
+      ai_used: aiUsed,
+      ai_error: aiError || null,
+    },
+  };
+}
+
 function normalizeFriendName(name) {
   const value = String(name || '').trim().replace(/\s+/g, ' ');
   if (!value) {
@@ -2493,47 +2704,53 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
-    if (!String(req.file.mimetype || '').startsWith('image/')) {
-      return res.status(400).json({ error: 'Only image files are supported right now' });
+    const result = await scanReceiptFile(req.file);
+    res.json(result);
+  } catch (err) {
+    console.error('[expenses/scan-image]', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not scan image' });
+  }
+});
+
+router.post('/expenses/scan-images-batch', upload.array('files', 8), async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ error: 'No images uploaded' });
+
+    const pageResults = [];
+    for (const file of files) {
+      pageResults.push(await scanReceiptFile(file));
     }
 
-    const result = await Tesseract.recognize(req.file.buffer, 'eng', {
-      logger: () => {},
-    });
-    const text = String(result?.data?.text || '').trim();
-    if (!text) return res.status(422).json({ error: 'Could not read text from this image' });
-
-    const localDraft = normalizeReceiptDraftShape(parseReceiptDraftFromText(text), text);
-    let aiDraft = null;
-    let aiUsed = false;
-    let aiError = '';
-    if (getOpenAiSmartCaptureConfig().enabled) {
+    const pageDrafts = pageResults.map((entry) => entry?.draft).filter(Boolean);
+    const mergedHeuristic = mergeReceiptDraftPages(pageDrafts);
+    let aiMerged = null;
+    let mergeAiUsed = false;
+    let mergeAiError = '';
+    if (pageDrafts.length > 1 && getOpenAiSmartCaptureConfig().enabled) {
       try {
-        aiDraft = await parseReceiptDraftWithOpenAi(
-          text,
-          localDraft,
-          req.file.buffer,
-          String(req.file.mimetype || 'image/jpeg')
-        );
-        aiUsed = !!aiDraft;
+        aiMerged = await mergeReceiptDraftPagesWithOpenAi(pageDrafts);
+        mergeAiUsed = !!aiMerged;
       } catch (err) {
-        aiError = err?.message || 'AI receipt parsing failed';
+        mergeAiError = err?.message || 'AI receipt merge failed';
       }
     }
-    const draft = finalizeReceiptDraft(mergeReceiptDrafts(localDraft, aiDraft));
+    const mergedDraft = finalizeReceiptDraft(mergeReceiptDrafts(mergedHeuristic, aiMerged));
+    mergedDraft.items = orderReceiptItemsByReference(mergedDraft.items, mergedHeuristic.items);
     res.json({
       success: true,
       draft: {
-        ...draft,
-        confidence: Number(result?.data?.confidence || 0),
-        ai_used: aiUsed,
-        ai_error: aiError || null,
+        ...mergedDraft,
+        page_count: pageDrafts.length,
+        confidence: pageResults.length ? Math.round((pageResults.reduce((sum, entry) => sum + Number(entry?.draft?.confidence || 0), 0) / pageResults.length) * 100) / 100 : 0,
+        ai_used: pageResults.some((entry) => !!entry?.draft?.ai_used) || mergeAiUsed,
+        ai_error: mergeAiError || null,
       },
+      pages: pageDrafts,
     });
   } catch (err) {
-    console.error('[expenses/scan-image]', err);
-    res.status(500).json({ error: err.message || 'Could not scan image' });
+    console.error('[expenses/scan-images-batch]', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not scan images' });
   }
 });
 

@@ -65,6 +65,7 @@
     return Number.isFinite(value) ? value : 0;
   }
   function r2(v) { return Math.round(n(v) * 100) / 100; }
+  const toJsArg = (value) => JSON.stringify(String(value ?? ''));
   function todayLocalIso() {
     const d = new Date();
     const y = d.getFullYear();
@@ -657,10 +658,95 @@
       end_date: '',
       show_add_to_expense_option: true,
       selected: new Set(),
+      scan_files: [],
+      scan_items: [],
+      scan_merchant: '',
+      manual_items: [createTripManualEntry(0)],
       voice_only: false,
       voice_drafts: [],
       voice_transcript: '',
     };
+  }
+
+  function normalizeTripReceiptScanDraft(draft, { fallbackDate = todayLocalIso(), defaultAssignment = 'self', pageIndex = 0 } = {}) {
+    const merchant = String(draft?.merchant || 'Scanned bill').trim() || 'Scanned bill';
+    const purchaseDate = toLocalIsoDate(draft?.purchase_date, fallbackDate || todayLocalIso());
+    const rows = Array.isArray(draft?.items) ? draft.items : [];
+    return {
+      merchant,
+      purchase_date: purchaseDate,
+      items: rows.map((item, index) => ({
+        key: `trip-scan-${Date.now()}-${pageIndex}-${index}`,
+        item_name: String(item?.item_name || '').trim() || `Item ${index + 1}`,
+        amount: String(item?.amount ?? '').trim(),
+        purchase_date: toLocalIsoDate(item?.purchase_date, purchaseDate),
+        category: String(item?.category || '').trim(),
+        is_extra: !!item?.is_extra,
+        selected: item?.selected !== false,
+        assignment: defaultAssignment,
+      })),
+    };
+  }
+
+  function buildTripScanMatchKey(item) {
+    const name = String(item?.item_name || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const amount = Number(item?.amount || 0);
+    return name && amount > 0 ? `${name}|${amount.toFixed(2)}` : '';
+  }
+
+  function createTripManualEntry(index = 0, assignment = 'self') {
+    return {
+      key: `trip-manual-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      item_name: '',
+      amount: '',
+      assignment,
+    };
+  }
+
+  function getTripAssignmentOptions(form) {
+    const selectedFriends = tripCreateSelectedFriends(form);
+    return [
+      { key: 'self', label: 'Mine' },
+      ...(selectedFriends.length ? [{ key: 'shared', label: 'Split' }] : []),
+      ...selectedFriends.map((friend) => ({
+        key: `friend:${Number(friend.id)}`,
+        label: String(friend.name || 'Friend').trim() || 'Friend',
+      })),
+    ];
+  }
+
+  function normalizeTripAssignmentsForSelectedFriends(items, selectedIds) {
+    return (items || []).map((item) => {
+      const assignment = String(item?.assignment || 'self');
+      if (!assignment.startsWith('friend:')) return item;
+      const friendIdNum = Number(assignment.split(':')[1] || 0);
+      if (selectedIds.has(friendIdNum)) return item;
+      return { ...item, assignment: selectedIds.size ? 'shared' : 'self' };
+    });
+  }
+
+  function computeTripRowSelfShare(row, friendCount = 0) {
+    const amountValue = r2(row?.amount);
+    if (!(amountValue > 0)) return 0;
+    const assignment = String(row?.assignment || 'self');
+    if (assignment === 'shared' && friendCount > 0) {
+      const participantCount = friendCount + 1;
+      const perHead = r2(amountValue / participantCount);
+      let remaining = amountValue;
+      let selfShare = 0;
+      for (let index = 0; index < participantCount; index += 1) {
+        const shareValue = index === participantCount - 1 ? r2(remaining) : perHead;
+        remaining = r2(remaining - shareValue);
+        if (index === 0) selfShare = shareValue;
+      }
+      return r2(selfShare);
+    }
+    if (assignment.startsWith('friend:')) return 0;
+    return amountValue;
   }
 
   function getTripById(tripId) {
@@ -3261,11 +3347,210 @@
     renderTripCreateModal();
   }
 
+  function tripCreateSelectedFriends(form) {
+    return [...(form?.selected || new Set())]
+      .map((id) => (state.friends || []).find((friend) => String(friend?.id) === String(id)))
+      .filter(Boolean);
+  }
+
+  async function rebuildTripReceiptScanFromFiles(nextFiles = [], { nextTripName = '' } = {}) {
+    const form = state.tripCreate;
+    if (!form) return;
+    if (!nextFiles.length) {
+      form.scan_files = [];
+      form.scan_items = [];
+      form.scan_merchant = '';
+      renderTripCreateModal();
+      return;
+    }
+    const fd = new FormData();
+    nextFiles.forEach((file) => fd.append('files', file));
+    const response = await fetch('/api/expenses/scan-images-batch', { method: 'POST', body: fd });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || payload?.message || `HTTP ${response.status}`);
+
+    const selectedFriends = tripCreateSelectedFriends(form);
+    const previousSelectionMap = new Map(
+      (form.scan_items || []).map((item) => [buildTripScanMatchKey(item), {
+        assignment: item?.assignment,
+        selected: item?.selected,
+        item_name: item?.item_name,
+      }]).filter(([key]) => !!key)
+    );
+    const normalized = normalizeTripReceiptScanDraft(payload?.draft || {}, {
+      fallbackDate: form.start_date || todayLocalIso(),
+      defaultAssignment: selectedFriends.length ? 'shared' : 'self',
+      pageIndex: nextFiles.length,
+    });
+    normalized.items = normalized.items.map((item) => {
+      const previous = previousSelectionMap.get(buildTripScanMatchKey(item));
+      if (!previous) return item;
+      return {
+        ...item,
+        assignment: previous.assignment || item.assignment,
+        selected: previous.selected !== undefined ? previous.selected : item.selected,
+        item_name: previous.item_name || item.item_name,
+      };
+    });
+
+    form.scan_files = nextFiles;
+    form.scan_merchant = normalized.merchant || '';
+    form.scan_items = normalized.items;
+    if (!String(nextTripName || form.name || '').trim() && normalized.merchant && normalized.merchant !== 'Scanned bill') {
+      form.name = `${normalized.merchant} Trip`;
+    }
+    renderTripCreateModal();
+  }
+
+  function liveSplitTriggerTripScanPick(source = 'upload') {
+    if (!state.tripCreate || state.tripSaveBusy) return;
+    syncTripCreateDraftFromDom();
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = source !== 'camera';
+    if (source === 'camera') input.capture = 'environment';
+    input.onchange = async () => {
+      const files = Array.from(input.files || []).filter(Boolean);
+      if (!files.length || !state.tripCreate) return;
+      try {
+        state.tripSaveBusy = true;
+        renderTripCreateModal();
+        await rebuildTripReceiptScanFromFiles([...(state.tripCreate.scan_files || []), ...files], { nextTripName: state.tripCreate.name || '' });
+      } catch (error) {
+        toast(error?.message || 'Could not scan these images', 'error');
+      } finally {
+        state.tripSaveBusy = false;
+        if (state.tripCreate) renderTripCreateModal();
+      }
+    };
+    input.click();
+  }
+
+  async function removeLastTripReceiptScanPageWeb() {
+    if (!state.tripCreate || state.tripSaveBusy || !(state.tripCreate.scan_files || []).length) return;
+    syncTripCreateDraftFromDom();
+    try {
+      state.tripSaveBusy = true;
+      renderTripCreateModal();
+      await rebuildTripReceiptScanFromFiles((state.tripCreate.scan_files || []).slice(0, -1), { nextTripName: state.tripCreate.name || '' });
+    } catch (error) {
+      toast(error?.message || 'Could not remove the last scanned page', 'error');
+    } finally {
+      state.tripSaveBusy = false;
+      if (state.tripCreate) renderTripCreateModal();
+    }
+  }
+
+  function updateTripScanItemWeb(itemKey, patch = {}) {
+    const form = state.tripCreate;
+    if (!form) return;
+    form.scan_items = (form.scan_items || []).map((item) => (String(item.key) === String(itemKey) ? { ...item, ...patch } : item));
+    renderTripCreateModal();
+  }
+
+  function deleteTripScanItemWeb(itemKey) {
+    const form = state.tripCreate;
+    if (!form) return;
+    form.scan_items = (form.scan_items || []).filter((item) => String(item.key) !== String(itemKey));
+    renderTripCreateModal();
+  }
+
+  function syncTripCreateDraftFromDom() {
+    const form = state.tripCreate;
+    if (!form || typeof document === 'undefined') return;
+
+    const tripNameInput = document.querySelector('[data-trip-field="name"]');
+    if (tripNameInput) form.name = String(tripNameInput.value || '');
+
+    const scanPatches = new Map();
+    document.querySelectorAll('[data-trip-scan-key][data-trip-scan-field]').forEach((node) => {
+      const key = String(node.getAttribute('data-trip-scan-key') || '');
+      const field = String(node.getAttribute('data-trip-scan-field') || '');
+      if (!key || !field) return;
+      if (!scanPatches.has(key)) scanPatches.set(key, {});
+      scanPatches.get(key)[field] = String(node.value || '');
+    });
+    if (scanPatches.size) {
+      form.scan_items = (form.scan_items || []).map((item) => (
+        scanPatches.has(String(item.key || ''))
+          ? { ...item, ...scanPatches.get(String(item.key || '')) }
+          : item
+      ));
+    }
+
+    const manualPatches = new Map();
+    document.querySelectorAll('[data-trip-manual-key][data-trip-manual-field]').forEach((node) => {
+      const key = String(node.getAttribute('data-trip-manual-key') || '');
+      const field = String(node.getAttribute('data-trip-manual-field') || '');
+      if (!key || !field) return;
+      if (!manualPatches.has(key)) manualPatches.set(key, {});
+      manualPatches.get(key)[field] = String(node.value || '');
+    });
+    if (manualPatches.size) {
+      form.manual_items = (form.manual_items || []).map((item) => (
+        manualPatches.has(String(item.key || ''))
+          ? { ...item, ...manualPatches.get(String(item.key || '')) }
+          : item
+      ));
+    }
+  }
+
+  function selectAllTripScanItemsWeb(checked) {
+    const form = state.tripCreate;
+    if (!form) return;
+    form.scan_items = (form.scan_items || []).map((item) => ({ ...item, selected: !!checked }));
+    renderTripCreateModal();
+  }
+
+  function resetTripReceiptScanStateWeb() {
+    const form = state.tripCreate;
+    if (!form) return;
+    syncTripCreateDraftFromDom();
+    form.scan_files = [];
+    form.scan_items = [];
+    form.scan_merchant = '';
+    renderTripCreateModal();
+  }
+
+  function addTripManualItemWeb() {
+    const form = state.tripCreate;
+    if (!form) return;
+    syncTripCreateDraftFromDom();
+    form.manual_items = [...(form.manual_items || []), createTripManualEntry((form.manual_items || []).length)];
+    renderTripCreateModal();
+  }
+
+  function updateTripManualItemWeb(itemKey, patch = {}) {
+    const form = state.tripCreate;
+    if (!form) return;
+    form.manual_items = (form.manual_items || []).map((item) => (String(item.key) === String(itemKey) ? { ...item, ...patch } : item));
+    renderTripCreateModal();
+  }
+
+  function deleteTripManualItemWeb(itemKey) {
+    const form = state.tripCreate;
+    if (!form) return;
+    const nextItems = (form.manual_items || []).filter((item) => String(item.key) !== String(itemKey));
+    form.manual_items = nextItems.length ? nextItems : [createTripManualEntry(0)];
+    renderTripCreateModal();
+  }
+
   function renderTripCreateModal() {
     const form = state.tripCreate;
     if (!form) return;
     const voiceOnly = !!form.voice_only;
     const selectableFriends = (state.friends || []);
+    const selectedFriends = tripCreateSelectedFriends(form);
+    const selectedFriendCount = selectedFriends.length;
+    const scanSelectedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
+    const scanSelectedTotal = r2(scanSelectedRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const scanSelectedMyShare = r2(scanSelectedRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
+    const manualRows = (form.manual_items || []);
+    const manualActiveRows = manualRows.filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0);
+    const manualTotal = r2(manualActiveRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const manualMyShare = r2(manualActiveRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
+    const assignmentOptions = getTripAssignmentOptions(form);
     openModal('Live Split Trip - New', `
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
@@ -3286,7 +3571,7 @@
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
       <div class="fg">
         <label class="fl full">Trip Name
-          <input class="fi" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." onchange="liveSplitTripField('name', this.value)">
+          <input class="fi" data-trip-field="name" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." oninput="liveSplitTripField('name', this.value)">
         </label>
         <label class="fl">Start Date
           <input class="fi" type="date" value="${escHtml(form.start_date || todayLocalIso())}" onchange="liveSplitTripField('start_date', this.value)">
@@ -3316,6 +3601,117 @@
           `).join('')}
         </div>
       </div>
+      <div style="margin-top:12px;padding:14px;border:1px solid #cfe5d9;border-radius:14px;background:#f6fbf8">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:220px">
+            <div style="font-size:14px;font-weight:800;color:var(--em)">Scan Bill To Trip</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">Upload images or click a receipt photo, auto-merge pages, and remove duplicate rows before saving them into this trip.</div>
+            ${(form.scan_files || []).length ? `<div style="margin-top:6px;font-size:12px;color:var(--t2);font-weight:700">${Number(form.scan_files.length)} page${Number(form.scan_files.length) === 1 ? '' : 's'} added</div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('camera')">${(form.scan_items || []).length ? 'Add Clicked Image' : 'Click Image'}</button>
+            <button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('upload')">${(form.scan_items || []).length ? 'Add Upload Image' : 'Upload Image'}</button>
+            ${(form.scan_items || []).length ? `<button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanRemoveLast()">Remove Last Page</button>` : ''}
+            ${(form.scan_items || []).length ? `<button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanClear()">Clear</button>` : ''}
+          </div>
+        </div>
+        ${state.tripSaveBusy ? `<div style="margin-top:10px;font-size:12px;color:var(--t3)">${liveSplitBusyLabel('Processing receipt images...')}</div>` : ''}
+        ${(form.scan_items || []).length ? `
+          <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div style="font-size:12px;color:var(--t2);font-weight:700">${escHtml(form.scan_merchant || 'Scanned bill')} | ${scanSelectedRows.length}/${form.scan_items.length} selected</div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div style="font-size:12px;color:var(--t2);font-weight:700">Trip total: ${fmtCur(scanSelectedTotal)}</div>
+              <div style="font-size:13px;color:var(--t1);font-weight:800">My share: ${fmtCur(scanSelectedMyShare)}</div>
+            </div>
+          </div>
+          <div style="margin-top:4px;font-size:12px;color:var(--t3)">Date for all scanned rows: ${escHtml(toLocalIsoDate(form.start_date, todayLocalIso()))}</div>
+          <div style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 2px 10px 2px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+              <label class="fc" style="margin:0;font-size:12px;font-weight:700;color:var(--t2)">
+                <input type="checkbox" ${(form.scan_items || []).every((item) => item?.selected !== false) ? 'checked' : ''} onchange="liveSplitTripScanSelectAll(this.checked)">
+                <span>Select all</span>
+              </label>
+              <div style="font-size:12px;color:var(--t3)">Edit rows below</div>
+            </div>
+            <div style="display:grid;gap:10px;margin-top:10px">
+            ${(form.scan_items || []).map((item) => {
+              const rowKey = String(item.key || '');
+              const scanFriends = tripCreateSelectedFriends(form);
+              const assignmentOptions = [
+                { key: 'self', label: 'Mine' },
+                ...(scanFriends.length ? [{ key: 'shared', label: 'Split' }] : []),
+                ...scanFriends.map((friend) => ({ key: `friend:${Number(friend.id)}`, label: String(friend.name || 'Friend').trim() || 'Friend' })),
+              ];
+              return `
+                <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:${item.selected !== false ? '#fff' : '#fafafa'}">
+                  <div style="display:flex;align-items:flex-start;gap:10px">
+                    <label class="fc" style="margin:0;padding-top:2px">
+                      <input type="checkbox" ${item.selected !== false ? 'checked' : ''} onchange="liveSplitTripScanItem(${toJsArg(rowKey)},'selected', this.checked ? '1' : '0')">
+                    </label>
+                    <div style="flex:1;min-width:0">
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="item_name" style="font-size:15px;font-weight:800;min-width:0;width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput="liveSplitTripScanItem(${toJsArg(rowKey)},'item_name', this.value)">
+                      ${item.category ? `<div style="margin-top:5px;font-size:11px;color:var(--t3)">${escHtml(item.category)}</div>` : ''}
+                    </div>
+                    <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripScanDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
+                  </div>
+                  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:10px">
+                    <label style="display:block;min-width:0">
+                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Amount</div>
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput="liveSplitTripScanItem(${toJsArg(rowKey)},'amount', this.value)">
+                    </label>
+                    <label style="display:block;min-width:0">
+                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Assign</div>
+                      <select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="assignment" style="width:100%;padding-right:24px" onchange="liveSplitTripScanItem(${toJsArg(rowKey)},'assignment', this.value)">
+                        ${assignmentOptions.map((option) => `<option value="${escHtml(option.key)}" ${String(item.assignment || 'self') === option.key ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('')}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+      <div style="margin-top:12px;padding:14px;border:1px solid #d8deea;border-radius:14px;background:#f8fafc">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:220px">
+            <div style="font-size:14px;font-weight:800;color:var(--t1)">Manual Trip Entries</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">Add multiple trip rows manually with item, amount, assignment, and delete.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div style="font-size:12px;color:var(--t2);font-weight:700">Trip total: ${fmtCur(manualTotal)}</div>
+            <div style="font-size:13px;color:var(--t1);font-weight:800">My share: ${fmtCur(manualMyShare)}</div>
+            <button class="btn btn-s btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripManualAdd()">Add Row</button>
+          </div>
+        </div>
+        <div style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fff;overflow:hidden">
+          <div style="display:grid;grid-template-columns:minmax(0,2.4fr) minmax(110px,.8fr) minmax(130px,1fr) 44px;gap:0;background:#f4f7fb;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;color:var(--t2)">
+            <div style="padding:10px 12px">Item</div>
+            <div style="padding:10px 12px">Amount</div>
+            <div style="padding:10px 12px">Assign</div>
+            <div style="padding:10px 12px;text-align:center">Del</div>
+          </div>
+          ${(manualRows || []).map((item) => `
+            <div style="display:grid;grid-template-columns:minmax(0,2.4fr) minmax(110px,.8fr) minmax(130px,1fr) 44px;gap:0;border-bottom:1px solid var(--border)">
+              <div style="padding:8px">
+                <input class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="item_name" style="width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'item_name', this.value)">
+              </div>
+              <div style="padding:8px">
+                <input class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="amount" style="width:100%;text-align:right" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'amount', this.value)">
+              </div>
+              <div style="padding:8px">
+                <select class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="assignment" style="width:100%;padding-right:24px" onchange="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'assignment', this.value)">
+                  ${assignmentOptions.map((option) => `<option value="${escHtml(option.key)}" ${String(item.assignment || 'self') === option.key ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('')}
+                </select>
+              </div>
+              <div style="padding:8px;display:flex;align-items:center;justify-content:center">
+                <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px" onclick="liveSplitTripManualDelete(${toJsArg(String(item.key || ''))})" title="Delete row">&times;</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
       <div class="fa" style="margin-top:14px">
         <button class="btn btn-g" onclick="closeModal()">Cancel</button>
         <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : 'Create Trip'}</button>
@@ -3326,6 +3722,7 @@
   async function saveLiveSplitTrip() {
     const form = state.tripCreate;
     if (!form) return;
+    syncTripCreateDraftFromDom();
     const voiceDrafts = Array.isArray(form.voice_drafts) ? form.voice_drafts : [];
     if (voiceDrafts.length) {
       try {
@@ -3377,10 +3774,45 @@
       toast('End date cannot be before start date', 'warning');
       return;
     }
+    const selectedScannedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
+    const manualRowsToSave = (form.manual_items || [])
+      .filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0)
+      .map((item) => ({
+        key: String(item?.key || ''),
+        item_name: String(item?.item_name || '').trim(),
+        amount: item?.amount,
+        assignment: String(item?.assignment || 'self'),
+        category: '',
+        is_extra: false,
+      }));
     const members = [...(form.selected || new Set())]
       .map((id) => state.friends.find((friend) => String(friend.id) === String(id)))
       .filter(Boolean)
       .map((friend) => mapFriendToTripMemberPayload(friend));
+    for (const row of selectedScannedRows) {
+      if (!String(row?.item_name || '').trim()) {
+        toast('Each selected scanned row needs an item name', 'warning');
+        return;
+      }
+      const amountValue = Number(row?.amount || 0);
+      if (!(amountValue > 0)) {
+        toast('Each selected scanned row needs a valid amount', 'warning');
+        return;
+      }
+    }
+    for (const row of manualRowsToSave) {
+      if (!String(row?.item_name || '').trim()) {
+        toast('Each manual entry needs an item name', 'warning');
+        return;
+      }
+      const amountValue = Number(row?.amount || 0);
+      if (!(amountValue > 0)) {
+        toast('Each manual entry needs a valid amount', 'warning');
+        return;
+      }
+    }
+    let createdTripId = 0;
+    let savedTripItemCount = 0;
     try {
       state.tripSaveBusy = true;
       renderTripCreateModal();
@@ -3395,15 +3827,78 @@
         },
       });
       if (!result || result.error) throw new Error(result?.error || 'Could not create live split trip');
+      createdTripId = Number(result?.id || 0);
+      const rowsToPersist = [
+        ...selectedScannedRows.map((row) => ({ ...row, _source: 'scan' })),
+        ...manualRowsToSave.map((row) => ({ ...row, _source: 'manual' })),
+      ];
+      if (createdTripId > 0 && rowsToPersist.length) {
+        const selectedFriends = tripCreateSelectedFriends(form);
+        for (const row of rowsToPersist) {
+          const amountValue = r2(row?.amount);
+          const assignment = String(row?.assignment || 'self');
+          const sharedParticipants = [
+            { key: 'self', name: 'You', share_value: 0 },
+            ...selectedFriends.map((friend) => ({
+              key: String(friend.id),
+              name: String(friend.name || 'Friend').trim() || 'Friend',
+              share_value: 0,
+            })),
+          ];
+          let participants = [{ key: 'self', name: 'You', share_value: amountValue }];
+          let splitModeValue = 'amount';
+
+          if (assignment === 'shared' && sharedParticipants.length > 1) {
+            const perHead = r2(amountValue / sharedParticipants.length);
+            let remaining = amountValue;
+            participants = sharedParticipants.map((person, index) => {
+              const shareValue = index === sharedParticipants.length - 1 ? r2(remaining) : perHead;
+              remaining = r2(remaining - shareValue);
+              return { ...person, share_value: shareValue };
+            });
+            splitModeValue = 'equal';
+          } else if (assignment.startsWith('friend:')) {
+            const friendId = Number(assignment.split(':')[1] || 0);
+            const friend = selectedFriends.find((item) => Number(item.id) === friendId);
+            if (!friend) throw new Error('One scanned bill row points to a friend who is no longer selected in this trip.');
+            participants = [
+              { key: 'self', name: 'You', share_value: 0 },
+              { key: String(friend.id), name: String(friend.name || 'Friend').trim() || 'Friend', share_value: amountValue },
+            ];
+          }
+
+          await persistLiveSplitEntry({
+            divide_date: toLocalIsoDate(form.start_date, todayLocalIso()),
+            details: String(row?.item_name || '').trim(),
+            paid_by: 'You',
+            paid_by_key: 'self',
+            total_amount: amountValue,
+            split_mode: splitModeValue,
+            trip_id: createdTripId,
+            participants,
+            category: String(row?.category || '').trim(),
+            expense_type: row?.is_extra ? 'extra' : 'fair',
+            addExpense: false,
+            finance_target: 'none',
+          });
+          savedTripItemCount += 1;
+        }
+      }
       state.tripSaveBusy = false;
       state.tripCreate = null;
       closeModal();
       await loadLiveSplit();
-      toast('Live split trip created', 'success');
+      const totalSavedRows = selectedScannedRows.length + manualRowsToSave.length;
+      toast(totalSavedRows ? `Live split trip created with ${totalSavedRows} item${totalSavedRows === 1 ? '' : 's'}` : 'Live split trip created', 'success');
     } catch (error) {
       state.tripSaveBusy = false;
       if (state.tripCreate) renderTripCreateModal();
-      toast(error?.message || 'Could not create live split trip', 'error');
+      const totalRows = selectedScannedRows.length + manualRowsToSave.length;
+      if (createdTripId > 0 && totalRows) {
+        toast(`Trip was created, but only ${savedTripItemCount} of ${totalRows} item${totalRows === 1 ? '' : 's'} were added. ${error?.message || ''}`.trim(), 'warning');
+      } else {
+        toast(error?.message || 'Could not create live split trip', 'error');
+      }
     }
   }
 
@@ -4533,10 +5028,33 @@
   };
   window.liveSplitTripToggleMember = function liveSplitTripToggleMember(friendId) {
     if (!state.tripCreate) return;
+    syncTripCreateDraftFromDom();
     const key = String(friendId || '');
     if (state.tripCreate.selected.has(key)) state.tripCreate.selected.delete(key);
     else state.tripCreate.selected.add(key);
+    const selectedIds = new Set(tripCreateSelectedFriends(state.tripCreate).map((friend) => Number(friend.id)));
+    state.tripCreate.scan_items = normalizeTripAssignmentsForSelectedFriends(state.tripCreate.scan_items, selectedIds);
+    state.tripCreate.manual_items = normalizeTripAssignmentsForSelectedFriends(state.tripCreate.manual_items, selectedIds);
     renderTripCreateModal();
+  };
+  window.liveSplitTripScanPick = liveSplitTriggerTripScanPick;
+  window.liveSplitTripScanRemoveLast = removeLastTripReceiptScanPageWeb;
+  window.liveSplitTripScanClear = resetTripReceiptScanStateWeb;
+  window.liveSplitTripScanDelete = deleteTripScanItemWeb;
+  window.liveSplitTripScanSelectAll = selectAllTripScanItemsWeb;
+  window.liveSplitTripScanItem = function liveSplitTripScanItem(itemKey, field, value) {
+    if (!state.tripCreate) return;
+    if (field === 'selected') {
+      updateTripScanItemWeb(itemKey, { selected: String(value) === '1' });
+      return;
+    }
+    updateTripScanItemWeb(itemKey, { [field]: value });
+  };
+  window.liveSplitTripManualAdd = addTripManualItemWeb;
+  window.liveSplitTripManualDelete = deleteTripManualItemWeb;
+  window.liveSplitTripManualItem = function liveSplitTripManualItem(itemKey, field, value) {
+    if (!state.tripCreate) return;
+    updateTripManualItemWeb(itemKey, { [field]: value });
   };
   window.liveSplitTripSave = saveLiveSplitTrip;
   window.liveSplitOpenTripDetails = openTripDetails;
@@ -4688,10 +5206,14 @@
       </div>
     `);
   };
-  window.liveSplitAddTripToExpense = function liveSplitAddTripToExpense(tripId, tripName, totalAmount) {
+  window.liveSplitAddTripToExpense = function liveSplitAddTripToExpense(tripId, tripName, myShareAmount) {
     const resolvedTripId = Number(tripId || 0);
     const trip = getTripById(resolvedTripId);
-    const resolvedAmount = Number(trip?.my_share_amount || totalAmount || 0);
+    const resolvedAmount = Number(
+      Number.isFinite(Number(trip?.my_share_amount)) && Number(trip?.my_share_amount) > 0
+        ? Number(trip.my_share_amount)
+        : (Number(myShareAmount || 0))
+    );
     if (!(resolvedTripId > 0) || !(resolvedAmount > 0)) {
       toast('Your trip share is not available', 'error');
       return;
