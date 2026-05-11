@@ -6,7 +6,7 @@ let currentTab = 'dashboard';
 let _userRole = 'user';
 let _accessiblePages = ['dashboard', 'expenses'];
 let _aiLookupAccessModes = { mode: 'none', offline: false, online: false };
-let _liveSplitAccess = { delete_friend: false };
+let _liveSplitAccess = { delete_friend: false, nudge: { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false } };
 window._liveSplitAccess = _liveSplitAccess;
 let _currentUserId = null;
 let _currentUser = null;
@@ -9836,6 +9836,9 @@ async function loadAdminPlans() {
     pages: Array.isArray(plan.pages) ? plan.pages : [],
     ai_lookup_mode: AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan.ai_lookup_mode)?.key || 'both',
     allow_live_split_friend_delete: !!plan.allow_live_split_friend_delete,
+    live_split_nudge_enabled: !!plan.live_split_nudge_enabled,
+    live_split_nudge_limit: plan.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0,
+    live_split_nudge_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.live_split_nudge_limit_period || '').toLowerCase()) ? String(plan.live_split_nudge_limit_period).toLowerCase() : 'day',
     voice_ai_enabled: !!plan.voice_ai_enabled,
     voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
     voice_ai_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day',
@@ -9850,6 +9853,11 @@ async function loadAdminPlans() {
         ? 'Unlimited'
         : `${p.voice_ai_limit}/${p.voice_ai_limit_period}`;
     const liveSplitDeleteLabel = p.allow_live_split_friend_delete ? 'Allowed' : 'Blocked';
+    const liveSplitNudgeLabel = !p.live_split_nudge_enabled || p.live_split_nudge_limit === 0
+      ? 'Disabled'
+      : p.live_split_nudge_limit === -1
+        ? 'Unlimited'
+        : `${p.live_split_nudge_limit}/${p.live_split_nudge_limit_period}`;
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -9866,6 +9874,7 @@ async function loadAdminPlans() {
             &nbsp;|&nbsp; AI Queries/day: <b>${p.ai_query_limit===-1||p.ai_query_limit==null?'Unlimited':p.ai_query_limit===0?'None':p.ai_query_limit}</b>
             &nbsp;|&nbsp; AI Mode: <b>${escHtml(aiModeLabel)}</b>
             &nbsp;|&nbsp; Voice AI: <b>${escHtml(voiceLabel)}</b>
+            &nbsp;|&nbsp; Live Split Nudges: <b>${escHtml(liveSplitNudgeLabel)}</b>
             &nbsp;|&nbsp; Delete Live Split Friend: <b>${escHtml(liveSplitDeleteLabel)}</b>
           </div>
         </div>
@@ -9898,6 +9907,9 @@ async function showPlanModal(planId) {
   const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
   const aiLookupModeVal = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan?.ai_lookup_mode)?.key || 'both';
   const liveSplitDeleteVal = !!plan?.allow_live_split_friend_delete;
+  const liveSplitNudgeEnabledVal = !!plan?.live_split_nudge_enabled;
+  const liveSplitNudgeLimitVal = plan?.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0;
+  const liveSplitNudgePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.live_split_nudge_limit_period || '').toLowerCase()) ? String(plan.live_split_nudge_limit_period).toLowerCase() : 'day';
   const voiceEnabledVal = !!plan?.voice_ai_enabled;
   const voiceLimitVal = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
   const voicePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day';
@@ -9932,6 +9944,31 @@ async function showPlanModal(planId) {
             `).join('')}
           </div>
           <div class="plan-field-help">Choose whether this plan sees Offline AI, Online AI, both, or neither.</div>
+        </div>
+        <div class="plan-mode-group" style="margin-top:16px">
+          <div class="plan-mode-label">Live Split Nudges</div>
+          <div class="plan-toggle-grid" style="margin-bottom:12px">
+            <label class="plan-toggle-tile ${liveSplitNudgeEnabledVal?'checked':''}">
+              <input type="checkbox" id="pLiveSplitNudgeEnabled" ${liveSplitNudgeEnabledVal?'checked':''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked);_toggleLiveSplitNudgeFields()">
+              <span class="plan-toggle-title">Enable Live Split nudges</span>
+              <span class="plan-toggle-sub">Allow sending reminder / balance update nudges in Live Split</span>
+            </label>
+          </div>
+          <div id="pLiveSplitNudgeFields" style="${liveSplitNudgeEnabledVal ? '' : 'opacity:.6'}">
+            <label class="fl full">Live Split nudge usage limit
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pLiveSplitNudgeLimit" value="${liveSplitNudgeLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateLiveSplitNudgeHint()">
+                <select class="fi" id="pLiveSplitNudgePeriod" style="max-width:180px" onchange="_updateLiveSplitNudgeHint()">
+                  <option value="day" ${liveSplitNudgePeriodVal==='day'?'selected':''}>Per day</option>
+                  <option value="week" ${liveSplitNudgePeriodVal==='week'?'selected':''}>Per week</option>
+                  <option value="month" ${liveSplitNudgePeriodVal==='month'?'selected':''}>Per month</option>
+                  <option value="year" ${liveSplitNudgePeriodVal==='year'?'selected':''}>Per year</option>
+                </select>
+                <span id="pLiveSplitNudgeHint" class="plan-ai-limit-badge"></span>
+              </div>
+              <div class="plan-field-help">-1 = Unlimited · 0 = No nudge access · Positive number = cap for the selected time period</div>
+            </label>
+          </div>
         </div>
         <div class="plan-mode-group" style="margin-top:16px">
           <div class="plan-mode-label">Voice AI</div>
@@ -10001,6 +10038,7 @@ async function showPlanModal(planId) {
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
   window.__modalClassName = '';
+  _updateLiveSplitNudgeHint();
   _updateVoiceLimitHint();
 }
 
@@ -10016,6 +10054,30 @@ function _toggleVoicePlanFields() {
   const wrap = document.getElementById('pVoiceFields');
   if (wrap) wrap.style.opacity = enabled ? '1' : '.6';
   _updateVoiceLimitHint();
+}
+
+function _toggleLiveSplitNudgeFields() {
+  const enabled = !!document.getElementById('pLiveSplitNudgeEnabled')?.checked;
+  const wrap = document.getElementById('pLiveSplitNudgeFields');
+  if (wrap) wrap.style.opacity = enabled ? '1' : '.6';
+  _updateLiveSplitNudgeHint();
+}
+
+function _updateLiveSplitNudgeHint() {
+  const enabled = !!document.getElementById('pLiveSplitNudgeEnabled')?.checked;
+  const rawLimit = parseInt(document.getElementById('pLiveSplitNudgeLimit')?.value ?? '0', 10);
+  const period = document.getElementById('pLiveSplitNudgePeriod')?.value || 'day';
+  const hint = document.getElementById('pLiveSplitNudgeHint');
+  if (!hint) return;
+  if (!enabled) {
+    hint.textContent = 'Disabled';
+    return;
+  }
+  if (Number.isNaN(rawLimit)) {
+    hint.textContent = '';
+    return;
+  }
+  hint.textContent = rawLimit === -1 ? 'Unlimited' : rawLimit === 0 ? 'No nudge access' : `${rawLimit}/${period}`;
 }
 
 function _updateVoiceLimitHint() {
@@ -10058,6 +10120,9 @@ async function adminSavePlan(planId) {
     is_active: document.getElementById('pActive').checked ? 1 : 0,
     auto_assign_on_signup: document.getElementById('pSignupDefault').checked ? 1 : 0,
     allow_live_split_friend_delete: document.getElementById('pLiveSplitDeleteFriend')?.checked ? 1 : 0,
+    live_split_nudge_enabled: document.getElementById('pLiveSplitNudgeEnabled')?.checked ? 1 : 0,
+    live_split_nudge_limit: parseInt(document.getElementById('pLiveSplitNudgeLimit')?.value ?? '0', 10) || 0,
+    live_split_nudge_limit_period: document.getElementById('pLiveSplitNudgePeriod')?.value || 'day',
     ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
     ai_lookup_mode: document.getElementById('pAiMode')?.value || 'both',
     voice_ai_enabled: document.getElementById('pVoiceEnabled')?.checked ? 1 : 0,

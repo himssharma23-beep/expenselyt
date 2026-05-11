@@ -18,6 +18,7 @@
     inviteActionBusy: new Set(),
     hiddenIncomingInviteKeys: new Set(),
     friendDeleteBusy: new Set(),
+    friendNudgeBusy: new Set(),
     outgoingCancelBusy: new Set(),
     requestActionBusy: false,
     createRequestActionBusy: false,
@@ -2163,6 +2164,13 @@
       const amount = row.amount;
       const friendId = resolveFriendIdForRow(row);
       const canSettle = friendId > 0 && Math.abs(n(amount)) > 0.004;
+      const nudgeAccess = window._liveSplitAccess?.nudge || {};
+      const canNudge = Math.abs(Number(amount)) > 0.004
+        && friendId > 0
+        && Number(row?.linked_user_id || 0) > 0
+        && Number(row?.linked_user_id || 0) !== Number(window._currentUser?.id || 0)
+        && !!nudgeAccess.enabled;
+      const nudgeDisabled = !nudgeAccess.can_use || state.friendNudgeBusy.has(friendId);
       const canDelete = canDeleteLiveSplitRow(row);
       const rowRef = encodeURIComponent(String(row?.key || friendId || row?.name || ''));
       const tone = row.amount > 0 ? 'var(--green)' : row.amount < 0 ? 'var(--red)' : 'var(--t3)';
@@ -2180,6 +2188,7 @@
             ${friendId > 0 ? `<button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceForFriend(${friendId})">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
             </button>` : ''}
+            ${canNudge ? `<button class="live-split-icon-btn" title="${escHtml(nudgeAccess.can_use === false ? (nudgeAccess.message || 'Nudge limit reached') : 'Nudge')}" aria-label="Nudge" ${nudgeDisabled ? 'disabled' : ''} onclick="liveSplitSendNudge(${friendId})">${state.friendNudgeBusy.has(friendId) ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 1-2.45-2h4.9A2.5 2.5 0 0 1 12 22Zm7-4H5v-1l1.5-1.5V10a5.5 5.5 0 1 1 11 0v5.5L19 17v1Zm-2-2V10a4 4 0 1 0-8 0v6h8Z"/></svg>'}</button>` : ''}
             ${canSettle ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenSettle(${friendId})">Settle</button>` : ''}
             ${canDelete ? `<button class="btn btn-g btn-sm" ${state.friendDeleteBusy.has(friendId) ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${friendId})">${state.friendDeleteBusy.has(friendId) ? liveSplitBusyLabel('Deleting...') : 'Delete'}</button>` : ''}
             <div class="friend-bal" style="color:${tone}">${fmtCur(amount)}</div>
@@ -4193,6 +4202,61 @@
     }
   }
 
+  async function sendLiveSplitNudge(friendId) {
+    const id = Number(friendId || 0);
+    if (!(id > 0)) return;
+    const nudgeAccess = window._liveSplitAccess?.nudge || {};
+    if (!nudgeAccess.enabled) {
+      toast(nudgeAccess.message || 'Live Split nudges are not included in your current plan.', 'warning');
+      return;
+    }
+    if (nudgeAccess.can_use === false) {
+      toast(nudgeAccess.message || 'You have used all Live Split nudges for now.', 'warning');
+      return;
+    }
+    const row = buildVisibleLiveSplitRows().find((item) => Number(resolveFriendIdForRow(item) || 0) === id) || null;
+    const rawAmount = n(row?.amount);
+    const amount = Math.abs(rawAmount);
+    if (!(amount > 0.004)) {
+      toast('Nudges are only available when there is a pending balance.', 'warning');
+      return;
+    }
+    if (Number(row?.linked_user_id || 0) <= 0) {
+      toast('This friend is not linked to an app user yet.', 'warning');
+      return;
+    }
+    const direction = rawAmount < 0 ? 'i_owe_them' : 'they_owe_me';
+    const prompt = direction === 'i_owe_them'
+      ? `Send a balance update to ${row?.name || 'this friend'} for ${fmtCur(amount)}?`
+      : `Send a payment reminder to ${row?.name || 'this friend'} for ${fmtCur(amount)}?`;
+    const confirmed = await confirmDialog(prompt);
+    if (!confirmed) return;
+    try {
+      state.friendNudgeBusy.add(id);
+      renderMain();
+      const result = await api(`/api/live-split/friends/${id}/nudge`, {
+        method: 'POST',
+        body: { amount, direction },
+      });
+      if (!result?.success) throw new Error(result?.error || 'Could not send nudge');
+      if (result?.access) {
+        window._liveSplitAccess = result.access;
+      }
+      const sentPushCount = Number(result?.sent_push_count || 0);
+      toast(
+        result?.already_sent
+          ? (result?.message || 'A nudge for this amount was already sent today.')
+          : (sentPushCount > 0 ? 'Nudge sent as a push notification' : 'Nudge saved as an in-app notification'),
+        result?.already_sent ? 'info' : 'success'
+      );
+    } catch (error) {
+      toast(error?.message || 'Could not send nudge', 'error');
+    } finally {
+      state.friendNudgeBusy.delete(id);
+      renderMain();
+    }
+  }
+
   async function openEditExpense(groupId) {
     const detail = await api(`/api/live-split/groups/${Number(groupId)}`);
     if (!detail?.group) {
@@ -4771,6 +4835,7 @@
     renderExpenseEditorModal();
   };
   window.liveSplitDeleteFriend = deleteLiveSplitFriend;
+  window.liveSplitSendNudge = sendLiveSplitNudge;
   window.liveSplitOpenSettle = openSettleModal;
   window.liveSplitOpenCreateForFriend = openCreateForFriend;
   window.liveSplitOpenVoiceForFriend = openVoiceSplitForFriend;

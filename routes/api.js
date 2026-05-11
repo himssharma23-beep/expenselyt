@@ -79,6 +79,72 @@ function parseReceiptDateFromText(text) {
   return null;
 }
 
+function roundCurrencyAmount(value) {
+  return Math.round((Number(value || 0) || 0) * 100) / 100;
+}
+
+function formatNotificationCurrency(amount, currencyCode = 'INR', localeCode = 'en-IN') {
+  try {
+    return new Intl.NumberFormat(localeCode || 'en-IN', {
+      style: 'currency',
+      currency: currencyCode || 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(roundCurrencyAmount(amount));
+  } catch (_err) {
+    return `${currencyCode || 'INR'} ${roundCurrencyAmount(amount).toFixed(2)}`;
+  }
+}
+
+async function sendStoredNotificationToUser(userId, payload = {}) {
+  const notification = await Promise.resolve(pgDb.createUserNotification(userId, payload));
+  if (!notification) {
+    return { created: null, sent: 0, delivery: null };
+  }
+
+  const [prefs, unread, tokenRows] = await Promise.all([
+    Promise.resolve(pgDb.getUserNotificationPreferences(userId)),
+    Promise.resolve(pgDb.getUnreadNotificationCount(userId)),
+    Promise.resolve(pgDb.getPushTokensForUsers([userId])),
+  ]);
+
+  if (prefs?.push_enabled === false || !tokenRows.length || payload?.silent) {
+    return { created: notification, sent: 0, delivery: null };
+  }
+
+  const delivery = await sendExpoPushNotifications(tokenRows.map((row) => ({
+    to: row.token,
+    title: notification.title,
+    body: notification.body,
+    user_id: userId,
+    notification_id: notification.id,
+    platform: row.platform,
+    data: {
+      notificationId: notification.id,
+      screen: notification.target_screen || null,
+      params: notification.target_params || {},
+      type: notification.type,
+      ...(notification.data || {}),
+    },
+  })));
+
+  for (const ticketRow of (delivery?.tickets || [])) {
+    if (ticketRow?.ticket?.status !== 'ok') continue;
+    const pushedUserId = Number(ticketRow?.meta?.user_id || 0);
+    const notificationId = Number(ticketRow?.meta?.notification_id || 0);
+    if (pushedUserId === Number(userId) && notificationId > 0) {
+      await Promise.resolve(pgDb.markUserNotificationPushed(userId, notificationId));
+    }
+  }
+
+  return {
+    created: notification,
+    sent: Number(delivery?.sent || 0),
+    unread,
+    delivery,
+  };
+}
+
 function parseReceiptDraftFromText(text) {
   const rawLines = String(text || '').split(/\r?\n/).map(normalizeOcrLine).filter(Boolean);
   const lines = rawLines.filter((line) => !/^[\W_]+$/.test(line));
@@ -413,6 +479,217 @@ function buildAiLookupOpenAiContext(summary, currentUser) {
     active_trips: safeArray(summary?.active_trips, 20),
     recurring_defaults: safeArray(summary?.recurring_defaults, 30),
     current_month_planner: safeArray(summary?.current_month_planner, 40),
+    petrol_divide_months: safeArray(summary?.petrol_divide_months, 18),
+    petrol_by_day: safeArray(summary?.petrol_by_day, 45),
+    petrol_recent_entries: safeArray(summary?.petrol_recent_entries, 60),
+    live_split_balances: safeArray(summary?.live_split_balances, 40),
+    live_split_recent_groups: safeArray(summary?.live_split_recent_groups, 40),
+    live_split_trips: safeArray(summary?.live_split_trips, 20),
+    daily_trackers: safeArray(summary?.daily_trackers, 40),
+    habit_trackers: safeArray(summary?.habit_trackers, 40),
+  };
+}
+
+function buildAiPetrolMonthSnapshot(monthData) {
+  const entries = Array.isArray(monthData?.entries) ? monthData.entries : [];
+  const byDayMap = new Map();
+  entries.forEach((entry) => {
+    const day = aiDateKeyValue(entry?.entry_date);
+    if (!day) return;
+    if (!byDayMap.has(day)) {
+      byDayMap.set(day, {
+        day,
+        total_amount: 0,
+        total_litres: 0,
+        total_distance_km: 0,
+        entry_count: 0,
+      });
+    }
+    const row = byDayMap.get(day);
+    row.total_amount = roundCurrencyAmount(row.total_amount + Number(entry?.amount_used || 0));
+    row.total_litres = roundCurrencyAmount(row.total_litres + Number(entry?.petrol_used_litre || 0));
+    row.total_distance_km = roundCurrencyAmount(row.total_distance_km + Number(entry?.distance_km || 0));
+    row.entry_count += 1;
+  });
+  const petrolByDay = [...byDayMap.values()].sort((a, b) => String(b.day).localeCompare(String(a.day)));
+  const petrolRecentEntries = entries.map((entry) => ({
+    entry_date: aiDateKeyValue(entry?.entry_date),
+    remarks: String(entry?.remarks || '').trim(),
+    amount_used: roundCurrencyAmount(entry?.amount_used),
+    petrol_used_litre: roundCurrencyAmount(entry?.petrol_used_litre),
+    distance_km: roundCurrencyAmount(entry?.distance_km),
+    average_kmpl: roundCurrencyAmount(entry?.average_kmpl),
+    is_fake: !!entry?.is_fake,
+  }));
+  const totals = petrolByDay.reduce((acc, row) => ({
+    total_amount: roundCurrencyAmount(acc.total_amount + Number(row.total_amount || 0)),
+    total_litres: roundCurrencyAmount(acc.total_litres + Number(row.total_litres || 0)),
+    total_distance_km: roundCurrencyAmount(acc.total_distance_km + Number(row.total_distance_km || 0)),
+    entry_count: Number(acc.entry_count || 0) + Number(row.entry_count || 0),
+  }), { total_amount: 0, total_litres: 0, total_distance_km: 0, entry_count: 0 });
+  return {
+    petrol_by_day: petrolByDay,
+    petrol_recent_entries: petrolRecentEntries,
+    petrol_month_snapshot: monthData?.month ? {
+      month_key: String(monthData.month.month_key || ''),
+      petrol_price: roundCurrencyAmount(monthData.month.petrol_price),
+      total_amount: roundCurrencyAmount(totals.total_amount),
+      total_litres: roundCurrencyAmount(totals.total_litres),
+      total_distance_km: roundCurrencyAmount(totals.total_distance_km),
+      entry_count: Number(totals.entry_count || 0),
+    } : null,
+  };
+}
+
+function buildAiLiveSplitSnapshot(userId, friends = [], groups = [], trips = []) {
+  const meId = Number(userId || 0);
+  const friendById = new Map((Array.isArray(friends) ? friends : []).map((friend) => [Number(friend.id), friend]));
+  const balanceMap = new Map();
+  const ensureBalance = (linkedUserId, fallbackName, friendId = null) => {
+    const uid = Number(linkedUserId || 0);
+    if (!(uid > 0) || uid === meId) return null;
+    if (!balanceMap.has(uid)) {
+      balanceMap.set(uid, {
+        linked_user_id: uid,
+        friend_id: Number(friendId || 0) || null,
+        name: String(fallbackName || 'Friend').trim() || 'Friend',
+        amount: 0,
+      });
+    }
+    const row = balanceMap.get(uid);
+    if (!row.friend_id && Number(friendId || 0) > 0) row.friend_id = Number(friendId);
+    if ((!row.name || row.name === 'Friend') && fallbackName) row.name = String(fallbackName).trim() || row.name;
+    return row;
+  };
+
+  (Array.isArray(groups) ? groups : []).forEach((group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = roundCurrencyAmount(group?.total_amount);
+    const groupMode = String(group?.split_mode || '').trim().toLowerCase();
+    const totalFriends = roundCurrencyAmount(splits.reduce((sum, split) => sum + Number(split?.share_amount || 0), 0));
+    const selfShare = roundCurrencyAmount(total - totalFriends);
+    const payerKey = String(group?.paid_by || '').trim().toLowerCase();
+    const selfIsPayer = !splits.some((split) => String(split?.friend_name || '').trim().toLowerCase() === payerKey);
+
+    splits.forEach((split) => {
+      const linkedFriend = friendById.get(Number(split?.friend_id || 0));
+      const linkedUserId = Number(split?.linked_user_id || linkedFriend?.linked_user_id || 0);
+      const friendName = String(
+        linkedFriend?.linked_user_display_name
+        || linkedFriend?.linked_user_username
+        || split?.friend_name
+        || linkedFriend?.name
+        || 'Friend'
+      ).trim();
+      const row = ensureBalance(linkedUserId, friendName, Number(split?.friend_id || linkedFriend?.id || 0));
+      if (!row) return;
+      const splitIsPayer = String(split?.friend_name || '').trim().toLowerCase() === payerKey
+        || String(linkedFriend?.name || '').trim().toLowerCase() === payerKey;
+      if (groupMode === 'settlement') {
+        if (selfIsPayer) row.amount = roundCurrencyAmount(row.amount + Number(split?.share_amount || 0));
+        else if (splitIsPayer) row.amount = roundCurrencyAmount(row.amount - Number(split?.share_amount || 0));
+        return;
+      }
+      if (selfIsPayer) row.amount = roundCurrencyAmount(row.amount + Number(split?.share_amount || 0));
+      else if (splitIsPayer && selfShare > 0) row.amount = roundCurrencyAmount(row.amount - selfShare);
+    });
+  });
+
+  return {
+    live_split_balances: [...balanceMap.values()]
+      .map((row) => ({ ...row, amount: roundCurrencyAmount(row.amount) }))
+      .sort((a, b) => Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0)) || String(a.name || '').localeCompare(String(b.name || ''))),
+    live_split_recent_groups: (Array.isArray(groups) ? groups : []).slice(0, 40).map((group) => ({
+      id: Number(group?.id || 0) || null,
+      divide_date: aiDateKeyValue(group?.divide_date),
+      details: String(group?.details || group?.heading || 'Live Split expense').trim(),
+      paid_by: String(group?.paid_by || '').trim(),
+      total_amount: roundCurrencyAmount(group?.total_amount),
+      split_mode: String(group?.split_mode || '').trim().toLowerCase() || 'equal',
+      split_count: Array.isArray(group?.splits) ? group.splits.length : 0,
+    })),
+    live_split_trips: (Array.isArray(trips) ? trips : []).slice(0, 20).map((trip) => ({
+      id: Number(trip?.id || 0) || null,
+      name: String(trip?.name || '').trim(),
+      status: String(trip?.status || '').trim().toLowerCase(),
+      total_amount: roundCurrencyAmount(trip?.total_amount),
+      expense_count: Number(trip?.expense_count || 0),
+      my_share_amount: roundCurrencyAmount(trip?.my_share_amount),
+      latest_divide_date: aiDateKeyValue(trip?.latest_divide_date),
+    })),
+  };
+}
+
+async function enrichAiSummaryWithModules(userId, summary, question = '') {
+  const currentMonth = String(summary?.current_month || new Date().toISOString().slice(0, 7));
+  const dateKey = aiExtractDateKey(question, summary);
+  const monthKey = aiExtractMonthKey(question, summary) || (dateKey ? dateKey.slice(0, 7) : currentMonth);
+  const [habitYear, habitMonth] = String(monthKey || currentMonth).split('-').map(Number);
+
+  const [
+    petrolMonthsRaw,
+    dailyTrackersRaw,
+    habitTrackersRaw,
+    liveSplitFriendsRaw,
+    liveSplitGroupsRaw,
+    liveSplitTripsRaw,
+  ] = await Promise.all([
+    Promise.resolve(pgPetrolDb.getPetrolDivideMonths(userId)).catch(() => []),
+    Promise.resolve(pgOpsDb.getDailyTrackers(userId)).catch(() => []),
+    Promise.resolve(pgOpsDb.getHabitTrackers(userId, habitYear, habitMonth)).catch(() => []),
+    Promise.resolve(pgCoreDb.getLiveSplitFriends(userId)).catch(() => []),
+    Promise.resolve(pgCoreDb.getLiveSplitGroups(userId)).catch(() => []),
+    Promise.resolve(pgCoreDb.getLiveSplitTrips(userId)).catch(() => []),
+  ]);
+
+  const petrolMonths = (Array.isArray(petrolMonthsRaw) ? petrolMonthsRaw : []).slice(0, 18).map((row) => ({
+    month_key: String(row?.month_key || ''),
+    petrol_price: roundCurrencyAmount(row?.petrol_price),
+    members_count: Number(row?.members_count || 0),
+    entries_count: Number(row?.entries_count || 0),
+    total_amount: roundCurrencyAmount(row?.total_amount),
+  }));
+
+  let petrolDetails = {};
+  const targetPetrolMonth = petrolMonths.find((row) => String(row.month_key) === String(monthKey));
+  if (targetPetrolMonth?.month_key) {
+    const monthData = await Promise.resolve(pgPetrolDb.getPetrolDivideMonth(userId, targetPetrolMonth.month_key)).catch(() => null);
+    if (monthData) petrolDetails = buildAiPetrolMonthSnapshot(monthData);
+  }
+
+  const liveSplitDetails = buildAiLiveSplitSnapshot(
+    userId,
+    Array.isArray(liveSplitFriendsRaw) ? liveSplitFriendsRaw : [],
+    Array.isArray(liveSplitGroupsRaw) ? liveSplitGroupsRaw : [],
+    Array.isArray(liveSplitTripsRaw) ? liveSplitTripsRaw : []
+  );
+
+  return {
+    ...summary,
+    petrol_divide_months: petrolMonths,
+    petrol_by_day: Array.isArray(petrolDetails.petrol_by_day) ? petrolDetails.petrol_by_day : [],
+    petrol_recent_entries: Array.isArray(petrolDetails.petrol_recent_entries) ? petrolDetails.petrol_recent_entries : [],
+    petrol_month_snapshot: petrolDetails.petrol_month_snapshot || null,
+    daily_trackers: (Array.isArray(dailyTrackersRaw) ? dailyTrackersRaw : []).slice(0, 40).map((tracker) => ({
+      id: Number(tracker?.id || 0) || null,
+      name: String(tracker?.name || '').trim(),
+      unit: String(tracker?.unit || '').trim(),
+      current_month_total: roundCurrencyAmount(tracker?.current_month_total),
+      current_month_days: Number(tracker?.current_month_days || 0),
+      price_per_unit: roundCurrencyAmount(tracker?.price_per_unit),
+      auto_add_to_expense: !!tracker?.auto_add_to_expense,
+      expense_category: String(tracker?.expense_category || '').trim(),
+    })),
+    habit_trackers: (Array.isArray(habitTrackersRaw) ? habitTrackersRaw : []).slice(0, 40).map((tracker) => ({
+      id: Number(tracker?.id || 0) || null,
+      name: String(tracker?.name || '').trim(),
+      month_one_days: Number(tracker?.month_one_days || 0),
+      month_total_days: Number(tracker?.month_total_days || 0),
+      month_percent: roundCurrencyAmount(tracker?.month_percent),
+      today_value: tracker?.today_value == null ? null : Number(tracker.today_value),
+      is_active: !!tracker?.is_active,
+    })),
+    ...liveSplitDetails,
   };
 }
 
@@ -421,10 +698,54 @@ function buildAiLookupFactBundle(question, summary, currentUser) {
   const normalized = q.toLowerCase();
   const tokens = aiTokens(q);
   const asksAboutExpense = aiHasAnyToken(tokens, ['expense', 'expenses', 'spend', 'spent', 'spending']);
+  const asksAboutPetrol = aiHasAnyToken(tokens, ['petrol', 'fuel', 'diesel', 'kmpl', 'mileage', 'litre', 'litres', 'liter', 'liters']);
   const dateKey = aiExtractDateKey(q, summary);
   const monthKey = aiExtractMonthKey(q, summary);
   const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
+  const recentPetrolEntries = Array.isArray(summary?.petrol_recent_entries) ? summary.petrol_recent_entries : [];
   const today = summary?.as_of || new Date().toISOString().slice(0, 10);
+
+  if (asksAboutPetrol && dateKey) {
+    const dayRow = aiFindPetrolDayRow(summary, dateKey);
+    const rows = recentPetrolEntries
+      .filter((row) => aiDateKeyValue(row?.entry_date) === aiDateKeyValue(dateKey))
+      .slice(0, 20)
+      .map((row) => ({
+        remarks: row.remarks || '',
+        amount_used: aiNum(row.amount_used),
+        amount_label: aiCurrency(summary, currentUser, row.amount_used),
+        petrol_used_litre: aiNum(row.petrol_used_litre),
+        distance_km: aiNum(row.distance_km),
+        entry_date: aiDateKeyValue(row.entry_date),
+      }));
+    return {
+      query_type: 'petrol_by_day',
+      found: !!dayRow,
+      date: dateKey,
+      date_label: aiDateLabel(dateKey),
+      total_amount: dayRow ? aiNum(dayRow.total_amount) : 0,
+      total_amount_label: dayRow ? aiCurrency(summary, currentUser, dayRow.total_amount) : '',
+      total_litres: dayRow ? aiNum(dayRow.total_litres) : 0,
+      total_distance_km: dayRow ? aiNum(dayRow.total_distance_km) : 0,
+      entry_count: dayRow ? Number(dayRow.entry_count) || rows.length : rows.length,
+      entries: rows,
+    };
+  }
+
+  if (asksAboutPetrol && monthKey) {
+    const monthRow = aiFindPetrolMonthRow(summary, monthKey);
+    return {
+      query_type: 'petrol_by_month',
+      found: !!monthRow,
+      month: monthKey,
+      month_label: aiMonthLabel(monthKey),
+      total_amount: monthRow ? aiNum(monthRow.total_amount) : 0,
+      total_amount_label: monthRow ? aiCurrency(summary, currentUser, monthRow.total_amount) : '',
+      total_litres: monthRow ? aiNum(monthRow.total_litres) : 0,
+      total_distance_km: monthRow ? aiNum(monthRow.total_distance_km) : 0,
+      entry_count: monthRow ? Number(monthRow.entry_count) || 0 : 0,
+    };
+  }
 
   if (asksAboutExpense && dateKey) {
     const dayRow = aiFindDayRow(summary, dateKey);
@@ -494,8 +815,9 @@ async function askAiLookupWithOpenAi(question, history, summary, currentUser, gr
   const targetedFacts = buildAiLookupFactBundle(question, summary, currentUser);
   const systemPrompt = [
     'You are Expense Lite AI, a personal finance assistant.',
-    'Answer only from the provided finance data and chat history.',
-    'Do not invent expenses, balances, dates, or categories that are not present.',
+    'Answer only from the provided app data and chat history.',
+    'The provided data can include expenses, petrol divide, live split, trackers, habits, planner, banks, cards, EMIs, friends, and trips.',
+    'Do not invent expenses, balances, dates, categories, petrol usage, tracker totals, or habit stats that are not present.',
     'If the requested data is missing, say that clearly and suggest the closest available information.',
     'Keep the answer concise, practical, and easy to scan.',
     'Use Indian currency formatting with the rupee symbol when amounts are INR.',
@@ -503,6 +825,7 @@ async function askAiLookupWithOpenAi(question, history, summary, currentUser, gr
     'Return a final user-facing answer only. Do not output internal instructions, tool plans, labels, or intent names.',
     'Prioritize targeted_facts over the broad finance_context whenever targeted_facts are present.',
     'If targeted_facts.query_type is "expense_by_day" or "expense_today", state the exact total and transaction count first, then optionally list a few rows.',
+    'If targeted_facts.query_type is "petrol_by_day" or "petrol_by_month", state the exact petrol litres and total amount first, then optionally list a few rows.',
     groundedAnswer
       ? 'A deterministic finance answer has already been computed from trusted app data. Preserve every date, amount, count, and item exactly. You may only lightly rewrite it for clarity.'
       : 'If you cannot answer confidently from the provided data, say that clearly.',
@@ -3660,6 +3983,100 @@ router.get('/live-split/friends/:id/activity', async (req, res) => {
   }
 });
 
+router.post('/live-split/friends/:id/nudge', async (req, res) => {
+  try {
+    const friendId = Number(req.params.id || 0);
+    if (!(friendId > 0)) return res.status(400).json({ error: 'Valid friend id is required.' });
+
+    const amountValue = roundCurrencyAmount(req.body?.amount);
+    if (!(amountValue > 0)) {
+      return res.status(400).json({ error: 'Nudge amount must be greater than 0.' });
+    }
+    const nudgeDirection = String(req.body?.direction || 'they_owe_me').trim().toLowerCase() === 'i_owe_them'
+      ? 'i_owe_them'
+      : 'they_owe_me';
+
+    const [me, friends] = await Promise.all([
+      Promise.resolve(pgDb.findUserById(req.session.userId)),
+      Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId)),
+    ]);
+    const liveSplitAccess = await Promise.resolve(pgDb.getUserLiveSplitAccess(req.session.userId));
+    const nudgeAccess = liveSplitAccess?.nudge || null;
+    if (!nudgeAccess?.enabled) {
+      return res.status(403).json({ error: nudgeAccess?.message || 'Live Split nudges are not included in your current plan.' });
+    }
+    if (!nudgeAccess?.can_use) {
+      return res.status(402).json({
+        error: nudgeAccess?.message || `You have used all Live Split nudges for this ${nudgeAccess?.period || 'day'}.`,
+        access: liveSplitAccess,
+      });
+    }
+    const friend = (friends || []).find((item) => Number(item?.id || 0) === friendId);
+    if (!friend) return res.status(404).json({ error: 'Live Split friend not found.' });
+
+    const targetUserId = Number(friend?.linked_user_id || 0);
+    if (!(targetUserId > 0)) {
+      return res.status(400).json({ error: 'This friend is not linked to an app user yet.' });
+    }
+    if (targetUserId === Number(req.session.userId)) {
+      return res.status(400).json({ error: 'You cannot nudge yourself.' });
+    }
+
+    const actorName = String(me?.display_name || me?.username || 'Someone').trim() || 'Someone';
+    const friendName = String(friend?.name || 'your friend').trim() || 'your friend';
+    const targetCurrency = String(req.body?.currency_code || me?.currency_code || 'INR').trim().toUpperCase() || 'INR';
+    const targetLocale = String(req.body?.locale_code || me?.locale_code || 'en-IN').trim() || 'en-IN';
+    const amountLabel = formatNotificationCurrency(amountValue, targetCurrency, targetLocale);
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const title = nudgeDirection === 'i_owe_them'
+      ? `Balance update from ${actorName}`
+      : `Payment reminder from ${actorName}`;
+    const body = nudgeDirection === 'i_owe_them'
+      ? `${actorName} nudged you in Live Split for ${amountLabel}. Open the app to review that ${actorName} owes you this amount.`
+      : `${actorName} nudged you in Live Split for ${amountLabel}. Open the app to review what you owe ${friendName === actorName ? 'them' : actorName}.`;
+
+    const result = await sendStoredNotificationToUser(targetUserId, {
+      type: 'live_split_nudge',
+      dedupe_key: `${req.session.userId}:${friendId}:${todayKey}:${nudgeDirection}:${Math.round(amountValue * 100)}`,
+      title,
+      body,
+      target_screen: 'LiveSplit',
+      target_params: {
+        source_user_id: Number(req.session.userId),
+        source_friend_id: friendId,
+      },
+      data: {
+        source_user_id: Number(req.session.userId),
+        source_friend_id: friendId,
+        amount: amountValue,
+        currency_code: targetCurrency,
+        direction: nudgeDirection,
+      },
+    });
+
+    if (!result?.created) {
+      return res.json({
+        success: true,
+        already_sent: true,
+        message: 'A nudge for this amount was already sent today.',
+        access: liveSplitAccess,
+      });
+    }
+
+    const usageAccess = await Promise.resolve(pgDb.consumeUserLiveSplitNudgeUsage(req.session.userId, friendId, nudgeDirection)).then(() => pgDb.getUserLiveSplitAccess(req.session.userId));
+
+    res.json({
+      success: true,
+      already_sent: false,
+      sent_push_count: Number(result?.sent || 0),
+      notification_id: Number(result?.created?.id || 0) || null,
+      access: usageAccess || liveSplitAccess,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not send Live Split nudge.' });
+  }
+});
+
 router.post('/live-split/friends', async (req, res) => {
   try {
     const id = await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, req.body?.name));
@@ -5237,7 +5654,7 @@ router.get('/auth/me/access', requireAuth, (req, res) => {
       role: user?.role || 'user',
       pages,
       ai_lookup_modes: aiLookupModes || { mode: 'none', offline: false, online: false },
-      live_split: liveSplitAccess || { delete_friend: false },
+      live_split: liveSplitAccess || { delete_friend: false, nudge: { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false } },
       voice_ai: voiceAiAccess || { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false },
     });
   }).catch((err) => {
@@ -5646,6 +6063,7 @@ router.post('/admin/ai-learning/test', requireAdmin, async (req, res) => {
     if (requestedDateKey) {
       summary = await ensureAiSummaryForDate(req.session.userId, summary, requestedDateKey);
     }
+    summary = await enrichAiSummaryWithModules(req.session.userId, summary, question);
 
     const normalizedQuestion = aiNormalizeQuestion(question);
     const trainedAnswer = lookupMode === 'online'
@@ -6187,6 +6605,12 @@ function aiFindDayRow(summary, dateKey) {
   return rows.find((row) => aiDateKeyValue(row.day) === target) || null;
 }
 
+function aiFindPetrolDayRow(summary, dateKey) {
+  const rows = Array.isArray(summary?.petrol_by_day) ? summary.petrol_by_day : [];
+  const target = aiDateKeyValue(dateKey);
+  return rows.find((row) => aiDateKeyValue(row.day) === target) || null;
+}
+
 async function ensureAiSummaryForDate(userId, summary, dateKey) {
   const target = aiDateKeyValue(dateKey);
   if (!target) return summary;
@@ -6215,6 +6639,13 @@ async function ensureAiSummaryForDate(userId, summary, dateKey) {
 function aiFindMonthRow(summary, monthKey) {
   const rows = Array.isArray(summary?.expense_last_6_months) ? summary.expense_last_6_months : [];
   return rows.find((row) => String(row.month) === String(monthKey)) || null;
+}
+
+function aiFindPetrolMonthRow(summary, monthKey) {
+  const rows = Array.isArray(summary?.petrol_divide_months) ? summary.petrol_divide_months : [];
+  const monthlySummary = summary?.petrol_month_snapshot;
+  if (monthlySummary && String(monthlySummary.month_key) === String(monthKey)) return monthlySummary;
+  return rows.find((row) => String(row.month_key) === String(monthKey)) || null;
 }
 
 function aiFindFriendByName(summary, question) {
@@ -6304,7 +6735,9 @@ function aiNormalizeQuestion(question) {
 }
 
 function aiIsFallbackAnswer(answer) {
-  return String(answer || '').startsWith('I can answer structured questions about your expenses');
+  const text = String(answer || '').trim();
+  return text.startsWith('I can answer structured questions about your expenses')
+    || text.startsWith('I can answer structured questions across ');
 }
 
 function aiResolveIntent(question, summary) {
@@ -6328,6 +6761,10 @@ function aiResolveIntent(question, summary) {
     bank: aiHasAnyToken(tokens, ['bank']),
     recurring: aiHasAnyToken(tokens, ['recurring']),
     emi: aiHasAnyToken(tokens, ['emi']),
+    petrol: aiHasAnyToken(tokens, ['petrol']),
+    tracker: aiHasAnyToken(tokens, ['tracker']),
+    habit: aiHasAnyToken(tokens, ['habit']),
+    live_split: aiHasAnyToken(tokens, ['live_split']),
     active: aiHasAnyToken(tokens, ['active']),
     recent: aiHasAnyToken(tokens, ['recent']),
     summary: aiHasAnyToken(tokens, ['summary']),
@@ -6517,6 +6954,7 @@ function aiAnswerFromSummary(question, summary, currentUser) {
   const normalized = q.toLowerCase();
   const tokens = aiTokens(q);
   const asksAboutExpense = aiHasAnyToken(tokens, ['expense', 'expenses', 'spend', 'spent', 'spending']);
+  const asksAboutPetrol = aiHasAnyToken(tokens, ['petrol', 'fuel', 'diesel', 'kmpl', 'mileage', 'litre', 'litres', 'liter', 'liters']);
   const asksAboutItem = aiHasAnyToken(tokens, ['item', 'items', 'thing', 'things', 'stuff', 'purchase', 'purchases']);
   const asksAboutExpensive = aiHasAnyToken(tokens, ['expensive', 'costly', 'costliest']);
   const asksAboutYear = aiHasAnyToken(tokens, ['year', 'years']);
@@ -6543,9 +6981,33 @@ function aiAnswerFromSummary(question, summary, currentUser) {
   const namedTrip = aiFindTrip(summary, q);
   const namedCard = aiFindCard(summary, q);
   const recentExpenses = Array.isArray(summary?.recent_expenses) ? summary.recent_expenses : [];
+  const petrolDayRow = aiFindPetrolDayRow(summary, dateKey);
+  const petrolMonthRow = aiFindPetrolMonthRow(summary, monthKey);
+  const petrolRecentEntries = Array.isArray(summary?.petrol_recent_entries) ? summary.petrol_recent_entries : [];
+  const dailyTrackers = Array.isArray(summary?.daily_trackers) ? summary.daily_trackers : [];
+  const habitTrackers = Array.isArray(summary?.habit_trackers) ? summary.habit_trackers : [];
+  const liveSplitBalances = Array.isArray(summary?.live_split_balances) ? summary.live_split_balances : [];
   const today = summary?.as_of || new Date().toISOString().slice(0, 10);
   const todayExpenses = recentExpenses.filter((row) => aiDateKeyValue(row?.purchase_date) === aiDateKeyValue(today));
   const dayExpenses = dateKey ? recentExpenses.filter((row) => aiDateKeyValue(row?.purchase_date) === aiDateKeyValue(dateKey)) : [];
+  const dayPetrolEntries = dateKey ? petrolRecentEntries.filter((row) => aiDateKeyValue(row?.entry_date) === aiDateKeyValue(dateKey)) : [];
+
+  if (asksAboutPetrol && dateKey) {
+    if (!petrolDayRow) return `You do not have any saved petrol divide entries for ${aiDateLabel(dateKey)}.`;
+    return aiLines([
+      `Your petrol divide totals for ${aiDateLabel(dateKey)} are ${Number(petrolDayRow.total_litres || 0).toFixed(2)} litre(s) and ${aiCurrency(summary, currentUser, petrolDayRow.total_amount)} across ${Number(petrolDayRow.entry_count) || 0} entry(s).`,
+      ...dayPetrolEntries.slice(0, 5).map((row) => `- ${row.remarks || 'Petrol entry'}: ${Number(row.petrol_used_litre || 0).toFixed(2)} L, ${aiCurrency(summary, currentUser, row.amount_used)}${row.distance_km ? ` for ${Number(row.distance_km).toFixed(2)} km` : ''}`),
+    ]);
+  }
+
+  if (asksAboutPetrol && monthKey) {
+    if (!petrolMonthRow) return `You do not have any saved petrol divide totals for ${aiMonthLabel(monthKey)}.`;
+    return aiLines([
+      `Your petrol divide totals for ${aiMonthLabel(monthKey)} are ${Number(petrolMonthRow.total_litres || 0).toFixed(2)} litre(s) and ${aiCurrency(summary, currentUser, petrolMonthRow.total_amount)} across ${Number(petrolMonthRow.entry_count || 0)} entry(s).`,
+      petrolMonthRow.total_distance_km ? `Total distance: ${Number(petrolMonthRow.total_distance_km || 0).toFixed(2)} km.` : '',
+      petrolMonthRow.petrol_price ? `Petrol price: ${aiCurrency(summary, currentUser, petrolMonthRow.petrol_price)} per litre.` : '',
+    ]);
+  }
 
   if (asksAboutExpense && dateKey && dateKey !== today) {
     if (!dayRow) return `You do not have any saved expenses for ${aiDateLabel(dateKey)}.`;
@@ -6768,10 +7230,36 @@ function aiAnswerFromSummary(question, summary, currentUser) {
     ]);
   }
 
+  if ((normalized.includes('tracker') || normalized.includes('daily tracker')) && dailyTrackers.length) {
+    return aiLines([
+      `Daily tracker snapshot for ${aiMonthLabel(currentMonth)}:`,
+      ...dailyTrackers.slice(0, 8).map((row) => `- ${row.name}: ${aiCurrency(summary, currentUser, row.current_month_total)} across ${Number(row.current_month_days || 0)} day(s)`),
+    ]);
+  }
+
+  if ((normalized.includes('habit') || normalized.includes('streak')) && habitTrackers.length) {
+    return aiLines([
+      `Habit tracker snapshot for ${aiMonthLabel(currentMonth)}:`,
+      ...habitTrackers.slice(0, 8).map((row) => `- ${row.name}: ${Number(row.month_one_days || 0)}/${Number(row.month_total_days || 0)} days (${Number(row.month_percent || 0).toFixed(2)}%)`),
+    ]);
+  }
+
+  if ((normalized.includes('live split') || normalized.includes('livesplit')) && liveSplitBalances.length) {
+    return aiLines([
+      'Live Split balances:',
+      ...liveSplitBalances.slice(0, 8).map((row) => Number(row.amount || 0) > 0
+        ? `- ${row.name} owes you ${aiCurrency(summary, currentUser, row.amount)}`
+        : `- You owe ${row.name} ${aiCurrency(summary, currentUser, Math.abs(Number(row.amount || 0)))}`),
+    ]);
+  }
+
   return aiLines([
-    'I can answer structured questions about your expenses, friend balances, active EMIs, credit card dues, recurring payments, and bank balances.',
+    'I can answer structured questions across expenses, petrol divide, live split, trackers, habits, friend balances, active EMIs, credit card dues, recurring payments, planner items, banks, and trips.',
     'Try asking things like:',
     '- What is my total expense this year?',
+    '- How much petrol used and amount on 9 May 2026?',
+    '- Show my daily tracker totals this month',
+    '- Show my habit progress this month',
     '- Who owes me money?',
     '- Which EMIs are active?',
     '- How much is my credit card due this month?',
@@ -6823,10 +7311,15 @@ router.post('/ai/lookup', async (req, res) => {
       });
     }
 
-    const [summary, currentUser] = await Promise.all([
+    let [summary, currentUser] = await Promise.all([
       Promise.resolve(getFinanceDb().getUserFinancialSummary(req.session.userId)),
       Promise.resolve(pgDb.findUserById(req.session.userId)),
     ]);
+    const requestedDateKey = aiExtractDateKey(question, summary);
+    if (requestedDateKey) {
+      summary = await ensureAiSummaryForDate(req.session.userId, summary, requestedDateKey);
+    }
+    summary = await enrichAiSummaryWithModules(req.session.userId, summary, question);
 
     const normalizedQuestion = aiNormalizeQuestion(question);
     const trainedAnswer = lookupMode === 'online'
