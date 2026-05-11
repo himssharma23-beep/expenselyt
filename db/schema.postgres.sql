@@ -952,6 +952,7 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS allow_live_split_friend_delete BOOLEA
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS live_split_nudge_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS live_split_nudge_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS live_split_nudge_limit_period TEXT NOT NULL DEFAULT 'day';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS live_split_nudge_same_friend_daily_limit INTEGER NOT NULL DEFAULT 1;
 UPDATE plans
 SET ai_lookup_mode = 'both'
 WHERE ai_lookup_mode IS NULL OR ai_lookup_mode NOT IN ('none', 'offline', 'online', 'both');
@@ -964,6 +965,9 @@ WHERE voice_ai_limit_period IS NULL OR voice_ai_limit_period NOT IN ('day', 'wee
 UPDATE plans
 SET live_split_nudge_limit_period = 'day'
 WHERE live_split_nudge_limit_period IS NULL OR live_split_nudge_limit_period NOT IN ('day', 'week', 'month', 'year');
+UPDATE plans
+SET live_split_nudge_same_friend_daily_limit = 1
+WHERE live_split_nudge_same_friend_daily_limit IS NULL OR live_split_nudge_same_friend_daily_limit = 0;
 
 CREATE TABLE IF NOT EXISTS voice_ai_usage (
   id BIGSERIAL PRIMARY KEY,

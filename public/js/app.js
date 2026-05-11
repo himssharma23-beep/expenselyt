@@ -9839,6 +9839,7 @@ async function loadAdminPlans() {
     live_split_nudge_enabled: !!plan.live_split_nudge_enabled,
     live_split_nudge_limit: plan.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0,
     live_split_nudge_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.live_split_nudge_limit_period || '').toLowerCase()) ? String(plan.live_split_nudge_limit_period).toLowerCase() : 'day',
+    live_split_nudge_same_friend_daily_limit: plan.live_split_nudge_same_friend_daily_limit != null ? Number(plan.live_split_nudge_same_friend_daily_limit) : 1,
     voice_ai_enabled: !!plan.voice_ai_enabled,
     voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
     voice_ai_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day',
@@ -9858,6 +9859,9 @@ async function loadAdminPlans() {
       : p.live_split_nudge_limit === -1
         ? 'Unlimited'
         : `${p.live_split_nudge_limit}/${p.live_split_nudge_limit_period}`;
+    const liveSplitSameFriendLabel = p.live_split_nudge_same_friend_daily_limit === -1
+      ? 'Unlimited per friend/day'
+      : `${p.live_split_nudge_same_friend_daily_limit || 1}/friend/day`;
     const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
     return `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -9875,6 +9879,7 @@ async function loadAdminPlans() {
             &nbsp;|&nbsp; AI Mode: <b>${escHtml(aiModeLabel)}</b>
             &nbsp;|&nbsp; Voice AI: <b>${escHtml(voiceLabel)}</b>
             &nbsp;|&nbsp; Live Split Nudges: <b>${escHtml(liveSplitNudgeLabel)}</b>
+            &nbsp;|&nbsp; Same Friend Nudge Cap: <b>${escHtml(liveSplitSameFriendLabel)}</b>
             &nbsp;|&nbsp; Delete Live Split Friend: <b>${escHtml(liveSplitDeleteLabel)}</b>
           </div>
         </div>
@@ -9910,6 +9915,7 @@ async function showPlanModal(planId) {
   const liveSplitNudgeEnabledVal = !!plan?.live_split_nudge_enabled;
   const liveSplitNudgeLimitVal = plan?.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0;
   const liveSplitNudgePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.live_split_nudge_limit_period || '').toLowerCase()) ? String(plan.live_split_nudge_limit_period).toLowerCase() : 'day';
+  const liveSplitSameFriendDailyLimitVal = plan?.live_split_nudge_same_friend_daily_limit != null ? Number(plan.live_split_nudge_same_friend_daily_limit) : 1;
   const voiceEnabledVal = !!plan?.voice_ai_enabled;
   const voiceLimitVal = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
   const voicePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day';
@@ -9944,6 +9950,15 @@ async function showPlanModal(planId) {
             `).join('')}
           </div>
           <div class="plan-field-help">Choose whether this plan sees Offline AI, Online AI, both, or neither.</div>
+        </div>
+            <label class="fl full">Same friend same day nudge cap
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pLiveSplitSameFriendDailyLimit" value="${liveSplitSameFriendDailyLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateLiveSplitNudgeHint()">
+                <span id="pLiveSplitSameFriendDailyHint" class="plan-ai-limit-badge"></span>
+              </div>
+              <div class="plan-field-help">1 = once per friend per day Â· -1 = unlimited repeats to the same friend in one day</div>
+            </label>
+          </div>
         </div>
         <div class="plan-mode-group" style="margin-top:16px">
           <div class="plan-mode-label">Live Split Nudges</div>
@@ -10068,9 +10083,11 @@ function _updateLiveSplitNudgeHint() {
   const rawLimit = parseInt(document.getElementById('pLiveSplitNudgeLimit')?.value ?? '0', 10);
   const period = document.getElementById('pLiveSplitNudgePeriod')?.value || 'day';
   const hint = document.getElementById('pLiveSplitNudgeHint');
+  const sameFriendHint = document.getElementById('pLiveSplitSameFriendDailyHint');
   if (!hint) return;
   if (!enabled) {
     hint.textContent = 'Disabled';
+    if (sameFriendHint) sameFriendHint.textContent = 'Disabled';
     return;
   }
   if (Number.isNaN(rawLimit)) {
@@ -10078,6 +10095,10 @@ function _updateLiveSplitNudgeHint() {
     return;
   }
   hint.textContent = rawLimit === -1 ? 'Unlimited' : rawLimit === 0 ? 'No nudge access' : `${rawLimit}/${period}`;
+  if (sameFriendHint) {
+    const rawSameFriend = parseInt(document.getElementById('pLiveSplitSameFriendDailyLimit')?.value ?? '1', 10);
+    sameFriendHint.textContent = Number.isNaN(rawSameFriend) ? '' : rawSameFriend === -1 ? 'Unlimited per friend/day' : `${Math.max(1, rawSameFriend)}/friend/day`;
+  }
 }
 
 function _updateVoiceLimitHint() {
@@ -10123,6 +10144,7 @@ async function adminSavePlan(planId) {
     live_split_nudge_enabled: document.getElementById('pLiveSplitNudgeEnabled')?.checked ? 1 : 0,
     live_split_nudge_limit: parseInt(document.getElementById('pLiveSplitNudgeLimit')?.value ?? '0', 10) || 0,
     live_split_nudge_limit_period: document.getElementById('pLiveSplitNudgePeriod')?.value || 'day',
+    live_split_nudge_same_friend_daily_limit: parseInt(document.getElementById('pLiveSplitSameFriendDailyLimit')?.value ?? '1', 10) || 1,
     ai_query_limit: isNaN(aiLimit) ? -1 : aiLimit,
     ai_lookup_mode: document.getElementById('pAiMode')?.value || 'both',
     voice_ai_enabled: document.getElementById('pVoiceEnabled')?.checked ? 1 : 0,

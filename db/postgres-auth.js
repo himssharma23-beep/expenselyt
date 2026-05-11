@@ -82,6 +82,7 @@ function normalizePlan(row) {
     live_split_nudge_enabled: !!row.live_split_nudge_enabled,
     live_split_nudge_limit: row.live_split_nudge_limit != null ? Number(row.live_split_nudge_limit) : 0,
     live_split_nudge_limit_period: normalizeLiveSplitNudgeLimitPeriod(row.live_split_nudge_limit_period),
+    live_split_nudge_same_friend_daily_limit: normalizeLiveSplitSameFriendDailyLimit(row.live_split_nudge_same_friend_daily_limit),
     ai_query_limit: row.ai_query_limit != null ? Number(row.ai_query_limit) : -1,
     ai_lookup_mode: normalizeAiLookupMode(row.ai_lookup_mode),
     voice_ai_enabled: !!row.voice_ai_enabled,
@@ -114,6 +115,13 @@ function normalizeLiveSplitNudgeLimitPeriod(period) {
   return ['day', 'week', 'month', 'year'].includes(value) ? value : 'day';
 }
 
+function normalizeLiveSplitSameFriendDailyLimit(limit) {
+  const value = Number(limit);
+  if (value === -1) return -1;
+  if (!Number.isFinite(value) || value < 1) return 1;
+  return Math.round(value);
+}
+
 function isMissingVoiceAiUsageTableError(err) {
   const message = String(err?.message || '').toLowerCase();
   return err?.code === '42P01' && message.includes('voice_ai_usage');
@@ -130,6 +138,7 @@ function isMissingPlanLiveSplitNudgeColumnError(err) {
     message.includes('live_split_nudge_enabled')
     || message.includes('live_split_nudge_limit')
     || message.includes('live_split_nudge_limit_period')
+    || message.includes('live_split_nudge_same_friend_daily_limit')
   );
 }
 
@@ -156,10 +165,20 @@ async function ensurePlanLiveSplitNudgeColumns(client = null) {
      ADD COLUMN IF NOT EXISTS live_split_nudge_limit_period TEXT NOT NULL DEFAULT 'day'`
   );
   await runner.query(
+    `ALTER TABLE plans
+     ADD COLUMN IF NOT EXISTS live_split_nudge_same_friend_daily_limit INTEGER NOT NULL DEFAULT 1`
+  );
+  await runner.query(
     `UPDATE plans
      SET live_split_nudge_limit_period = 'day'
      WHERE live_split_nudge_limit_period IS NULL
         OR live_split_nudge_limit_period NOT IN ('day', 'week', 'month', 'year')`
+  );
+  await runner.query(
+    `UPDATE plans
+     SET live_split_nudge_same_friend_daily_limit = 1
+     WHERE live_split_nudge_same_friend_daily_limit IS NULL
+        OR live_split_nudge_same_friend_daily_limit = 0`
   );
 }
 
@@ -1334,8 +1353,8 @@ async function createPlan(data) {
       await client.query('UPDATE plans SET auto_assign_on_signup = FALSE');
     }
     const result = await client.query(
-      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, allow_live_split_friend_delete, live_split_nudge_enabled, live_split_nudge_limit, live_split_nudge_limit_period, ai_query_limit, ai_lookup_mode, voice_ai_enabled, voice_ai_limit, voice_ai_limit_period)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO plans (name, description, price_monthly, price_yearly, is_free, is_active, auto_assign_on_signup, allow_live_split_friend_delete, live_split_nudge_enabled, live_split_nudge_limit, live_split_nudge_limit_period, live_split_nudge_same_friend_daily_limit, ai_query_limit, ai_lookup_mode, voice_ai_enabled, voice_ai_limit, voice_ai_limit_period)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING id`,
       [
         data.name,
@@ -1349,6 +1368,7 @@ async function createPlan(data) {
         !!data.live_split_nudge_enabled,
         data.live_split_nudge_limit != null ? Number(data.live_split_nudge_limit) : 0,
         normalizeLiveSplitNudgeLimitPeriod(data.live_split_nudge_limit_period),
+        normalizeLiveSplitSameFriendDailyLimit(data.live_split_nudge_same_friend_daily_limit),
         data.ai_query_limit != null ? Number(data.ai_query_limit) : -1,
         normalizeAiLookupMode(data.ai_lookup_mode),
         !!data.voice_ai_enabled,
@@ -1416,6 +1436,10 @@ async function updatePlan(id, data) {
     if (data.live_split_nudge_limit_period !== undefined) {
       params.push(normalizeLiveSplitNudgeLimitPeriod(data.live_split_nudge_limit_period));
       fields.push(`live_split_nudge_limit_period = $${params.length}`);
+    }
+    if (data.live_split_nudge_same_friend_daily_limit !== undefined) {
+      params.push(normalizeLiveSplitSameFriendDailyLimit(data.live_split_nudge_same_friend_daily_limit));
+      fields.push(`live_split_nudge_same_friend_daily_limit = $${params.length}`);
     }
     if (data.ai_query_limit !== undefined) {
       params.push(Number(data.ai_query_limit));
@@ -1683,6 +1707,7 @@ async function getUserLiveSplitAccess(userId) {
     enabled: false,
     limit: 0,
     period: 'day',
+    same_friend_daily_limit: 1,
     used: 0,
     remaining: 0,
     unlimited: false,
@@ -1698,6 +1723,7 @@ async function getUserLiveSplitAccess(userId) {
         enabled: true,
         limit: -1,
         period: 'day',
+        same_friend_daily_limit: -1,
         used: 0,
         remaining: -1,
         unlimited: true,
@@ -1711,7 +1737,7 @@ async function getUserLiveSplitAccess(userId) {
   let result;
   try {
     result = await query(
-      `SELECT p.allow_live_split_friend_delete, p.live_split_nudge_enabled, p.live_split_nudge_limit, p.live_split_nudge_limit_period, p.name
+      `SELECT p.allow_live_split_friend_delete, p.live_split_nudge_enabled, p.live_split_nudge_limit, p.live_split_nudge_limit_period, p.live_split_nudge_same_friend_daily_limit, p.name
        FROM plans p
        JOIN plan_pages pp
          ON pp.plan_id = p.id
@@ -1729,7 +1755,7 @@ async function getUserLiveSplitAccess(userId) {
     await ensurePlanLiveSplitDeleteColumn();
     await ensurePlanLiveSplitNudgeColumns();
     result = await query(
-      `SELECT p.allow_live_split_friend_delete, p.live_split_nudge_enabled, p.live_split_nudge_limit, p.live_split_nudge_limit_period, p.name
+      `SELECT p.allow_live_split_friend_delete, p.live_split_nudge_enabled, p.live_split_nudge_limit, p.live_split_nudge_limit_period, p.live_split_nudge_same_friend_daily_limit, p.name
        FROM plans p
        JOIN plan_pages pp
          ON pp.plan_id = p.id
@@ -1770,6 +1796,7 @@ async function getUserLiveSplitAccess(userId) {
   }, null);
   const limit = Number(chosen?.live_split_nudge_limit || 0);
   const period = normalizeLiveSplitNudgeLimitPeriod(chosen?.live_split_nudge_limit_period);
+  const sameFriendDailyLimit = normalizeLiveSplitSameFriendDailyLimit(chosen?.live_split_nudge_same_friend_daily_limit);
   if (limit === -1) {
     return {
       delete_friend: deleteFriend,
@@ -1777,6 +1804,7 @@ async function getUserLiveSplitAccess(userId) {
         enabled: true,
         limit: -1,
         period,
+        same_friend_daily_limit: sameFriendDailyLimit,
         used: 0,
         remaining: -1,
         unlimited: true,
@@ -1794,6 +1822,7 @@ async function getUserLiveSplitAccess(userId) {
         enabled: false,
         limit,
         period,
+        same_friend_daily_limit: sameFriendDailyLimit,
         used: 0,
         remaining: 0,
         unlimited: false,
@@ -1833,6 +1862,7 @@ async function getUserLiveSplitAccess(userId) {
       enabled: true,
       limit,
       period,
+      same_friend_daily_limit: sameFriendDailyLimit,
       used,
       remaining,
       unlimited: false,
@@ -1981,6 +2011,36 @@ async function consumeUserLiveSplitNudgeUsage(userId, friendId = null, direction
   return true;
 }
 
+async function countUserLiveSplitNudgesForFriendOnDay(userId, friendId, dayStart = null) {
+  const uid = Number(userId || 0);
+  const fid = Number(friendId || 0);
+  if (!(uid > 0) || !(fid > 0)) return 0;
+  const rangeStart = dayStart instanceof Date ? dayStart : usageRangeStart('day');
+  let result;
+  try {
+    result = await query(
+      `SELECT COUNT(*)::int AS used
+       FROM live_split_nudge_usage
+       WHERE user_id = $1
+         AND friend_id = $2
+         AND created_at >= $3`,
+      [uid, fid, rangeStart.toISOString()]
+    );
+  } catch (err) {
+    if (!isMissingLiveSplitNudgeUsageTableError(err)) throw err;
+    await ensureLiveSplitNudgeUsageTable();
+    result = await query(
+      `SELECT COUNT(*)::int AS used
+       FROM live_split_nudge_usage
+       WHERE user_id = $1
+         AND friend_id = $2
+         AND created_at >= $3`,
+      [uid, fid, rangeStart.toISOString()]
+    );
+  }
+  return Number(result.rows[0]?.used || 0);
+}
+
 async function generateOtp(userId, purpose, channel) {
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -2121,6 +2181,7 @@ module.exports = {
   getUserLiveSplitAccess,
   getUserVoiceAiAccess,
   consumeUserLiveSplitNudgeUsage,
+  countUserLiveSplitNudgesForFriendOnDay,
   consumeUserVoiceAiUsage,
   getSubscriptions,
   createSubscription,

@@ -4262,7 +4262,16 @@ router.post('/live-split/friends/:id/nudge', async (req, res) => {
     const targetCurrency = String(req.body?.currency_code || me?.currency_code || 'INR').trim().toUpperCase() || 'INR';
     const targetLocale = String(req.body?.locale_code || me?.locale_code || 'en-IN').trim() || 'en-IN';
     const amountLabel = formatNotificationCurrency(amountValue, targetCurrency, targetLocale);
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const sameFriendDailyLimit = Number(nudgeAccess?.same_friend_daily_limit || 1);
+    if (sameFriendDailyLimit !== -1) {
+      const sameFriendDayUsed = await Promise.resolve(pgDb.countUserLiveSplitNudgesForFriendOnDay(req.session.userId, friendId));
+      if (sameFriendDayUsed >= sameFriendDailyLimit) {
+        return res.status(429).json({
+          error: `You can nudge the same person only ${sameFriendDailyLimit} time${sameFriendDailyLimit === 1 ? '' : 's'} per day on your current plan.`,
+          access: liveSplitAccess,
+        });
+      }
+    }
     const title = nudgeDirection === 'i_owe_them'
       ? `Balance update from ${actorName}`
       : `Payment reminder from ${actorName}`;
@@ -4272,7 +4281,7 @@ router.post('/live-split/friends/:id/nudge', async (req, res) => {
 
     const result = await sendStoredNotificationToUser(targetUserId, {
       type: 'live_split_nudge',
-      dedupe_key: `${req.session.userId}:${friendId}:${todayKey}:${nudgeDirection}:${Math.round(amountValue * 100)}`,
+      dedupe_key: `${req.session.userId}:${friendId}:${nudgeDirection}:${Date.now()}:${Math.floor(Math.random() * 1000000)}`,
       title,
       body,
       target_screen: 'LiveSplit',
@@ -4289,14 +4298,7 @@ router.post('/live-split/friends/:id/nudge', async (req, res) => {
       },
     });
 
-    if (!result?.created) {
-      return res.json({
-        success: true,
-        already_sent: true,
-        message: 'A nudge for this amount was already sent today.',
-        access: liveSplitAccess,
-      });
-    }
+    if (!result?.created) throw new Error('Could not create Live Split nudge notification.');
 
     const usageAccess = await Promise.resolve(pgDb.consumeUserLiveSplitNudgeUsage(req.session.userId, friendId, nudgeDirection)).then(() => pgDb.getUserLiveSplitAccess(req.session.userId));
 
@@ -5889,7 +5891,7 @@ router.get('/auth/me/access', requireAuth, (req, res) => {
       role: user?.role || 'user',
       pages,
       ai_lookup_modes: aiLookupModes || { mode: 'none', offline: false, online: false },
-      live_split: liveSplitAccess || { delete_friend: false, nudge: { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false } },
+      live_split: liveSplitAccess || { delete_friend: false, nudge: { enabled: false, limit: 0, period: 'day', same_friend_daily_limit: 1, used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false } },
       voice_ai: voiceAiAccess || { enabled: false, limit: 0, period: 'day', used: 0, remaining: 0, unlimited: false, can_use: false, is_admin: false },
     });
   }).catch((err) => {
