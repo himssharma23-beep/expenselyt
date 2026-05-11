@@ -417,6 +417,35 @@ function getOpenAiReceiptScanModel() {
   ).trim();
 }
 
+function getOpenAiReceiptScanTimeoutMs() {
+  const raw = Number(process.env.OPENAI_RECEIPT_SCAN_TIMEOUT_MS || 12000);
+  if (!Number.isFinite(raw) || raw < 3000) return 12000;
+  return Math.round(raw);
+}
+
+async function postOpenAiResponseWithTimeout(body, apiKey, timeoutMs = getOpenAiReceiptScanTimeoutMs()) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`OpenAI receipt scan timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function getOpenAiAiLookupConfig() {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
   const model = String(
@@ -2352,34 +2381,27 @@ async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageB
     });
   }
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: getOpenAiReceiptScanModel(),
-      input: [
-        {
-          role: 'system',
-          content: [{ type: 'input_text', text: systemPrompt }],
-        },
-        {
-          role: 'user',
-          content,
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'receipt_scan_parse',
-          strict: true,
-          schema,
-        },
+  const response = await postOpenAiResponseWithTimeout({
+    model: getOpenAiReceiptScanModel(),
+    input: [
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt }],
       },
-    }),
-  });
+      {
+        role: 'user',
+        content,
+      },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'receipt_scan_parse',
+        strict: true,
+        schema,
+      },
+    },
+  }, config.apiKey);
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -2444,46 +2466,39 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
     'Do not invent rows that are not supported by the provided drafts.',
   ].join(' ');
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: getOpenAiReceiptScanModel(),
-      input: [
-        {
-          role: 'system',
-          content: [{ type: 'input_text', text: systemPrompt }],
-        },
-        {
-          role: 'user',
-          content: [{
-            type: 'input_text',
-            text: JSON.stringify({
-              drafts: pages.map((page, index) => ({
-                page: index + 1,
-                merchant: page?.merchant || '',
-                purchase_date: page?.purchase_date || '',
-                total_amount: page?.total_amount || 0,
-                items: page?.items || [],
-                raw_text: page?.raw_text || '',
-              })),
-            }),
-          }],
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'receipt_scan_merge',
-          strict: true,
-          schema,
-        },
+  const response = await postOpenAiResponseWithTimeout({
+    model: getOpenAiReceiptScanModel(),
+    input: [
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt }],
       },
-    }),
-  });
+      {
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: JSON.stringify({
+            drafts: pages.map((page, index) => ({
+              page: index + 1,
+              merchant: page?.merchant || '',
+              purchase_date: page?.purchase_date || '',
+              total_amount: page?.total_amount || 0,
+              items: page?.items || [],
+              raw_text: page?.raw_text || '',
+            })),
+          }),
+        }],
+      },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'receipt_scan_merge',
+        strict: true,
+        schema,
+      },
+    },
+  }, config.apiKey);
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -2500,7 +2515,7 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
   return normalizeReceiptDraftShape(parsed, pages.map((page) => page?.raw_text || '').join('\n\n'));
 }
 
-async function scanReceiptFile(file) {
+async function scanReceiptFile(file, options = {}) {
   if (!file) {
     const err = new Error('No image uploaded');
     err.statusCode = 400;
@@ -2523,10 +2538,11 @@ async function scanReceiptFile(file) {
   }
 
   const localDraft = normalizeReceiptDraftShape(parseReceiptDraftFromText(text), text);
+  const enableAi = options?.enableAi !== false;
   let aiDraft = null;
   let aiUsed = false;
   let aiError = '';
-  if (getOpenAiSmartCaptureConfig().enabled) {
+  if (enableAi && getOpenAiSmartCaptureConfig().enabled) {
     try {
       aiDraft = await parseReceiptDraftWithOpenAi(
         text,
@@ -2717,9 +2733,10 @@ router.post('/expenses/scan-images-batch', upload.array('files', 8), async (req,
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: 'No images uploaded' });
 
+    const usePerPageAi = files.length <= 1;
     const pageResults = [];
     for (const file of files) {
-      pageResults.push(await scanReceiptFile(file));
+      pageResults.push(await scanReceiptFile(file, { enableAi: usePerPageAi }));
     }
 
     const pageDrafts = pageResults.map((entry) => entry?.draft).filter(Boolean);
@@ -2745,6 +2762,7 @@ router.post('/expenses/scan-images-batch', upload.array('files', 8), async (req,
         confidence: pageResults.length ? Math.round((pageResults.reduce((sum, entry) => sum + Number(entry?.draft?.confidence || 0), 0) / pageResults.length) * 100) / 100 : 0,
         ai_used: pageResults.some((entry) => !!entry?.draft?.ai_used) || mergeAiUsed,
         ai_error: mergeAiError || null,
+        batch_fast_mode: !usePerPageAi,
       },
       pages: pageDrafts,
     });
