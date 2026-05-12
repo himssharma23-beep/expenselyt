@@ -1076,6 +1076,28 @@
     return Object.entries(grouped);
   }
 
+  function buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer) {
+    const payerKey = textKey(payer);
+    const ownerAmount = r2(splits.reduce((sum, split) => sum + n(split?.share_amount), 0)) || r2(total);
+    return [
+      { name: 'You', share: ownerAmount, paid: !!selfPayer },
+      ...splits.map((split) => ({
+        name: String(split?.friend_name || '').trim(),
+        share: r2(split?.share_amount),
+        paid: textKey(split?.friend_name) === payerKey,
+      })),
+    ].filter((item) => item.name);
+  }
+
+  function buildSettlementParticipantsForSharedGroup(participants, ownerKey, payerParticipant, rowParticipant, total) {
+    return participants.map((participant) => ({
+      name: participant.name,
+      share: participant.key === ownerKey ? r2(total) : r2(participant.share),
+      paid: !!(payerParticipant && payerParticipant.key === participant.key),
+      contextOnly: participant.key !== ownerKey && participant.key !== rowParticipant.key,
+    }));
+  }
+
   function buildRowEvents(row) {
     const rowName = String(row?.name || '').trim();
     if (!rowName) return [];
@@ -1130,14 +1152,16 @@
       });
       if (payerKey === rowKey) involved = true;
       if (involved) {
-        const participants = [
-          { name: 'You', share: selfShare, paid: selfPayer },
-          ...splits.map((split) => ({
-            name: String(split?.friend_name || '').trim(),
-            share: r2(split?.share_amount),
-            paid: textKey(split?.friend_name) === payerKey,
-          })),
-        ].filter((item) => item.name);
+        const participants = groupMode === 'settlement'
+          ? buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer)
+          : [
+              { name: 'You', share: selfShare, paid: selfPayer },
+              ...splits.map((split) => ({
+                name: String(split?.friend_name || '').trim(),
+                share: r2(split?.share_amount),
+                paid: textKey(split?.friend_name) === payerKey,
+              })),
+            ].filter((item) => item.name);
         events.push({
           key: `g-${group?.id || ''}-${group?.divide_date || ''}-${group?.details || ''}`,
           group_id: Number(group?.id) || null,
@@ -1237,12 +1261,15 @@
         delta = r2(0 - selfShare);
       }
 
-      const eventParticipants = participants.map((participant) => ({
-        name: participant.name,
-        share: r2(participant.share),
-        paid: !!(payerParticipant && payerParticipant.key === participant.key),
-        contextOnly: participant.key !== selfParticipant.key && participant.key !== rowParticipant.key,
-      }));
+      const ownerKey = `owner:${ownerUserId || textKey(ownerName)}`;
+      const eventParticipants = groupMode === 'settlement'
+        ? buildSettlementParticipantsForSharedGroup(participants, ownerKey, payerParticipant, rowParticipant, total)
+        : participants.map((participant) => ({
+            name: participant.name,
+            share: r2(participant.share),
+            paid: !!(payerParticipant && payerParticipant.key === participant.key),
+            contextOnly: participant.key !== selfParticipant.key && participant.key !== rowParticipant.key,
+          }));
 
       if (eventParticipants.length) {
         events.push({
@@ -1714,6 +1741,7 @@
           const totalFriends = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
           const selfShare = r2(total - totalFriends);
           const payer = String(groupFromId?.paid_by || '').trim();
+          const groupMode = String(groupFromId?.split_mode || '').trim().toLowerCase();
           const payerKey = textKey(payer);
           const selfPayer = isLikelySelfPayerForOwnGroup(payer, splits);
           event = {
@@ -1724,17 +1752,19 @@
             payer: payer || '-',
             total,
             delta: 0,
-            my_share_amount: String(groupFromId?.split_mode || '').trim().toLowerCase() === 'settlement' ? 0 : selfShare,
-            split_mode: String(groupFromId?.split_mode || '').trim().toLowerCase() || 'equal',
+            my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
+            split_mode: groupMode || 'equal',
             added_to_expense: !!groupFromId?.added_to_expense,
-            participants: [
-              { name: 'You', share: selfShare, paid: selfPayer },
-              ...splits.map((split) => ({
-                name: String(split?.friend_name || '').trim(),
-                share: r2(split?.share_amount),
-                paid: textKey(split?.friend_name) === payerKey,
-              })),
-            ].filter((item) => item.name),
+            participants: groupMode === 'settlement'
+              ? buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer)
+              : [
+                  { name: 'You', share: selfShare, paid: selfPayer },
+                  ...splits.map((split) => ({
+                    name: String(split?.friend_name || '').trim(),
+                    share: r2(split?.share_amount),
+                    paid: textKey(split?.friend_name) === payerKey,
+                  })),
+                ].filter((item) => item.name),
           };
         }
       } catch (_) {
