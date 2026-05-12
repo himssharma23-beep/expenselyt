@@ -10057,6 +10057,167 @@ async function showPlanModal(planId) {
   _updateVoiceLimitHint();
 }
 
+async function showPlanModal(planId) {
+  const data = await api('/api/admin/plans');
+  const plan = planId ? data?.plans?.find((p) => p.id === planId) : null;
+  const pageCheckboxes = ALL_PAGES.map((pg) =>
+    `<label class="plan-page-tile ${plan?.pages?.includes(pg.key) ? 'checked' : ''}">
+      <input type="checkbox" class="plan-page-cb" value="${pg.key}" ${plan?.pages?.includes(pg.key) ? 'checked' : ''} onchange="this.closest('.plan-page-tile')?.classList.toggle('checked', this.checked)">
+      <span>${pg.label}</span>
+    </label>`
+  ).join('');
+  const aiLimitVal = plan?.ai_query_limit != null ? plan.ai_query_limit : -1;
+  const aiLookupModeVal = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan?.ai_lookup_mode)?.key || 'both';
+  const liveSplitDeleteVal = !!plan?.allow_live_split_friend_delete;
+  const liveSplitNudgeEnabledVal = !!plan?.live_split_nudge_enabled;
+  const liveSplitNudgeLimitVal = plan?.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0;
+  const liveSplitNudgePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.live_split_nudge_limit_period || '').toLowerCase())
+    ? String(plan.live_split_nudge_limit_period).toLowerCase()
+    : 'day';
+  const liveSplitSameFriendDailyLimitVal = plan?.live_split_nudge_same_friend_daily_limit != null
+    ? Number(plan.live_split_nudge_same_friend_daily_limit)
+    : 1;
+  const voiceEnabledVal = !!plan?.voice_ai_enabled;
+  const voiceLimitVal = plan?.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0;
+  const voicePeriodVal = ['day', 'week', 'month', 'year'].includes(String(plan?.voice_ai_limit_period || '').toLowerCase())
+    ? String(plan.voice_ai_limit_period).toLowerCase()
+    : 'day';
+  window.__modalClassName = 'modal-wide plan-editor-modal';
+  openModal(plan ? `Edit plan · ${plan.name}` : 'New plan', `
+    <div class="plan-modal-shell plan-modal-shell-reference">
+      <div class="plan-modal-card plan-modal-card-basics">
+        <div class="plan-modal-card-title">Plan Basics</div>
+        <div class="fg">
+          <label class="fl">Plan Name<input class="fi" id="pName" value="${plan?.name || ''}" placeholder="Pro, Premium, Family..."></label>
+          <label class="fl">Description<input class="fi" id="pDesc" value="${plan?.description || ''}" placeholder="Short value proposition..."></label>
+          <label class="fl">Monthly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pMonthly" value="${plan?.price_monthly || 0}"></label>
+          <label class="fl">Yearly Price (&#8377;)<input class="fi" type="number" step="0.01" id="pYearly" value="${plan?.price_yearly || 0}"></label>
+        </div>
+      </div>
+
+      <div class="plan-modal-grid-2">
+        <div class="plan-modal-card plan-modal-card-compact">
+          <div class="plan-modal-card-title">AI Access</div>
+          <label class="fl full">Queries per day
+            <div class="plan-ai-limit-row">
+              <input class="fi" type="number" id="pAiLimit" value="${aiLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateAiLimitHint(this.value)">
+              <span id="pAiLimitHint" class="plan-ai-limit-badge">${aiLimitVal === -1 ? 'Unlimited' : aiLimitVal === 0 ? 'No AI access' : `${aiLimitVal}/day`}</span>
+            </div>
+            <div class="plan-field-help">-1 = Unlimited &middot; 0 = Disabled</div>
+          </label>
+          <div class="plan-mode-group">
+            <div class="plan-mode-label">Lookup mode</div>
+            <input type="hidden" id="pAiMode" value="${aiLookupModeVal}">
+            <div class="plan-mode-grid">
+              ${AI_LOOKUP_MODE_OPTIONS.map((opt) => `
+                <button type="button" data-mode="${opt.key}" class="plan-mode-chip ${aiLookupModeVal === opt.key ? 'active' : ''}" onclick="setPlanAiMode('${opt.key}')">${opt.label.replace(' only', '')}</button>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="plan-modal-card plan-modal-card-compact">
+          <div class="plan-modal-card-title">Voice AI</div>
+          <div class="plan-toggle-grid plan-toggle-grid-single" style="margin-bottom:10px">
+            <label class="plan-toggle-tile plan-toggle-switch ${voiceEnabledVal ? 'checked' : ''}">
+              <input type="checkbox" id="pVoiceEnabled" ${voiceEnabledVal ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked);_toggleVoicePlanFields()">
+              <span class="plan-toggle-copy">
+                <span class="plan-toggle-title">Enable voice AI</span>
+                <span class="plan-toggle-sub">Voice-based expense &amp; split insertion</span>
+              </span>
+            </label>
+          </div>
+          <div id="pVoiceFields" style="${voiceEnabledVal ? '' : 'opacity:.6'}">
+            <label class="fl full">Usage limit
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pVoiceLimit" value="${voiceLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateVoiceLimitHint()">
+                <select class="fi" id="pVoicePeriod" style="max-width:140px" onchange="_updateVoiceLimitHint()">
+                  <option value="day" ${voicePeriodVal === 'day' ? 'selected' : ''}>Per day</option>
+                  <option value="week" ${voicePeriodVal === 'week' ? 'selected' : ''}>Per week</option>
+                  <option value="month" ${voicePeriodVal === 'month' ? 'selected' : ''}>Per month</option>
+                  <option value="year" ${voicePeriodVal === 'year' ? 'selected' : ''}>Per year</option>
+                </select>
+                <span id="pVoiceLimitHint" class="plan-ai-limit-badge"></span>
+              </div>
+              <div class="plan-field-help">-1 = Unlimited &middot; 0 = No usage</div>
+            </label>
+          </div>
+        </div>
+
+        <div class="plan-modal-card plan-modal-card-compact">
+          <div class="plan-modal-card-title">Live Split Nudges</div>
+          <div class="plan-toggle-grid plan-toggle-grid-single" style="margin-bottom:10px">
+            <label class="plan-toggle-tile plan-toggle-switch ${liveSplitNudgeEnabledVal ? 'checked' : ''}">
+              <input type="checkbox" id="pLiveSplitNudgeEnabled" ${liveSplitNudgeEnabledVal ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked);_toggleLiveSplitNudgeFields()">
+              <span class="plan-toggle-copy">
+                <span class="plan-toggle-title">Enable nudges</span>
+                <span class="plan-toggle-sub">Balance reminders in Live Split</span>
+              </span>
+            </label>
+          </div>
+          <div id="pLiveSplitNudgeFields" style="${liveSplitNudgeEnabledVal ? '' : 'opacity:.6'}">
+            <label class="fl full">Usage limit
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pLiveSplitNudgeLimit" value="${liveSplitNudgeLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateLiveSplitNudgeHint()">
+                <select class="fi" id="pLiveSplitNudgePeriod" style="max-width:140px" onchange="_updateLiveSplitNudgeHint()">
+                  <option value="day" ${liveSplitNudgePeriodVal === 'day' ? 'selected' : ''}>Per day</option>
+                  <option value="week" ${liveSplitNudgePeriodVal === 'week' ? 'selected' : ''}>Per week</option>
+                  <option value="month" ${liveSplitNudgePeriodVal === 'month' ? 'selected' : ''}>Per month</option>
+                  <option value="year" ${liveSplitNudgePeriodVal === 'year' ? 'selected' : ''}>Per year</option>
+                </select>
+                <span id="pLiveSplitNudgeHint" class="plan-ai-limit-badge"></span>
+              </div>
+            </label>
+            <label class="fl full">Same friend / day cap
+              <div class="plan-ai-limit-row">
+                <input class="fi" type="number" id="pLiveSplitSameFriendDailyLimit" value="${liveSplitSameFriendDailyLimitVal}" min="-1" step="1" style="flex:1" oninput="_updateLiveSplitNudgeHint()">
+                <span id="pLiveSplitSameFriendDailyHint" class="plan-ai-limit-badge"></span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="plan-modal-card plan-modal-card-compact">
+          <div class="plan-modal-card-title">Plan Behavior</div>
+          <div class="plan-toggle-grid plan-toggle-grid-behavior">
+            <label class="plan-toggle-tile plan-toggle-pill ${plan?.is_free ? 'checked' : ''}">
+              <input type="checkbox" id="pFree" ${plan?.is_free ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+              <span class="plan-toggle-title">Free plan</span>
+            </label>
+            <label class="plan-toggle-tile plan-toggle-pill ${(plan === null || plan?.is_active) ? 'checked' : ''}">
+              <input type="checkbox" id="pActive" ${(plan === null || plan?.is_active) ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+              <span class="plan-toggle-title">Active</span>
+            </label>
+            <label class="plan-toggle-tile plan-toggle-pill ${plan?.auto_assign_on_signup ? 'checked' : ''}">
+              <input type="checkbox" id="pSignupDefault" ${plan?.auto_assign_on_signup ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+              <span class="plan-toggle-title">Auto assign</span>
+            </label>
+            <label class="plan-toggle-tile plan-toggle-pill ${liveSplitDeleteVal ? 'checked' : ''}">
+              <input type="checkbox" id="pLiveSplitDeleteFriend" ${liveSplitDeleteVal ? 'checked' : ''} onchange="this.closest('.plan-toggle-tile')?.classList.toggle('checked', this.checked)">
+              <span class="plan-toggle-title">Delete friends</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="plan-modal-card plan-modal-card-pages">
+        <div class="plan-section-head">
+          <div>
+            <div class="plan-modal-card-title" style="margin-bottom:2px">Pages Included</div>
+          </div>
+        </div>
+        <div class="plan-pages-grid">${pageCheckboxes}</div>
+      </div>
+    </div>
+    <div class="fa plan-modal-footer">
+      <button class="btn btn-p plan-save-btn" onclick="adminSavePlan(${planId || 'null'})"><span class="plan-save-btn-icon" aria-hidden="true"></span>Save plan</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  window.__modalClassName = '';
+  _updateLiveSplitNudgeHint();
+  _updateVoiceLimitHint();
+}
+
 function _updateAiLimitHint(val) {
   const n = parseInt(val, 10);
   const hint = document.getElementById('pAiLimitHint');
