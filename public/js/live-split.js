@@ -350,6 +350,7 @@
     (sharedGroups || []).forEach((group) => {
       const splits = Array.isArray(group?.splits) ? group.splits : [];
       const total = r2(group?.total_amount);
+      const groupMode = String(group?.split_mode || '').trim().toLowerCase();
       const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
       const ownerUserId = Number(group?.owner_user_id || 0);
       const meId = Number(group?.target_user_id || window._currentUser?.id || 0);
@@ -430,7 +431,13 @@
         if (isSelfLinkedEntity(row)) return;
 
         let delta = 0;
-        if (selfIsPayer) {
+        if (groupMode === 'settlement') {
+          if (selfIsPayer && selfShare > 0) {
+            delta = selfShare;
+          } else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) {
+            delta = r2(0 - selfShare);
+          }
+        } else if (selfIsPayer) {
           delta = r2(participant.share);
         } else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) {
           delta = r2(0 - selfShare);
@@ -1151,6 +1158,7 @@
     (state.sharedGroups || []).forEach((group) => {
       const splits = Array.isArray(group?.splits) ? group.splits : [];
       const total = r2(group?.total_amount);
+      const groupMode = String(group?.split_mode || '').trim().toLowerCase();
       const ownerName = String(group?.owner_name || 'Owner').trim();
       const ownerUserId = Number(group?.owner_user_id || 0);
       const meId = Number(group?.target_user_id || window._currentUser?.id || 0);
@@ -1217,7 +1225,13 @@
       if (!rowParticipant || rowParticipant.key === selfParticipant.key) return;
 
       let delta = 0;
-      if (selfIsPayer) {
+      if (groupMode === 'settlement') {
+        if (selfIsPayer && selfShare > 0) {
+          delta = selfShare;
+        } else if (payerParticipant && payerParticipant.key === rowParticipant.key && selfShare > 0) {
+          delta = r2(0 - selfShare);
+        }
+      } else if (selfIsPayer) {
         delta = r2(rowParticipant.share);
       } else if (payerParticipant && payerParticipant.key === rowParticipant.key && selfShare > 0) {
         delta = r2(0 - selfShare);
@@ -1240,8 +1254,8 @@
           payer: payer || ownerName || '-',
           total,
           delta,
-          my_share_amount: String(group?.split_mode || '').trim().toLowerCase() === 'settlement' ? 0 : selfShare,
-          split_mode: String(group?.split_mode || '').trim().toLowerCase() || 'equal',
+          my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
+          split_mode: groupMode || 'equal',
           added_to_expense: !!group?.added_to_expense,
           participants: eventParticipants,
         });

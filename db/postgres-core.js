@@ -296,6 +296,7 @@ function computeLiveSplitDashboardSummary(userId, friends = [], groups = [], sha
 
   (sharedGroups || []).forEach((group) => {
     const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const groupMode = String(group?.split_mode || '').trim().toLowerCase();
     const total = r2(group?.total_amount);
     const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
     const ownerUserId = Number(group?.owner_user_id || 0);
@@ -365,8 +366,13 @@ function computeLiveSplitDashboardSummary(userId, friends = [], groups = [], sha
       if (!row || Number(row?.linked_user_id || 0) === meId) return;
 
       let delta = 0;
-      if (selfIsPayer) delta = r2(participant.share);
-      else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) delta = r2(0 - selfShare);
+      if (groupMode === 'settlement') {
+        if (selfIsPayer && selfShare > 0) delta = selfShare;
+        else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) delta = r2(0 - selfShare);
+      } else {
+        if (selfIsPayer) delta = r2(participant.share);
+        else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) delta = r2(0 - selfShare);
+      }
       if (delta !== 0) row.amount = r2(row.amount + delta);
     });
   });

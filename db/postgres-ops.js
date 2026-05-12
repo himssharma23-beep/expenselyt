@@ -1615,6 +1615,7 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
 }
 
 async function updateRecurringEntry(userId, id, data) {
+  const type = data.type === 'cc_txn' ? 'cc_txn' : 'expense';
   const description = normalizeText(data.description, 'Recurring description', 160);
   const amount = normalizePositiveAmount(data.amount);
   const expenseCategory = normalizeOptionalText(data.expense_category, 80);
@@ -1624,28 +1625,33 @@ async function updateRecurringEntry(userId, id, data) {
   const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
   const reminderSilent = !!data.reminder_silent;
   const intervalMonths = Math.max(1, parseInt(data.interval_months, 10) || 1);
-  const bankAccountId = normalizeBankAccountId(data.bank_account_id);
+  const bankAccountId = type === 'expense' ? normalizeBankAccountId(data.bank_account_id) : null;
+  const cardId = type === 'cc_txn' ? (parseInt(data.card_id, 10) || null) : null;
+  const discountPct = type === 'cc_txn' ? (parseFloat(data.discount_pct) || 0) : 0;
+  const alsoExpense = type === 'cc_txn' ? !!data.also_expense : false;
+  const isExtra = type === 'expense' ? !!data.is_extra : false;
   const isActive = data.is_active != null ? !!data.is_active : true;
   await withTransaction(async (client) => {
     await client.query(
       `UPDATE recurring_entries
-       SET description = $1, amount = $2, interval_months = $3, start_month = $4, due_day = $5, card_id = $6,
-           bank_account_id = $7, expense_category = $8, discount_pct = $9, also_expense = $10, is_extra = $11,
-           reminder_enabled = $12, reminder_days_before = $13, reminder_frequency = $14, reminder_silent = $15,
-           is_active = $16, updated_at = NOW(), updated_by = $18
-       WHERE id = $17 AND user_id = $18`,
+       SET type = $1, description = $2, amount = $3, interval_months = $4, start_month = $5, due_day = $6, card_id = $7,
+           bank_account_id = $8, expense_category = $9, discount_pct = $10, also_expense = $11, is_extra = $12,
+           reminder_enabled = $13, reminder_days_before = $14, reminder_frequency = $15, reminder_silent = $16,
+           is_active = $17, updated_at = NOW(), updated_by = $19
+       WHERE id = $18 AND user_id = $19`,
       [
+        type,
         description,
         amount,
         intervalMonths,
         data.start_month || null,
         dueDay,
-        data.card_id || null,
+        cardId,
         bankAccountId,
         expenseCategory,
-        parseFloat(data.discount_pct) || 0,
-        !!data.also_expense,
-        !!data.is_extra,
+        discountPct,
+        alsoExpense,
+        isExtra,
         reminderEnabled,
         reminderDaysBefore,
         reminderFrequency,
