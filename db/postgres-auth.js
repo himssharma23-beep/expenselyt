@@ -31,6 +31,8 @@ const ADMIN_ACCESS_PAGES = [
   'creditcards',
   'banks',
   'planner',
+  'societies',
+  'schoolkids',
   'tracker',
   'habittracker',
   'expense_scan',

@@ -1575,6 +1575,9 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
   const postingDate = recurringDueDateForMonth(currentMonth, entry.due_day);
   if (!postingDate) return false;
   if (postingDate > localIsoToday()) return false;
+  if (entry.type === 'expense' && !entry.card_id) {
+    await generateMonthlyPayments(userId, currentMonth);
+  }
   await withTransaction(async (client) => {
     if (entry.type === 'expense') {
       const bankAccountId = normalizeBankAccountId(entry.bank_account_id);
@@ -1586,6 +1589,17 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
       if (bankAccountId) {
         await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
       }
+      await client.query(
+        `UPDATE monthly_payments
+         SET paid_amount = $1,
+             paid_date = $2,
+             status = 'paid',
+             bank_account_id = COALESCE($3, bank_account_id)
+         WHERE user_id = $4
+           AND month = $5
+           AND recurring_entry_id = $6`,
+        [num(entry.amount), postingDate, bankAccountId, userId, currentMonth, entry.id]
+      );
     } else if (entry.type === 'cc_txn' && entry.card_id) {
       const billingDb = require('./postgres-billing');
       await billingDb.addCcTxn(userId, {

@@ -101,7 +101,7 @@ async function updateCycleTotals(cycleId, client = null) {
     `SELECT
        COALESCE(SUM(amount), 0) AS total_amount,
        COALESCE(SUM(discount_amount), 0) AS total_discount,
-       COALESCE(SUM(net_amount), 0) AS net_payable
+       COALESCE(SUM(amount), 0) AS net_payable
      FROM cc_txns
      WHERE cycle_id = $1`,
     [cycleId]
@@ -860,7 +860,7 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
       const cycleStartStr = _localDate(new Date(yr, mo - 1 + offset - 1, billGenDay + 1));
       const cycleEndStr = _localDate(cycleEndDate);
       const matchingR = await query(
-        `SELECT id, net_payable, paid_amount, status
+        `SELECT id, COALESCE(total_amount, net_payable) AS net_payable, paid_amount, status
          FROM cc_cycles
          WHERE card_id = $1 AND user_id = $2 AND cycle_start = $3 AND cycle_end = $4
          LIMIT 1`,
@@ -872,7 +872,7 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
       let recentNet = 0;
       if (!matching) {
         const recentR = await query(
-          `SELECT net_payable
+          `SELECT COALESCE(total_amount, net_payable) AS net_payable
            FROM cc_cycles
            WHERE card_id = $1 AND user_id = $2 AND status IN ('open','billed','partial','paid')
            ORDER BY cycle_start DESC
@@ -941,7 +941,7 @@ async function getUserFinancialSummary(userId) {
 
   const ccSummaries = [];
   for (const card of cardsR.rows) {
-    const cycleR = await query(`SELECT net_payable, total_amount AS total_spent, status, cycle_start, cycle_end, due_date FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC LIMIT 1`, [card.id, userId]);
+    const cycleR = await query(`SELECT COALESCE(total_amount, net_payable) AS net_payable, total_amount AS total_spent, status, cycle_start, cycle_end, due_date FROM cc_cycles WHERE card_id = $1 AND user_id = $2 ORDER BY cycle_start DESC LIMIT 1`, [card.id, userId]);
     ccSummaries.push({
       ...card,
       credit_limit: num(card.credit_limit),

@@ -14,10 +14,11 @@ const { assertPostgresConfigured, getDbProvider } = require('./db/provider');
 const pgDb = require('./db/postgres-auth');
 const pgCoreDb = require('./db/postgres-core');
 const pgPetrolDb = require('./db/postgres-petrol');
+const pgOpsDb = require('./db/postgres-ops');
 const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
 const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
-const { sendMonthlySummaryEmailsForCurrentMonth } = require('./utils/user-email-events');
+const { sendMonthlySummaryEmailsForCurrentMonth, sendRecurringAppliedEmailForUser } = require('./utils/user-email-events');
 const { runPushNotificationCycle } = require('./utils/user-push-events');
 const { verifyRecaptcha } = require('./utils/recaptcha');
 
@@ -255,11 +256,33 @@ async function runPushCycle() {
   }
 }
 
+async function runRecurringCycle() {
+  try {
+    const users = await pgDb.getAllUsers();
+    for (const user of users || []) {
+      const userId = Number(user?.id || 0);
+      if (!userId || user?.deleted_at || user?.is_active === false) continue;
+      try {
+        const applied = await pgOpsDb.applyRecurringEntries(userId);
+        if ((applied || []).length) {
+          sendRecurringAppliedEmailForUser(userId, applied).catch(() => {});
+        }
+      } catch (err) {
+        console.error(`[recurring] apply failed for user ${userId}:`, err?.message || err);
+      }
+    }
+  } catch (err) {
+    console.error('[recurring] cycle failed:', err?.message || err);
+  }
+}
+
 setTimeout(() => {
   runMonthlyEmailCycle().catch(() => {});
   runPushCycle().catch(() => {});
+  runRecurringCycle().catch(() => {});
   setInterval(() => {
     runMonthlyEmailCycle().catch(() => {});
     runPushCycle().catch(() => {});
+    runRecurringCycle().catch(() => {});
   }, 60 * 60 * 1000);
 }, 10 * 1000);

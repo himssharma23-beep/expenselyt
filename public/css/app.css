@@ -1547,6 +1547,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 /* ─── Planner ────────────────────────────────────────────────── */
 .planner-layout { display:grid; grid-template-columns:1fr 280px; gap:16px; align-items:start; }
 .planner-summary { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
+.societies-main { min-width:0; }
 .pl-stat { background:var(--white); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
 .pl-stat .lbl { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--t3); font-weight:600; margin-bottom:6px; }
 .pl-stat .val { font-size:17px; font-weight:700; font-family:var(--mono); }

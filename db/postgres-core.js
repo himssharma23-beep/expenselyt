@@ -5226,6 +5226,1084 @@ async function getPublicShareData(token) {
   };
 }
 
+let societySchemaEnsured = false;
+let schoolKidSchemaEnsured = false;
+
+function currentMonthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function normalizeMonthKey(value, label = 'Month') {
+  const normalized = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(normalized)) throw validationError(`${label} must be in YYYY-MM format`);
+  return normalized;
+}
+
+function normalizePhoneNumber(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  if (normalized.length > 30) throw validationError('Phone number must be 30 characters or fewer');
+  if (!/^[0-9+\-() ]+$/.test(normalized)) throw validationError('Phone number contains invalid characters');
+  return normalized;
+}
+
+function normalizePropertyType(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!['home', 'shop'].includes(normalized)) throw validationError('Property type must be home or shop');
+  return normalized;
+}
+
+async function ensureSocietyTables() {
+  if (societySchemaEnsured) return;
+  await query(`
+    CREATE TABLE IF NOT EXISTS societies (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      location TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, name)
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_members (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      member_name TEXT NOT NULL,
+      phone_number TEXT,
+      unit_label TEXT NOT NULL,
+      property_type TEXT NOT NULL DEFAULT 'home',
+      monthly_due NUMERIC(12,2) NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE society_members ADD COLUMN IF NOT EXISTS monthly_due NUMERIC(12,2) NOT NULL DEFAULT 0`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_contributions (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+      month_key TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      paid_on DATE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (society_id, member_id, month_key)
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      expense_date DATE NOT NULL,
+      month_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_societies_user_id ON societies(user_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_members_society_id ON society_members(society_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_contributions_society_month ON society_contributions(society_id, month_key)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_expenses_society_month ON society_expenses(society_id, month_key)`);
+  societySchemaEnsured = true;
+}
+
+function normalizeSocietyAmount(value, label = 'Amount', { allowZero = true } = {}) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) throw validationError(`${label} is invalid`);
+  if (allowZero ? amount < 0 : amount <= 0) throw validationError(`${label} must be ${allowZero ? '0 or more' : 'greater than 0'}`);
+  return Math.round(amount * 100) / 100;
+}
+
+async function getSocietyOwnedByUser(userId, societyId) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT id, user_id, name, location, created_at, updated_at
+     FROM societies
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [societyId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function listSocieties(userId) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT s.id,
+            s.name,
+            s.location,
+            s.created_at,
+            s.updated_at,
+            COALESCE(m.member_count, 0) AS member_count,
+            COALESCE(c.total_collected, 0) AS total_collected,
+            COALESCE(e.total_spent, 0) AS total_spent,
+            COALESCE(c.latest_month_key, e.latest_month_key, '') AS latest_month_key
+     FROM societies s
+     LEFT JOIN (
+       SELECT society_id, COUNT(*) AS member_count
+       FROM society_members
+       GROUP BY society_id
+     ) m ON m.society_id = s.id
+     LEFT JOIN (
+       SELECT society_id, SUM(amount) AS total_collected, MAX(month_key) AS latest_month_key
+       FROM society_contributions
+       GROUP BY society_id
+     ) c ON c.society_id = s.id
+     LEFT JOIN (
+       SELECT society_id, SUM(amount) AS total_spent, MAX(month_key) AS latest_month_key
+       FROM society_expenses
+       GROUP BY society_id
+     ) e ON e.society_id = s.id
+     WHERE s.user_id = $1
+     ORDER BY lower(s.name), s.id`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    location: row.location || '',
+    member_count: Number(row.member_count || 0),
+    total_collected: num(row.total_collected),
+    total_spent: num(row.total_spent),
+    latest_month_key: row.latest_month_key || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+async function createSociety(userId, data = {}) {
+  await ensureSocietyTables();
+  const name = normalizeText(data.name, 'Society name', 120);
+  const location = normalizeOptionalText(data.location, 160);
+  const result = await query(
+    `INSERT INTO societies (user_id, name, location, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     RETURNING id, user_id, name, location, created_at, updated_at`,
+    [userId, name, location]
+  );
+  return result.rows[0];
+}
+
+async function updateSociety(userId, societyId, data = {}) {
+  await ensureSocietyTables();
+  const current = await getSocietyOwnedByUser(userId, societyId);
+  if (!current) throw validationError('Society not found');
+  const name = data.name !== undefined ? normalizeText(data.name, 'Society name', 120) : current.name;
+  const location = data.location !== undefined ? normalizeOptionalText(data.location, 160) : current.location;
+  const result = await query(
+    `UPDATE societies
+     SET name = $1, location = $2, updated_at = NOW()
+     WHERE id = $3 AND user_id = $4
+     RETURNING id, user_id, name, location, created_at, updated_at`,
+    [name, location, societyId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSociety(userId, societyId) {
+  await ensureSocietyTables();
+  const result = await query('DELETE FROM societies WHERE id = $1 AND user_id = $2', [societyId, userId]);
+  return result.rowCount > 0;
+}
+
+async function addSocietyMember(userId, societyId, data = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query(
+    `INSERT INTO society_members (society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+     RETURNING id, society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, created_at, updated_at`,
+    [
+      societyId,
+      normalizeText(data.member_name, 'Member name', 120),
+      normalizePhoneNumber(data.phone_number),
+      normalizeText(data.unit_label, 'House number or shop name', 120),
+      normalizePropertyType(data.property_type),
+      normalizeSocietyAmount(data.monthly_due, 'Monthly due'),
+      data.is_active !== false,
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateSocietyMember(userId, societyId, memberId, data = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const currentR = await query(
+    `SELECT id, member_name, phone_number, unit_label, property_type, monthly_due, is_active
+     FROM society_members
+     WHERE id = $1 AND society_id = $2
+     LIMIT 1`,
+    [memberId, societyId]
+  );
+  const current = currentR.rows[0];
+  if (!current) throw validationError('Society member not found');
+  const result = await query(
+    `UPDATE society_members
+     SET member_name = $1,
+         phone_number = $2,
+         unit_label = $3,
+         property_type = $4,
+         monthly_due = $5,
+         is_active = $6,
+         updated_at = NOW()
+     WHERE id = $7 AND society_id = $8
+     RETURNING id, society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, created_at, updated_at`,
+    [
+      data.member_name !== undefined ? normalizeText(data.member_name, 'Member name', 120) : current.member_name,
+      data.phone_number !== undefined ? normalizePhoneNumber(data.phone_number) : current.phone_number,
+      data.unit_label !== undefined ? normalizeText(data.unit_label, 'House number or shop name', 120) : current.unit_label,
+      data.property_type !== undefined ? normalizePropertyType(data.property_type) : current.property_type,
+      data.monthly_due !== undefined ? normalizeSocietyAmount(data.monthly_due, 'Monthly due') : normalizeSocietyAmount(current.monthly_due, 'Monthly due'),
+      data.is_active !== undefined ? !!data.is_active : !!current.is_active,
+      memberId,
+      societyId,
+    ]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSocietyMember(userId, societyId, memberId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query('DELETE FROM society_members WHERE id = $1 AND society_id = $2', [memberId, societyId]);
+  return result.rowCount > 0;
+}
+
+async function saveSocietyContribution(userId, societyId, memberId, data = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const memberR = await query(
+    `SELECT id FROM society_members WHERE id = $1 AND society_id = $2 LIMIT 1`,
+    [memberId, societyId]
+  );
+  if (!memberR.rows[0]) throw validationError('Society member not found');
+  const monthKey = normalizeMonthKey(data.month_key || currentMonthKey());
+  const rawAmount = Number(data.amount || 0);
+  if (!Number.isFinite(rawAmount) || rawAmount < 0) throw validationError('Contribution amount must be 0 or more');
+  const amount = Math.round(rawAmount * 100) / 100;
+  const paidOn = data.paid_on ? normalizeDateValue(data.paid_on, 'Paid on') : null;
+  const notes = data.notes != null ? normalizeOptionalText(data.notes, 500) : null;
+  if (amount === 0) {
+    await query(
+      `DELETE FROM society_contributions
+       WHERE society_id = $1 AND member_id = $2 AND month_key = $3`,
+      [societyId, memberId, monthKey]
+    );
+    return { deleted: true, member_id: Number(memberId), month_key: monthKey, amount: 0 };
+  }
+  const result = await query(
+    `INSERT INTO society_contributions (society_id, member_id, month_key, amount, paid_on, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     ON CONFLICT (society_id, member_id, month_key)
+     DO UPDATE SET amount = EXCLUDED.amount,
+                   paid_on = EXCLUDED.paid_on,
+                   notes = EXCLUDED.notes,
+                   updated_at = NOW()
+     RETURNING id, society_id, member_id, month_key, amount, paid_on, notes, created_at, updated_at`,
+    [societyId, memberId, monthKey, amount, paidOn, notes]
+  );
+  return result.rows[0];
+}
+
+async function addSocietyExpense(userId, societyId, data = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const expenseDate = normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date');
+  const result = await query(
+    `INSERT INTO society_expenses (society_id, expense_date, month_key, title, category, amount, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+     RETURNING id, society_id, expense_date, month_key, title, category, amount, notes, created_at, updated_at`,
+    [
+      societyId,
+      expenseDate,
+      normalizeMonthKey(data.month_key || expenseDate.slice(0, 7)),
+      normalizeText(data.title, 'Expense title', 160),
+      normalizeOptionalText(data.category, 80),
+      normalizeAmount(data.amount, 'Expense amount'),
+      normalizeOptionalText(data.notes, 500),
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateSocietyExpense(userId, societyId, expenseId, data = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const currentR = await query(
+    `SELECT id, expense_date, month_key, title, category, amount, notes
+     FROM society_expenses
+     WHERE id = $1 AND society_id = $2
+     LIMIT 1`,
+    [expenseId, societyId]
+  );
+  const current = currentR.rows[0];
+  if (!current) throw validationError('Society expense not found');
+  const expenseDate = data.expense_date !== undefined ? normalizeDateValue(data.expense_date, 'Expense date') : current.expense_date;
+  const result = await query(
+    `UPDATE society_expenses
+     SET expense_date = $1,
+         month_key = $2,
+         title = $3,
+         category = $4,
+         amount = $5,
+         notes = $6,
+         updated_at = NOW()
+     WHERE id = $7 AND society_id = $8
+     RETURNING id, society_id, expense_date, month_key, title, category, amount, notes, created_at, updated_at`,
+    [
+      expenseDate,
+      data.month_key !== undefined ? normalizeMonthKey(data.month_key) : String(expenseDate).slice(0, 7),
+      data.title !== undefined ? normalizeText(data.title, 'Expense title', 160) : current.title,
+      data.category !== undefined ? normalizeOptionalText(data.category, 80) : current.category,
+      data.amount !== undefined ? normalizeAmount(data.amount, 'Expense amount') : num(current.amount),
+      data.notes !== undefined ? normalizeOptionalText(data.notes, 500) : current.notes,
+      expenseId,
+      societyId,
+    ]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSocietyExpense(userId, societyId, expenseId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query('DELETE FROM society_expenses WHERE id = $1 AND society_id = $2', [expenseId, societyId]);
+  return result.rowCount > 0;
+}
+
+async function getSocietyDetail(userId, societyId, options = {}) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const [membersR, contributionsR, expensesR] = await Promise.all([
+    query(
+      `SELECT id, society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, created_at, updated_at
+       FROM society_members
+       WHERE society_id = $1
+       ORDER BY lower(member_name), lower(unit_label), id`,
+      [societyId]
+    ),
+    query(
+      `SELECT id, society_id, member_id, month_key, amount, paid_on, notes, created_at, updated_at
+       FROM society_contributions
+       WHERE society_id = $1
+       ORDER BY month_key DESC, member_id ASC`,
+      [societyId]
+    ),
+    query(
+      `SELECT id, society_id, expense_date, month_key, title, category, amount, notes, created_at, updated_at
+       FROM society_expenses
+       WHERE society_id = $1
+       ORDER BY expense_date DESC, id DESC`,
+      [societyId]
+    ),
+  ]);
+  const members = membersR.rows.map((row) => ({
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    member_name: row.member_name,
+    phone_number: row.phone_number || '',
+    unit_label: row.unit_label,
+    property_type: row.property_type,
+    monthly_due: num(row.monthly_due),
+    is_active: !!row.is_active,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const contributions = contributionsR.rows.map((row) => ({
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    member_id: Number(row.member_id),
+    month_key: row.month_key,
+    amount: num(row.amount),
+    paid_on: row.paid_on,
+    notes: row.notes || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const expenses = expensesR.rows.map((row) => ({
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    expense_date: row.expense_date,
+    month_key: row.month_key,
+    title: row.title,
+    category: row.category || '',
+    amount: num(row.amount),
+    notes: row.notes || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const monthCandidates = [
+    ...contributions.map((item) => item.month_key),
+    ...expenses.map((item) => item.month_key),
+  ].filter(Boolean);
+  const selectedMonth = options.month ? normalizeMonthKey(options.month) : (monthCandidates.sort().slice(-1)[0] || currentMonthKey());
+  const matrixMonths = [...new Set([...monthCandidates, selectedMonth])].sort();
+  const contributionByMemberMonth = new Map(contributions.map((item) => [`${item.member_id}:${item.month_key}`, item]));
+  const membersWithContributions = members.map((member) => {
+    const selectedContribution = contributionByMemberMonth.get(`${member.id}:${selectedMonth}`) || null;
+    const contributionsByMonth = {};
+    matrixMonths.forEach((monthKey) => {
+      const found = contributionByMemberMonth.get(`${member.id}:${monthKey}`);
+      contributionsByMonth[monthKey] = found ? num(found.amount) : 0;
+    });
+    return {
+      ...member,
+      selected_month_due: num(member.monthly_due),
+      selected_month_amount: selectedContribution ? num(selectedContribution.amount) : 0,
+      selected_month_paid_on: selectedContribution?.paid_on || null,
+      selected_month_notes: selectedContribution?.notes || '',
+      selected_month_pending: Math.max(0, Math.round((num(member.monthly_due) - num(selectedContribution ? selectedContribution.amount : 0)) * 100) / 100),
+      selected_month_status: num(member.monthly_due) <= 0
+        ? (selectedContribution && num(selectedContribution.amount) > 0 ? 'paid' : 'not_set')
+        : (selectedContribution && num(selectedContribution.amount) >= num(member.monthly_due) ? 'paid' : 'pending'),
+      contributions_by_month: contributionsByMonth,
+      total_contributed: contributions
+        .filter((item) => item.member_id === member.id)
+        .reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0),
+    };
+  });
+  const monthExpenses = expenses.filter((item) => item.month_key === selectedMonth);
+  const monthContributionTotal = membersWithContributions.reduce((sum, member) => Math.round((sum + num(member.selected_month_amount)) * 100) / 100, 0);
+  const monthDueTotal = membersWithContributions.reduce((sum, member) => Math.round((sum + num(member.selected_month_due)) * 100) / 100, 0);
+  const monthExpenseTotal = monthExpenses.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+  const overallContributionTotal = contributions.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+  const overallExpenseTotal = expenses.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+  const paidMembers = membersWithContributions.filter((member) => num(member.selected_month_amount) > 0);
+  const paidMemberIds = new Set(paidMembers.map((member) => Number(member.id)));
+  const pendingMembers = membersWithContributions.filter((member) => !paidMemberIds.has(Number(member.id)));
+  const monthSummary = matrixMonths.map((monthKey) => {
+    const collected = contributions.filter((item) => item.month_key === monthKey).reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+    const spent = expenses.filter((item) => item.month_key === monthKey).reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+    const paidCount = membersWithContributions.filter((member) => {
+      const amount = num((member.contributions_by_month || {})[monthKey] || 0);
+      return num(member.monthly_due) > 0 ? amount >= num(member.monthly_due) : amount > 0;
+    }).length;
+    return {
+      month_key: monthKey,
+      collected,
+      spent,
+      balance: Math.round((collected - spent) * 100) / 100,
+      paid_count: paidCount,
+      due_total: membersWithContributions.reduce((sum, member) => Math.round((sum + num(member.monthly_due)) * 100) / 100, 0),
+    };
+  }).sort((a, b) => a.month_key.localeCompare(b.month_key));
+  return {
+    society: {
+      id: Number(society.id),
+      name: society.name,
+      location: society.location || '',
+      created_at: society.created_at,
+      updated_at: society.updated_at,
+    },
+    selected_month: selectedMonth,
+    matrix_months: matrixMonths,
+    members: membersWithContributions,
+    contributions,
+    expenses,
+    month_expenses: monthExpenses,
+    month_summary: monthSummary,
+    payment_status: {
+      paid_members: paidMembers,
+      pending_members: pendingMembers,
+      paid_count: paidMembers.length,
+      pending_count: pendingMembers.length,
+      due_total: monthDueTotal,
+      pending_total: Math.max(0, Math.round((monthDueTotal - monthContributionTotal) * 100) / 100),
+      collection_ratio: monthDueTotal > 0 ? Math.round((monthContributionTotal / monthDueTotal) * 10000) / 100 : 0,
+    },
+    totals: {
+      member_count: members.length,
+      selected_month_due: monthDueTotal,
+      selected_month_collected: monthContributionTotal,
+      selected_month_spent: monthExpenseTotal,
+      selected_month_balance: Math.round((monthContributionTotal - monthExpenseTotal) * 100) / 100,
+      overall_collected: overallContributionTotal,
+      overall_spent: overallExpenseTotal,
+      overall_balance: Math.round((overallContributionTotal - overallExpenseTotal) * 100) / 100,
+    },
+  };
+}
+
+function normalizeSchoolKidAmount(value, label = 'Amount', { allowZero = true } = {}) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) throw validationError(`${label} is invalid`);
+  if (allowZero ? amount < 0 : amount <= 0) throw validationError(`${label} must be ${allowZero ? '0 or more' : 'greater than 0'}`);
+  return Math.round(amount * 100) / 100;
+}
+
+function normalizeSchoolKidAge(value) {
+  if (value === '' || value == null) return null;
+  const age = Number(value);
+  if (!Number.isInteger(age) || age < 0 || age > 30) throw validationError('Age must be a whole number between 0 and 30');
+  return age;
+}
+
+function normalizeAcademicYear(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) throw validationError('Academic year is required');
+  if (normalized.length > 20) throw validationError('Academic year must be 20 characters or fewer');
+  return normalized;
+}
+
+function parseAcademicYearStart(value) {
+  const match = String(value || '').match(/(\d{4})/);
+  return match ? Number(match[1]) : 0;
+}
+
+function schoolClassRank(label) {
+  const normalized = String(label || '').trim().toLowerCase();
+  const map = {
+    playway: 0,
+    play: 0,
+    nursery: 1,
+    lkg: 2,
+    ukg: 3,
+    '1st': 4,
+    '2nd': 5,
+    '3rd': 6,
+    '4th': 7,
+    '5th': 8,
+    '6th': 9,
+    '7th': 10,
+    '8th': 11,
+    '9th': 12,
+    '10th': 13,
+    '11th': 14,
+    '12th': 15,
+  };
+  if (map[normalized] != null) return map[normalized];
+  const numMatch = normalized.match(/^(\d{1,2})/);
+  if (numMatch) return 100 + Number(numMatch[1]);
+  return 999;
+}
+
+function sortSchoolKidClassRows(rows = []) {
+  return [...rows].sort((a, b) => {
+    const kidCmp = String(a.kid_name || '').localeCompare(String(b.kid_name || ''));
+    if (kidCmp) return kidCmp;
+    const schoolCmp = String(a.school_name || '').localeCompare(String(b.school_name || ''));
+    if (schoolCmp) return schoolCmp;
+    const yearCmp = parseAcademicYearStart(a.academic_year) - parseAcademicYearStart(b.academic_year);
+    if (yearCmp) return yearCmp;
+    const classCmp = schoolClassRank(a.class_label) - schoolClassRank(b.class_label);
+    if (classCmp) return classCmp;
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+}
+
+async function ensureSchoolKidTables() {
+  if (schoolKidSchemaEnsured) return;
+  await query(`
+    CREATE TABLE IF NOT EXISTS school_kids (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kid_name TEXT NOT NULL,
+      age_years INTEGER,
+      details TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, kid_name)
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS school_kid_classes (
+      id BIGSERIAL PRIMARY KEY,
+      kid_id BIGINT NOT NULL REFERENCES school_kids(id) ON DELETE CASCADE,
+      school_name TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      class_label TEXT NOT NULL,
+      expected_monthly_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
+      bus_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
+      other_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
+      details TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (kid_id, school_name, academic_year, class_label)
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS school_kid_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      kid_id BIGINT NOT NULL REFERENCES school_kids(id) ON DELETE CASCADE,
+      class_id BIGINT NOT NULL REFERENCES school_kid_classes(id) ON DELETE CASCADE,
+      expense_date DATE NOT NULL,
+      item_name TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_school_kids_user_id ON school_kids(user_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_school_kid_classes_kid_id ON school_kid_classes(kid_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_school_kid_expenses_kid_id ON school_kid_expenses(kid_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_school_kid_expenses_class_id ON school_kid_expenses(class_id)`);
+  schoolKidSchemaEnsured = true;
+}
+
+async function getSchoolKidOwnedByUser(userId, kidId) {
+  await ensureSchoolKidTables();
+  const result = await query(
+    `SELECT id, user_id, kid_name, age_years, details, created_at, updated_at
+     FROM school_kids
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [kidId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function getSchoolKidClassOwnedByUser(userId, kidId, classId) {
+  await ensureSchoolKidTables();
+  const result = await query(
+    `SELECT c.id,
+            c.kid_id,
+            c.school_name,
+            c.academic_year,
+            c.class_label,
+            c.expected_monthly_fee,
+            c.bus_fee,
+            c.other_fee,
+            c.details,
+            c.created_at,
+            c.updated_at
+     FROM school_kid_classes c
+     INNER JOIN school_kids k ON k.id = c.kid_id
+     WHERE c.id = $1 AND c.kid_id = $2 AND k.user_id = $3
+     LIMIT 1`,
+    [classId, kidId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function listSchoolKids(userId) {
+  await ensureSchoolKidTables();
+  const result = await query(
+    `SELECT k.id,
+            k.kid_name,
+            k.age_years,
+            k.details,
+            k.created_at,
+            k.updated_at,
+            COALESCE(cls.class_count, 0) AS class_count,
+            COALESCE(exp.total_expense, 0) AS total_expense
+     FROM school_kids k
+     LEFT JOIN (
+       SELECT kid_id, COUNT(*) AS class_count
+       FROM school_kid_classes
+       GROUP BY kid_id
+     ) cls ON cls.kid_id = k.id
+     LEFT JOIN (
+       SELECT kid_id, SUM(amount) AS total_expense
+       FROM school_kid_expenses
+       GROUP BY kid_id
+     ) exp ON exp.kid_id = k.id
+     WHERE k.user_id = $1
+     ORDER BY lower(k.kid_name), k.id`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    kid_name: row.kid_name,
+    age_years: row.age_years != null ? Number(row.age_years) : null,
+    details: row.details || '',
+    class_count: Number(row.class_count || 0),
+    total_expense: num(row.total_expense),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+async function createSchoolKid(userId, data = {}) {
+  await ensureSchoolKidTables();
+  const result = await query(
+    `INSERT INTO school_kids (user_id, kid_name, age_years, details, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     RETURNING id, user_id, kid_name, age_years, details, created_at, updated_at`,
+    [
+      userId,
+      normalizeText(data.kid_name, 'Kid name', 120),
+      normalizeSchoolKidAge(data.age_years),
+      normalizeOptionalText(data.details, 500),
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateSchoolKid(userId, kidId, data = {}) {
+  const current = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!current) throw validationError('Kid not found');
+  const result = await query(
+    `UPDATE school_kids
+     SET kid_name = $1,
+         age_years = $2,
+         details = $3,
+         updated_at = NOW()
+     WHERE id = $4 AND user_id = $5
+     RETURNING id, user_id, kid_name, age_years, details, created_at, updated_at`,
+    [
+      data.kid_name !== undefined ? normalizeText(data.kid_name, 'Kid name', 120) : current.kid_name,
+      data.age_years !== undefined ? normalizeSchoolKidAge(data.age_years) : current.age_years,
+      data.details !== undefined ? normalizeOptionalText(data.details, 500) : current.details,
+      kidId,
+      userId,
+    ]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSchoolKid(userId, kidId) {
+  await ensureSchoolKidTables();
+  const result = await query('DELETE FROM school_kids WHERE id = $1 AND user_id = $2', [kidId, userId]);
+  return result.rowCount > 0;
+}
+
+async function addSchoolKidClass(userId, kidId, data = {}) {
+  const kid = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!kid) throw validationError('Kid not found');
+  const result = await query(
+    `INSERT INTO school_kid_classes (
+       kid_id, school_name, academic_year, class_label,
+       expected_monthly_fee, bus_fee, other_fee, details, updated_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+     RETURNING id, kid_id, school_name, academic_year, class_label, expected_monthly_fee, bus_fee, other_fee, details, created_at, updated_at`,
+    [
+      kidId,
+      normalizeText(data.school_name, 'School name', 160),
+      normalizeAcademicYear(data.academic_year),
+      normalizeText(data.class_label, 'Class', 60),
+      normalizeSchoolKidAmount(data.expected_monthly_fee, 'Expected monthly fee'),
+      normalizeSchoolKidAmount(data.bus_fee, 'Bus fee'),
+      normalizeSchoolKidAmount(data.other_fee, 'Other fee'),
+      normalizeOptionalText(data.details, 500),
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateSchoolKidClass(userId, kidId, classId, data = {}) {
+  const current = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
+  if (!current) throw validationError('Class not found');
+  const result = await query(
+    `UPDATE school_kid_classes
+     SET school_name = $1,
+         academic_year = $2,
+         class_label = $3,
+         expected_monthly_fee = $4,
+         bus_fee = $5,
+         other_fee = $6,
+         details = $7,
+         updated_at = NOW()
+     WHERE id = $8 AND kid_id = $9
+     RETURNING id, kid_id, school_name, academic_year, class_label, expected_monthly_fee, bus_fee, other_fee, details, created_at, updated_at`,
+    [
+      data.school_name !== undefined ? normalizeText(data.school_name, 'School name', 160) : current.school_name,
+      data.academic_year !== undefined ? normalizeAcademicYear(data.academic_year) : current.academic_year,
+      data.class_label !== undefined ? normalizeText(data.class_label, 'Class', 60) : current.class_label,
+      data.expected_monthly_fee !== undefined ? normalizeSchoolKidAmount(data.expected_monthly_fee, 'Expected monthly fee') : num(current.expected_monthly_fee),
+      data.bus_fee !== undefined ? normalizeSchoolKidAmount(data.bus_fee, 'Bus fee') : num(current.bus_fee),
+      data.other_fee !== undefined ? normalizeSchoolKidAmount(data.other_fee, 'Other fee') : num(current.other_fee),
+      data.details !== undefined ? normalizeOptionalText(data.details, 500) : current.details,
+      classId,
+      kidId,
+    ]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSchoolKidClass(userId, kidId, classId) {
+  const current = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
+  if (!current) throw validationError('Class not found');
+  const result = await query('DELETE FROM school_kid_classes WHERE id = $1 AND kid_id = $2', [classId, kidId]);
+  return result.rowCount > 0;
+}
+
+async function addSchoolKidExpense(userId, kidId, data = {}) {
+  const kid = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!kid) throw validationError('Kid not found');
+  const classId = Number(data.class_id || 0);
+  const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
+  if (!classRow) throw validationError('Class not found');
+  const result = await query(
+    `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
+    [
+      kidId,
+      classId,
+      normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
+      normalizeText(data.item_name, 'Expense item', 160),
+      normalizeAmount(data.amount, 'Expense amount'),
+      normalizeOptionalText(data.notes, 500),
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateSchoolKidExpense(userId, kidId, expenseId, data = {}) {
+  const kid = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!kid) throw validationError('Kid not found');
+  const currentR = await query(
+    `SELECT e.id, e.kid_id, e.class_id, e.expense_date, e.item_name, e.amount, e.notes
+     FROM school_kid_expenses e
+     INNER JOIN school_kids k ON k.id = e.kid_id
+     WHERE e.id = $1 AND e.kid_id = $2 AND k.user_id = $3
+     LIMIT 1`,
+    [expenseId, kidId, userId]
+  );
+  const current = currentR.rows[0];
+  if (!current) throw validationError('Expense not found');
+  const classId = data.class_id !== undefined ? Number(data.class_id || 0) : Number(current.class_id);
+  const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
+  if (!classRow) throw validationError('Class not found');
+  const result = await query(
+    `UPDATE school_kid_expenses
+     SET class_id = $1,
+         expense_date = $2,
+         item_name = $3,
+         amount = $4,
+         notes = $5,
+         updated_at = NOW()
+     WHERE id = $6 AND kid_id = $7
+     RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
+    [
+      classId,
+      data.expense_date !== undefined ? normalizeDateValue(data.expense_date, 'Expense date') : current.expense_date,
+      data.item_name !== undefined ? normalizeText(data.item_name, 'Expense item', 160) : current.item_name,
+      data.amount !== undefined ? normalizeAmount(data.amount, 'Expense amount') : num(current.amount),
+      data.notes !== undefined ? normalizeOptionalText(data.notes, 500) : current.notes,
+      expenseId,
+      kidId,
+    ]
+  );
+  return result.rows[0] || null;
+}
+
+async function deleteSchoolKidExpense(userId, kidId, expenseId) {
+  const kid = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!kid) throw validationError('Kid not found');
+  const result = await query(
+    `DELETE FROM school_kid_expenses
+     WHERE id = $1 AND kid_id = $2`,
+    [expenseId, kidId]
+  );
+  return result.rowCount > 0;
+}
+
+async function replaceSchoolKidClassExpenses(userId, kidId, classId, expenses = []) {
+  const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
+  if (!classRow) throw validationError('Class not found');
+  await query('DELETE FROM school_kid_expenses WHERE kid_id = $1 AND class_id = $2', [kidId, classId]);
+  let inserted = 0;
+  for (const item of expenses) {
+    await query(
+      `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+      [
+        kidId,
+        classId,
+        normalizeDateValue(item.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
+        normalizeText(item.item_name, 'Expense item', 160),
+        normalizeAmount(item.amount, 'Expense amount'),
+        normalizeOptionalText(item.notes, 500),
+      ]
+    );
+    inserted++;
+  }
+  return { success: true, inserted };
+}
+
+async function getSchoolKidsOverview(userId) {
+  await ensureSchoolKidTables();
+  const [kidsR, classesR, expensesR] = await Promise.all([
+    query(
+      `SELECT id, kid_name, age_years, details, created_at, updated_at
+       FROM school_kids
+       WHERE user_id = $1
+       ORDER BY lower(kid_name), id`,
+      [userId]
+    ),
+    query(
+      `SELECT c.id, c.kid_id, c.school_name, c.academic_year, c.class_label,
+              c.expected_monthly_fee, c.bus_fee, c.other_fee, c.details,
+              c.created_at, c.updated_at, k.kid_name
+       FROM school_kid_classes c
+       INNER JOIN school_kids k ON k.id = c.kid_id
+       WHERE k.user_id = $1
+       ORDER BY lower(k.kid_name), c.academic_year, lower(c.school_name), lower(c.class_label), c.id`,
+      [userId]
+    ),
+    query(
+      `SELECT e.id, e.kid_id, e.class_id, e.expense_date, e.item_name, e.amount, e.notes,
+              e.created_at, e.updated_at
+       FROM school_kid_expenses e
+       INNER JOIN school_kids k ON k.id = e.kid_id
+       WHERE k.user_id = $1
+       ORDER BY e.expense_date DESC, e.id DESC`,
+      [userId]
+    ),
+  ]);
+  const kids = kidsR.rows.map((row) => ({
+    id: Number(row.id),
+    kid_name: row.kid_name,
+    age_years: row.age_years != null ? Number(row.age_years) : null,
+    details: row.details || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const classRows = classesR.rows.map((row) => ({
+    id: Number(row.id),
+    kid_id: Number(row.kid_id),
+    kid_name: row.kid_name,
+    school_name: row.school_name,
+    academic_year: row.academic_year,
+    class_label: row.class_label,
+    expected_monthly_fee: num(row.expected_monthly_fee),
+    bus_fee: num(row.bus_fee),
+    other_fee: num(row.other_fee),
+    details: row.details || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const expenses = expensesR.rows.map((row) => ({
+    id: Number(row.id),
+    kid_id: Number(row.kid_id),
+    class_id: Number(row.class_id),
+    expense_date: row.expense_date,
+    item_name: row.item_name,
+    amount: num(row.amount),
+    notes: row.notes || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const expensesByClass = new Map();
+  expenses.forEach((expense) => {
+    const list = expensesByClass.get(expense.class_id) || [];
+    list.push(expense);
+    expensesByClass.set(expense.class_id, list);
+  });
+  const enrichedClassRows = sortSchoolKidClassRows(classRows.map((row) => {
+    const classExpenses = expensesByClass.get(row.id) || [];
+    return {
+      ...row,
+      total_expense: classExpenses.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0),
+      expense_count: classExpenses.length,
+    };
+  }));
+  const classesByKid = new Map();
+  enrichedClassRows.forEach((row) => {
+    const list = classesByKid.get(row.kid_id) || [];
+    list.push(row);
+    classesByKid.set(row.kid_id, list);
+  });
+  const kidsWithRows = kids.map((kid) => {
+    const rows = classesByKid.get(kid.id) || [];
+    return {
+      ...kid,
+      total_expense: rows.reduce((sum, row) => Math.round((sum + num(row.total_expense)) * 100) / 100, 0),
+      class_count: rows.length,
+      class_rows: rows,
+    };
+  });
+  return {
+    kids: kidsWithRows,
+    class_rows: enrichedClassRows,
+    grand_total: kidsWithRows.reduce((sum, kid) => Math.round((sum + num(kid.total_expense)) * 100) / 100, 0),
+  };
+}
+
+async function getSchoolKidDetail(userId, kidId) {
+  const kid = await getSchoolKidOwnedByUser(userId, kidId);
+  if (!kid) throw validationError('Kid not found');
+  const [classesR, expensesR] = await Promise.all([
+    query(
+      `SELECT id, kid_id, school_name, academic_year, class_label,
+              expected_monthly_fee, bus_fee, other_fee, details, created_at, updated_at
+       FROM school_kid_classes
+       WHERE kid_id = $1
+       ORDER BY academic_year, lower(school_name), lower(class_label), id`,
+      [kidId]
+    ),
+    query(
+      `SELECT id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at
+       FROM school_kid_expenses
+       WHERE kid_id = $1
+       ORDER BY expense_date DESC, id DESC`,
+      [kidId]
+    ),
+  ]);
+  const classes = classesR.rows.map((row) => ({
+    id: Number(row.id),
+    kid_id: Number(row.kid_id),
+    school_name: row.school_name,
+    academic_year: row.academic_year,
+    class_label: row.class_label,
+    expected_monthly_fee: num(row.expected_monthly_fee),
+    bus_fee: num(row.bus_fee),
+    other_fee: num(row.other_fee),
+    details: row.details || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const expenses = expensesR.rows.map((row) => ({
+    id: Number(row.id),
+    kid_id: Number(row.kid_id),
+    class_id: Number(row.class_id),
+    expense_date: row.expense_date,
+    item_name: row.item_name,
+    amount: num(row.amount),
+    notes: row.notes || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+  const expensesByClass = new Map();
+  expenses.forEach((expense) => {
+    const list = expensesByClass.get(expense.class_id) || [];
+    list.push(expense);
+    expensesByClass.set(expense.class_id, list);
+  });
+  const classRows = sortSchoolKidClassRows(classes.map((row) => {
+    const classExpenses = expensesByClass.get(row.id) || [];
+    const monthTotals = {};
+    classExpenses.forEach((expense) => {
+      const monthKey = String(expense.expense_date || '').slice(0, 7);
+      monthTotals[monthKey] = Math.round(((monthTotals[monthKey] || 0) + num(expense.amount)) * 100) / 100;
+    });
+    const monthSummary = Object.keys(monthTotals).sort().map((monthKey) => ({
+      month_key: monthKey,
+      total: monthTotals[monthKey],
+    }));
+    return {
+      ...row,
+      kid_name: kid.kid_name,
+      total_expense: classExpenses.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0),
+      expense_count: classExpenses.length,
+      month_summary: monthSummary,
+      expenses: classExpenses,
+      expected_annual_total: Math.round(((num(row.expected_monthly_fee) + num(row.bus_fee) + num(row.other_fee)) * 12) * 100) / 100,
+    };
+  }));
+  return {
+    kid: {
+      id: Number(kid.id),
+      kid_name: kid.kid_name,
+      age_years: kid.age_years != null ? Number(kid.age_years) : null,
+      details: kid.details || '',
+      created_at: kid.created_at,
+      updated_at: kid.updated_at,
+    },
+    classes: classRows,
+    expenses,
+    total_expense: classRows.reduce((sum, row) => Math.round((sum + num(row.total_expense)) * 100) / 100, 0),
+    school_options: [...new Set(classRows.map((row) => row.school_name).filter(Boolean))],
+    year_options: [...new Set(classRows.map((row) => row.academic_year).filter(Boolean))].sort((a, b) => parseAcademicYearStart(a) - parseAcademicYearStart(b)),
+  };
+}
+
 module.exports = {
   getExpenses,
   getExpenseCategories,
@@ -5317,4 +6395,29 @@ module.exports = {
   getShareLinks,
   deleteShareLink,
   getPublicShareData,
+  listSocieties,
+  getSocietyDetail,
+  createSociety,
+  updateSociety,
+  deleteSociety,
+  addSocietyMember,
+  updateSocietyMember,
+  deleteSocietyMember,
+  saveSocietyContribution,
+  addSocietyExpense,
+  updateSocietyExpense,
+  deleteSocietyExpense,
+  listSchoolKids,
+  getSchoolKidsOverview,
+  getSchoolKidDetail,
+  createSchoolKid,
+  updateSchoolKid,
+  deleteSchoolKid,
+  addSchoolKidClass,
+  updateSchoolKidClass,
+  deleteSchoolKidClass,
+  addSchoolKidExpense,
+  updateSchoolKidExpense,
+  deleteSchoolKidExpense,
+  replaceSchoolKidClassExpenses,
 };

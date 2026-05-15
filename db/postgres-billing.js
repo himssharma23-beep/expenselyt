@@ -382,7 +382,7 @@ async function updateCycleTotals(cycleId, client = null) {
        COUNT(*)::int AS txn_count,
        COALESCE(SUM(amount), 0) AS total_amount,
        COALESCE(SUM(discount_amount), 0) AS total_discount,
-       COALESCE(SUM(net_amount), 0) AS net_payable
+       COALESCE(SUM(amount), 0) AS net_payable
      FROM cc_txns
      WHERE cycle_id = $1`,
     [cycleId]
@@ -407,7 +407,7 @@ async function autoClosePastCcCycles(userId, cardId = null) {
   );
   for (const cycle of result.rows) {
     const paid = num(cycle.paid_amount);
-    const due = num(cycle.net_payable);
+    const due = num(cycle.total_amount || cycle.net_payable);
     const status = paid >= due - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
     await query(
       `UPDATE cc_cycles
@@ -470,7 +470,7 @@ async function getCreditCards(userId) {
     const { cycle, totals } = await withTransaction(async (client) => {
       const cycle = await getCurrentCycleSnapshot(card.id, userId, card, client);
       const totalsR = await client.query(
-          `SELECT COALESCE(SUM(amount),0) AS total_spent, COALESCE(SUM(net_amount),0) AS total_net, COUNT(*)::int AS txn_count
+          `SELECT COALESCE(SUM(amount),0) AS total_spent, COALESCE(SUM(amount),0) AS total_net, COUNT(*)::int AS txn_count
            FROM cc_txns
            WHERE card_id = $1 AND user_id = $2`,
           [card.id, userId]
@@ -500,7 +500,7 @@ async function addCcTxn(userId, txn) {
     const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card.default_discount_pct);
     const amount = parseFloat(txn.amount);
     const discAmt = roundMoney(amount * discPct / 100);
-    const netAmt = roundMoney(amount - discAmt);
+    const netAmt = roundMoney(amount);
     const result = await client.query(
       `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -526,7 +526,11 @@ async function getCcCurrentCycle(userId, cardId) {
       cycle = refreshedCycleR.rows[0] || cycle;
     }
     const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC, id ASC', [cycle.id]);
-    return { card, cycle, txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.net_amount) })) };
+    return {
+      card,
+      cycle: cycle ? { ...cycle, net_payable: num(cycle.total_amount || cycle.net_payable) } : cycle,
+      txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.amount) })),
+    };
   });
 }
 
@@ -548,9 +552,9 @@ async function getCcCycles(userId, cardId) {
         ...cycle,
         total_amount: num(cycle.total_amount),
         total_discount: num(cycle.total_discount),
-        net_payable: num(cycle.net_payable),
+        net_payable: num(cycle.total_amount || cycle.net_payable),
         paid_amount: num(cycle.paid_amount),
-        txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.net_amount) })),
+        txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.amount) })),
       });
     }
     return cycles;
@@ -563,7 +567,7 @@ async function getCcMonthlySummary(userId, cardId, year) {
     `SELECT to_char(cycle_end, 'YYYY-MM') AS month,
             COALESCE(SUM(total_amount), 0) AS total_amount,
             COALESCE(SUM(total_discount), 0) AS total_discount,
-            COALESCE(SUM(net_payable), 0) AS net_payable,
+            COALESCE(SUM(total_amount), 0) AS net_payable,
             COALESCE(SUM((SELECT COUNT(*) FROM cc_txns t WHERE t.cycle_id = cy.id)), 0) AS txn_count
      FROM cc_cycles cy
      WHERE card_id = $1 AND user_id = $2 AND status != 'open'${year ? " AND to_char(cycle_end, 'YYYY') = $3" : ''}
@@ -579,7 +583,7 @@ async function getCcYearlySummary(userId, cardId) {
     `SELECT to_char(cycle_end, 'YYYY') AS year,
             COALESCE(SUM(total_amount), 0) AS total_amount,
             COALESCE(SUM(total_discount), 0) AS total_discount,
-            COALESCE(SUM(net_payable), 0) AS net_payable,
+            COALESCE(SUM(total_amount), 0) AS net_payable,
             COALESCE(SUM((SELECT COUNT(*) FROM cc_txns t WHERE t.cycle_id = cy.id)), 0) AS txn_count,
             COUNT(*)::int AS cycle_count
      FROM cc_cycles cy
@@ -680,7 +684,7 @@ async function updateCcTxn(userId, id, txn) {
   const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(existing.discount_pct);
   const amount = txn.amount != null ? parseFloat(txn.amount) : num(existing.amount);
   const discAmt = roundMoney(amount * discPct / 100);
-  const netAmt = roundMoney(amount - discAmt);
+  const netAmt = roundMoney(amount);
   await query(
     `UPDATE cc_txns
      SET txn_date = $1, description = $2, amount = $3, discount_pct = $4, discount_amount = $5, net_amount = $6
@@ -708,7 +712,7 @@ async function addCcTxnToCycle(userId, cycleId, txn) {
     const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card?.default_discount_pct);
     const amount = parseFloat(txn.amount);
     const discAmt = roundMoney(amount * discPct / 100);
-    const netAmt = roundMoney(amount - discAmt);
+    const netAmt = roundMoney(amount);
     const result = await client.query(
       `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -740,7 +744,7 @@ async function bulkAddCcTxnsToCycle(userId, cycleId, txns, discountPct = null) {
         ? parseFloat(discountPct)
         : (txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(card?.default_discount_pct));
       const discAmt = roundMoney(amount * nextDiscount / 100);
-      const netAmt = roundMoney(amount - discAmt);
+      const netAmt = roundMoney(amount);
       await client.query(
         `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'manual',NULL)`,
@@ -780,7 +784,7 @@ async function updateCcCycle(userId, cycleId, data) {
   }
   if (data.status) {
     const nextStatus = String(data.status);
-    const nextNet = totalAmount !== null ? totalAmount : num(cycle.net_payable);
+    const nextNet = totalAmount !== null ? totalAmount : num(cycle.total_amount || cycle.net_payable);
     if (nextStatus === 'paid') {
       fields.push(`status = $${fields.length + 1}`); params.push('paid');
       fields.push(`paid_amount = $${fields.length + 1}`); params.push(nextNet);
@@ -810,7 +814,8 @@ async function closeCcCycle(userId, cycleId, paidAmount, paidDate, bankAccountId
     if (!cycle) throw new Error('Cycle not found');
     const paid = parseFloat(paidAmount) || 0;
     const previousPaid = num(cycle.paid_amount);
-    const status = paid >= num(cycle.net_payable) - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
+    const due = num(cycle.total_amount || cycle.net_payable);
+    const status = paid >= due - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
     await client.query(
       `UPDATE cc_cycles
        SET status = $1, paid_amount = $2, paid_date = $3, closed_at = NOW()
@@ -885,7 +890,7 @@ async function getCcDuesForMonth(userId, month, cardId = null) {
   return result.rows.map((row) => ({
     ...row,
     card_id: Number(row.card_id),
-    net_payable: num(row.net_payable),
+    net_payable: num(row.total_amount || row.net_payable),
     paid_amount: num(row.paid_amount),
     total_amount: num(row.total_amount),
     total_discount: num(row.total_discount),

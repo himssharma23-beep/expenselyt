@@ -452,6 +452,23 @@ document.addEventListener('keydown', (event) => {
 });
 let friendSort = 'name';
 let selectedFriend = null;
+let _societiesList = [];
+let _selectedSocietyId = null;
+let _societyDetail = null;
+let _societyMonth = new Date().toISOString().slice(0, 7);
+let _societiesLoading = false;
+let _societyMemberFilter = 'all';
+let _societyMemberSearch = '';
+let _societyTab = 'overview';
+let _societyRange = 'month';
+let _schoolKidsOverview = null;
+let _schoolKidsList = [];
+let _selectedSchoolKidId = null;
+let _schoolKidDetail = null;
+let _schoolKidDetailCache = {};
+let _schoolKidsLoading = false;
+let _selectedSchoolKidClassId = null;
+let _schoolKidTab = 'overview';
 const DIVIDE_DRAFT_STORAGE_KEY = 'expense-lite.divide-draft.v1';
 let divideItems = _loadDivideDraftItems();
 let divideSelected = new Set();
@@ -999,6 +1016,8 @@ function loadTab() {
   else if (currentTab === 'creditcards') loadCreditCards();
   else if (currentTab === 'banks') loadBankAccounts();
   else if (currentTab === 'planner') loadPlanner();
+  else if (currentTab === 'societies') loadSocieties();
+  else if (currentTab === 'schoolkids') loadSchoolKids();
   else if (currentTab === 'tracker') loadTracker();
   else if (currentTab === 'habittracker') loadHabitTracker();
   else if (currentTab === 'recurring') loadRecurring();
@@ -1057,6 +1076,8 @@ function getNotificationTargetTab(item) {
     trips: 'trips',
     reports: 'reports',
     planner: 'planner',
+    societies: 'societies',
+    schoolkids: 'schoolkids',
     tracker: 'tracker',
     recurring: 'recurring',
     emitracker: 'emitracker',
@@ -8535,6 +8556,8 @@ const ALL_PAGES = [
   { key: 'creditcards', label: 'Credit Cards' },
   { key: 'banks',       label: 'Bank Accounts' },
   { key: 'planner',     label: 'Planner' },
+  { key: 'societies',   label: 'Societies' },
+  { key: 'schoolkids',  label: 'School Kids' },
   { key: 'tracker',     label: 'Daily Tracker' },
   { key: 'habittracker', label: 'Habit Tracker' },
   { key: 'expense_scan', label: 'Scan Image' },
@@ -11966,7 +11989,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
           <td class="td-m">${fmtCur(t.amount)}</td>
           <td class="td-m" style="color:var(--green)">${t.discount_pct > 0 ? t.discount_pct + '%' : '-'}</td>
           <td class="td-m" style="color:var(--green)">${t.discount_amount > 0 ? fmtCur(t.discount_amount) : '-'}</td>
-          <td class="td-m" style="font-weight:700">${fmtCur(t.net_amount)}</td>
+          <td class="td-m" style="font-weight:700">${fmtCur(t.amount)}</td>
           <td style="text-align:right">
             <button class="btn-d" style="color:var(--em)" onclick="showCcTxnModal(${card.id},${t.id})">Edit</button>
             <button class="btn-d" onclick="deleteCcTxn(${t.id})">Del</button>
@@ -11984,7 +12007,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
               <div class="cc-txn-card-title">${escHtml(t.description)} ${srcBadge}</div>
               <div class="cc-txn-card-date">${fmtDate(t.txn_date)}</div>
             </div>
-            <div class="cc-txn-card-amount">${fmtCur(t.net_amount)}</div>
+            <div class="cc-txn-card-amount">${fmtCur(t.amount)}</div>
           </div>
           <div class="cc-txn-card-meta">
             <span>Amount: <b>${fmtCur(t.amount)}</b></span>
@@ -12004,8 +12027,8 @@ function renderCcCurrentCycle(card, cycle, txns) {
       <div class="cc-cycle-stat"><div class="lbl">Cycle Period</div><div class="val">${fmtDate(cycle.cycle_start)} to ${fmtDate(cycle.cycle_end)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Payment Due</div><div class="val" style="color:var(--amber);font-weight:700">${fmtDate(cycle.due_date)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Total Spent</div><div class="val">${fmtCur(totalAmt)}</div></div>
-      <div class="cc-cycle-stat"><div class="lbl">Total Discount</div><div class="val" style="color:var(--green)">- ${fmtCur(totalDisc)}</div></div>
-      <div class="cc-cycle-stat"><div class="lbl">Net Payable</div><div class="val hl">${fmtCur(netPay)}</div></div>
+      <div class="cc-cycle-stat"><div class="lbl">Total Discount</div><div class="val" style="color:var(--green)">${fmtCur(totalDisc)}</div></div>
+      <div class="cc-cycle-stat"><div class="lbl">Payable</div><div class="val hl">${fmtCur(netPay)}</div></div>
     </div>
 
     <div class="card cc-current-cycle-card" style="margin-bottom:16px">
@@ -12019,7 +12042,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
         </div>
       </div>
       <div class="table-wrap cc-txn-table-wrap"><table>
-        <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th class="td-m">Disc%</th><th class="td-m">Discount</th><th class="td-m">Net</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th class="td-m">Disc%</th><th class="td-m">Discount</th><th class="td-m">Payable</th><th></th></tr></thead>
         <tbody>${txnRows}</tbody>
       </table></div>
       <div class="cc-txn-card-list">${txnCards}</div>
@@ -12048,7 +12071,7 @@ function renderCcHistory(cycles) {
       <td>${fmtDate(t.txn_date)}</td>
       <td>${escHtml(t.description)}${t.source === 'emi' ? ' <span style="font-size:10px;background:var(--bg2);color:var(--t2);padding:1px 5px;border-radius:99px">emi</span>' : ''}</td>
       <td class="td-m">${fmtCur(t.amount)}</td>
-      <td class="td-m">${t.discount_pct > 0 ? fmtCur(t.net_amount) : '-'}</td>
+      <td class="td-m">${t.discount_pct > 0 ? fmtCur(t.amount) : '-'}</td>
       ${c.status === 'open' ? `<td class="td-m" style="white-space:nowrap">
         <button class="btn-d" style="color:var(--em)" onclick="showEditCycleTxn(${t.id})">Edit</button>
         <button class="btn-d" onclick="deleteCycleTxn(${t.id})">Del</button>
@@ -12056,7 +12079,7 @@ function renderCcHistory(cycles) {
     </tr>`).join('');
 
     const txnTable = `<div class="table-wrap" style="margin-top:8px"><table>
-      <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th class="td-m">Net</th><th class="td-m"></th></tr></thead>
+      <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th class="td-m">Payable</th><th class="td-m"></th></tr></thead>
       <tbody>${txnRows || `<tr><td colspan="5" style="text-align:center;color:var(--t3);padding:12px">No transactions</td></tr>`}</tbody>
     </table></div>`;
 
@@ -12339,7 +12362,7 @@ function showEditCycleModal(cycleId) {
       <label class="fl" id="csPaidWrap" style="${status === 'paid' ? '' : 'display:none'}">Paid Date<input class="fi" type="date" id="csPaidDate" value="${normalizeInputDate(paidDate) || ''}"></label>
     </div>
     <div style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
-      Saved discount stays at <strong>${fmtCur(cycle.total_discount || 0)}</strong>. Updating total amount recalculates net payable.
+      Saved discount stays at <strong>${fmtCur(cycle.total_discount || 0)}</strong>. Updating total amount recalculates payable.
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doEditCycle(${cycleId})">Update</button>
@@ -12518,7 +12541,7 @@ function renderCcMonthly(months, availYears) {
     <div class="cc-cycle-summary" style="margin-bottom:16px">
       <div class="cc-cycle-stat"><div class="lbl">Year Spent</div><div class="val">${fmtCur(yearTotal)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Discount Saved</div><div class="val" style="color:var(--green)">- ${fmtCur(yearDisc)}</div></div>
-      <div class="cc-cycle-stat"><div class="lbl">Net Paid</div><div class="val hl">${fmtCur(yearNet)}</div></div>
+      <div class="cc-cycle-stat"><div class="lbl">Total Payable</div><div class="val hl">${fmtCur(yearNet)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Months Active</div><div class="val">${months.length}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -12526,7 +12549,7 @@ function renderCcMonthly(months, availYears) {
       <div class="cc-chart-wrap">${allMonthBars}</div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Month</th><th class="td-m">Total Spent</th><th class="td-m">Discount</th><th class="td-m">Net Paid</th><th class="td-m">Transactions</th></tr></thead>
+      <thead><tr><th>Month</th><th class="td-m">Total Spent</th><th class="td-m">Discount</th><th class="td-m">Payable</th><th class="td-m">Transactions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -12570,7 +12593,7 @@ function renderCcYearly(years) {
     <div class="cc-cycle-summary" style="margin-bottom:16px">
       <div class="cc-cycle-stat"><div class="lbl">All-time Spent</div><div class="val">${fmtCur(grandTotal)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Total Discount</div><div class="val" style="color:var(--green)">- ${fmtCur(grandDisc)}</div></div>
-      <div class="cc-cycle-stat"><div class="lbl">Net Paid</div><div class="val hl">${fmtCur(grandNet)}</div></div>
+      <div class="cc-cycle-stat"><div class="lbl">Total Payable</div><div class="val hl">${fmtCur(grandNet)}</div></div>
       <div class="cc-cycle-stat"><div class="lbl">Years Active</div><div class="val">${years.length}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -12578,7 +12601,7 @@ function renderCcYearly(years) {
       <div class="cc-chart-wrap" style="align-items:flex-end;justify-content:center;gap:12px">${bars}</div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Year</th><th class="td-m">Total Spent</th><th class="td-m">Discount</th><th class="td-m">Net Paid</th><th class="td-m">Transactions</th><th class="td-m">Cycles</th></tr></thead>
+      <thead><tr><th>Year</th><th class="td-m">Total Spent</th><th class="td-m">Discount</th><th class="td-m">Payable</th><th class="td-m">Transactions</th><th class="td-m">Cycles</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -12740,7 +12763,7 @@ async function showCcTxnModal(cardId, txnId) {
       <label class="fl">Discount % <span style="font-size:11px;color:var(--t3)">(default: ${card.default_discount_pct}%)</span><input class="fi" type="number" step="0.1" id="ctDisc" value="${txn.discount_pct||0}" min="0" max="100" oninput="ccTxnPreview()"></label>
     </div>
     <div id="ctPreview" style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--t2);margin:4px 0 12px">
-      Enter amount to see net payable
+      Enter amount to see the card payable and discount display
     </div>
     ${!txnId ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:8px;cursor:pointer">
       <input type="checkbox" id="ctAddExpense" style="width:15px;height:15px;cursor:pointer" onchange="document.getElementById('ctExpTypeWrap').style.display=this.checked?'':'none'">
@@ -12765,11 +12788,11 @@ async function showCcTxnModal(cardId, txnId) {
 function ccTxnPreview() {
   const amt  = parseFloat(document.getElementById('ctAmt')?.value) || 0;
   const disc = parseFloat(document.getElementById('ctDisc')?.value) || 0;
-  if (!amt) { document.getElementById('ctPreview').innerHTML = 'Enter amount to see net payable'; return; }
+  if (!amt) { document.getElementById('ctPreview').innerHTML = 'Enter amount to see the card payable and discount display'; return; }
   const discAmt = Math.round(amt * disc / 100 * 100) / 100;
   const net = Math.round(amt * 100) / 100;
   document.getElementById('ctPreview').innerHTML =
-    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;â€“&nbsp; Discount: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;â€“&nbsp; Net Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
+    `Amount: <strong>${fmtCur(amt)}</strong> &nbsp;|&nbsp; Discount shown: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong> &nbsp;|&nbsp; Payable: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
 }
 
 async function saveCcTxn(cardId, txnId) {
@@ -12821,7 +12844,7 @@ function showCloseCycleModal(cycleId, netPayable) {
       <label class="fl">Payment Date<input class="fi" type="date" id="ccPaidDate" value="${todayStr()}"></label>
     </div>
     <div style="background:var(--bg);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
-      Net Payable: <strong>${fmtCur(netPayable)}</strong>. A new billing cycle will be created automatically.
+      Payable: <strong>${fmtCur(netPayable)}</strong>. A new billing cycle will be created automatically.
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doCloseCycle(${cycleId})">Close Cycle</button>
@@ -12890,9 +12913,10 @@ function divCcCardChanged() {
 function divCcPreview() {
   const amt = parseFloat(document.getElementById('dAmount')?.value) || 0;
   const disc = parseFloat(document.getElementById('divCcDisc')?.value) || 0;
-  const net = Math.round((amt - amt * disc / 100) * 100) / 100;
+  const discAmt = Math.round(amt * disc / 100 * 100) / 100;
+  const net = Math.round(amt * 100) / 100;
   const el = document.getElementById('divCcPreview');
-  if (el && amt) el.innerHTML = `Full amount charged to card: <strong style="color:var(--em)">${fmtCur(net)}</strong> after ${disc}% discount`;
+  if (el && amt) el.innerHTML = `Full amount charged to card: <strong style="color:var(--em)">${fmtCur(net)}</strong> &nbsp;|&nbsp; Discount shown: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong>`;
   else if (el) el.innerHTML = '';
 }
 
@@ -12935,9 +12959,10 @@ function ccLinkPreview() {
   const amtEl = document.getElementById('eAmount') || document.getElementById('teAmount') || document.getElementById('dAmount') || document.getElementById('ctAmt');
   const amt = parseFloat(amtEl?.value) || 0;
   const disc = parseFloat(document.getElementById('ccLinkDisc')?.value) || 0;
-  const net = Math.round((amt - amt * disc / 100) * 100) / 100;
+  const discAmt = Math.round(amt * disc / 100 * 100) / 100;
+  const net = Math.round(amt * 100) / 100;
   const el = document.getElementById('ccLinkPreview');
-  if (el && amt) el.innerHTML = `Net charged to card: <strong style="color:var(--em)">${fmtCur(net)}</strong>`;
+  if (el && amt) el.innerHTML = `Charged to card: <strong style="color:var(--em)">${fmtCur(net)}</strong> &nbsp;|&nbsp; Discount shown: <strong style="color:var(--green)">${fmtCur(discAmt)}</strong>`;
   else if (el) el.innerHTML = '';
 }
 
@@ -13727,7 +13752,7 @@ function showCcPayModal(cycleId, netPayable) {
       <label class="fl">Payment Date<input class="fi" type="date" id="ccpDate" value="${todayStr()}"></label>
     </div>
     <div style="background:var(--blue-l);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--blue);margin-bottom:12px">
-      Net payable: <strong>${fmtCur(netPayable)}</strong>. Paying closes this billing cycle.
+      Payable: <strong>${fmtCur(netPayable)}</strong>. Paying closes this billing cycle.
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doCcPayFromPlanner(${cycleId})">Mark Paid</button>
@@ -15573,7 +15598,7 @@ function showCcPayModal(cycleId, netPayable) {
       <label class="fl full">Deduct From Bank<select class="fi" id="ccpBank">${bankOptions}</select></label>
     </div>
     <div style="background:var(--blue-l);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--blue);margin-bottom:12px">
-      Net payable: <strong>${fmtCur(netPayable)}</strong>. Paying closes this billing cycle.
+      Payable: <strong>${fmtCur(netPayable)}</strong>. Paying closes this billing cycle.
     </div>
     <div class="fa">
       <button class="btn btn-p" onclick="doCcPayFromPlanner(${cycleId})">Mark Paid</button>
@@ -15664,6 +15689,2045 @@ function renderBankAccounts() {
       <div class="bank-grid">${grid}</div>
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
+}
+
+function societyMonthLabel(monthKey) {
+  const normalized = String(monthKey || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(normalized)) return normalized || '-';
+  const [year, month] = normalized.split('-').map(Number);
+  return `${_MONTHS_LONG[(month || 1) - 1]} ${year}`;
+}
+
+function setSocietyMemberFilter(value) {
+  _societyMemberFilter = String(value || 'all');
+  renderSocietiesPage();
+}
+
+function setSocietyMemberSearch(value) {
+  _societyMemberSearch = String(value || '');
+  renderSocietiesPage();
+}
+
+function setSocietyTab(value) {
+  _societyTab = String(value || 'overview');
+  renderSocietiesPage();
+}
+
+function setSocietyRange(value) {
+  _societyRange = String(value || 'month') === 'all' ? 'all' : 'month';
+  renderSocietiesPage();
+}
+
+function getSelectedSocietySummary() {
+  return _societiesList.find((item) => String(item.id) === String(_selectedSocietyId)) || null;
+}
+
+async function loadSocieties() {
+  _societiesLoading = true;
+  renderSocietiesPage();
+  const listRes = await api('/api/societies');
+  _societiesList = Array.isArray(listRes?.societies) ? listRes.societies : [];
+  if (!_selectedSocietyId && _societiesList.length) _selectedSocietyId = _societiesList[0].id;
+  if (_selectedSocietyId && !_societiesList.some((item) => String(item.id) === String(_selectedSocietyId))) {
+    _selectedSocietyId = _societiesList[0]?.id || null;
+  }
+  if (_selectedSocietyId) {
+    const detailRes = await api(`/api/societies/${Number(_selectedSocietyId)}?month=${encodeURIComponent(_societyMonth)}`);
+    if (detailRes?.error) {
+      _societyDetail = null;
+      toast(detailRes.error || 'Could not load society details.', 'error');
+    } else {
+      _societyDetail = detailRes;
+      _societyMonth = detailRes.selected_month || _societyMonth;
+    }
+  } else {
+    _societyDetail = null;
+  }
+  _societiesLoading = false;
+  renderSocietiesPage();
+}
+
+async function openSociety(id) {
+  _selectedSocietyId = id;
+  await loadSocieties();
+}
+
+function renderSocietiesPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const selected = _societyDetail;
+  const societyOptions = _societiesList.length
+    ? _societiesList.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(_selectedSocietyId) ? 'selected' : ''}>${escHtml(item.name || 'Society')}${item.location ? ` - ${escHtml(item.location)}` : ''}</option>`).join('')
+    : '<option value="">No societies yet</option>';
+
+  const detailBlock = selected ? (() => {
+    const isAllTime = _societyRange === 'all';
+    const monthLabel = societyMonthLabel(_societyMonth);
+    const periodLabel = isAllTime ? 'All Time' : monthLabel;
+    const allMembers = Array.isArray(selected.members) ? selected.members : [];
+    const searchNeedle = _societyMemberSearch.trim().toLowerCase();
+    const filteredMembers = allMembers.filter((member) => {
+      const status = String(isAllTime
+        ? ((Number(member.total_contributed || 0) > 0) ? 'paid' : 'pending')
+        : (member.selected_month_status || '')).toLowerCase();
+      if (_societyMemberFilter === 'paid' && status !== 'paid') return false;
+      if (_societyMemberFilter === 'pending' && status !== 'pending') return false;
+      if (_societyMemberFilter === 'not_set' && status !== 'not_set') return false;
+      if (!searchNeedle) return true;
+      return [
+        member.member_name,
+        member.unit_label,
+        member.phone_number,
+      ].some((value) => String(value || '').toLowerCase().includes(searchNeedle));
+    });
+
+    const paidMembers = isAllTime
+      ? allMembers.filter((member) => Number(member.total_contributed || 0) > 0)
+      : (selected.payment_status?.paid_members || []);
+    const pendingMembers = isAllTime
+      ? allMembers.filter((member) => Number(member.total_contributed || 0) <= 0)
+      : (selected.payment_status?.pending_members || []);
+    const dueTotal = Number(isAllTime
+      ? ((selected.month_summary || []).reduce((sum, row) => Math.round((sum + Number(row.due_total || 0)) * 100) / 100, 0))
+      : (selected.payment_status?.due_total || 0));
+    const collectedTotal = Number(isAllTime ? (selected.totals?.overall_collected || 0) : (selected.totals?.selected_month_collected || 0));
+    const spentTotal = Number(isAllTime ? (selected.totals?.overall_spent || 0) : (selected.totals?.selected_month_spent || 0));
+    const balanceTotal = Number(isAllTime ? (selected.totals?.overall_balance || 0) : (selected.totals?.selected_month_balance || 0));
+    const scopeExpenses = isAllTime ? (selected.expenses || []) : (selected.month_expenses || []);
+    const collectionPct = dueTotal > 0 ? Math.max(0, Math.min(100, Math.round((collectedTotal / dueTotal) * 100))) : 0;
+    const donutCollectedPct = Math.max(0, Math.min(100, Math.round(((collectedTotal || 0) / Math.max((collectedTotal || 0) + (spentTotal || 0), 1)) * 100)));
+    const donutStyle = `background:conic-gradient(#248f5b 0 ${donutCollectedPct}%, #c83b2b ${donutCollectedPct}% 100%)`;
+    const reportRows = (selected.month_summary || []).map((row) => `
+      <tr>
+        <td>${escHtml(societyMonthLabel(row.month_key))}</td>
+        <td>${row.paid_count}/${Number(selected.totals?.member_count || 0)}</td>
+        <td style="color:var(--green);font-weight:700">${fmtCur(row.collected || 0)}</td>
+        <td style="color:var(--red);font-weight:700">${fmtCur(row.spent || 0)}</td>
+        <td style="font-weight:700;color:${Number(row.balance || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(row.balance || 0)}</td>
+      </tr>`).join('');
+    const allTimeMax = Math.max(1, ...(selected.month_summary || []).flatMap((row) => [Number(row.collected || 0), Number(row.spent || 0)]));
+    const chartBars = (selected.month_summary || []).map((row) => {
+      const collectPct = Math.max(6, Math.round((Number(row.collected || 0) / allTimeMax) * 100));
+      const spendPct = Math.max(6, Math.round((Number(row.spent || 0) / allTimeMax) * 100));
+      return `
+        <div style="display:grid;grid-template-columns:1fr;align-items:end;justify-items:center;gap:8px;min-width:140px">
+          <div style="width:100%;display:flex;align-items:flex-end;justify-content:center;gap:14px;height:180px">
+            <div title="Collected ${fmtCur(row.collected || 0)}" style="width:64px;height:${collectPct}%;min-height:${Number(row.collected || 0) > 0 ? '10px' : '2px'};border-radius:10px 10px 4px 4px;background:#248f5b"></div>
+            <div title="Expenses ${fmtCur(row.spent || 0)}" style="width:64px;height:${spendPct}%;min-height:${Number(row.spent || 0) > 0 ? '10px' : '2px'};border-radius:10px 10px 4px 4px;background:#c83b2b"></div>
+          </div>
+          <div style="font-size:12px;font-weight:700;color:var(--t2)">${escHtml(societyMonthLabel(row.month_key))}</div>
+        </div>`;
+    }).join('');
+
+    const tabItems = [
+      ['overview', 'Overview'],
+      ['members', 'Members'],
+      ['matrix', 'Matrix'],
+      ['expenses', 'Expenses'],
+      ['report', 'Report'],
+    ];
+    const tabsHtml = tabItems.map(([key, label]) => `
+      <button
+        class="chip ${_societyTab === key ? 'active' : ''}"
+        style="${_societyTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}"
+        onclick="setSocietyTab('${key}')">${label}</button>`).join('');
+
+    const overviewSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Payment Status · ${escHtml(monthLabel)}</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);border-bottom:1px solid var(--border-l)">
+          <div style="padding:18px 22px">
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Who Paid — ${escHtml(monthLabel)}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">At-a-glance payment status</div>
+          </div>
+          <div style="padding:18px 22px;border-left:1px solid var(--border-l)">
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">This Month</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Collection vs expenses</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);align-items:stretch">
+          <div style="padding:20px 22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start">
+            <div style="border:1px solid #bfe8d1;background:#f1fbf5;border-radius:16px;padding:16px 18px;max-height:420px;display:flex;flex-direction:column;min-height:0">
+              <div style="font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#17784a">&#10003; Paid (${paidMembers.length})</div>
+              <div style="display:grid;gap:12px;margin-top:14px;overflow:auto;padding-right:4px">
+                ${paidMembers.length ? paidMembers.map((member) => `
+                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                    <div>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div>
+                      <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}</div>
+                    </div>
+                    <div style="font-weight:800;color:#17784a">${fmtCur(member.selected_month_amount || 0)}</div>
+                  </div>`).join('') : '<div style="font-size:13px;color:var(--t3)">No paid members yet.</div>'}
+              </div>
+            </div>
+            <div style="border:1px solid #f1c3bb;background:#fff5f2;border-radius:16px;padding:16px 18px;max-height:420px;display:flex;flex-direction:column;min-height:0">
+              <div style="font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#d64735">&#8987; Pending (${pendingMembers.length})</div>
+              <div style="display:grid;gap:12px;margin-top:14px;overflow:auto;padding-right:4px">
+                ${pendingMembers.length ? pendingMembers.map((member) => `
+                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                    <div>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div>
+                      <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}</div>
+                    </div>
+                    <div style="font-weight:800;color:#d64735">${fmtCur(member.selected_month_pending || 0)} due</div>
+                  </div>`).join('') : '<div style="font-size:13px;color:var(--t3)">No pending members for this month.</div>'}
+              </div>
+            </div>
+          </div>
+          <div style="padding:20px 22px;border-left:1px solid var(--border-l);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+            <div style="width:184px;height:184px;border-radius:50%;${donutStyle};display:flex;align-items:center;justify-content:center">
+              <div style="width:126px;height:126px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+                <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Collected</div>
+                <div style="font-size:28px;font-weight:900;color:var(--green);margin-top:6px">${donutCollectedPct}%</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center;font-size:13px;color:var(--t2)">
+              <span><span style="display:inline-block;width:10px;height:10px;background:#248f5b;border-radius:2px;margin-right:6px"></span>Collected</span>
+              <span><span style="display:inline-block;width:10px;height:10px;background:#c83b2b;border-radius:2px;margin-right:6px"></span>Expenses</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    const membersSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Members & Contributions</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Members</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">${isAllTime ? 'Member contributions from start till today' : `Monthly dues for ${escHtml(monthLabel)}`}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="showSocietyExcelImportModal()">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showSocietyMemberModal()">+ Add Member</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;padding:14px 22px;border-bottom:1px solid var(--border-l)">
+          <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
+            <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
+            <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
+            <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
+          </select>
+          <input class="fi" style="max-width:260px" value="${escHtml(_societyMemberSearch)}" oninput="setSocietyMemberSearch(this.value)" placeholder="Search name or unit...">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Property</th><th>Unit</th><th>Phone</th><th style="text-align:right">${isAllTime ? 'Total Paid' : `${escHtml(monthLabel)} Paid`}</th><th style="text-align:right">${isAllTime ? 'Monthly Due' : 'Dues'}</th><th>Status</th><th class="td-m">Actions</th></tr></thead>
+            <tbody>
+              ${filteredMembers.length ? filteredMembers.map((member) => {
+                const status = String(member.selected_month_status || '');
+                const paid = Number(isAllTime ? (member.total_contributed || 0) : (member.selected_month_amount || 0));
+                const due = Number(member.selected_month_due || 0);
+                const pending = Number(member.selected_month_pending || 0);
+                const statusChip = isAllTime
+                  ? (paid > 0
+                    ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Paid</span>`
+                    : `<span class="badge" style="background:#fff1ee;color:#d64735">&#8987; Unpaid</span>`)
+                  : status === 'paid'
+                  ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Paid</span>`
+                  : status === 'pending'
+                  ? `<span class="badge" style="background:#fff1ee;color:#d64735">&#8987; Unpaid</span>`
+                  : `<span class="badge" style="background:var(--bg2);color:var(--t3)">No Due</span>`;
+                return `
+                  <tr>
+                    <td><div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div></td>
+                    <td>${escHtml(member.property_type === 'shop' ? 'Shop' : 'Home')}</td>
+                    <td>${escHtml(member.unit_label || '-')}</td>
+                    <td>${escHtml(member.phone_number || '-')}</td>
+                    <td style="text-align:right;font-weight:800;color:${paid > 0 ? 'var(--green)' : 'var(--t2)'}">${fmtCur(paid)}</td>
+                    <td style="text-align:right;font-weight:800;color:${isAllTime ? 'var(--t1)' : (pending > 0 ? 'var(--red)' : 'var(--t1)')}">${fmtCur(due)}</td>
+                    <td>${statusChip}</td>
+                    <td style="white-space:nowrap">
+                      <button class="trip-icon-btn" title="Update Month Contribution" aria-label="Update Month Contribution" onclick="showSocietyContributionModal(${Number(member.id)})"><span class="trip-icon-btn-glyph">&#8377;</span></button>
+                      <button class="trip-icon-btn" title="Download Member PDF" aria-label="Download Member PDF" onclick="downloadSocietyMemberPdf(${Number(member.id)})"><span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span></button>
+                      <button class="trip-icon-btn" title="Edit Member" aria-label="Edit Member" onclick="showSocietyMemberModal(${Number(member.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+                      <button class="trip-icon-btn danger" title="Delete Member" aria-label="Delete Member" onclick="deleteSocietyMember(${Number(member.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+                    </td>
+                  </tr>`;
+              }).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No members match this filter.</td></tr>'}
+            </tbody>
+            <tfoot>
+              <tr style="background:#edf8f1">
+                <td colspan="4" style="font-weight:900;color:var(--t1)">Total</td>
+                <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(collectedTotal)}</td>
+                <td style="text-align:right;font-weight:900;color:var(--t1)">${fmtCur(dueTotal)}</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+
+    const matrixMonthTotals = (selected.matrix_months || []).map((monthKey) => {
+      const monthTotal = filteredMembers.reduce((sum, member) => Math.round((sum + Number((member.contributions_by_month || {})[monthKey] || 0)) * 100) / 100, 0);
+      return `<th style="position:sticky;top:0;z-index:4;text-align:right;background:#edf8f1;font-weight:900;color:var(--green);white-space:nowrap">${fmtCur(monthTotal)}</th>`;
+    }).join('');
+    const matrixGrandTotal = fmtCur(filteredMembers.reduce((sum, member) => Math.round((sum + Number(member.total_contributed || 0)) * 100) / 100, 0));
+
+    const matrixSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">All Months Matrix</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">All Months Matrix</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Every member × every month</div>
+          </div>
+          <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
+            <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
+            <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
+            <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
+          </select>
+        </div>
+        <div class="table-wrap" style="max-height:72vh;overflow:auto">
+          <table>
+            <thead>
+              <tr>
+                <th style="position:sticky;left:0;top:0;z-index:6;background:#edf8f1;min-width:220px">Total</th>
+                ${matrixMonthTotals}
+                <th style="position:sticky;top:0;z-index:4;text-align:right;background:#edf8f1;font-weight:900;color:var(--green);white-space:nowrap">${matrixGrandTotal}</th>
+              </tr>
+              <tr>
+                <th style="position:sticky;left:0;top:39px;z-index:6;background:#eef9f4;min-width:220px">Member</th>
+                ${(selected.matrix_months || []).map((monthKey) => `<th style="position:sticky;top:39px;z-index:4;text-align:right;background:#eef9f4;white-space:nowrap">${escHtml(societyMonthLabel(monthKey))}</th>`).join('')}
+                <th style="position:sticky;top:39px;z-index:4;text-align:right;background:#eef9f4;white-space:nowrap">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredMembers.length ? filteredMembers.map((member) => `
+                <tr>
+                  <td style="position:sticky;left:0;z-index:3;background:#fff;min-width:220px">
+                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(member.member_name)}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:3px">${escHtml(member.unit_label || '-')}</div>
+                  </td>
+                  ${(selected.matrix_months || []).map((monthKey) => {
+                    const value = Number((member.contributions_by_month || {})[monthKey] || 0);
+                    return `<td style="text-align:right">${value > 0 ? `<span class="badge" style="background:#eaf8ef;color:var(--green);font-weight:800">${fmtCur(value)}</span>` : `<span class="badge" style="background:#fff3f1;color:#d8a3a0">₹0</span>`}</td>`;
+                  }).join('')}
+                  <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(member.total_contributed || 0)}</td>
+                </tr>`).join('') : '<tr><td colspan="99" style="text-align:center;color:var(--t3)">No members to show in matrix.</td></tr>'}
+            </tbody>
+            <tfoot>
+              <tr style="background:#edf8f1">
+                <td style="font-weight:900">Total</td>
+                ${(selected.matrix_months || []).map((monthKey) => {
+                  const monthTotal = filteredMembers.reduce((sum, member) => Math.round((sum + Number((member.contributions_by_month || {})[monthKey] || 0)) * 100) / 100, 0);
+                  return `<td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(monthTotal)}</td>`;
+                }).join('')}
+                <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(filteredMembers.reduce((sum, member) => Math.round((sum + Number(member.total_contributed || 0)) * 100) / 100, 0))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+
+    const matrixSectionEnhanced = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">All Months Matrix</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">All Months Matrix</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Every member x every month</div>
+          </div>
+          <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
+            <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
+            <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
+            <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
+          </select>
+        </div>
+        <div class="table-wrap" style="max-height:72vh;overflow:auto">
+          <table>
+            <thead>
+              <tr>
+                <th style="position:sticky;left:0;top:0;z-index:6;background:#edf8f1;min-width:220px">Total</th>
+                ${(selected.matrix_months || []).map((monthKey) => {
+                  const monthTotal = filteredMembers.reduce((sum, member) => Math.round((sum + Number((member.contributions_by_month || {})[monthKey] || 0)) * 100) / 100, 0);
+                  return `<th style="position:sticky;top:0;z-index:4;text-align:right;background:#edf8f1;font-weight:900;color:var(--green);white-space:nowrap">${fmtCur(monthTotal)}</th>`;
+                }).join('')}
+                <th style="position:sticky;top:0;z-index:4;text-align:right;background:#edf8f1;font-weight:900;color:var(--green);white-space:nowrap">${fmtCur(filteredMembers.reduce((sum, member) => Math.round((sum + Number(member.total_contributed || 0)) * 100) / 100, 0))}</th>
+              </tr>
+              <tr>
+                <th style="position:sticky;left:0;top:39px;z-index:6;background:#eef9f4;min-width:220px">Member</th>
+                ${(selected.matrix_months || []).map((monthKey) => `<th style="position:sticky;top:39px;z-index:4;text-align:right;background:#eef9f4;white-space:nowrap">${escHtml(societyMonthLabel(monthKey))}</th>`).join('')}
+                <th style="position:sticky;top:39px;z-index:4;text-align:right;background:#eef9f4;white-space:nowrap">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredMembers.length ? filteredMembers.map((member) => `
+                <tr>
+                  <td style="position:sticky;left:0;z-index:3;background:#fff;min-width:220px">
+                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(member.member_name)}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:3px">${escHtml(member.unit_label || '-')}</div>
+                  </td>
+                  ${(selected.matrix_months || []).map((monthKey) => {
+                    const value = Number((member.contributions_by_month || {})[monthKey] || 0);
+                    return `<td style="text-align:right"><button class="badge" onclick="showSocietyContributionModal(${Number(member.id)}, '${monthKey}')" style="border:none;cursor:pointer;min-width:76px;justify-content:center;background:${value > 0 ? '#eaf8ef' : '#fff3f1'};color:${value > 0 ? 'var(--green)' : '#d8a3a0'};font-weight:800;padding:4px 10px">${value > 0 ? fmtCur(value) : '₹0'}</button></td>`;
+                  }).join('')}
+                  <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(member.total_contributed || 0)}</td>
+                </tr>`).join('') : '<tr><td colspan="99" style="text-align:center;color:var(--t3)">No members to show in matrix.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    const expensesSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Expenses · ${escHtml(monthLabel)}</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Society Expenses</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Recorded for ${escHtml(monthLabel)}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="showSocietyExcelImportModal('expenses')">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showSocietyExpenseModal()">+ Add Expense</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
+            <tbody>
+              ${(selected.month_expenses || []).length ? selected.month_expenses.map((expense) => `
+                <tr>
+                  <td>${fmtDate(expense.expense_date)}</td>
+                  <td><strong>${escHtml(expense.title)}</strong></td>
+                  <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
+                  <td>${escHtml(expense.notes || '—')}</td>
+                  <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(expense.amount || 0)}</td>
+                  <td style="white-space:nowrap">
+                    <button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSocietyExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+                    <button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSocietyExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+                  </td>
+                </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--t3)">No society expenses in this month.</td></tr>'}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="4" style="text-align:right;color:var(--t3)">Total this month</td>
+                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(spentTotal)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+
+    const expensesSectionEnhanced = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Expenses · ${escHtml(periodLabel)}</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Society Expenses</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">${isAllTime ? 'Recorded from start till today' : `Recorded for ${escHtml(monthLabel)}`}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="showSocietyExcelImportModal('expenses')">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showSocietyExpenseModal()">+ Add Expense</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
+            <tbody>
+              ${scopeExpenses.length ? scopeExpenses.map((expense) => `
+                <tr>
+                  <td>${fmtDate(expense.expense_date)}</td>
+                  <td><strong>${escHtml(expense.title)}</strong></td>
+                  <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
+                  <td>${escHtml(expense.notes || '—')}</td>
+                  <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(expense.amount || 0)}</td>
+                  <td style="white-space:nowrap">
+                    <button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSocietyExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+                    <button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSocietyExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+                  </td>
+                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--t3)">No society expenses ${isAllTime ? 'yet' : 'in this month'}.</td></tr>`}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="4" style="text-align:right;color:var(--t3)">${isAllTime ? 'Total till today' : 'Total this month'}</td>
+                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(spentTotal)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+
+    const reportSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Collection vs Expense Report</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:18px 22px;border-bottom:1px solid var(--border-l);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">All-Time Report</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Full history of collections and expenses</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="showSocietyCustomPdfModal()">Custom PDF</button>
+            <button class="btn btn-s btn-sm" onclick="downloadSocietyReportPdf()">Report PDF</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:18px 18px 4px">
+          <div style="background:#eaf8ef;border-radius:16px;padding:16px 18px;text-align:center">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#248f5b;font-weight:800">Total Collected</div>
+            <div style="font-size:34px;font-weight:900;color:#18784a;margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_collected || 0)}</div>
+          </div>
+          <div style="background:#fff3f1;border-radius:16px;padding:16px 18px;text-align:center">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#d64735;font-weight:800">Total Expenses</div>
+            <div style="font-size:34px;font-weight:900;color:#d64735;margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_spent || 0)}</div>
+          </div>
+          <div style="background:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#eef8f0' : '#fff3f1'};border-radius:16px;padding:16px 18px;text-align:center">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#248f5b' : '#d64735'};font-weight:800">Net Balance</div>
+            <div style="font-size:34px;font-weight:900;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#18784a' : '#d64735'};margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_balance || 0)}</div>
+          </div>
+        </div>
+        <div style="padding:18px 18px 8px">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;overflow:auto;padding:18px 8px 10px;border-top:1px solid var(--border-l);border-bottom:1px solid var(--border-l)">
+            ${chartBars || '<div style="padding:22px;color:var(--t3)">No monthly report data yet.</div>'}
+          </div>
+          <div style="display:flex;gap:16px;justify-content:center;font-size:13px;color:var(--t2);margin-top:14px">
+            <span><span style="display:inline-block;width:10px;height:10px;background:#248f5b;border-radius:2px;margin-right:6px"></span>Collected</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#c83b2b;border-radius:2px;margin-right:6px"></span>Expenses</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Paid Members</th><th>Collected</th><th>Expenses</th><th>Balance</th></tr></thead>
+            <tbody>${reportRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No report data available.</td></tr>'}</tbody>
+            <tfoot>
+              <tr style="background:#edf8f1">
+                <td style="font-weight:900">All Time</td>
+                <td>—</td>
+                <td style="font-weight:900;color:var(--green)">${fmtCur(selected.totals?.overall_collected || 0)}</td>
+                <td style="font-weight:900;color:var(--red)">${fmtCur(selected.totals?.overall_spent || 0)}</td>
+                <td style="font-weight:900;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(selected.totals?.overall_balance || 0)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+
+    const activeSection = _societyTab === 'members'
+      ? membersSection
+      : _societyTab === 'matrix'
+      ? matrixSectionEnhanced
+      : _societyTab === 'expenses'
+      ? expensesSectionEnhanced
+      : _societyTab === 'report'
+      ? reportSection
+      : overviewSection;
+
+    return `
+      <div style="display:grid;gap:14px">
+        <div style="border-radius:28px;padding:18px 20px 18px;background:
+          linear-gradient(135deg, rgba(11,78,45,0.96), rgba(40,139,86,0.96)),
+          radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 32%);
+          box-shadow:0 24px 54px rgba(22,66,46,0.24);position:relative;overflow:hidden">
+          <div style="position:absolute;inset:0;opacity:.16;background-image:
+            linear-gradient(rgba(255,255,255,.28) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.28) 1px, transparent 1px);
+            background-size:34px 34px;pointer-events:none"></div>
+          <div style="position:relative;display:grid;grid-template-columns:minmax(220px,1fr) minmax(420px,1.7fr);gap:14px;align-items:start">
+            <div style="display:flex;flex-direction:column;justify-content:flex-start;min-width:0;padding-top:2px">
+              <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Society</div>
+              <div style="font-size:18px;line-height:1.05;font-weight:900;color:#fff;margin-top:6px">${escHtml(selected.society?.name || 'Society')}</div>
+              <div style="font-size:12px;color:rgba(255,255,255,.75);margin-top:6px">${escHtml(selected.society?.location || 'Location not added yet')}</div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:4px;padding:4px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
+                <button class="chip ${!isAllTime ? 'active' : ''}" onclick="setSocietyRange('month')" style="${!isAllTime ? 'background:#ffffff;color:#175d3e;border-color:#ffffff;' : 'background:transparent;color:#fff;border-color:rgba(255,255,255,.16);'}min-width:74px">Month</button>
+                <button class="chip ${isAllTime ? 'active' : ''}" onclick="setSocietyRange('all')" style="${isAllTime ? 'background:#ffffff;color:#175d3e;border-color:#ffffff;' : 'background:transparent;color:#fff;border-color:rgba(255,255,255,.16);'}min-width:84px">All Time</button>
+              </div>
+              <label style="display:flex;align-items:center;gap:10px;padding:0 14px;height:38px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);color:#fff;min-width:205px;max-width:250px;opacity:${isAllTime ? '.55' : '1'}">
+                <span style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Month</span>
+                <input class="fi" type="month" value="${escHtml(_societyMonth)}" onchange="changeSocietyMonth(this.value)" ${isAllTime ? 'disabled' : ''} style="background:transparent;border:none;box-shadow:none;padding:0;color:#fff;font-weight:800">
+              </label>
+              <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
+                <button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>
+                <button class="trip-icon-btn" title="Matrix PDF" aria-label="Matrix PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMatrixPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#9638;</span></button>
+                <button class="trip-icon-btn" title="Expenses PDF" aria-label="Expenses PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyExpensesPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#8377;</span></button>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
+                <button class="trip-icon-btn" title="Add Member" aria-label="Add Member" style="width:36px;height:36px;min-width:36px;background:#ffffff;border-color:#ffffff;color:#175d3e" onclick="showSocietyMemberModal()"><span class="trip-icon-btn-glyph" style="font-size:14px">&#128101;</span></button>
+                <button class="trip-icon-btn" title="Add Expense" aria-label="Add Expense" style="width:36px;height:36px;min-width:36px;background:#ffffff;border-color:#ffffff;color:#175d3e" onclick="showSocietyExpenseModal()"><span class="trip-icon-btn-glyph" style="font-size:14px">&#8377;</span></button>
+                <button class="trip-icon-btn" title="Edit Society" aria-label="Edit Society" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.22);color:#fff" onclick="showSocietyModal(${Number(selected.society?.id || 0)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+              </div>
+            </div>
+          </div>
+          <div style="position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px">
+            <div style="padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);min-height:82px">
+              <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Members</div>
+              <div style="font-size:20px;font-weight:900;color:#fff;line-height:1;margin-top:5px">${Number(selected.totals?.member_count || 0)}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">registered units</div>
+            </div>
+            <div style="padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);min-height:82px">
+              <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Collected</div>
+              <div style="font-size:20px;font-weight:900;color:#d6ffe6;line-height:1;margin-top:5px;${moneyStyle}">${fmtCur(collectedTotal)}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">${isAllTime ? `${paidMembers.length}/${Number(selected.totals?.member_count || 0)} ever paid` : `${paidMembers.length}/${Number(selected.totals?.member_count || 0)} paid`}</div>
+              <div style="height:6px;border-radius:999px;background:rgba(255,255,255,.14);margin-top:8px;overflow:hidden"><div style="height:100%;width:${collectionPct}%;background:#9be0b8"></div></div>
+            </div>
+            <div style="padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);min-height:82px">
+              <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Spent</div>
+              <div style="font-size:20px;font-weight:900;color:#ffd3cc;line-height:1;margin-top:5px;${moneyStyle}">${fmtCur(spentTotal)}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">${Number(scopeExpenses.length)} expense(s)</div>
+            </div>
+            <div style="padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);min-height:82px">
+              <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Balance</div>
+              <div style="font-size:20px;font-weight:900;color:${balanceTotal >= 0 ? '#d6ffe6' : '#ffd3cc'};line-height:1;margin-top:5px;${moneyStyle}">${fmtCur(balanceTotal)}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">${balanceTotal >= 0 ? 'surplus' : 'deficit'}</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>
+          ${tabsHtml}
+        </div>
+        ${activeSection}
+      </div>`;
+  })() : `
+    <div class="card" style="padding:36px;text-align:center">
+      <div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first society</div>
+      <div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add members, monthly dues, contribution status, society expenses, and exportable reports in one place.</div>
+      <button class="btn btn-p" style="margin-top:16px" onclick="showSocietyModal()">+ Add Society</button>
+    </div>`;
+
+  main.innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">Societies</div>
+          <div style="font-size:14px;color:var(--t2);margin-top:6px">Manage monthly contributions and society expenses in one place.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="loadSocieties()">Refresh</button>
+          <button class="btn btn-p btn-sm" onclick="showSocietyModal()">+ Add Society</button>
+        </div>
+      </div>
+      <div class="card" style="padding:14px 16px;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:minmax(220px, 360px) 1fr;gap:12px;align-items:center">
+          <label style="display:flex;flex-direction:column;gap:6px;min-width:0">
+            <span style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Society</span>
+            <select class="fi" onchange="if(this.value){openSociety(this.value)}" ${_societiesList.length ? '' : 'disabled'}>
+              ${societyOptions}
+            </select>
+          </label>
+          ${selected ? `
+            <div style="display:flex;justify-content:flex-end;gap:18px;flex-wrap:wrap">
+              <div><div style="font-size:10px;color:var(--t3);text-transform:uppercase">Members</div><div style="font-size:16px;font-weight:800;color:var(--t1)">${Number(selected.totals?.member_count || 0)}</div></div>
+              <div><div style="font-size:10px;color:var(--t3);text-transform:uppercase">Collected</div><div style="font-size:16px;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(selected.totals?.overall_collected || 0)}</div></div>
+              <div><div style="font-size:10px;color:var(--t3);text-transform:uppercase">Spent</div><div style="font-size:16px;font-weight:800;color:var(--red);${moneyStyle}">${fmtCur(selected.totals?.overall_spent || 0)}</div></div>
+              <div><div style="font-size:10px;color:var(--t3);text-transform:uppercase">Balance</div><div style="font-size:16px;font-weight:800;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? 'var(--green)' : 'var(--red)'};${moneyStyle}">${fmtCur(selected.totals?.overall_balance || 0)}</div></div>
+            </div>` : '<div style="font-size:13px;color:var(--t3);text-align:right">Add a society to begin.</div>'}
+        </div>
+      </div>
+      ${_societiesLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading societies...</div>' : `<div class="societies-main">${detailBlock}</div>`}
+    </div>`;
+  repairMojibakeInNode(main);
+  if (_schoolKidTab === 'class') {
+    Array.from(main.querySelectorAll('div,section')).forEach((node) => {
+      const text = (node.textContent || '').trim();
+      const style = node.getAttribute?.('style') || '';
+      if ((text.includes('Expected Fees') || text.includes('Month Wise Expense')) && style.includes('grid-template-columns:minmax(220px,300px) 1fr')) {
+        node.remove();
+      }
+    });
+  }
+}
+
+function renderSchoolKidsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _schoolKidsOverview || { kids: [], class_rows: [], grand_total: 0 };
+  const selectedKid = getSelectedSchoolKid();
+  const selectedClass = getSelectedSchoolKidClass();
+  const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const tabItems = [['overview', 'Overview'], ['kid', 'Kid Detail'], ['class', 'Class Detail']];
+  const tabsHtml = tabItems.map(([key, label]) => `<button class="chip ${_schoolKidTab === key ? 'active' : ''}" style="${_schoolKidTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}" onclick="setSchoolKidTab('${key}')">${label}</button>`).join('');
+  const totalRecordsWithSpend = (overview.class_rows || []).filter((row) => Number(row.total_expense || 0) > 0).length;
+  const avgPerRecord = totalRecordsWithSpend ? Math.round((Number(overview.grand_total || 0) / totalRecordsWithSpend) * 100) / 100 : 0;
+  const highestKid = (_schoolKidsList || []).reduce((best, kid) => Number(kid.total_expense || 0) > Number(best?.total_expense || 0) ? kid : best, null);
+  const selectedKidClassRows = _schoolKidDetail?.classes || [];
+  const selectedKidYearBars = selectedKidClassRows
+    .filter((row) => Number(row.total_expense || 0) > 0)
+    .sort((a, b) => String(a.academic_year || '').localeCompare(String(b.academic_year || '')));
+  const selectedKidMaxSpend = Math.max(1, ...selectedKidYearBars.map((row) => Number(row.total_expense || 0)));
+  const selectedKidYearChart = selectedKidYearBars.length
+    ? selectedKidYearBars.map((row) => {
+      const height = Math.max(12, Math.round((Number(row.total_expense || 0) / selectedKidMaxSpend) * 66));
+      return `<div style="min-width:62px;display:grid;gap:6px;justify-items:center;align-items:end"><div style="width:100%;height:72px;display:flex;align-items:flex-end;justify-content:center"><div style="width:100%;max-width:48px;height:${height}px;border-radius:10px 10px 4px 4px;background:linear-gradient(180deg,#c4ffca 0%,#7fd58d 100%)"></div></div><div style="font-size:11px;color:rgba(255,255,255,.78);font-weight:700">${escHtml(row.class_label || '-')}</div></div>`;
+    }).join('')
+    : `<div style="font-size:13px;color:rgba(255,255,255,.7)">Add class records with expenses to see year-wise bars.</div>`;
+  const orderedKids = [...(overview.kids || [])].sort((a, b) => {
+    const ageA = Number(a?.age_years);
+    const ageB = Number(b?.age_years);
+    const hasAgeA = Number.isFinite(ageA);
+    const hasAgeB = Number.isFinite(ageB);
+    if (hasAgeA && hasAgeB && ageA !== ageB) return ageB - ageA;
+    if (hasAgeA !== hasAgeB) return hasAgeA ? -1 : 1;
+    return String(a?.kid_name || '').localeCompare(String(b?.kid_name || ''));
+  });
+  const kidCards = orderedKids.map((kid) => {
+    const active = String(kid.id) === String(_selectedSchoolKidId);
+    const classCount = Number(kid.class_count || 0);
+    return `<button class="card" type="button" onclick="openSchoolKid(${Number(kid.id)})" style="padding:14px 15px;text-align:left;border:${active ? '1.5px solid rgba(255,255,255,.44)' : '1px solid rgba(255,255,255,.16)'};background:${active ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.08)'};box-shadow:none;border-radius:18px;color:#fff;min-height:132px;display:grid;align-content:space-between;gap:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+        </div>
+        <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
+      </div>
+      <div style="display:grid;gap:7px">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;color:rgba(255,255,255,.72)">
+          <span>${classCount} class record${classCount === 1 ? '' : 's'}</span>
+          <span>${active ? 'Selected' : 'Tap to view'}</span>
+        </div>
+        ${kid.details ? `<div style="font-size:11px;color:rgba(255,255,255,.72);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(kid.details)}</div>` : '<div style="font-size:11px;color:rgba(255,255,255,.56)">School expense tracker</div>'}
+      </div>
+    </button>`;
+  }).join('');
+  const overviewTables = (overview.kids || []).map((kid) => `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(kid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${Number(kid.class_count || 0)}/${(kid.class_rows || []).length || Number(kid.class_count || 0)} records with spend</div></div><div style="font-size:20px;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(kid.class_rows || []).length ? (kid.class_rows || []).map((row) => `<tr><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(40, Math.min(88, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(kid.total_expense || 0))) * 88)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Class Detail" aria-label="Open Class Detail" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${Number(row.id)}))"><span class="trip-icon-btn-glyph">&#128065;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No class records yet.</td></tr>'}</tbody></table></div></div>`).join('');
+  const selectedKidSection = selectedKid ? `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="width:36px;height:36px;border-radius:12px;background:#e8f5ed;color:#3a6d53;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900">${escHtml(String(selectedKid.kid_name || 'K').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase())}</div><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedKid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${selectedKidClassRows.filter((row) => Number(row.total_expense || 0) > 0).length}/${selectedKidClassRows.length} records with spend</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><div style="font-size:18px;font-weight:900;color:var(--green);margin-right:6px;${moneyStyle}">${fmtCur(selectedKid.total_expense || 0)}</div><button class="btn btn-g btn-sm" onclick="showSchoolKidModal(${Number(selectedKid.id)})">Edit Kid</button><button class="btn btn-s btn-sm" onclick="showSchoolKidClassModal()">+ Add Class</button><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal()">+ Add Record</button></div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(_schoolKidDetail?.classes || []).length ? (_schoolKidDetail.classes || []).map((row) => `<tr style="${String(row.id) === String(_selectedSchoolKidClassId) ? 'background:#f3fbf6' : ''}"><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(38, Math.min(84, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(selectedKid.total_expense || 0))) * 84)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Detail" aria-label="Open Detail" onclick="selectSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128065;</span></button><button class="trip-icon-btn" title="Edit Class" aria-label="Edit Class" onclick="showSchoolKidClassModal(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Class" aria-label="Delete Class" onclick="deleteSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No school/class records yet.</td></tr>'}</tbody></table></div></div>` : '';
+  const classDetailSection = selectedClass ? (() => {
+    const expenseRows = (selectedClass.expenses || []).map((expense) => `<tr><td>${fmtDate(expense.expense_date)}</td><td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(expense.amount || 0)}</td><td>${escHtml(expense.notes || '-')}</td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('');
+    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+  })() : '';
+
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:22px 24px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;grid-template-columns:minmax(280px,.95fr) minmax(360px,1.15fr);gap:24px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="display:flex;align-items:end;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.68);font-weight:800">Selected Kid</div><div style="font-size:22px;font-weight:900;color:#fff;line-height:1.15;margin-top:6px">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div><div style="font-size:11px;color:rgba(255,255,255,.64);font-weight:700">${selectedKid ? 'Tap another tile to switch' : 'Choose from tiles below'}</div></div><div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.68);font-weight:800;margin-top:14px">${escHtml((selectedKid?.kid_name || 'Selected kid').toUpperCase())}'s year-wise spending</div><div style="display:flex;gap:10px;align-items:flex-end;overflow:auto;padding:14px 0 4px">${selectedKidYearChart}</div></div></div><div style="position:relative;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px">${kidCards}</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px"><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Grand Total</div><div style="font-size:22px;font-weight:900;color:var(--green);margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">${_schoolKidsList.length} kids · all time</div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Records With Expenses</div><div style="font-size:22px;font-weight:900;color:#d58f28;margin-top:8px">${totalRecordsWithSpend}/${(overview.class_rows || []).length}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">class years with spend</div><div style="height:6px;border-radius:999px;background:#eef0ee;margin-top:10px;overflow:hidden"><div style="height:100%;width:${(overview.class_rows || []).length ? Math.round((totalRecordsWithSpend / (overview.class_rows || []).length) * 100) : 0}%;background:#3b7d57"></div></div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Avg Per Year</div><div style="font-size:22px;font-weight:900;color:#4268b2;margin-top:8px;${moneyStyle}">${fmtCur(avgPerRecord)}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">per paid class record</div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Highest Spend</div><div style="font-size:18px;font-weight:900;color:var(--t1);margin-top:8px">${escHtml(highestKid?.kid_name || '-')}</div><div style="font-size:13px;color:var(--t3);margin-top:6px;${moneyStyle}">${highestKid ? `${fmtCur(highestKid.total_expense || 0)} total` : 'No data yet'}</div></div></div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  repairMojibakeInNode(main);
+}
+
+async function changeSocietyMonth(monthKey) {
+  _societyMonth = monthKey || _societyMonth;
+  await loadSocieties();
+}
+
+function showSocietyModal(id = null) {
+  const society = id ? (_societiesList.find((item) => String(item.id) === String(id)) || {}) : {};
+  openModal(id ? 'Edit Society' : 'Add Society', `
+    <div class="fg">
+      <label class="fl full">Society Name *<input class="fi" id="societyName" value="${escHtml(society.name || '')}" placeholder="e.g. Green Avenue RWA"></label>
+      <label class="fl full">Location<input class="fi" id="societyLocation" value="${escHtml(society.location || '')}" placeholder="e.g. Sector 22, Chandigarh"></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSociety(${id || 'null'})">${id ? 'Update' : 'Add Society'}</button>
+      ${id ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteSociety(${Number(id)})">Delete</button>` : ''}
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSociety(id));
+}
+
+async function saveSociety(id = null) {
+  const body = {
+    name: document.getElementById('societyName')?.value?.trim() || '',
+    location: document.getElementById('societyLocation')?.value?.trim() || '',
+  };
+  if (!body.name) { toast('Society name is required', 'warning'); return; }
+  const result = id
+    ? await api(`/api/societies/${Number(id)}`, { method: 'PUT', body })
+    : await api('/api/societies', { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save society.', 'error'); return; }
+  closeModal();
+  _selectedSocietyId = Number(result?.society?.id || id || _selectedSocietyId);
+  toast(id ? 'Society updated' : 'Society added', 'success');
+  await loadSocieties();
+}
+
+async function deleteSociety(id) {
+  if (!await confirmDialog('Delete this society, all members, contributions, and expenses?')) return;
+  const result = await api(`/api/societies/${Number(id)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete society.', 'error'); return; }
+  if (String(_selectedSocietyId) === String(id)) _selectedSocietyId = null;
+  closeModal();
+  toast('Society deleted', 'success');
+  await loadSocieties();
+}
+
+function showSocietyMemberModal(memberId = null) {
+  const member = memberId ? ((_societyDetail?.members || []).find((item) => String(item.id) === String(memberId)) || {}) : {};
+  openModal(memberId ? 'Edit Society Member' : 'Add Society Member', `
+    <div class="fg">
+      <label class="fl">Member Name *<input class="fi" id="societyMemberName" value="${escHtml(member.member_name || '')}"></label>
+      <label class="fl">Phone Number<input class="fi" id="societyMemberPhone" value="${escHtml(member.phone_number || '')}"></label>
+      <label class="fl">House Number / Shop Name *<input class="fi" id="societyMemberUnit" value="${escHtml(member.unit_label || '')}"></label>
+      <label class="fl">Monthly Due *<input class="fi" type="number" step="0.01" min="0" id="societyMemberDue" value="${escHtml(String(member.monthly_due || 0))}"></label>
+      <label class="fl">Property Type
+        <select class="fi" id="societyMemberType">
+          <option value="home" ${String(member.property_type || 'home') === 'home' ? 'selected' : ''}>Home</option>
+          <option value="shop" ${String(member.property_type || '') === 'shop' ? 'selected' : ''}>Shop</option>
+        </select>
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyMember(${memberId || 'null'})">${memberId ? 'Update' : 'Add Member'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyMember(memberId));
+}
+
+async function saveSocietyMember(memberId = null) {
+  if (!_selectedSocietyId) return;
+  const body = {
+    member_name: document.getElementById('societyMemberName')?.value?.trim() || '',
+    phone_number: document.getElementById('societyMemberPhone')?.value?.trim() || '',
+    unit_label: document.getElementById('societyMemberUnit')?.value?.trim() || '',
+    monthly_due: Number(document.getElementById('societyMemberDue')?.value || 0),
+    property_type: document.getElementById('societyMemberType')?.value || 'home',
+  };
+  if (!body.member_name || !body.unit_label) { toast('Member name and house/shop field are required', 'warning'); return; }
+  const result = memberId
+    ? await api(`/api/societies/${Number(_selectedSocietyId)}/members/${Number(memberId)}`, { method: 'PUT', body })
+    : await api(`/api/societies/${Number(_selectedSocietyId)}/members`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save member.', 'error'); return; }
+  closeModal();
+  toast(memberId ? 'Member updated' : 'Member added', 'success');
+  await loadSocieties();
+}
+
+async function deleteSocietyMember(memberId) {
+  if (!await confirmDialog('Delete this member and all their monthly contributions?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/members/${Number(memberId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete member.', 'error'); return; }
+  toast('Member deleted', 'success');
+  await loadSocieties();
+}
+
+function showSocietyContributionModal(memberId, monthKey = _societyMonth) {
+  const member = (_societyDetail?.members || []).find((item) => String(item.id) === String(memberId));
+  if (!member) return;
+  const targetMonth = monthKey || _societyMonth;
+  const monthValue = Number((member.contributions_by_month || {})[targetMonth] || 0);
+  openModal(`Contribution - ${escHtml(member.member_name)}`, `
+    <div class="fg">
+      <label class="fl">Month *<input class="fi" type="month" id="societyContributionMonth" value="${escHtml(targetMonth)}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0" id="societyContributionAmount" value="${escHtml(String(monthValue || (targetMonth === _societyMonth ? (member.selected_month_amount || member.selected_month_due || member.monthly_due || 0) : (member.monthly_due || 0))))}"></label>
+      <label class="fl">Paid On<input class="fi" type="date" id="societyContributionPaidOn" value="${escHtml(targetMonth === _societyMonth ? (member.selected_month_paid_on || '') : '')}"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyContributionNotes" placeholder="Optional note">${escHtml(member.selected_month_notes || '')}</textarea></label>
+    </div>
+    <div style="font-size:12px;color:var(--t3);margin-top:8px">Monthly due for this member is ${fmtCur(member.monthly_due || 0)}. Set amount to 0 if you want to remove this month's contribution entry.</div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyContribution(${Number(memberId)})">Save Contribution</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyContribution(memberId));
+}
+
+async function saveSocietyContribution(memberId) {
+  const body = {
+    month_key: document.getElementById('societyContributionMonth')?.value || _societyMonth,
+    amount: Number(document.getElementById('societyContributionAmount')?.value || 0),
+    paid_on: document.getElementById('societyContributionPaidOn')?.value || '',
+    notes: document.getElementById('societyContributionNotes')?.value?.trim() || '',
+  };
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/contributions/${Number(memberId)}`, { method: 'PUT', body });
+  if (!result?.success) { toast(result?.error || 'Could not save contribution.', 'error'); return; }
+  closeModal();
+  _societyMonth = body.month_key || _societyMonth;
+  toast('Contribution saved', 'success');
+  await loadSocieties();
+}
+
+function showSocietyExpenseModal(expenseId = null) {
+  const expense = expenseId ? ((_societyDetail?.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
+  openModal(expenseId ? 'Edit Society Expense' : 'Add Society Expense', `
+    <div class="fg">
+      <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(expense.expense_date || `${_societyMonth}-01`)}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
+      <label class="fl full">Title *<input class="fi" id="societyExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Security Guard Salary"></label>
+      <label class="fl">Category<input class="fi" id="societyExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Salary, Repair"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyExpenseNotes" placeholder="Optional note">${escHtml(expense.notes || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyExpense(${expenseId || 'null'})">${expenseId ? 'Update Expense' : 'Add Expense'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyExpense(expenseId));
+}
+
+async function saveSocietyExpense(expenseId = null) {
+  const expenseDate = document.getElementById('societyExpenseDate')?.value || `${_societyMonth}-01`;
+  const body = {
+    expense_date: expenseDate,
+    month_key: String(expenseDate).slice(0, 7),
+    title: document.getElementById('societyExpenseTitle')?.value?.trim() || '',
+    category: document.getElementById('societyExpenseCategory')?.value?.trim() || '',
+    amount: Number(document.getElementById('societyExpenseAmount')?.value || 0),
+    notes: document.getElementById('societyExpenseNotes')?.value?.trim() || '',
+  };
+  if (!body.title || !(body.amount > 0)) { toast('Expense title and amount are required', 'warning'); return; }
+  const result = expenseId
+    ? await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'PUT', body })
+    : await api(`/api/societies/${Number(_selectedSocietyId)}/expenses`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save expense.', 'error'); return; }
+  closeModal();
+  _societyMonth = body.month_key || _societyMonth;
+  toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  await loadSocieties();
+}
+
+async function deleteSocietyExpense(expenseId) {
+  if (!await confirmDialog('Delete this society expense?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete expense.', 'error'); return; }
+  toast('Expense deleted', 'success');
+  await loadSocieties();
+}
+
+function toggleSocietyCustomExpenseMonths() {
+  const scope = document.getElementById('societyPdfExpenseScope')?.value || 'current';
+  const wrap = document.getElementById('societyPdfExpenseMonthsWrap');
+  if (wrap) wrap.style.display = scope === 'selected' ? 'block' : 'none';
+}
+
+function showSocietyCustomPdfModal() {
+  if (!_societyDetail?.society) return;
+  const months = _societyDetail.matrix_months || [];
+  const monthChecks = months.map((monthKey) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:#fff">
+      <input type="checkbox" class="society-pdf-matrix-month" value="${escHtml(monthKey)}" checked>
+      <span style="font-size:13px;color:var(--t2)">${escHtml(societyMonthLabel(monthKey))}</span>
+    </label>`).join('');
+  const expenseMonthChecks = months.map((monthKey) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:#fff">
+      <input type="checkbox" class="society-pdf-expense-month" value="${escHtml(monthKey)}" checked>
+      <span style="font-size:13px;color:var(--t2)">${escHtml(societyMonthLabel(monthKey))}</span>
+    </label>`).join('');
+  openModal('Custom Society PDF', `
+    <div class="fg">
+      <div class="fl full" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="checkbox" id="societyPdfIncludeSummary" checked>
+          <span>Summary</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="checkbox" id="societyPdfIncludeReport" checked>
+          <span>Report</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="checkbox" id="societyPdfIncludeMatrix" checked>
+          <span>Matrix</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="checkbox" id="societyPdfIncludeExpenses" checked>
+          <span>Expenses</span>
+        </label>
+      </div>
+      <label class="fl full">Members to show
+        <select class="fi" id="societyPdfMemberScope">
+          <option value="all">All members</option>
+          <option value="paid">Paid members only</option>
+          <option value="unpaid">Not paid members only</option>
+        </select>
+      </label>
+      <div class="fl full">
+        <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px">Matrix months to show</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">${monthChecks || '<div style="color:var(--t3)">No months available.</div>'}</div>
+      </div>
+      <label class="fl full">Expenses to show
+        <select class="fi" id="societyPdfExpenseScope" onchange="toggleSocietyCustomExpenseMonths()">
+          <option value="current">Current month only</option>
+          <option value="all">All expenses till today</option>
+          <option value="selected">Selected months</option>
+        </select>
+      </label>
+      <div class="fl full" id="societyPdfExpenseMonthsWrap" style="display:none">
+        <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px">Expense months to show</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">${expenseMonthChecks || '<div style="color:var(--t3)">No months available.</div>'}</div>
+      </div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="downloadSocietyCustomPdfFromModal()">Generate PDF</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function downloadSocietyCustomPdfFromModal() {
+  const matrixMonths = [...document.querySelectorAll('.society-pdf-matrix-month:checked')].map((input) => input.value);
+  const expenseMonths = [...document.querySelectorAll('.society-pdf-expense-month:checked')].map((input) => input.value);
+  const options = {
+    include_summary: !!document.getElementById('societyPdfIncludeSummary')?.checked,
+    include_report: !!document.getElementById('societyPdfIncludeReport')?.checked,
+    include_matrix: !!document.getElementById('societyPdfIncludeMatrix')?.checked,
+    include_expenses: !!document.getElementById('societyPdfIncludeExpenses')?.checked,
+    member_scope: document.getElementById('societyPdfMemberScope')?.value || 'all',
+    matrix_months: matrixMonths,
+    expense_scope: document.getElementById('societyPdfExpenseScope')?.value || 'current',
+    expense_months: expenseMonths,
+  };
+  if (!options.include_summary && !options.include_report && !options.include_matrix && !options.include_expenses) {
+    toast('Select at least one section for the PDF.', 'warning');
+    return;
+  }
+  downloadSocietyCustomPdf(options);
+  closeModal();
+}
+
+function showSocietyExcelImportModal(mode = 'members') {
+  if (!_selectedSocietyId) return;
+  const importMode = String(mode || 'members').toLowerCase() === 'expenses' ? 'expenses' : 'members';
+  openModal(importMode === 'expenses' ? 'Import Society Expenses' : 'Import Society Excel', `
+    <div class="fg">
+      <label class="fl full">File (.xlsx / .xls / .ods)
+        <input type="file" accept=".xlsx,.xls,.ods" id="societyImportFile" class="fi">
+      </label>
+      <label class="fl">Password (optional)
+        <input type="password" id="societyImportPassword" class="fi" placeholder="Leave blank if none" autocomplete="new-password">
+      </label>
+      ${importMode === 'members' ? `
+        <label class="fl">Year for month headers without year
+          <input type="number" id="societyImportBaseYear" class="fi" min="2000" max="2100" value="${escHtml(String(Number(String(_societyMonth || '').slice(0, 4)) || new Date().getFullYear()))}">
+        </label>` : `
+        <div class="fl">
+          <div style="font-size:12px;color:var(--t3);line-height:1.6;padding-top:8px">Expected headers: <b>Date</b>, <b>Comments</b>, <b>Paid</b>.</div>
+        </div>`}
+    </div>
+    <div style="font-size:12px;color:var(--t3);margin-top:8px">${importMode === 'members'
+      ? 'Expected columns: <b>Type</b>, <b>H. NO.</b>, <b>phone num</b>, <b>Name</b>, followed by month columns like <b>Sep-24</b>, <b>Oct-24</b>, <b>Jan-25</b>. If your month headers do not include years, set the first visible month year above.'
+      : 'The importer will read one expense per row and create society expenses using the row date as the expense month.'}</div>
+    <input type="hidden" id="societyImportMode" value="${escHtml(importMode)}">
+    <div id="societyImportSheetArea" style="margin-top:14px"></div>
+    <div id="societyImportPreview" style="margin-top:14px"></div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="loadSocietyImportSheets()">Read File</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function getSelectedSocietyImportSheet() {
+  return [...document.querySelectorAll('.society-import-sheet-cb:checked')].map((checkbox) => checkbox.value)[0] || '';
+}
+
+async function loadSocietyImportSheets() {
+  const file = document.getElementById('societyImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const password = document.getElementById('societyImportPassword')?.value || '';
+  const area = document.getElementById('societyImportSheetArea');
+  const preview = document.getElementById('societyImportPreview');
+  if (area) area.innerHTML = `<div style="color:var(--t3);font-size:13px">Reading file...</div>`;
+  if (preview) preview.innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/import-excel/sheets`, { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (area) area.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not read file.')}</div>`;
+    return;
+  }
+  const sheets = Array.isArray(data?.sheets) ? data.sheets : [];
+  if (!sheets.length) {
+    if (area) area.innerHTML = `<div style="color:var(--amber);font-size:13px">No sheets found in this file.</div>`;
+    return;
+  }
+  if (area) area.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--t3)">Choose the society sheet to preview and import.</div>
+      <button class="btn btn-s btn-sm" onclick="previewSocietyExcelImport()">Preview Import</button>
+    </div>
+    <div style="display:grid;gap:8px;margin-top:10px">
+      ${sheets.map((sheet, index) => `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="radio" name="societyImportSheet" class="society-import-sheet-cb" value="${escHtml(sheet)}" ${index === 0 ? 'checked' : ''}>
+          <span style="font-weight:700;color:var(--t2)">${escHtml(sheet)}</span>
+        </label>`).join('')}
+    </div>`;
+}
+
+async function previewSocietyExcelImport() {
+  const file = document.getElementById('societyImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const sheet = getSelectedSocietyImportSheet();
+  if (!sheet) { toast('Please choose a sheet first.', 'warning'); return; }
+  const mode = document.getElementById('societyImportMode')?.value || 'members';
+  const password = document.getElementById('societyImportPassword')?.value || '';
+  const baseYear = document.getElementById('societyImportBaseYear')?.value || '';
+  const preview = document.getElementById('societyImportPreview');
+  if (preview) preview.innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  fd.append('sheet', sheet);
+  fd.append('mode', mode);
+  fd.append('base_year', baseYear);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/import-excel/preview`, { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (preview) preview.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not preview import.')}</div>`;
+    return;
+  }
+  if (String(data.mode || mode) === 'expenses') {
+    const expenseRows = (data.preview || []).map((expense) => `
+      <tr>
+        <td>${fmtDate(expense.expense_date)}</td>
+        <td style="font-weight:700;color:var(--t1)">${escHtml(expense.title || '-')}</td>
+        <td style="text-align:right;color:var(--red);font-weight:800">${fmtCur(expense.amount || 0)}</td>
+        <td>${escHtml(expense.month_key || '-')}</td>
+      </tr>`).join('');
+    if (preview) preview.innerHTML = `
+      <div class="card" style="padding:16px">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+          <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Sheet</div><div style="font-weight:800;color:var(--t1)">${escHtml(data.sheet || sheet)}</div></div>
+          <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Expenses</div><div style="font-weight:800;color:var(--t1)">${Number(data.expense_count || 0)}</div></div>
+          <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Total Amount</div><div style="font-weight:800;color:var(--red)">${fmtCur(data.total_amount || 0)}</div></div>
+          <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Skipped Rows</div><div style="font-weight:800;color:var(--amber)">${Number(data.skipped_rows || 0)}</div></div>
+        </div>
+        <div class="table-wrap" style="margin-top:14px">
+          <table>
+            <thead><tr><th>Date</th><th>Comments</th><th style="text-align:right">Paid</th><th>Month</th></tr></thead>
+            <tbody>${expenseRows || '<tr><td colspan="4" style="text-align:center;color:var(--t3)">No valid expenses found.</td></tr>'}</tbody>
+          </table>
+        </div>
+        <div class="fa" style="margin-top:16px">
+          <button class="btn btn-p" onclick="doSocietyExcelImport()">Import Expenses</button>
+        </div>
+      </div>`;
+    return;
+  }
+  const monthPills = (data.month_columns || []).map((month) => `<span class="badge" style="background:#edf8f1;color:var(--green)">${escHtml(month)}</span>`).join(' ');
+  const rowsHtml = (data.preview || []).map((member) => `
+    <tr>
+      <td>${escHtml(member.property_type === 'shop' ? 'Shop' : 'Home')}</td>
+      <td>${escHtml(member.unit_label || '-')}</td>
+      <td>${escHtml(member.phone_number || '-')}</td>
+      <td style="font-weight:700;color:var(--t1)">${escHtml(member.member_name || '-')}</td>
+      <td style="text-align:right">${fmtCur(member.monthly_due || 0)}</td>
+      <td>${(member.contributions || []).map((entry) => `<span class="badge" style="background:#f4f8ff;color:#3a5ca8;margin:0 6px 6px 0">${escHtml(entry.month_key)}: ${fmtCur(entry.amount || 0)}</span>`).join('') || '<span style="color:var(--t3)">No payments</span>'}</td>
+    </tr>`).join('');
+  if (preview) preview.innerHTML = `
+    <div class="card" style="padding:16px">
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Sheet</div><div style="font-weight:800;color:var(--t1)">${escHtml(data.sheet || sheet)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Members</div><div style="font-weight:800;color:var(--t1)">${Number(data.member_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Payments</div><div style="font-weight:800;color:var(--green)">${Number(data.contribution_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Skipped Rows</div><div style="font-weight:800;color:var(--red)">${Number(data.skipped_rows || 0)}</div></div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--t3)">Detected months</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${monthPills || '<span style="color:var(--t3)">No month columns detected</span>'}</div>
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Type</th><th>Unit</th><th>Phone</th><th>Name</th><th style="text-align:right">Monthly Due</th><th>Imported Months</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;color:var(--t3)">No valid rows found.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="fa" style="margin-top:16px">
+        <button class="btn btn-p" onclick="doSocietyExcelImport()">Import Excel</button>
+      </div>
+    </div>`;
+}
+
+async function doSocietyExcelImport() {
+  const file = document.getElementById('societyImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const sheet = getSelectedSocietyImportSheet();
+  if (!sheet) { toast('Please choose a sheet first.', 'warning'); return; }
+  const mode = document.getElementById('societyImportMode')?.value || 'members';
+  const password = document.getElementById('societyImportPassword')?.value || '';
+  const baseYear = document.getElementById('societyImportBaseYear')?.value || '';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  fd.append('sheet', sheet);
+  fd.append('mode', mode);
+  fd.append('base_year', baseYear);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/import-excel`, { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) { toast(data?.error || 'Could not import society excel.', 'error'); return; }
+  closeModal();
+  if (String(mode) === 'expenses') {
+    toast(`Imported ${Number(data.expenses_imported || 0)} society expenses.`, 'success');
+  } else {
+    toast(`Imported ${Number(data.members_added || 0)} new members, updated ${Number(data.members_updated || 0)} members, and saved ${Number(data.contributions_imported || 0)} payments.`, 'success');
+  }
+  await loadSocieties();
+}
+
+function schoolKidMonthLabel(monthKey) {
+  const normalized = String(monthKey || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(normalized)) return normalized || '-';
+  const [year, month] = normalized.split('-').map(Number);
+  return `${_MONTHS_LONG[(month || 1) - 1]} ${year}`;
+}
+
+function formatAcademicYear(value) {
+  return String(value || '').trim() || '-';
+}
+
+function getSelectedSchoolKid() {
+  return _schoolKidsList.find((item) => String(item.id) === String(_selectedSchoolKidId)) || null;
+}
+
+function getSelectedSchoolKidClass() {
+  return (_schoolKidDetail?.classes || []).find((item) => String(item.id) === String(_selectedSchoolKidClassId)) || null;
+}
+
+function syncSelectedSchoolKidClass() {
+  if (!_schoolKidDetail?.classes?.length) {
+    _selectedSchoolKidClassId = null;
+    return;
+  }
+  if (!_selectedSchoolKidClassId || !(_schoolKidDetail.classes || []).some((item) => String(item.id) === String(_selectedSchoolKidClassId))) {
+    _selectedSchoolKidClassId = _schoolKidDetail.classes[0]?.id || null;
+  }
+}
+
+async function fetchSchoolKidDetail(id) {
+  const numericId = Number(id);
+  if (!numericId) {
+    _schoolKidDetail = null;
+    _selectedSchoolKidClassId = null;
+    return null;
+  }
+  const cacheKey = String(numericId);
+  if (_schoolKidDetailCache[cacheKey]) {
+    _schoolKidDetail = _schoolKidDetailCache[cacheKey];
+    syncSelectedSchoolKidClass();
+    return _schoolKidDetail;
+  }
+  const detailRes = await api(`/api/school-kids/${numericId}`);
+  if (detailRes?.error) {
+    _schoolKidDetail = null;
+    _selectedSchoolKidClassId = null;
+    toast(detailRes.error || 'Could not load kid details.', 'error');
+    return null;
+  }
+  _schoolKidDetail = detailRes;
+  _schoolKidDetailCache[cacheKey] = detailRes;
+  syncSelectedSchoolKidClass();
+  return detailRes;
+}
+
+async function loadSchoolKids() {
+  _schoolKidsLoading = true;
+  renderSchoolKidsPage();
+  const overviewRes = await api('/api/school-kids');
+  _schoolKidsOverview = overviewRes?.error ? null : overviewRes;
+  _schoolKidsList = Array.isArray(overviewRes?.kids) ? overviewRes.kids : [];
+  _schoolKidDetailCache = {};
+  if (!_selectedSchoolKidId && _schoolKidsList.length) _selectedSchoolKidId = _schoolKidsList[0].id;
+  if (_selectedSchoolKidId && !_schoolKidsList.some((item) => String(item.id) === String(_selectedSchoolKidId))) {
+    _selectedSchoolKidId = _schoolKidsList[0]?.id || null;
+  }
+  if (_selectedSchoolKidId) {
+    await fetchSchoolKidDetail(_selectedSchoolKidId);
+  } else {
+    _schoolKidDetail = null;
+    _selectedSchoolKidClassId = null;
+  }
+  _schoolKidsLoading = false;
+  renderSchoolKidsPage();
+}
+
+async function openSchoolKid(id) {
+  const targetId = Number(id);
+  if (!targetId) return;
+  if (String(_selectedSchoolKidId) === String(targetId) && _schoolKidTab === 'kid' && _schoolKidDetail) {
+    renderSchoolKidsPage();
+    return;
+  }
+  _selectedSchoolKidId = targetId;
+  _selectedSchoolKidClassId = null;
+  _schoolKidTab = 'kid';
+  const cacheKey = String(targetId);
+  if (_schoolKidDetailCache[cacheKey]) {
+    _schoolKidDetail = _schoolKidDetailCache[cacheKey];
+    syncSelectedSchoolKidClass();
+    renderSchoolKidsPage();
+    return;
+  }
+  await fetchSchoolKidDetail(targetId);
+  renderSchoolKidsPage();
+}
+
+function setSchoolKidTab(value) {
+  _schoolKidTab = String(value || 'overview');
+  renderSchoolKidsPage();
+}
+
+function renderSchoolKidsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _schoolKidsOverview || { kids: [], class_rows: [], grand_total: 0 };
+  const selectedKid = getSelectedSchoolKid();
+  const selectedClass = getSelectedSchoolKidClass();
+  const tabItems = [
+    ['overview', 'Overview'],
+    ['kid', 'Kid Detail'],
+    ['class', 'Class Detail'],
+  ];
+  const tabsHtml = tabItems.map(([key, label]) => `
+    <button
+      class="chip ${_schoolKidTab === key ? 'active' : ''}"
+      style="${_schoolKidTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}"
+      onclick="setSchoolKidTab('${key}')">${label}</button>`).join('');
+  const kidOptions = _schoolKidsList.length
+    ? _schoolKidsList.map((kid) => `<option value="${Number(kid.id)}" ${String(kid.id) === String(_selectedSchoolKidId) ? 'selected' : ''}>${escHtml(kid.kid_name)}${kid.age_years != null ? ` · Age ${Number(kid.age_years)}` : ''}</option>`).join('')
+    : '<option value="">No kids yet</option>';
+  const kidCards = (overview.kids || []).map((kid) => `
+    <button
+      class="card"
+      type="button"
+      onclick="openSchoolKid(${Number(kid.id)})"
+      style="padding:18px;text-align:left;border:${String(kid.id) === String(_selectedSchoolKidId) ? '2px solid #1f734c' : '1px solid var(--border-l)'};background:${String(kid.id) === String(_selectedSchoolKidId) ? 'linear-gradient(180deg,#f3fbf6 0%,#ffffff 100%)' : '#fff'};min-width:220px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <div>
+          <div style="font-size:17px;font-weight:900;color:var(--t1)">${escHtml(kid.kid_name)}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}${kid.class_count ? ` · ${Number(kid.class_count)} class records` : ''}</div>
+        </div>
+        <div style="font-size:18px;font-weight:900;color:var(--green)">${fmtCur(kid.total_expense || 0)}</div>
+      </div>
+      ${kid.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:10px">${escHtml(kid.details)}</div>` : ''}
+    </button>`).join('');
+
+  const overviewTables = (overview.kids || []).map((kid) => `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--border-l)">
+        <div>
+          <div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(kid.kid_name)} Expenses</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals</div>
+        </div>
+        <div style="font-size:20px;font-weight:900;color:var(--green)">${fmtCur(kid.total_expense || 0)}</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead>
+          <tbody>
+            ${(kid.class_rows || []).length ? (kid.class_rows || []).map((row) => `
+              <tr>
+                <td>${escHtml(row.school_name || '-')}</td>
+                <td>${escHtml(formatAcademicYear(row.academic_year))}</td>
+                <td>${escHtml(row.class_label || '-')}</td>
+                <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(row.total_expense || 0)}</td>
+                <td style="white-space:nowrap">
+                  <button class="trip-icon-btn" title="Open Class Detail" aria-label="Open Class Detail" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${Number(row.id)}))"><span class="trip-icon-btn-glyph">&#128065;</span></button>
+                </td>
+              </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No class records yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`).join('');
+
+  const selectedKidSection = selectedKid ? `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)">
+        <div>
+          <div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedKid.kid_name)}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">Selected child · class wise breakdown</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-g btn-sm" onclick="showSchoolKidModal(${Number(selectedKid.id)})">Edit Kid</button>
+          <button class="btn btn-s btn-sm" onclick="showSchoolKidClassModal()">+ Add Class</button>
+          <button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal()">+ Add Expense</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Expected / Month</th><th style="text-align:right">Total Expense</th><th class="td-m">Actions</th></tr></thead>
+          <tbody>
+            ${(_schoolKidDetail?.classes || []).length ? (_schoolKidDetail.classes || []).map((row) => `
+              <tr style="${String(row.id) === String(_selectedSchoolKidClassId) ? 'background:#f3fbf6' : ''}">
+                <td>${escHtml(row.school_name || '-')}</td>
+                <td>${escHtml(formatAcademicYear(row.academic_year))}</td>
+                <td style="font-weight:800;color:var(--t1)">${escHtml(row.class_label || '-')}</td>
+                <td style="text-align:right">${fmtCur((row.expected_monthly_fee || 0) + (row.bus_fee || 0) + (row.other_fee || 0))}</td>
+                <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(row.total_expense || 0)}</td>
+                <td style="white-space:nowrap">
+                  <button class="trip-icon-btn" title="Open Detail" aria-label="Open Detail" onclick="selectSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128065;</span></button>
+                  <button class="trip-icon-btn" title="Edit Class" aria-label="Edit Class" onclick="showSchoolKidClassModal(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+                  <button class="trip-icon-btn danger" title="Delete Class" aria-label="Delete Class" onclick="deleteSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+                </td>
+              </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--t3)">No school/class records yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>` : '';
+
+  const classDetailSection = selectedClass ? (() => {
+    const monthRows = (selectedClass.month_summary || []).map((row) => `
+      <tr>
+        <td>${escHtml(schoolKidMonthLabel(row.month_key))}</td>
+        <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(row.total || 0)}</td>
+      </tr>`).join('');
+    const expenseRows = (selectedClass.expenses || []).map((expense) => `
+      <tr>
+        <td>${fmtDate(expense.expense_date)}</td>
+        <td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td>
+        <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(expense.amount || 0)}</td>
+        <td>${escHtml(expense.notes || '-')}</td>
+        <td style="white-space:nowrap">
+          <button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+          <button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+        </td>
+      </tr>`).join('');
+    return `
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total ${fmtCur(selectedClass.total_expense || 0)}</div>
+          </div>
+          <button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)">
+          <div class="card" style="padding:16px;background:#f7fbf8">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div>
+            <div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)">
+              <div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green)">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green)">${fmtCur(selectedClass.bus_fee || 0)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green)">${fmtCur(selectedClass.other_fee || 0)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1)">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div>
+            </div>
+            ${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}
+          </div>
+          <div class="card" style="padding:16px;background:#fff">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div>
+            <div class="table-wrap" style="margin-top:12px">
+              <table>
+                <thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead>
+                <tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead>
+            <tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody>
+            <tfoot>
+              <tr style="background:#edf8f1">
+                <td colspan="2" style="font-weight:900;color:var(--t1)">Total</td>
+                <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(selectedClass.total_expense || 0)}</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+  })() : '';
+
+  main.innerHTML = `
+    <div class="tab-content">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div>
+          <div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button>
+          <button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button>
+          <button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button>
+        </div>
+      </div>
+      ${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `
+        <div class="card" style="padding:36px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div>
+          <div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div>
+          <button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button>
+        </div>` : `
+        <div class="card" style="padding:20px;margin-bottom:16px;background:linear-gradient(135deg,#145a3c 0%,#27804f 100%);color:#fff">
+          <div style="display:grid;grid-template-columns:minmax(240px,1fr) minmax(240px,360px);gap:16px;align-items:center">
+            <div>
+              <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Grand Total</div>
+              <div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:6px">${fmtCur(overview.grand_total || 0)}</div>
+              <div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kid${_schoolKidsList.length === 1 ? '' : 's'} tracked</div>
+            </div>
+            <label style="display:flex;flex-direction:column;gap:8px;min-width:0">
+              <span style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.68);font-weight:800">Selected Kid</span>
+              <select class="fi" onchange="if(this.value){openSchoolKid(this.value)}">${kidOptions}</select>
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px">${kidCards}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+          <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>
+          ${tabsHtml}
+        </div>
+        <div style="display:grid;gap:18px">
+          ${_schoolKidTab === 'overview' ? overviewTables : ''}
+          ${_schoolKidTab === 'kid' ? selectedKidSection : ''}
+          ${_schoolKidTab === 'class' ? classDetailSection : ''}
+        </div>`)}
+    </div>`;
+  repairMojibakeInNode(main);
+}
+
+function renderSchoolClassBadge(classLabel) {
+  const raw = String(classLabel || '').trim();
+  if (!raw) return '-';
+  const key = raw.toLowerCase();
+  let bg = '#eef2ff';
+  let color = '#4664c8';
+  if (key.includes('nursery')) { bg = '#eef5ff'; color = '#4d73c7'; }
+  else if (key.includes('lkg')) { bg = '#fff3cc'; color = '#d6921f'; }
+  else if (key.includes('ukg')) { bg = '#f1e9ff'; color = '#7d5cd6'; }
+  else if (key.includes('1st')) { bg = '#ebf7ef'; color = '#4d8c69'; }
+  else if (key.includes('2nd')) { bg = '#fff0ef'; color = '#cc6857'; }
+  else if (key.includes('3rd')) { bg = '#eef2f5'; color = '#627285'; }
+  return `<span class="badge" style="background:${bg};color:${color}">${escHtml(raw)}</span>`;
+}
+
+function renderSchoolKidsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _schoolKidsOverview || { kids: [], class_rows: [], grand_total: 0 };
+  const selectedKid = getSelectedSchoolKid();
+  const selectedClass = getSelectedSchoolKidClass();
+  const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const tabItems = [['overview', 'Overview'], ['kid', 'Kid Detail'], ['class', 'Class Detail']];
+  const tabsHtml = tabItems.map(([key, label]) => `<button class="chip ${_schoolKidTab === key ? 'active' : ''}" style="${_schoolKidTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}" onclick="setSchoolKidTab('${key}')">${label}</button>`).join('');
+  const kidOptions = _schoolKidsList.length
+    ? _schoolKidsList.map((kid) => `<option value="${Number(kid.id)}" ${String(kid.id) === String(_selectedSchoolKidId) ? 'selected' : ''}>${escHtml(kid.kid_name)}${kid.age_years != null ? ` · Age ${Number(kid.age_years)}` : ''}</option>`).join('')
+    : '<option value="">No kids yet</option>';
+  const totalRecordsWithSpend = (overview.class_rows || []).filter((row) => Number(row.total_expense || 0) > 0).length;
+  const avgPerRecord = totalRecordsWithSpend ? Math.round((Number(overview.grand_total || 0) / totalRecordsWithSpend) * 100) / 100 : 0;
+  const highestKid = (_schoolKidsList || []).reduce((best, kid) => Number(kid.total_expense || 0) > Number(best?.total_expense || 0) ? kid : best, null);
+  const selectedKidClassRows = _schoolKidDetail?.classes || [];
+  const selectedKidYearBars = selectedKidClassRows.filter((row) => Number(row.total_expense || 0) > 0).sort((a, b) => String(a.academic_year || '').localeCompare(String(b.academic_year || '')));
+  const selectedKidMaxSpend = Math.max(1, ...selectedKidYearBars.map((row) => Number(row.total_expense || 0)));
+  const selectedKidYearChart = selectedKidYearBars.length ? selectedKidYearBars.map((row) => {
+    const height = Math.max(12, Math.round((Number(row.total_expense || 0) / selectedKidMaxSpend) * 66));
+    return `<div style="min-width:62px;display:grid;gap:6px;justify-items:center;align-items:end"><div style="width:100%;height:72px;display:flex;align-items:flex-end;justify-content:center"><div style="width:100%;max-width:48px;height:${height}px;border-radius:10px 10px 4px 4px;background:linear-gradient(180deg,#c4ffca 0%,#7fd58d 100%)"></div></div><div style="font-size:11px;color:rgba(255,255,255,.78);font-weight:700">${escHtml(row.class_label || '-')}</div></div>`;
+  }).join('') : `<div style="font-size:13px;color:rgba(255,255,255,.7)">Add class records with expenses to see year-wise bars.</div>`;
+  const kidCards = (overview.kids || []).map((kid) => `<button class="card" type="button" onclick="openSchoolKid(${Number(kid.id)})" style="padding:16px;text-align:left;border:${String(kid.id) === String(_selectedSchoolKidId) ? '1.5px solid rgba(255,255,255,.42)' : '1px solid rgba(255,255,255,.18)'};background:${String(kid.id) === String(_selectedSchoolKidId) ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.08)'};box-shadow:none;min-width:170px;border-radius:18px;color:#fff"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div><div style="font-size:16px;font-weight:900;color:#fff;line-height:1.15">${escHtml(kid.kid_name)}</div><div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:6px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}${kid.class_count ? ` · ${Number(kid.class_count)} class records` : ''}</div></div><div style="font-size:16px;font-weight:900;color:#d9ffe6;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div></div>${kid.details ? `<div style="font-size:12px;color:rgba(255,255,255,.74);line-height:1.55;margin-top:10px">${escHtml(kid.details)}</div>` : ''}</button>`).join('');
+  const overviewTables = (overview.kids || []).map((kid) => `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(kid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${Number(kid.class_count || 0)}/${(kid.class_rows || []).length || Number(kid.class_count || 0)} records with spend</div></div><div style="font-size:20px;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(kid.class_rows || []).length ? (kid.class_rows || []).map((row) => `<tr><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(40, Math.min(88, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(kid.total_expense || 0))) * 88)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Class Detail" aria-label="Open Class Detail" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${Number(row.id)}))"><span class="trip-icon-btn-glyph">&#128065;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No class records yet.</td></tr>'}</tbody></table></div></div>`).join('');
+  const selectedKidSection = selectedKid ? `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="width:36px;height:36px;border-radius:12px;background:#e8f5ed;color:#3a6d53;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900">${escHtml(String(selectedKid.kid_name || 'K').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase())}</div><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedKid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${selectedKidClassRows.filter((row) => Number(row.total_expense || 0) > 0).length}/${selectedKidClassRows.length} records with spend</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><div style="font-size:18px;font-weight:900;color:var(--green);margin-right:6px;${moneyStyle}">${fmtCur(selectedKid.total_expense || 0)}</div><button class="btn btn-g btn-sm" onclick="showSchoolKidModal(${Number(selectedKid.id)})">Edit Kid</button><button class="btn btn-s btn-sm" onclick="showSchoolKidClassModal()">+ Add Class</button><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal()">+ Add Record</button></div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(_schoolKidDetail?.classes || []).length ? (_schoolKidDetail.classes || []).map((row) => `<tr style="${String(row.id) === String(_selectedSchoolKidClassId) ? 'background:#f3fbf6' : ''}"><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(38, Math.min(84, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(selectedKid.total_expense || 0))) * 84)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Detail" aria-label="Open Detail" onclick="selectSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128065;</span></button><button class="trip-icon-btn" title="Edit Class" aria-label="Edit Class" onclick="showSchoolKidClassModal(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Class" aria-label="Delete Class" onclick="deleteSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No school/class records yet.</td></tr>'}</tbody></table></div></div>` : '';
+  const classDetailSection = selectedClass ? (() => {
+    const expenseRows = (selectedClass.expenses || []).map((expense) => `<tr><td>${fmtDate(expense.expense_date)}</td><td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(expense.amount || 0)}</td><td>${escHtml(expense.notes || '-')}</td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('');
+    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+  })() : '';
+
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:22px 24px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;grid-template-columns:minmax(290px,1fr) minmax(320px,1.15fr);gap:22px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:16px">${kidCards}</div></div><div style="display:grid;gap:14px"><label style="display:flex;flex-direction:column;gap:8px;min-width:0"><span style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.68);font-weight:800">Selected Kid</span><select class="fi" onchange="if(this.value){openSchoolKid(this.value)}" style="background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.16);color:#fff">${kidOptions}</select></label><div><div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.68);font-weight:800">${escHtml((selectedKid?.kid_name || 'Selected kid').toUpperCase())}'s year-wise spending</div><div style="display:flex;gap:10px;align-items:flex-end;overflow:auto;padding:14px 0 4px">${selectedKidYearChart}</div></div></div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px"><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Grand Total</div><div style="font-size:22px;font-weight:900;color:var(--green);margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">${_schoolKidsList.length} kids · all time</div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Records With Expenses</div><div style="font-size:22px;font-weight:900;color:#d58f28;margin-top:8px">${totalRecordsWithSpend}/${(overview.class_rows || []).length}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">class years with spend</div><div style="height:6px;border-radius:999px;background:#eef0ee;margin-top:10px;overflow:hidden"><div style="height:100%;width:${(overview.class_rows || []).length ? Math.round((totalRecordsWithSpend / (overview.class_rows || []).length) * 100) : 0}%;background:#3b7d57"></div></div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Avg Per Year</div><div style="font-size:22px;font-weight:900;color:#4268b2;margin-top:8px;${moneyStyle}">${fmtCur(avgPerRecord)}</div><div style="font-size:12px;color:var(--t3);margin-top:6px">per paid class record</div></div><div class="card" style="padding:18px 20px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800">Highest Spend</div><div style="font-size:18px;font-weight:900;color:var(--t1);margin-top:8px">${escHtml(highestKid?.kid_name || '-')}</div><div style="font-size:13px;color:var(--t3);margin-top:6px;${moneyStyle}">${highestKid ? `${fmtCur(highestKid.total_expense || 0)} total` : 'No data yet'}</div></div></div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  repairMojibakeInNode(main);
+}
+
+function renderSchoolKidsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _schoolKidsOverview || { kids: [], class_rows: [], grand_total: 0 };
+  const selectedKid = getSelectedSchoolKid();
+  const selectedClass = getSelectedSchoolKidClass();
+  const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const tabItems = [['overview', 'Overview'], ['kid', 'Kid Detail'], ['class', 'Class Detail']];
+  const tabsHtml = tabItems.map(([key, label]) => `<button class="chip ${_schoolKidTab === key ? 'active' : ''}" style="${_schoolKidTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}" onclick="setSchoolKidTab('${key}')">${label}</button>`).join('');
+  const totalRecordsWithSpend = (overview.class_rows || []).filter((row) => Number(row.total_expense || 0) > 0).length;
+  const avgPerRecord = totalRecordsWithSpend ? Math.round((Number(overview.grand_total || 0) / totalRecordsWithSpend) * 100) / 100 : 0;
+  const highestKid = (_schoolKidsList || []).reduce((best, kid) => Number(kid.total_expense || 0) > Number(best?.total_expense || 0) ? kid : best, null);
+  const selectedKidClassRows = _schoolKidDetail?.classes || [];
+  const selectedKidClassRowsOrdered = [...selectedKidClassRows].sort((a, b) => {
+    const aStart = Number(String(a?.academic_year || '').match(/\d{4}/)?.[0] || 0);
+    const bStart = Number(String(b?.academic_year || '').match(/\d{4}/)?.[0] || 0);
+    if (aStart !== bStart) return aStart - bStart;
+    return String(a?.academic_year || '').localeCompare(String(b?.academic_year || ''));
+  });
+  const orderedKids = [...(overview.kids || [])].sort((a, b) => {
+    const ageA = Number(a?.age_years);
+    const ageB = Number(b?.age_years);
+    const hasAgeA = Number.isFinite(ageA);
+    const hasAgeB = Number.isFinite(ageB);
+    if (hasAgeA && hasAgeB && ageA !== ageB) return ageB - ageA;
+    if (hasAgeA !== hasAgeB) return hasAgeA ? -1 : 1;
+    return String(a?.kid_name || '').localeCompare(String(b?.kid_name || ''));
+  });
+  const kidCards = orderedKids.map((kid) => {
+    const active = String(kid.id) === String(_selectedSchoolKidId);
+    const classCount = Number(kid.class_count || 0);
+    return `<button class="card" type="button" onclick="openSchoolKid(${Number(kid.id)})" style="padding:14px 15px;text-align:left;border:${active ? '1.5px solid rgba(255,255,255,.42)' : '1px solid rgba(255,255,255,.16)'};background:${active ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.08)'};box-shadow:none;border-radius:18px;color:#fff;min-height:132px;display:grid;align-content:space-between;gap:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+        </div>
+        <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
+      </div>
+      <div style="display:grid;gap:7px">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;color:rgba(255,255,255,.72)">
+          <span>${classCount} class record${classCount === 1 ? '' : 's'}</span>
+          <span>${active ? 'Selected' : 'Tap to view'}</span>
+        </div>
+        ${kid.details ? `<div style="font-size:11px;color:rgba(255,255,255,.72);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(kid.details)}</div>` : '<div style="font-size:11px;color:rgba(255,255,255,.56)">School expense tracker</div>'}
+      </div>
+    </button>`;
+  }).join('');
+  const overviewTables = (overview.kids || []).map((kid) => `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(kid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${Number(kid.class_count || 0)}/${(kid.class_rows || []).length || Number(kid.class_count || 0)} records with spend</div></div><div style="font-size:20px;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(kid.class_rows || []).length ? (kid.class_rows || []).map((row) => `<tr><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(40, Math.min(88, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(kid.total_expense || 0))) * 88)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Class Detail" aria-label="Open Class Detail" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${Number(row.id)}))"><span class="trip-icon-btn-glyph">&#128065;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No class records yet.</td></tr>'}</tbody></table></div></div>`).join('');
+  const selectedKidSection = selectedKid ? `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="width:36px;height:36px;border-radius:12px;background:#e8f5ed;color:#3a6d53;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900">${escHtml(String(selectedKid.kid_name || 'K').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase())}</div><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedKid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${selectedKidClassRows.filter((row) => Number(row.total_expense || 0) > 0).length}/${selectedKidClassRows.length} records with spend</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><div style="font-size:18px;font-weight:900;color:var(--green);margin-right:6px;${moneyStyle}">${fmtCur(selectedKid.total_expense || 0)}</div><button class="btn btn-g btn-sm" onclick="showSchoolKidModal(${Number(selectedKid.id)})">Edit Kid</button><button class="btn btn-s btn-sm" onclick="showSchoolKidClassModal()">+ Add Class</button><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal()">+ Add Record</button></div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(_schoolKidDetail?.classes || []).length ? (_schoolKidDetail.classes || []).map((row) => `<tr style="${String(row.id) === String(_selectedSchoolKidClassId) ? 'background:#f3fbf6' : ''}"><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(38, Math.min(84, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(selectedKid.total_expense || 0))) * 84)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Detail" aria-label="Open Detail" onclick="selectSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128065;</span></button><button class="trip-icon-btn" title="Edit Class" aria-label="Edit Class" onclick="showSchoolKidClassModal(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Class" aria-label="Delete Class" onclick="deleteSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No school/class records yet.</td></tr>'}</tbody></table></div></div>` : '';
+  const classDetailSection = selectedClass ? (() => {
+    const monthRows = (selectedClass.month_summary || []).map((row) => `<tr><td>${escHtml(schoolKidMonthLabel(row.month_key))}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(row.total || 0)}</td></tr>`).join('');
+    const expenseRows = (selectedClass.expenses || []).map((expense) => `<tr><td>${fmtDate(expense.expense_date)}</td><td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(expense.amount || 0)}</td><td>${escHtml(expense.notes || '-')}</td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('');
+    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+  })() : '';
+
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  repairMojibakeInNode(main);
+}
+
+function renderSchoolKidsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _schoolKidsOverview || { kids: [], class_rows: [], grand_total: 0 };
+  const selectedKid = getSelectedSchoolKid();
+  const selectedClass = getSelectedSchoolKidClass();
+  const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const tabItems = [['overview', 'Overview'], ['kid', 'Kid Detail'], ['class', 'Class Detail']];
+  const tabsHtml = tabItems.map(([key, label]) => `<button class="chip ${_schoolKidTab === key ? 'active' : ''}" style="${_schoolKidTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}" onclick="setSchoolKidTab('${key}')">${label}</button>`).join('');
+  const totalRecordsWithSpend = (overview.class_rows || []).filter((row) => Number(row.total_expense || 0) > 0).length;
+  const avgPerRecord = totalRecordsWithSpend ? Math.round((Number(overview.grand_total || 0) / totalRecordsWithSpend) * 100) / 100 : 0;
+  const highestKid = (_schoolKidsList || []).reduce((best, kid) => Number(kid.total_expense || 0) > Number(best?.total_expense || 0) ? kid : best, null);
+  const selectedKidClassRows = _schoolKidDetail?.classes || [];
+  const orderedKids = [...(overview.kids || [])].sort((a, b) => {
+    const ageA = Number(a?.age_years);
+    const ageB = Number(b?.age_years);
+    const hasAgeA = Number.isFinite(ageA);
+    const hasAgeB = Number.isFinite(ageB);
+    if (hasAgeA && hasAgeB && ageA !== ageB) return ageB - ageA;
+    if (hasAgeA !== hasAgeB) return hasAgeA ? -1 : 1;
+    return String(a?.kid_name || '').localeCompare(String(b?.kid_name || ''));
+  });
+  const kidCards = orderedKids.map((kid) => {
+    const active = String(kid.id) === String(_selectedSchoolKidId);
+    const classCount = Number(kid.class_count || 0);
+    return `<button class="card" type="button" onclick="openSchoolKid(${Number(kid.id)})" style="padding:14px 15px;text-align:left;border:${active ? '1.5px solid rgba(255,255,255,.42)' : '1px solid rgba(255,255,255,.16)'};background:${active ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.08)'};box-shadow:none;border-radius:18px;color:#fff;min-height:132px;display:grid;align-content:space-between;gap:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+        </div>
+        <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
+      </div>
+      <div style="display:grid;gap:7px">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;color:rgba(255,255,255,.72)">
+          <span>${classCount} class record${classCount === 1 ? '' : 's'}</span>
+          <span>${active ? 'Selected' : 'Tap to view'}</span>
+        </div>
+        ${kid.details ? `<div style="font-size:11px;color:rgba(255,255,255,.72);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(kid.details)}</div>` : '<div style="font-size:11px;color:rgba(255,255,255,.56)">School expense tracker</div>'}
+      </div>
+    </button>`;
+  }).join('');
+  const overviewYearMap = new Map();
+  orderedKids.forEach((kid) => {
+    (kid.class_rows || []).forEach((row) => {
+      const yearKey = String(row.academic_year || '').trim();
+      if (!yearKey) return;
+      if (!overviewYearMap.has(yearKey)) overviewYearMap.set(yearKey, {});
+      const bucket = overviewYearMap.get(yearKey);
+      if (!bucket[kid.id]) bucket[kid.id] = [];
+      bucket[kid.id].push(row);
+    });
+  });
+  const overviewYears = Array.from(overviewYearMap.keys()).sort((a, b) => {
+    const aStart = Number(String(a).match(/\d{4}/)?.[0] || 0);
+    const bStart = Number(String(b).match(/\d{4}/)?.[0] || 0);
+    if (aStart !== bStart) return aStart - bStart;
+    return a.localeCompare(b);
+  });
+  const overviewHeaderTop = `<tr><th rowspan="2" style="min-width:110px">Year</th>${orderedKids.map((kid) => `<th colspan="3" style="text-align:center">${escHtml(kid.kid_name)}</th>`).join('')}</tr>`;
+  const overviewHeaderBottom = `<tr>${orderedKids.map(() => `<th style="min-width:170px">School</th><th style="min-width:108px">Class</th><th style="min-width:124px;text-align:right">Total</th>`).join('')}</tr>`;
+  const overviewBodyRows = overviewYears.map((year) => {
+    const byKid = overviewYearMap.get(year) || {};
+    return `<tr><td style="font-weight:800;color:var(--t1)">${escHtml(formatAcademicYear(year))}</td>${orderedKids.map((kid) => {
+      const rows = byKid[kid.id] || [];
+      if (!rows.length) return `<td style="color:var(--t3)">-</td><td style="color:var(--t3)">-</td><td style="text-align:right;color:var(--t3);${moneyStyle}">-</td>`;
+      const schoolNames = rows.map((row) => escHtml(row.school_name || '-')).join('<br>');
+      const classLabels = rows.map((row) => renderSchoolClassBadge(row.class_label)).join('<div style="height:6px"></div>');
+      const totalAmount = rows.reduce((sum, row) => sum + Number(row.total_expense || 0), 0);
+      const primaryId = Number(rows[0]?.id || 0);
+      return `<td style="vertical-align:top"><button type="button" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${primaryId}))" style="all:unset;cursor:pointer;color:var(--t1);font-weight:700;line-height:1.5;display:block;width:100%">${schoolNames}</button></td><td style="vertical-align:top">${classLabels}</td><td style="text-align:right;vertical-align:top;font-weight:800;color:var(--green);${moneyStyle}"><button type="button" onclick="openSchoolKid(${Number(kid.id)}).then(()=>selectSchoolKidClass(${primaryId}))" style="all:unset;cursor:pointer;color:inherit;font:inherit">${fmtCur(totalAmount)}</button></td>`;
+    }).join('')}</tr>`;
+  }).join('');
+  const overviewTables = `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:18px;font-weight:900;color:var(--t1)">All Kids Overview</div><div style="font-size:12px;color:var(--t3);margin-top:4px">All years in one table, with each child shown side by side.</div></div><div style="font-size:20px;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div></div><div class="table-wrap"><table><thead>${overviewHeaderTop}${overviewHeaderBottom}</thead><tbody>${overviewBodyRows || `<tr><td colspan="${1 + (orderedKids.length * 3)}" style="text-align:center;color:var(--t3)">No class records yet.</td></tr>`}</tbody></table></div></div>`;
+  const selectedKidSection = selectedKid ? `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="width:36px;height:36px;border-radius:12px;background:#e8f5ed;color:#3a6d53;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900">${escHtml(String(selectedKid.kid_name || 'K').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase())}</div><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedKid.kid_name)} Expenses</div><div style="font-size:12px;color:var(--t3);margin-top:4px">School wise and class wise totals · ${selectedKidClassRows.filter((row) => Number(row.total_expense || 0) > 0).length}/${selectedKidClassRows.length} records with spend</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><div style="font-size:18px;font-weight:900;color:var(--green);margin-right:6px;${moneyStyle}">${fmtCur(selectedKid.total_expense || 0)}</div><button class="btn btn-g btn-sm" onclick="showSchoolKidModal(${Number(selectedKid.id)})">Edit Kid</button><button class="btn btn-s btn-sm" onclick="showSchoolKidClassModal()">+ Add Class</button><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal()">+ Add Record</button></div></div><div class="table-wrap"><table><thead><tr><th>School Name</th><th>Year</th><th>Class</th><th style="text-align:right">Total</th><th class="td-m">Actions</th></tr></thead><tbody>${(_schoolKidDetail?.classes || []).length ? (_schoolKidDetail.classes || []).map((row) => `<tr style="${String(row.id) === String(_selectedSchoolKidClassId) ? 'background:#f3fbf6' : ''}"><td>${escHtml(row.school_name || '-')}</td><td><span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(formatAcademicYear(row.academic_year))}</span></td><td>${renderSchoolClassBadge(row.class_label)}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}"><div style="display:flex;align-items:center;justify-content:flex-end;gap:10px"><span style="display:inline-block;height:4px;width:${Math.max(38, Math.min(84, Math.round((Number(row.total_expense || 0) / Math.max(1, Number(selectedKid.total_expense || 0))) * 84)))}px;border-radius:999px;background:#3b7d57"></span><span>${fmtCur(row.total_expense || 0)}</span></div></td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Open Detail" aria-label="Open Detail" onclick="selectSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128065;</span></button><button class="trip-icon-btn" title="Edit Class" aria-label="Edit Class" onclick="showSchoolKidClassModal(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Class" aria-label="Delete Class" onclick="deleteSchoolKidClass(${Number(row.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No school/class records yet.</td></tr>'}</tbody></table></div></div>` : '';
+  const classDetailSection = selectedClass ? (() => {
+    const monthRows = (selectedClass.month_summary || []).map((row) => `<tr><td>${escHtml(schoolKidMonthLabel(row.month_key))}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(row.total || 0)}</td></tr>`).join('');
+    const expenseRows = (selectedClass.expenses || []).map((expense) => `<tr><td>${fmtDate(expense.expense_date)}</td><td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(expense.amount || 0)}</td><td>${escHtml(expense.notes || '-')}</td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('');
+    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+  })() : '';
+
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  repairMojibakeInNode(main);
+  pruneSchoolKidClassPanels(main);
+  sortSchoolKidDetailRows(main);
+  applySchoolKidClassHeaderLabel(main);
+  compactSchoolKidsLayout(main);
+}
+
+function pruneSchoolKidClassPanels(root = document.getElementById('main')) {
+  if (!root || _schoolKidTab !== 'class') return;
+  const addExpenseBtn = Array.from(root.querySelectorAll('button')).find((btn) => (btn.textContent || '').includes('Add Expense To This Class'));
+  const headerRow = addExpenseBtn?.closest('div[style*="border-bottom"]');
+  const candidate = headerRow?.nextElementSibling;
+  const text = (candidate?.textContent || '').replace(/\s+/g, ' ').trim();
+  const style = candidate?.getAttribute?.('style') || '';
+  if (candidate && style.includes('grid-template-columns:minmax(220px,300px) 1fr') && (text.includes('Expected Fees') || text.includes('Month Wise Expense'))) {
+    candidate.remove();
+  }
+}
+
+function sortSchoolKidDetailRows(root = document.getElementById('main')) {
+  if (!root || _schoolKidTab !== 'kid') return;
+  const addRecordBtn = Array.from(root.querySelectorAll('button')).find((btn) => (btn.textContent || '').includes('Add Record'));
+  const card = addRecordBtn?.closest('.card');
+  const tbody = card?.querySelector('tbody');
+  if (!tbody) return;
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const sorted = rows.sort((a, b) => {
+    const aYear = (a.querySelector('td:nth-child(2) .badge')?.textContent || '').trim();
+    const bYear = (b.querySelector('td:nth-child(2) .badge')?.textContent || '').trim();
+    const aStart = Number(String(aYear).match(/\d{4}/)?.[0] || 0);
+    const bStart = Number(String(bYear).match(/\d{4}/)?.[0] || 0);
+    if (aStart !== bStart) return aStart - bStart;
+    return aYear.localeCompare(bYear);
+  });
+  sorted.forEach((row) => tbody.appendChild(row));
+}
+
+function applySchoolKidClassHeaderLabel(root = document.getElementById('main')) {
+  if (!root || _schoolKidTab !== 'class' || !_selectedSchoolKidId) return;
+  const selectedKid = getSelectedSchoolKid();
+  const addExpenseBtn = Array.from(root.querySelectorAll('button')).find((btn) => (btn.textContent || '').includes('Add Expense To This Class'));
+  const headerRow = addExpenseBtn?.closest('div[style*="border-bottom"]');
+  const headerTitle = headerRow?.querySelector('div[style*="font-size:20px"]');
+  if (!headerTitle || !selectedKid) return;
+  const current = headerTitle.textContent || '';
+  if (current.includes(`(${selectedKid.kid_name})`)) return;
+  headerTitle.textContent = `${current} (${selectedKid.kid_name})`;
+}
+
+function compactSchoolKidsLayout(root = document.getElementById('main')) {
+  if (!root) return;
+  const pageTitle = Array.from(root.querySelectorAll('div')).find((el) => (el.textContent || '').trim() === 'School Kids' && (el.getAttribute('style') || '').includes('font-size:28px'));
+  if (pageTitle) pageTitle.style.fontSize = '24px';
+  const pageSubtitle = pageTitle?.nextElementSibling;
+  if (pageSubtitle) {
+    pageSubtitle.style.fontSize = '13px';
+    pageSubtitle.style.marginTop = '4px';
+  }
+
+  const hero = pageTitle?.closest('.tab-content')?.querySelector('.card');
+  if (hero && (hero.getAttribute('style') || '').includes('linear-gradient(135deg')) {
+    hero.style.padding = '14px 18px';
+    hero.style.marginBottom = '12px';
+    hero.style.boxShadow = '0 18px 38px rgba(22,66,46,0.14)';
+  }
+
+  const grandTotalLabel = Array.from(root.querySelectorAll('div')).find((el) => (el.textContent || '').trim() === 'Grand Total' && (el.getAttribute('style') || '').includes('letter-spacing'));
+  if (grandTotalLabel) {
+    const bigValue = grandTotalLabel.nextElementSibling;
+    const subValue = bigValue?.nextElementSibling;
+    if (bigValue) bigValue.style.fontSize = '34px';
+    if (subValue) subValue.style.fontSize = '12px';
+  }
+
+  const heroTiles = Array.from(root.querySelectorAll('button.card')).filter((btn) => (btn.textContent || '').includes('Tap to view') || (btn.textContent || '').includes('Selected'));
+  heroTiles.forEach((tile) => {
+    tile.style.padding = '12px 13px';
+    tile.style.minHeight = '110px';
+    tile.style.borderRadius = '16px';
+    const topRow = tile.firstElementChild;
+    const bottomRow = topRow?.nextElementSibling;
+    const name = topRow?.querySelector('div[style*="font-size:15px"]');
+    const age = topRow?.querySelector('div[style*="font-size:12px"]');
+    const amount = topRow?.querySelector('div[style*="font-size:15px"]');
+    if (name) name.style.fontSize = '14px';
+    if (age) age.style.fontSize = '11px';
+    if (amount) amount.style.fontSize = '14px';
+    if (bottomRow) bottomRow.style.gap = '5px';
+  });
+
+  const sectionsRow = Array.from(root.querySelectorAll('div')).find((el) => (el.textContent || '').includes('Sections') && (el.getAttribute('style') || '').includes('letter-spacing:.18em'));
+  if (sectionsRow) {
+    sectionsRow.style.marginBottom = '12px';
+    sectionsRow.style.gap = '6px';
+  }
+
+  const detailCards = Array.from(root.querySelectorAll('.card')).filter((card) => {
+    const text = (card.textContent || '').trim();
+    return text.includes('Expenses') || text.includes('All Kids Overview') || text.includes('Add Expense To This Class');
+  });
+  detailCards.forEach((card) => {
+    if (!(card.getAttribute('style') || '').includes('linear-gradient(135deg')) {
+      card.style.borderRadius = '18px';
+    }
+  });
+}
+
+function selectSchoolKidClass(classId) {
+  _selectedSchoolKidClassId = classId;
+  _schoolKidTab = 'class';
+  renderSchoolKidsPage();
+}
+
+function showSchoolKidModal(kidId = null) {
+  const kid = kidId ? (_schoolKidsList.find((item) => String(item.id) === String(kidId)) || {}) : {};
+  openModal(kidId ? 'Edit Kid' : 'Add Kid', `
+    <div class="fg">
+      <label class="fl">Kid Name *<input class="fi" id="schoolKidName" value="${escHtml(kid.kid_name || '')}"></label>
+      <label class="fl">Age<input class="fi" type="number" min="0" max="30" id="schoolKidAge" value="${kid.age_years != null ? Number(kid.age_years) : ''}"></label>
+      <label class="fl full">Details<textarea class="fi" rows="4" id="schoolKidDetails" placeholder="Any notes about the child or school journey">${escHtml(kid.details || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSchoolKid(${kidId || 'null'})">${kidId ? 'Update Kid' : 'Add Kid'}</button>
+      ${kidId ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteSchoolKid(${Number(kidId)})">Delete</button>` : ''}
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSchoolKid(kidId));
+}
+
+async function saveSchoolKid(kidId = null) {
+  const body = {
+    kid_name: document.getElementById('schoolKidName')?.value?.trim() || '',
+    age_years: document.getElementById('schoolKidAge')?.value || '',
+    details: document.getElementById('schoolKidDetails')?.value?.trim() || '',
+  };
+  if (!body.kid_name) { toast('Kid name is required', 'warning'); return; }
+  const result = kidId
+    ? await api(`/api/school-kids/${Number(kidId)}`, { method: 'PUT', body })
+    : await api('/api/school-kids', { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save kid.', 'error'); return; }
+  closeModal();
+  _selectedSchoolKidId = Number(result?.kid?.id || kidId || _selectedSchoolKidId);
+  toast(kidId ? 'Kid updated' : 'Kid added', 'success');
+  await loadSchoolKids();
+}
+
+async function deleteSchoolKid(kidId) {
+  if (!await confirmDialog('Delete this kid, all class records, and all linked school expenses?')) return;
+  const result = await api(`/api/school-kids/${Number(kidId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete kid.', 'error'); return; }
+  if (String(_selectedSchoolKidId) === String(kidId)) {
+    _selectedSchoolKidId = null;
+    _selectedSchoolKidClassId = null;
+  }
+  closeModal();
+  toast('Kid deleted', 'success');
+  await loadSchoolKids();
+}
+
+function showSchoolKidClassModal(classId = null) {
+  if (!_selectedSchoolKidId) return;
+  const classRow = classId ? ((_schoolKidDetail?.classes || []).find((item) => String(item.id) === String(classId)) || {}) : {};
+  openModal(classId ? 'Edit School/Class' : 'Add School/Class', `
+    <div class="fg">
+      <label class="fl full">School Name *<input class="fi" id="schoolKidClassSchool" value="${escHtml(classRow.school_name || '')}" placeholder="e.g. Manav Mangal Smart School"></label>
+      <label class="fl">Academic Year *<input class="fi" id="schoolKidClassYear" value="${escHtml(classRow.academic_year || '')}" placeholder="e.g. 2025-26"></label>
+      <label class="fl">Class *<input class="fi" id="schoolKidClassLabel" value="${escHtml(classRow.class_label || '')}" placeholder="e.g. Nursery, LKG, 1st"></label>
+      <label class="fl">Monthly Fee<input class="fi" type="number" step="0.01" min="0" id="schoolKidClassMonthly" value="${escHtml(String(classRow.expected_monthly_fee || 0))}"></label>
+      <label class="fl">Bus Fee<input class="fi" type="number" step="0.01" min="0" id="schoolKidClassBus" value="${escHtml(String(classRow.bus_fee || 0))}"></label>
+      <label class="fl">Other Fee<input class="fi" type="number" step="0.01" min="0" id="schoolKidClassOther" value="${escHtml(String(classRow.other_fee || 0))}"></label>
+      <label class="fl full">Details<textarea class="fi" rows="4" id="schoolKidClassDetails" placeholder="Optional notes or expected fee details">${escHtml(classRow.details || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSchoolKidClass(${classId || 'null'})">${classId ? 'Update Class' : 'Add Class'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSchoolKidClass(classId));
+}
+
+async function saveSchoolKidClass(classId = null) {
+  if (!_selectedSchoolKidId) return;
+  const body = {
+    school_name: document.getElementById('schoolKidClassSchool')?.value?.trim() || '',
+    academic_year: document.getElementById('schoolKidClassYear')?.value?.trim() || '',
+    class_label: document.getElementById('schoolKidClassLabel')?.value?.trim() || '',
+    expected_monthly_fee: Number(document.getElementById('schoolKidClassMonthly')?.value || 0),
+    bus_fee: Number(document.getElementById('schoolKidClassBus')?.value || 0),
+    other_fee: Number(document.getElementById('schoolKidClassOther')?.value || 0),
+    details: document.getElementById('schoolKidClassDetails')?.value?.trim() || '',
+  };
+  if (!body.school_name || !body.academic_year || !body.class_label) { toast('School name, academic year, and class are required', 'warning'); return; }
+  const result = classId
+    ? await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/classes/${Number(classId)}`, { method: 'PUT', body })
+    : await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/classes`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save class.', 'error'); return; }
+  closeModal();
+  _selectedSchoolKidClassId = Number(result?.class_row?.id || classId || _selectedSchoolKidClassId);
+  toast(classId ? 'Class updated' : 'Class added', 'success');
+  await loadSchoolKids();
+}
+
+async function deleteSchoolKidClass(classId) {
+  if (!await confirmDialog('Delete this class record and all linked expenses?')) return;
+  const result = await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/classes/${Number(classId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete class.', 'error'); return; }
+  if (String(_selectedSchoolKidClassId) === String(classId)) _selectedSchoolKidClassId = null;
+  toast('Class deleted', 'success');
+  await loadSchoolKids();
+}
+
+function showSchoolKidExpenseModal(expenseId = null, classId = null) {
+  if (!_selectedSchoolKidId) return;
+  const classes = _schoolKidDetail?.classes || [];
+  if (!classes.length) { toast('Add a school/class first.', 'warning'); return; }
+  const expense = expenseId ? ((_schoolKidDetail?.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
+  const selectedClassId = classId || expense.class_id || _selectedSchoolKidClassId || classes[0]?.id;
+  const classOptions = classes.map((row) => `<option value="${Number(row.id)}" ${String(row.id) === String(selectedClassId) ? 'selected' : ''}>${escHtml(row.school_name)} · ${escHtml(formatAcademicYear(row.academic_year))} · ${escHtml(row.class_label)}</option>`).join('');
+  openModal(expenseId ? 'Edit School Expense' : 'Add School Expense', `
+    <div class="fg">
+      <label class="fl full">Class *
+        <select class="fi" id="schoolKidExpenseClass">${classOptions}</select>
+      </label>
+      <label class="fl">Date *<input class="fi" type="date" id="schoolKidExpenseDate" value="${escHtml(expense.expense_date || todayStr())}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="schoolKidExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
+      <label class="fl full">Thing *<input class="fi" id="schoolKidExpenseItem" value="${escHtml(expense.item_name || '')}" placeholder="e.g. Registration fees, Books, Bus fees"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="4" id="schoolKidExpenseNotes" placeholder="Optional notes">${escHtml(expense.notes || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSchoolKidExpense(${expenseId || 'null'})">${expenseId ? 'Update Expense' : 'Add Expense'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSchoolKidExpense(expenseId));
+}
+
+async function saveSchoolKidExpense(expenseId = null) {
+  if (!_selectedSchoolKidId) return;
+  const body = {
+    class_id: Number(document.getElementById('schoolKidExpenseClass')?.value || 0),
+    expense_date: document.getElementById('schoolKidExpenseDate')?.value || todayStr(),
+    item_name: document.getElementById('schoolKidExpenseItem')?.value?.trim() || '',
+    amount: Number(document.getElementById('schoolKidExpenseAmount')?.value || 0),
+    notes: document.getElementById('schoolKidExpenseNotes')?.value?.trim() || '',
+  };
+  if (!(body.class_id > 0) || !body.item_name || !(body.amount > 0)) { toast('Class, thing, and amount are required', 'warning'); return; }
+  const result = expenseId
+    ? await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses/${Number(expenseId)}`, { method: 'PUT', body })
+    : await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save expense.', 'error'); return; }
+  closeModal();
+  _selectedSchoolKidClassId = body.class_id;
+  toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  await loadSchoolKids();
+}
+
+async function deleteSchoolKidExpense(expenseId) {
+  if (!await confirmDialog('Delete this school expense?')) return;
+  const result = await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete expense.', 'error'); return; }
+  toast('Expense deleted', 'success');
+  await loadSchoolKids();
+}
+
+function showSchoolKidImportModal() {
+  openModal('Import School Kids Excel', `
+    <div class="fg">
+      <label class="fl full">File (.xlsx / .xls / .ods)
+        <input type="file" class="fi" id="schoolKidImportFile" accept=".xlsx,.xls,.ods">
+      </label>
+      <label class="fl full">Password (optional)
+        <input type="password" class="fi" id="schoolKidImportPassword" placeholder="Leave blank if none">
+      </label>
+    </div>
+    <div style="font-size:12px;color:var(--t3);margin-top:8px">Use the workbook with your yearly sheets. The importer will read class-wise expense blocks from those sheets and match school names from the Overall sheet when available.</div>
+    <div id="schoolKidImportSheetArea" style="margin-top:14px"></div>
+    <div id="schoolKidImportPreview" style="margin-top:14px"></div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="loadSchoolKidImportSheets()">Read File</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function getSelectedSchoolKidImportSheets() {
+  return [...document.querySelectorAll('.school-kid-import-sheet-cb:checked')].map((checkbox) => checkbox.value);
+}
+
+async function loadSchoolKidImportSheets() {
+  const file = document.getElementById('schoolKidImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const password = document.getElementById('schoolKidImportPassword')?.value || '';
+  const area = document.getElementById('schoolKidImportSheetArea');
+  const preview = document.getElementById('schoolKidImportPreview');
+  if (area) area.innerHTML = `<div style="color:var(--t3);font-size:13px">Reading file...</div>`;
+  if (preview) preview.innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  const response = await fetch('/api/school-kids/import-excel/sheets', { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (area) area.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not read file.')}</div>`;
+    return;
+  }
+  const sheets = Array.isArray(data?.sheets) ? data.sheets : [];
+  if (!sheets.length) {
+    if (area) area.innerHTML = `<div style="color:var(--amber);font-size:13px">No sheets found in this file.</div>`;
+    return;
+  }
+  if (area) area.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--t3)">Choose the sheets to import. Keep <b>Overall</b> selected if it exists so school names can be matched better.</div>
+      <button class="btn btn-s btn-sm" onclick="previewSchoolKidExcelImport()">Preview Import</button>
+    </div>
+    <div style="display:grid;gap:8px;margin-top:10px">
+      ${sheets.map((sheet) => `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="checkbox" class="school-kid-import-sheet-cb" value="${escHtml(sheet)}" checked>
+          <span style="font-weight:700;color:var(--t2)">${escHtml(sheet)}</span>
+        </label>`).join('')}
+    </div>`;
+}
+
+async function previewSchoolKidExcelImport() {
+  const file = document.getElementById('schoolKidImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const sheets = getSelectedSchoolKidImportSheets();
+  if (!sheets.length) { toast('Please choose at least one sheet.', 'warning'); return; }
+  const password = document.getElementById('schoolKidImportPassword')?.value || '';
+  const preview = document.getElementById('schoolKidImportPreview');
+  if (preview) preview.innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  fd.append('sheets', JSON.stringify(sheets));
+  const response = await fetch('/api/school-kids/import-excel/preview', { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (preview) preview.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not preview import.')}</div>`;
+    return;
+  }
+  const rowsHtml = (data.preview || []).map((row) => `
+    <tr>
+      <td style="font-weight:700;color:var(--t1)">${escHtml(row.kid_name || '-')}</td>
+      <td>${escHtml(row.school_name || '-')}</td>
+      <td>${escHtml(row.academic_year || '-')}</td>
+      <td>${escHtml(row.class_label || '-')}</td>
+      <td style="text-align:right">${fmtCur(row.expected_monthly_fee || 0)}</td>
+      <td style="text-align:right">${fmtCur(row.total_expense || 0)}</td>
+      <td style="text-align:right">${Number(row.expense_count || 0)}</td>
+    </tr>`).join('');
+  if (preview) preview.innerHTML = `
+    <div class="card" style="padding:16px">
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Kids</div><div style="font-weight:800;color:var(--t1)">${Number(data.kid_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Classes</div><div style="font-weight:800;color:var(--t1)">${Number(data.class_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Expenses</div><div style="font-weight:800;color:var(--green)">${Number(data.expense_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Skipped Sheets</div><div style="font-weight:800;color:${(data.skipped_sheets || []).length ? 'var(--amber)' : 'var(--t1)'}">${(data.skipped_sheets || []).length}</div></div>
+      </div>
+      ${(data.skipped_sheets || []).length ? `<div style="font-size:12px;color:var(--amber);margin-top:10px">Skipped: ${escHtml((data.skipped_sheets || []).join(', '))}</div>` : ''}
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Kid</th><th>School</th><th>Year</th><th>Class</th><th style="text-align:right">Monthly Fee</th><th style="text-align:right">Total Expense</th><th style="text-align:right">Rows</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="7" style="text-align:center;color:var(--t3)">No valid rows found.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="fa" style="margin-top:16px">
+        <button class="btn btn-p" onclick="doSchoolKidExcelImport()">Import Excel</button>
+      </div>
+    </div>`;
+}
+
+async function doSchoolKidExcelImport() {
+  const file = document.getElementById('schoolKidImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const sheets = getSelectedSchoolKidImportSheets();
+  if (!sheets.length) { toast('Please choose at least one sheet.', 'warning'); return; }
+  const password = document.getElementById('schoolKidImportPassword')?.value || '';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('password', password);
+  fd.append('sheets', JSON.stringify(sheets));
+  const response = await fetch('/api/school-kids/import-excel', { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) { toast(data?.error || 'Could not import school kids excel.', 'error'); return; }
+  closeModal();
+  toast(`Imported ${Number(data.kids_added || 0)} kids, ${Number(data.classes_added || 0)} classes, updated ${Number(data.classes_updated || 0)} classes, and saved ${Number(data.expenses_imported || 0)} expenses.`, 'success');
+  await loadSchoolKids();
 }
 
 function habitMonthKey(year, month) {

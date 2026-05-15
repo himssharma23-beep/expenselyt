@@ -3035,8 +3035,34 @@ function parseExcelAmount(value) {
   return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : null;
 }
 
+function excelCellDisplayValue(cell) {
+  if (!cell) return '';
+  try {
+    if (typeof cell.text === 'function') {
+      const textValue = String(cell.text() || '').trim();
+      if (textValue) return textValue;
+    }
+  } catch {}
+  const value = cell.value();
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim();
+  }
+  if (value instanceof Date) {
+    return parseExcelDate(value) || '';
+  }
+  if (typeof value === 'object') {
+    if (Array.isArray(value?.richText)) {
+      const joined = value.richText.map((part) => String(part?.value || '')).join('').trim();
+      if (joined) return joined;
+    }
+    if (typeof value?.text === 'string' && value.text.trim()) return value.text.trim();
+  }
+  return String(value).trim();
+}
+
 function excelCellText(sheet, row, col) {
-  return String(sheet.cell(row, col).value() || '').trim();
+  return excelCellDisplayValue(sheet.cell(row, col));
 }
 
 function titleCaseWords(value) {
@@ -8058,4 +8084,1027 @@ router.post('/recurring/apply', (req, res) => {
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
+router.get('/societies', async (req, res) => {
+  try {
+    const societies = await Promise.resolve(pgCoreDb.listSocieties(req.session.userId));
+    res.json({ societies });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load societies.' });
+  }
+});
+
+router.post('/societies', async (req, res) => {
+  try {
+    const society = await Promise.resolve(pgCoreDb.createSociety(req.session.userId, req.body || {}));
+    res.json({ success: true, society });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create society.' });
+  }
+});
+
+router.get('/societies/:id', async (req, res) => {
+  try {
+    const detail = await Promise.resolve(pgCoreDb.getSocietyDetail(req.session.userId, req.params.id, {
+      month: req.query.month || '',
+    }));
+    res.json(detail);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load society.' });
+  }
+});
+
+router.put('/societies/:id', async (req, res) => {
+  try {
+    const society = await Promise.resolve(pgCoreDb.updateSociety(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, society });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update society.' });
+  }
+});
+
+router.delete('/societies/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSociety(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete society.' });
+  }
+});
+
+router.post('/societies/:id/members', async (req, res) => {
+  try {
+    const member = await Promise.resolve(pgCoreDb.addSocietyMember(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, member });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add member.' });
+  }
+});
+
+router.put('/societies/:id/members/:memberId', async (req, res) => {
+  try {
+    const member = await Promise.resolve(pgCoreDb.updateSocietyMember(req.session.userId, req.params.id, req.params.memberId, req.body || {}));
+    res.json({ success: true, member });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update member.' });
+  }
+});
+
+router.delete('/societies/:id/members/:memberId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyMember(req.session.userId, req.params.id, req.params.memberId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete member.' });
+  }
+});
+
+router.put('/societies/:id/contributions/:memberId', async (req, res) => {
+  try {
+    const contribution = await Promise.resolve(pgCoreDb.saveSocietyContribution(req.session.userId, req.params.id, req.params.memberId, req.body || {}));
+    res.json({ success: true, contribution });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save contribution.' });
+  }
+});
+
+router.post('/societies/:id/expenses', async (req, res) => {
+  try {
+    const expense = await Promise.resolve(pgCoreDb.addSocietyExpense(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add expense.' });
+  }
+});
+
+router.put('/societies/:id/expenses/:expenseId', async (req, res) => {
+  try {
+    const expense = await Promise.resolve(pgCoreDb.updateSocietyExpense(req.session.userId, req.params.id, req.params.expenseId, req.body || {}));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update expense.' });
+  }
+});
+
+router.delete('/societies/:id/expenses/:expenseId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyExpense(req.session.userId, req.params.id, req.params.expenseId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete expense.' });
+  }
+});
+
+router.post('/societies/:id/import-excel/sheets', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const password = req.body.password || '';
+    const opts = password ? { password } : {};
+    const wb = await XlsxPopulate.fromDataAsync(req.file.buffer, opts);
+    res.json({ sheets: wb.sheets().map((sheet) => sheet.name()) });
+  } catch (err) {
+    const msg = err.message || '';
+    if (msg.toLowerCase().includes('password') || msg.toLowerCase().includes('decrypt') || msg.toLowerCase().includes('encrypt')) {
+      res.status(400).json({ error: 'Wrong password or file is corrupted.' });
+    } else {
+      res.status(500).json({ error: msg || 'Failed to read file' });
+    }
+  }
+});
+
+router.post('/societies/:id/import-excel/preview', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const mode = String(req.body.mode || 'members').toLowerCase();
+    if (mode === 'expenses') {
+      const preview = await parseSocietyExpenseImportWorkbook(req.file.buffer, {
+        password: req.body.password || '',
+        sheetName: req.body.sheet || '',
+      });
+      return res.json({
+        success: true,
+        mode: 'expenses',
+        sheet: preview.sheet,
+        expense_count: preview.expenses.length,
+        skipped_rows: preview.skippedRows,
+        total_amount: preview.totalAmount,
+        preview: preview.expenses.slice(0, 20),
+      });
+    }
+    const preview = await parseSocietyImportWorkbook(req.file.buffer, {
+      password: req.body.password || '',
+      sheetName: req.body.sheet || '',
+      baseYear: req.body.base_year || '',
+    });
+    res.json({
+      success: true,
+      mode: 'members',
+      sheet: preview.sheet,
+      month_columns: preview.monthColumns,
+      member_count: preview.members.length,
+      contribution_count: preview.contributionCount,
+      skipped_rows: preview.skippedRows,
+      preview: preview.members.slice(0, 12).map((member) => ({
+        property_type: member.property_type,
+        unit_label: member.unit_label,
+        phone_number: member.phone_number,
+        member_name: member.member_name,
+        monthly_due: member.monthly_due,
+        contributions: member.contributions.slice(0, 6),
+      })),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview society import.' });
+  }
+});
+
+router.post('/societies/:id/import-excel', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const societyId = Number(req.params.id);
+    if (!(societyId > 0)) return res.status(400).json({ error: 'Invalid society id' });
+    const mode = String(req.body.mode || 'members').toLowerCase();
+    if (mode === 'expenses') {
+      const parsedExpenses = await parseSocietyExpenseImportWorkbook(req.file.buffer, {
+        password: req.body.password || '',
+        sheetName: req.body.sheet || '',
+      });
+      if (!parsedExpenses.expenses.length) return res.status(400).json({ error: 'No valid expenses found in the selected sheet.' });
+      let expensesImported = 0;
+      for (const expense of parsedExpenses.expenses) {
+        await Promise.resolve(pgCoreDb.addSocietyExpense(req.session.userId, societyId, expense));
+        expensesImported++;
+      }
+      return res.json({
+        success: true,
+        expenses_imported: expensesImported,
+        imported_months: [...new Set(parsedExpenses.expenses.map((expense) => expense.month_key).filter(Boolean))],
+      });
+    }
+    const parsed = await parseSocietyImportWorkbook(req.file.buffer, {
+      password: req.body.password || '',
+      sheetName: req.body.sheet || '',
+      baseYear: req.body.base_year || '',
+    });
+    if (!parsed.members.length) return res.status(400).json({ error: 'No valid members found in the selected sheet.' });
+
+    const detail = await Promise.resolve(pgCoreDb.getSocietyDetail(req.session.userId, societyId, {}));
+    const existingMembers = Array.isArray(detail?.members) ? detail.members : [];
+    const unitMap = new Map();
+    const namePhoneMap = new Map();
+    const nameMap = new Map();
+    existingMembers.forEach((member) => {
+      const unitKey = normalizeSocietyImportUnitKey(member.unit_label);
+      const nameKey = normalizeSocietyImportNameKey(member.member_name);
+      const phoneKey = normalizeSocietyImportPhoneKey(member.phone_number);
+      if (unitKey && !unitMap.has(unitKey)) unitMap.set(unitKey, member);
+      if (nameKey && phoneKey && !namePhoneMap.has(`${nameKey}|${phoneKey}`)) namePhoneMap.set(`${nameKey}|${phoneKey}`, member);
+      if (nameKey && !nameMap.has(nameKey)) nameMap.set(nameKey, member);
+    });
+
+    let membersAdded = 0;
+    let membersUpdated = 0;
+    let contributionsImported = 0;
+
+    for (const importedMember of parsed.members) {
+      const unitKey = normalizeSocietyImportUnitKey(importedMember.unit_label);
+      const nameKey = normalizeSocietyImportNameKey(importedMember.member_name);
+      const phoneKey = normalizeSocietyImportPhoneKey(importedMember.phone_number);
+      let matched = null;
+      if (unitKey && unitMap.has(unitKey)) matched = unitMap.get(unitKey);
+      else if (nameKey && phoneKey && namePhoneMap.has(`${nameKey}|${phoneKey}`)) matched = namePhoneMap.get(`${nameKey}|${phoneKey}`);
+      else if (nameKey && nameMap.has(nameKey)) matched = nameMap.get(nameKey);
+
+      const memberPayload = {
+        member_name: importedMember.member_name,
+        phone_number: importedMember.phone_number,
+        unit_label: importedMember.unit_label,
+        property_type: importedMember.property_type,
+        monthly_due: importedMember.monthly_due > 0
+          ? importedMember.monthly_due
+          : Number(matched?.monthly_due || 0),
+      };
+
+      let targetMember = matched;
+      if (matched) {
+        targetMember = await Promise.resolve(pgCoreDb.updateSocietyMember(req.session.userId, societyId, matched.id, memberPayload));
+        membersUpdated++;
+      } else {
+        targetMember = await Promise.resolve(pgCoreDb.addSocietyMember(req.session.userId, societyId, memberPayload));
+        membersAdded++;
+      }
+
+      const freshUnitKey = normalizeSocietyImportUnitKey(targetMember.unit_label);
+      const freshNameKey = normalizeSocietyImportNameKey(targetMember.member_name);
+      const freshPhoneKey = normalizeSocietyImportPhoneKey(targetMember.phone_number);
+      if (freshUnitKey) unitMap.set(freshUnitKey, targetMember);
+      if (freshNameKey && freshPhoneKey) namePhoneMap.set(`${freshNameKey}|${freshPhoneKey}`, targetMember);
+      if (freshNameKey) nameMap.set(freshNameKey, targetMember);
+
+      for (const contribution of importedMember.contributions) {
+        await Promise.resolve(pgCoreDb.saveSocietyContribution(req.session.userId, societyId, targetMember.id, {
+          month_key: contribution.month_key,
+          amount: contribution.amount,
+          paid_on: contribution.paid_on || '',
+          notes: contribution.notes || 'Imported from Excel',
+        }));
+        contributionsImported++;
+      }
+    }
+
+    res.json({
+      success: true,
+      members_added: membersAdded,
+      members_updated: membersUpdated,
+      contributions_imported: contributionsImported,
+      imported_months: parsed.monthColumns,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not import society excel.' });
+  }
+});
+
+router.get('/school-kids', async (req, res) => {
+  try {
+    const overview = await Promise.resolve(pgCoreDb.getSchoolKidsOverview(req.session.userId));
+    res.json(overview);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load school kids.' });
+  }
+});
+
+router.post('/school-kids', async (req, res) => {
+  try {
+    const kid = await Promise.resolve(pgCoreDb.createSchoolKid(req.session.userId, req.body || {}));
+    res.json({ success: true, kid });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create kid.' });
+  }
+});
+
+router.get('/school-kids/:id', async (req, res) => {
+  try {
+    const detail = await Promise.resolve(pgCoreDb.getSchoolKidDetail(req.session.userId, req.params.id));
+    res.json(detail);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load kid details.' });
+  }
+});
+
+router.put('/school-kids/:id', async (req, res) => {
+  try {
+    const kid = await Promise.resolve(pgCoreDb.updateSchoolKid(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, kid });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update kid.' });
+  }
+});
+
+router.delete('/school-kids/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSchoolKid(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete kid.' });
+  }
+});
+
+router.post('/school-kids/:id/classes', async (req, res) => {
+  try {
+    const classRow = await Promise.resolve(pgCoreDb.addSchoolKidClass(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, class_row: classRow });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add class.' });
+  }
+});
+
+router.put('/school-kids/:id/classes/:classId', async (req, res) => {
+  try {
+    const classRow = await Promise.resolve(pgCoreDb.updateSchoolKidClass(req.session.userId, req.params.id, req.params.classId, req.body || {}));
+    res.json({ success: true, class_row: classRow });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update class.' });
+  }
+});
+
+router.delete('/school-kids/:id/classes/:classId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSchoolKidClass(req.session.userId, req.params.id, req.params.classId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete class.' });
+  }
+});
+
+router.post('/school-kids/:id/expenses', async (req, res) => {
+  try {
+    const expense = await Promise.resolve(pgCoreDb.addSchoolKidExpense(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add expense.' });
+  }
+});
+
+router.put('/school-kids/:id/expenses/:expenseId', async (req, res) => {
+  try {
+    const expense = await Promise.resolve(pgCoreDb.updateSchoolKidExpense(req.session.userId, req.params.id, req.params.expenseId, req.body || {}));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update expense.' });
+  }
+});
+
+router.delete('/school-kids/:id/expenses/:expenseId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSchoolKidExpense(req.session.userId, req.params.id, req.params.expenseId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete expense.' });
+  }
+});
+
+router.post('/school-kids/import-excel/sheets', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const password = req.body.password || '';
+    const workbook = await readSchoolKidWorkbook(req.file.buffer, password);
+    res.json({ sheets: workbook.sheetNames });
+  } catch (err) {
+    const msg = err.message || '';
+    if (msg.toLowerCase().includes('password') || msg.toLowerCase().includes('decrypt') || msg.toLowerCase().includes('encrypt')) {
+      res.status(400).json({ error: 'Wrong password or file is corrupted.' });
+    } else {
+      res.status(500).json({ error: msg || 'Failed to read file' });
+    }
+  }
+});
+
+router.post('/school-kids/import-excel/preview', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const preview = await parseSchoolKidImportWorkbook(req.file.buffer, {
+      password: req.body.password || '',
+      sheets: parseSheetParam(req.body.sheets),
+    });
+    res.json({
+      success: true,
+      sheets: preview.sheets,
+      kid_count: preview.kidCount,
+      class_count: preview.classRecords.length,
+      expense_count: preview.expenseCount,
+      skipped_sheets: preview.skippedSheets,
+      preview: preview.classRecords.slice(0, 16).map((row) => ({
+        kid_name: row.kid_name,
+        school_name: row.school_name,
+        academic_year: row.academic_year,
+        class_label: row.class_label,
+        expected_monthly_fee: row.expected_monthly_fee,
+        bus_fee: row.bus_fee,
+        other_fee: row.other_fee,
+        expense_count: row.expenses.length,
+        total_expense: row.expenses.reduce((sum, item) => Math.round((sum + Number(item.amount || 0)) * 100) / 100, 0),
+      })),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview school kids import.' });
+  }
+});
+
+router.post('/school-kids/import-excel', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = await parseSchoolKidImportWorkbook(req.file.buffer, {
+      password: req.body.password || '',
+      sheets: parseSheetParam(req.body.sheets),
+    });
+    if (!parsed.classRecords.length) return res.status(400).json({ error: 'No valid kid class records found in the selected sheets.' });
+
+    const overview = await Promise.resolve(pgCoreDb.getSchoolKidsOverview(req.session.userId));
+    const kidMap = new Map((overview?.kids || []).map((kid) => [normalizeSchoolKidImportNameKey(kid.kid_name), kid]));
+    const detailCache = new Map();
+    async function getKidDetailCached(kidId) {
+      if (!detailCache.has(kidId)) {
+        detailCache.set(kidId, await Promise.resolve(pgCoreDb.getSchoolKidDetail(req.session.userId, kidId)));
+      }
+      return detailCache.get(kidId);
+    }
+
+    let kidsAdded = 0;
+    let classesAdded = 0;
+    let classesUpdated = 0;
+    let expensesImported = 0;
+
+    for (const record of parsed.classRecords) {
+      const kidKey = normalizeSchoolKidImportNameKey(record.kid_name);
+      let kid = kidMap.get(kidKey);
+      if (!kid) {
+        kid = await Promise.resolve(pgCoreDb.createSchoolKid(req.session.userId, {
+          kid_name: record.kid_name,
+          details: 'Imported from Excel',
+        }));
+        kidMap.set(kidKey, kid);
+        kidsAdded++;
+      }
+
+      const kidDetail = await getKidDetailCached(Number(kid.id));
+      const existingClass = (kidDetail?.classes || []).find((row) =>
+        normalizeExcelHeader(row.school_name) === normalizeExcelHeader(record.school_name)
+        && String(row.academic_year || '').trim() === String(record.academic_year || '').trim()
+        && normalizeExcelHeader(row.class_label) === normalizeExcelHeader(record.class_label)
+      );
+      const classPayload = {
+        school_name: record.school_name,
+        academic_year: record.academic_year,
+        class_label: record.class_label,
+        expected_monthly_fee: record.expected_monthly_fee,
+        bus_fee: record.bus_fee,
+        other_fee: record.other_fee,
+        details: record.details || 'Imported from Excel',
+      };
+      let targetClass = existingClass;
+      if (existingClass) {
+        targetClass = await Promise.resolve(pgCoreDb.updateSchoolKidClass(req.session.userId, kid.id, existingClass.id, classPayload));
+        classesUpdated++;
+      } else {
+        targetClass = await Promise.resolve(pgCoreDb.addSchoolKidClass(req.session.userId, kid.id, classPayload));
+        classesAdded++;
+      }
+      await Promise.resolve(pgCoreDb.replaceSchoolKidClassExpenses(req.session.userId, kid.id, targetClass.id, record.expenses));
+      expensesImported += record.expenses.length;
+      detailCache.delete(Number(kid.id));
+    }
+
+    res.json({
+      success: true,
+      kids_added: kidsAdded,
+      classes_added: classesAdded,
+      classes_updated: classesUpdated,
+      expenses_imported: expensesImported,
+      imported_sheets: parsed.sheets,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not import school kids excel.' });
+  }
+});
+
 module.exports = router;
+
+function normalizeSocietyImportPhoneKey(value) {
+  return String(value || '').replace(/\D+/g, '').trim();
+}
+
+function normalizeSocietyImportUnitKey(value) {
+  return normalizeExcelHeader(String(value || '').replace(/[._-]/g, ' '));
+}
+
+function normalizeSocietyImportNameKey(value) {
+  return normalizeExcelHeader(value);
+}
+
+function parseSocietyHeaderAliases(normalized) {
+  if (['type', 'property type', 'property'].includes(normalized)) return 'property_type';
+  if (['h no', 'h no.', 'house no', 'house number', 'house no shop name', 'unit', 'unit no', 'shop name', 'house shop'].includes(normalized)) return 'unit_label';
+  if (['phone', 'phone num', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number'].includes(normalized)) return 'phone_number';
+  if (['name', 'member name', 'owner name', 'resident name'].includes(normalized)) return 'member_name';
+  return null;
+}
+
+function parseSocietyExpenseHeaderAliases(normalized) {
+  if (['date', 'expense date', 'paid on'].includes(normalized)) return 'expense_date';
+  if (['comments', 'comment', 'title', 'description', 'details', 'expense'].includes(normalized)) return 'title';
+  if (['paid', 'amount', 'expense amount', 'amt'].includes(normalized)) return 'amount';
+  return null;
+}
+
+function parseSocietyMonthColumn(rawValue, fallbackState) {
+  const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  if (rawValue instanceof Date && !isNaN(rawValue.getTime())) {
+    const monthNum = rawValue.getMonth() + 1;
+    const year = rawValue.getFullYear();
+    fallbackState.currentYear = year;
+    fallbackState.prevMonth = monthNum;
+    return {
+      header: `${shortMonths[monthNum - 1] || 'Mon'}-${String(year).slice(-2)}`,
+      month_key: `${year}-${String(monthNum).padStart(2, '0')}`,
+    };
+  }
+  if (typeof rawValue === 'number') {
+    const parsedDate = XLSX.SSF.parse_date_code(rawValue);
+    if (parsedDate && parsedDate.y && parsedDate.m) {
+      const year = Number(parsedDate.y);
+      const monthNum = Number(parsedDate.m);
+      fallbackState.currentYear = year;
+      fallbackState.prevMonth = monthNum;
+      return {
+        header: `${shortMonths[monthNum - 1] || 'Mon'}-${String(year).slice(-2)}`,
+        month_key: `${year}-${String(monthNum).padStart(2, '0')}`,
+      };
+    }
+  }
+  const raw = String(rawValue || '').trim();
+  if (!raw) return null;
+  const monMatch = raw.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i);
+  if (!monMatch) return null;
+  const monthNames = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  const monthNum = monthNames[monMatch[1].toLowerCase()];
+  let year = null;
+  const yearMatch = raw.match(/(?:^|[^0-9])(\d{2,4})(?:[^0-9]|$)/);
+  if (yearMatch) {
+    const yearNum = Number(yearMatch[1]);
+    year = String(yearMatch[1]).length === 2 ? 2000 + yearNum : yearNum;
+    fallbackState.currentYear = year;
+    fallbackState.prevMonth = monthNum;
+  } else if (fallbackState.currentYear) {
+    if (fallbackState.prevMonth && monthNum < fallbackState.prevMonth) fallbackState.currentYear += 1;
+    year = fallbackState.currentYear;
+    fallbackState.prevMonth = monthNum;
+  }
+  if (!year) return null;
+  return {
+    header: raw,
+    month_key: `${year}-${String(monthNum).padStart(2, '0')}`,
+  };
+}
+
+async function parseSocietyImportWorkbook(buffer, options = {}) {
+  const password = options.password || '';
+  const workbook = await XlsxPopulate.fromDataAsync(buffer, password ? { password } : {});
+  const sheet = options.sheetName ? workbook.sheet(options.sheetName) : workbook.sheets()[0];
+  if (!sheet) {
+    const err = new Error('Selected sheet was not found');
+    err.statusCode = 400;
+    throw err;
+  }
+  const usedRange = sheet.usedRange();
+  if (!usedRange) {
+    const err = new Error('Selected sheet is empty');
+    err.statusCode = 400;
+    throw err;
+  }
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  const baseYear = Number(options.baseYear || 0) || null;
+  let headerRow = 0;
+  let memberCols = null;
+  let monthCols = [];
+
+  for (let row = 1; row <= Math.min(lastRow, 12); row++) {
+    const cols = {};
+    const months = [];
+    const fallbackState = { currentYear: baseYear, prevMonth: null };
+    for (let col = 1; col <= lastCol; col++) {
+      const cell = sheet.cell(row, col);
+      const cellVal = excelCellDisplayValue(cell);
+      const rawVal = cell.value();
+      const normalized = normalizeExcelHeader(cellVal);
+      const mapped = parseSocietyHeaderAliases(normalized);
+      if (mapped) cols[mapped] = col;
+      const monthMeta = parseSocietyMonthColumn(rawVal ?? cellVal, fallbackState) || parseSocietyMonthColumn(cellVal, fallbackState);
+      if (monthMeta) months.push({ col, ...monthMeta });
+    }
+    if (cols.member_name && cols.unit_label && months.length) {
+      headerRow = row;
+      memberCols = cols;
+      monthCols = months;
+      break;
+    }
+  }
+
+  if (!headerRow || !memberCols) {
+    const err = new Error('Could not detect society import columns. Expected headers like Type, H. NO., phone num, Name, and month columns.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const members = [];
+  let skippedRows = 0;
+  let contributionCount = 0;
+  for (let row = headerRow + 1; row <= lastRow; row++) {
+    const memberName = excelCellDisplayValue(sheet.cell(row, memberCols.member_name));
+    const unitLabel = excelCellDisplayValue(sheet.cell(row, memberCols.unit_label));
+    const propertyRaw = memberCols.property_type ? excelCellDisplayValue(sheet.cell(row, memberCols.property_type)).toLowerCase() : '';
+    const phoneNumber = memberCols.phone_number ? excelCellDisplayValue(sheet.cell(row, memberCols.phone_number)) : '';
+    const hasAnyAmount = monthCols.some((monthCol) => parseExcelAmount(sheet.cell(row, monthCol.col).value()) > 0);
+    if (!memberName && !unitLabel && !phoneNumber && !hasAnyAmount) {
+      skippedRows++;
+      continue;
+    }
+    if (!memberName && !unitLabel) {
+      skippedRows++;
+      continue;
+    }
+    const contributions = monthCols
+      .map((monthCol) => ({
+        month_key: monthCol.month_key,
+        amount: parseExcelAmount(sheet.cell(row, monthCol.col).value()) || 0,
+        paid_on: '',
+        notes: `Imported from Excel (${monthCol.header})`,
+      }))
+      .filter((entry) => entry.amount > 0);
+    contributionCount += contributions.length;
+    const monthlyDue = contributions.reduce((max, entry) => Math.max(max, Number(entry.amount || 0)), 0);
+    members.push({
+      property_type: propertyRaw === 'shop' ? 'shop' : 'home',
+      unit_label: unitLabel,
+      phone_number: phoneNumber,
+      member_name: memberName || unitLabel,
+      monthly_due: monthlyDue,
+      contributions,
+    });
+  }
+
+  return {
+    sheet: sheet.name(),
+    monthColumns: monthCols.map((item) => item.month_key),
+    members,
+    contributionCount,
+    skippedRows,
+  };
+}
+
+async function parseSocietyExpenseImportWorkbook(buffer, options = {}) {
+  const password = options.password || '';
+  const workbook = await XlsxPopulate.fromDataAsync(buffer, password ? { password } : {});
+  const sheet = options.sheetName ? workbook.sheet(options.sheetName) : workbook.sheets()[0];
+  if (!sheet) {
+    const err = new Error('Selected sheet was not found');
+    err.statusCode = 400;
+    throw err;
+  }
+  const usedRange = sheet.usedRange();
+  if (!usedRange) {
+    const err = new Error('Selected sheet is empty');
+    err.statusCode = 400;
+    throw err;
+  }
+  const lastRow = usedRange.endCell().rowNumber();
+  const lastCol = usedRange.endCell().columnNumber();
+  let headerRow = 0;
+  let cols = null;
+  for (let row = 1; row <= Math.min(lastRow, 12); row++) {
+    const found = {};
+    for (let col = 1; col <= lastCol; col++) {
+      const alias = parseSocietyExpenseHeaderAliases(normalizeExcelHeader(excelCellDisplayValue(sheet.cell(row, col))));
+      if (alias) found[alias] = col;
+    }
+    if (found.expense_date && found.title && found.amount) {
+      headerRow = row;
+      cols = found;
+      break;
+    }
+  }
+  if (!headerRow || !cols) {
+    const err = new Error('Could not detect society expense columns. Expected headers like Date, Comments, and Paid.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const expenses = [];
+  let skippedRows = 0;
+  let totalAmount = 0;
+  for (let row = headerRow + 1; row <= lastRow; row++) {
+    const dateVal = sheet.cell(row, cols.expense_date).value();
+    const title = excelCellDisplayValue(sheet.cell(row, cols.title));
+    const amount = parseExcelAmount(sheet.cell(row, cols.amount).value()) || 0;
+    if (!dateVal && !title && !(amount > 0)) {
+      skippedRows++;
+      continue;
+    }
+    const expenseDate = parseExcelDate(dateVal);
+    if (!expenseDate || !title || !(amount > 0)) {
+      skippedRows++;
+      continue;
+    }
+    totalAmount = Math.round((totalAmount + amount) * 100) / 100;
+    expenses.push({
+      expense_date: expenseDate,
+      month_key: expenseDate.slice(0, 7),
+      title,
+      category: '',
+      amount,
+      notes: 'Imported from Excel',
+    });
+  }
+  return {
+    sheet: sheet.name(),
+    expenses,
+    skippedRows,
+    totalAmount,
+  };
+}
+
+function normalizeSchoolKidImportNameKey(value) {
+  return normalizeExcelHeader(value);
+}
+
+async function readSchoolKidWorkbook(buffer, password = '') {
+  if (password) {
+    const workbook = await XlsxPopulate.fromDataAsync(buffer, { password });
+    const sheetNames = workbook.sheets().map((sheet) => sheet.name());
+    const sheetsByName = {};
+    for (const sheet of workbook.sheets()) {
+      const usedRange = sheet.usedRange();
+      if (!usedRange) {
+        sheetsByName[sheet.name()] = [];
+        continue;
+      }
+      const lastRow = usedRange.endCell().rowNumber();
+      const lastCol = usedRange.endCell().columnNumber();
+      const rows = [];
+      for (let row = 1; row <= lastRow; row++) {
+        const current = [];
+        for (let col = 1; col <= lastCol; col++) {
+          current.push(excelCellDisplayValue(sheet.cell(row, col)));
+        }
+        rows.push(current);
+      }
+      sheetsByName[sheet.name()] = rows;
+    }
+    return { sheetNames, sheetsByName };
+  }
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: false });
+  const sheetNames = workbook.SheetNames || [];
+  const sheetsByName = {};
+  for (const sheetName of sheetNames) {
+    sheetsByName[sheetName] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      defval: '',
+    });
+  }
+  return { sheetNames, sheetsByName };
+}
+
+function schoolKidGridCell(grid, row, col) {
+  if (!Array.isArray(grid)) return '';
+  return grid?.[row - 1]?.[col - 1] ?? '';
+}
+
+function schoolKidGridMaxCol(grid) {
+  return Array.isArray(grid) ? grid.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0) : 0;
+}
+
+function normalizeSchoolKidImportClassLabel(value) {
+  const raw = String(value || '').trim();
+  const stripped = raw.replace(/^class\s*[-:]\s*/i, '').trim();
+  return stripped || raw;
+}
+
+function parseSchoolKidBlockMeta(grid, headerRow, startCol) {
+  const rowValues = [];
+  for (let col = startCol; col <= startCol + 4; col++) {
+    rowValues.push(String(schoolKidGridCell(grid, headerRow + 1, col) || '').trim());
+  }
+  const nonEmpty = rowValues.filter(Boolean);
+  let classLabel = '';
+  const classCandidate = nonEmpty.find((value) => normalizeExcelHeader(value).startsWith('class'));
+  if (classCandidate) classLabel = normalizeSchoolKidImportClassLabel(classCandidate);
+  else {
+    const rightSide = rowValues.slice(2).find(Boolean);
+    classLabel = normalizeSchoolKidImportClassLabel(rightSide || '');
+  }
+  const kidName = nonEmpty.find((value) => normalizeExcelHeader(value) !== normalizeExcelHeader(classCandidate || value)) || '';
+  return {
+    kid_name: kidName,
+    class_label: classLabel,
+  };
+}
+
+function deriveSchoolKidAcademicYearFromSheetName(sheetName) {
+  const match = String(sheetName || '').match(/\b(20\d{2})\b/);
+  if (!match) return null;
+  const startYear = Number(match[1]);
+  const endYearShort = String((startYear + 1) % 100).padStart(2, '0');
+  return `${startYear}-${endYearShort}`;
+}
+
+function parseSchoolKidExpectedFeeBoxes(grid) {
+  const lastRow = Array.isArray(grid) ? grid.length : 0;
+  const lastCol = schoolKidGridMaxCol(grid);
+  const boxes = [];
+  for (let row = 1; row <= lastRow; row++) {
+    for (let col = 1; col <= lastCol; col++) {
+      const title = normalizeExcelHeader(schoolKidGridCell(grid, row, col));
+      if (title !== 'expected monthly fees') continue;
+      const payload = {};
+      for (let r = row + 1; r <= Math.min(lastRow, row + 8); r++) {
+        for (let c = col; c <= Math.min(lastCol, col + 3); c++) {
+          const label = normalizeExcelHeader(schoolKidGridCell(grid, r, c));
+          if (!['name', 'class', 'bus', 'month', 'other'].includes(label)) continue;
+          let rawValue = null;
+          let textValue = '';
+          for (let cc = c + 1; cc <= Math.min(lastCol, c + 4); cc++) {
+            rawValue = schoolKidGridCell(grid, r, cc);
+            textValue = String(rawValue || '').trim();
+            if (textValue || rawValue !== null && rawValue !== undefined && rawValue !== '') break;
+          }
+          if (label === 'name') payload.kid_name = textValue;
+          else if (label === 'class') payload.class_label = normalizeSchoolKidImportClassLabel(textValue);
+          else if (label === 'bus') payload.bus_fee = parseExcelAmount(rawValue ?? textValue) || 0;
+          else if (label === 'month') payload.expected_monthly_fee = parseExcelAmount(rawValue ?? textValue) || 0;
+          else if (label === 'other') payload.other_fee = parseExcelAmount(rawValue ?? textValue) || 0;
+        }
+      }
+      if (payload.kid_name || payload.class_label) boxes.push(payload);
+    }
+  }
+  return boxes;
+}
+
+function parseSchoolKidOverallSheet(grid) {
+  const lastRow = Array.isArray(grid) ? grid.length : 0;
+  const lastCol = schoolKidGridMaxCol(grid);
+  const rows = [];
+  const blocks = [];
+  for (let row = 1; row <= Math.min(lastRow, 8); row++) {
+    for (let col = 1; col <= lastCol; col++) {
+      const raw = String(schoolKidGridCell(grid, row, col) || '').trim();
+      if (!raw) continue;
+      const match = raw.match(/^(.*)\s+Expenses$/i);
+      if (!match) continue;
+      const kidName = String(match[1] || '').trim();
+      if (!kidName) continue;
+      blocks.push({ kid_name: kidName, row, col });
+    }
+  }
+  for (const block of blocks) {
+    let headerRow = 0;
+    for (let row = block.row; row <= Math.min(lastRow, block.row + 8); row++) {
+      const h1 = normalizeExcelHeader(schoolKidGridCell(grid, row, block.col));
+      const h2 = normalizeExcelHeader(schoolKidGridCell(grid, row, block.col + 1));
+      const h3 = normalizeExcelHeader(schoolKidGridCell(grid, row, block.col + 2));
+      const h4 = normalizeExcelHeader(schoolKidGridCell(grid, row, block.col + 3));
+      if (h1 === 'school name' && h2 === 'year' && h3 === 'class' && h4 === 'total') {
+        headerRow = row;
+        break;
+      }
+    }
+    if (!headerRow) continue;
+    let blankStreak = 0;
+    for (let row = headerRow + 1; row <= lastRow; row++) {
+      const schoolName = String(schoolKidGridCell(grid, row, block.col) || '').trim();
+      const academicYear = String(schoolKidGridCell(grid, row, block.col + 1) || '').trim();
+      const classLabel = normalizeSchoolKidImportClassLabel(schoolKidGridCell(grid, row, block.col + 2));
+      const total = parseExcelAmount(schoolKidGridCell(grid, row, block.col + 3)) || 0;
+      if (!schoolName && !academicYear && !classLabel && !total) {
+        blankStreak++;
+        if (blankStreak >= 2) break;
+        continue;
+      }
+      blankStreak = 0;
+      if (!schoolName || !academicYear || !classLabel) continue;
+      rows.push({
+        kid_name: block.kid_name,
+        school_name: schoolName,
+        academic_year: academicYear,
+        class_label: classLabel,
+        total,
+      });
+    }
+  }
+  return rows;
+}
+
+function parseSchoolKidDetailSheet(grid, sheetName, academicYear, overallRows = []) {
+  const lastRow = Array.isArray(grid) ? grid.length : 0;
+  const lastCol = schoolKidGridMaxCol(grid);
+  const feeBoxes = parseSchoolKidExpectedFeeBoxes(grid);
+  const records = [];
+  const seenBlocks = new Set();
+  for (let headerRow = 1; headerRow <= Math.min(lastRow, 4); headerRow++) {
+    for (let startCol = 1; startCol <= lastCol - 4; startCol++) {
+      const h1 = normalizeExcelHeader(schoolKidGridCell(grid, headerRow, startCol));
+      const h2 = normalizeExcelHeader(schoolKidGridCell(grid, headerRow, startCol + 1));
+      const h3 = normalizeExcelHeader(schoolKidGridCell(grid, headerRow, startCol + 2));
+      const h4 = normalizeExcelHeader(schoolKidGridCell(grid, headerRow, startCol + 3));
+      const h5 = normalizeExcelHeader(schoolKidGridCell(grid, headerRow, startCol + 4));
+      if (!(h1 === 'date' && h2 === 'thing' && h3 === 'amount' && h4 === 'month' && h5 === 'expenses')) continue;
+      const blockKey = `${headerRow}:${startCol}`;
+      if (seenBlocks.has(blockKey)) continue;
+      seenBlocks.add(blockKey);
+      const meta = parseSchoolKidBlockMeta(grid, headerRow, startCol);
+      const kidName = meta.kid_name;
+      const classLabel = meta.class_label;
+      if (!kidName || !classLabel) continue;
+      const overallMatch = overallRows.find((row) =>
+        normalizeSchoolKidImportNameKey(row.kid_name) === normalizeSchoolKidImportNameKey(kidName)
+        && normalizeExcelHeader(row.class_label) === normalizeExcelHeader(classLabel)
+        && String(row.academic_year || '').trim() === String(academicYear || '').trim()
+      ) || overallRows.find((row) =>
+        normalizeSchoolKidImportNameKey(row.kid_name) === normalizeSchoolKidImportNameKey(kidName)
+        && normalizeExcelHeader(row.class_label) === normalizeExcelHeader(classLabel)
+      );
+      const feeBox = feeBoxes.find((box) =>
+        normalizeSchoolKidImportNameKey(box.kid_name) === normalizeSchoolKidImportNameKey(kidName)
+        && normalizeExcelHeader(box.class_label) === normalizeExcelHeader(classLabel)
+      ) || {};
+      const expenses = [];
+      let blankStreak = 0;
+      for (let row = headerRow + 3; row <= lastRow; row++) {
+        const dateVal = schoolKidGridCell(grid, row, startCol);
+        const itemName = String(schoolKidGridCell(grid, row, startCol + 1) || '').trim();
+        const amount = parseExcelAmount(schoolKidGridCell(grid, row, startCol + 2)) || 0;
+        if (!dateVal && !itemName && !amount) {
+          blankStreak++;
+          if (expenses.length && blankStreak >= 2) break;
+          continue;
+        }
+        blankStreak = 0;
+        const expenseDate = parseExcelDate(dateVal);
+        if (!expenseDate || !itemName || !(amount > 0)) continue;
+        expenses.push({
+          expense_date: expenseDate,
+          item_name: itemName,
+          amount,
+          notes: `Imported from Excel (${sheetName})`,
+        });
+      }
+      records.push({
+        kid_name: kidName,
+        school_name: overallMatch?.school_name || 'Imported School',
+        academic_year: academicYear,
+        class_label: classLabel,
+        expected_monthly_fee: Number(feeBox.expected_monthly_fee || 0),
+        bus_fee: Number(feeBox.bus_fee || 0),
+        other_fee: Number(feeBox.other_fee || 0),
+        details: `Imported from sheet ${sheetName}`,
+        expenses,
+      });
+    }
+  }
+  return records;
+}
+
+async function parseSchoolKidImportWorkbook(buffer, options = {}) {
+  const password = options.password || '';
+  const workbook = await readSchoolKidWorkbook(buffer, password);
+  const requestedSheets = Array.isArray(options.sheets) ? options.sheets.filter(Boolean) : [];
+  const selectedNames = requestedSheets.length ? requestedSheets : workbook.sheetNames;
+  const overallSheetName = workbook.sheetNames.find((name) => normalizeExcelHeader(name) === 'overall');
+  const overallRows = overallSheetName ? parseSchoolKidOverallSheet(workbook.sheetsByName[overallSheetName]) : [];
+  const classRecords = [];
+  const skippedSheets = [];
+  for (const sheetName of selectedNames) {
+    const grid = workbook.sheetsByName[sheetName];
+    if (!grid) continue;
+    if (normalizeExcelHeader(sheetName) === 'overall') continue;
+    const academicYear = deriveSchoolKidAcademicYearFromSheetName(sheetName);
+    if (!academicYear) {
+      skippedSheets.push(sheetName);
+      continue;
+    }
+    const parsedRows = parseSchoolKidDetailSheet(grid, sheetName, academicYear, overallRows);
+    if (!parsedRows.length) {
+      skippedSheets.push(sheetName);
+      continue;
+    }
+    classRecords.push(...parsedRows);
+  }
+  const kidCount = new Set(classRecords.map((row) => normalizeSchoolKidImportNameKey(row.kid_name))).size;
+  const expenseCount = classRecords.reduce((sum, row) => sum + row.expenses.length, 0);
+  return {
+    sheets: selectedNames,
+    classRecords,
+    kidCount,
+    expenseCount,
+    skippedSheets,
+  };
+}
