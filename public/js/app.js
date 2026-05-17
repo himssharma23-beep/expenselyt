@@ -15756,6 +15756,30 @@ function renderSocietiesPage() {
   const main = document.getElementById('main');
   if (!main) return;
   const moneyStyle = "font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-0.02em";
+  const sortSocietyMembersForDisplay = (members = []) => {
+    const parseUnitValue = (value) => {
+      const text = String(value || '').trim();
+      const parts = text.match(/\d+/g);
+      return parts ? parts.map(Number) : [];
+    };
+    return [...members].sort((a, b) => {
+      const typeA = String(a?.property_type || '').toLowerCase() === 'shop' ? 1 : 0;
+      const typeB = String(b?.property_type || '').toLowerCase() === 'shop' ? 1 : 0;
+      if (typeA !== typeB) return typeA - typeB;
+      const aParts = parseUnitValue(a?.unit_label);
+      const bParts = parseUnitValue(b?.unit_label);
+      const maxLen = Math.max(aParts.length, bParts.length);
+      for (let i = 0; i < maxLen; i += 1) {
+        const aVal = aParts[i];
+        const bVal = bParts[i];
+        if (Number.isFinite(aVal) && Number.isFinite(bVal) && aVal !== bVal) return aVal - bVal;
+        if (Number.isFinite(aVal) !== Number.isFinite(bVal)) return Number.isFinite(aVal) ? -1 : 1;
+      }
+      const unitCompare = String(a?.unit_label || '').localeCompare(String(b?.unit_label || ''), undefined, { numeric: true, sensitivity: 'base' });
+      if (unitCompare) return unitCompare;
+      return String(a?.member_name || '').localeCompare(String(b?.member_name || ''), undefined, { sensitivity: 'base' });
+    });
+  };
   const selected = _societyDetail;
   const societyOptions = _societiesList.length
     ? _societiesList.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(_selectedSocietyId) ? 'selected' : ''}>${escHtml(item.name || 'Society')}${item.location ? ` - ${escHtml(item.location)}` : ''}</option>`).join('')
@@ -15767,7 +15791,7 @@ function renderSocietiesPage() {
     const periodLabel = isAllTime ? 'All Time' : monthLabel;
     const allMembers = Array.isArray(selected.members) ? selected.members : [];
     const searchNeedle = _societyMemberSearch.trim().toLowerCase();
-    const filteredMembers = allMembers.filter((member) => {
+    const filteredMembers = sortSocietyMembersForDisplay(allMembers.filter((member) => {
       const status = String(isAllTime
         ? ((Number(member.total_contributed || 0) > 0) ? 'paid' : 'pending')
         : (member.selected_month_status || '')).toLowerCase();
@@ -15780,7 +15804,7 @@ function renderSocietiesPage() {
         member.unit_label,
         member.phone_number,
       ].some((value) => String(value || '').toLowerCase().includes(searchNeedle));
-    });
+    }));
 
     const paidMembers = isAllTime
       ? allMembers.filter((member) => Number(member.total_contributed || 0) > 0)
