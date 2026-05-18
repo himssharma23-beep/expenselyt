@@ -5754,8 +5754,23 @@ function normalizeSchoolKidDateOfBirth(value) {
   return normalized;
 }
 
+function schoolKidDateToIso(value) {
+  if (value === '' || value == null) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())).toISOString().slice(0, 10);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())).toISOString().slice(0, 10);
+}
+
 function deriveSchoolKidAgeFromDateOfBirth(value) {
-  const normalized = String(value || '').trim();
+  const normalized = schoolKidDateToIso(value);
   if (!normalized) return null;
   const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -5952,7 +5967,7 @@ async function listSchoolKids(userId) {
     id: Number(row.id),
     kid_name: row.kid_name,
     age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
-    date_of_birth: row.date_of_birth || null,
+    date_of_birth: schoolKidDateToIso(row.date_of_birth),
     details: row.details || '',
     class_count: Number(row.class_count || 0),
     total_expense: num(row.total_expense),
@@ -5981,6 +5996,7 @@ async function createSchoolKid(userId, data = {}) {
   return {
     ...row,
     age_years: row?.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row?.age_years != null ? Number(row.age_years) : null),
+    date_of_birth: schoolKidDateToIso(row?.date_of_birth),
   };
 }
 
@@ -6016,6 +6032,7 @@ async function updateSchoolKid(userId, kidId, data = {}) {
   return {
     ...row,
     age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
+    date_of_birth: schoolKidDateToIso(row.date_of_birth),
   };
 }
 
@@ -6215,7 +6232,7 @@ async function getSchoolKidsOverview(userId) {
     id: Number(row.id),
     kid_name: row.kid_name,
     age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
-    date_of_birth: row.date_of_birth || null,
+    date_of_birth: schoolKidDateToIso(row.date_of_birth),
     details: row.details || '',
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -6357,7 +6374,7 @@ async function getSchoolKidDetail(userId, kidId) {
       id: Number(kid.id),
       kid_name: kid.kid_name,
       age_years: kid.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(kid.date_of_birth) : (kid.age_years != null ? Number(kid.age_years) : null),
-      date_of_birth: kid.date_of_birth || null,
+      date_of_birth: schoolKidDateToIso(kid.date_of_birth),
       details: kid.details || '',
       created_at: kid.created_at,
       updated_at: kid.updated_at,

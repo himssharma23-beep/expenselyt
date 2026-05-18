@@ -16890,7 +16890,9 @@ function getSelectedSchoolKidClass() {
 }
 
 function formatSchoolKidAgeLabel(kid) {
-  const age = Number(kid?.age_years);
+  const rawAge = kid?.age_years;
+  if (rawAge === '' || rawAge == null) return 'Age not available';
+  const age = Number(rawAge);
   return Number.isFinite(age) && age >= 0 ? `Age ${age}` : 'Age not available';
 }
 
