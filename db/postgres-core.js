@@ -5744,6 +5744,46 @@ function normalizeSchoolKidAge(value) {
   return age;
 }
 
+function normalizeSchoolKidDateOfBirth(value) {
+  if (value === '' || value == null) return null;
+  const normalized = normalizeDateValue(value, 'Date of birth');
+  const derivedAge = deriveSchoolKidAgeFromDateOfBirth(normalized);
+  if (derivedAge == null) throw validationError('Date of birth is invalid');
+  if (derivedAge < 0) throw validationError('Date of birth cannot be in the future');
+  if (derivedAge > 30) throw validationError('Date of birth must be within the last 30 years');
+  return normalized;
+}
+
+function deriveSchoolKidAgeFromDateOfBirth(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const birthDate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(birthDate.getTime())
+    || birthDate.getUTCFullYear() !== year
+    || birthDate.getUTCMonth() !== month - 1
+    || birthDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const now = new Date();
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (birthDate.getTime() > todayUtc.getTime()) return -1;
+  let age = todayUtc.getUTCFullYear() - year;
+  if (
+    todayUtc.getUTCMonth() < birthDate.getUTCMonth()
+    || (todayUtc.getUTCMonth() === birthDate.getUTCMonth() && todayUtc.getUTCDate() < birthDate.getUTCDate())
+  ) {
+    age -= 1;
+  }
+  return age;
+}
+
 function normalizeAcademicYear(value) {
   const normalized = String(value || '').trim();
   if (!normalized) throw validationError('Academic year is required');
@@ -5805,11 +5845,13 @@ async function ensureSchoolKidTables() {
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       kid_name TEXT NOT NULL,
       age_years INTEGER,
+      date_of_birth DATE,
       details TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, kid_name)
     )`);
+  await query(`ALTER TABLE school_kids ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
   await query(`
     CREATE TABLE IF NOT EXISTS school_kid_classes (
       id BIGSERIAL PRIMARY KEY,
@@ -5847,7 +5889,7 @@ async function ensureSchoolKidTables() {
 async function getSchoolKidOwnedByUser(userId, kidId) {
   await ensureSchoolKidTables();
   const result = await query(
-    `SELECT id, user_id, kid_name, age_years, details, created_at, updated_at
+    `SELECT id, user_id, kid_name, age_years, date_of_birth, details, created_at, updated_at
      FROM school_kids
      WHERE id = $1 AND user_id = $2
      LIMIT 1`,
@@ -5885,6 +5927,7 @@ async function listSchoolKids(userId) {
     `SELECT k.id,
             k.kid_name,
             k.age_years,
+            k.date_of_birth,
             k.details,
             k.created_at,
             k.updated_at,
@@ -5908,7 +5951,8 @@ async function listSchoolKids(userId) {
   return result.rows.map((row) => ({
     id: Number(row.id),
     kid_name: row.kid_name,
-    age_years: row.age_years != null ? Number(row.age_years) : null,
+    age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
+    date_of_birth: row.date_of_birth || null,
     details: row.details || '',
     class_count: Number(row.class_count || 0),
     total_expense: num(row.total_expense),
@@ -5919,40 +5963,60 @@ async function listSchoolKids(userId) {
 
 async function createSchoolKid(userId, data = {}) {
   await ensureSchoolKidTables();
+  const dateOfBirth = normalizeSchoolKidDateOfBirth(data.date_of_birth);
+  const fallbackAge = dateOfBirth ? null : normalizeSchoolKidAge(data.age_years);
   const result = await query(
-    `INSERT INTO school_kids (user_id, kid_name, age_years, details, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
-     RETURNING id, user_id, kid_name, age_years, details, created_at, updated_at`,
+    `INSERT INTO school_kids (user_id, kid_name, age_years, date_of_birth, details, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     RETURNING id, user_id, kid_name, age_years, date_of_birth, details, created_at, updated_at`,
     [
       userId,
       normalizeText(data.kid_name, 'Kid name', 120),
-      normalizeSchoolKidAge(data.age_years),
+      fallbackAge,
+      dateOfBirth,
       normalizeOptionalText(data.details, 500),
     ]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  return {
+    ...row,
+    age_years: row?.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row?.age_years != null ? Number(row.age_years) : null),
+  };
 }
 
 async function updateSchoolKid(userId, kidId, data = {}) {
   const current = await getSchoolKidOwnedByUser(userId, kidId);
   if (!current) throw validationError('Kid not found');
+  const nextDateOfBirth = data.date_of_birth !== undefined
+    ? normalizeSchoolKidDateOfBirth(data.date_of_birth)
+    : (current.date_of_birth || null);
+  const nextAgeYears = data.date_of_birth !== undefined
+    ? (nextDateOfBirth ? null : (data.age_years !== undefined ? normalizeSchoolKidAge(data.age_years) : current.age_years))
+    : (data.age_years !== undefined ? normalizeSchoolKidAge(data.age_years) : current.age_years);
   const result = await query(
     `UPDATE school_kids
      SET kid_name = $1,
          age_years = $2,
-         details = $3,
+         date_of_birth = $3,
+         details = $4,
          updated_at = NOW()
-     WHERE id = $4 AND user_id = $5
-     RETURNING id, user_id, kid_name, age_years, details, created_at, updated_at`,
+     WHERE id = $5 AND user_id = $6
+     RETURNING id, user_id, kid_name, age_years, date_of_birth, details, created_at, updated_at`,
     [
       data.kid_name !== undefined ? normalizeText(data.kid_name, 'Kid name', 120) : current.kid_name,
-      data.age_years !== undefined ? normalizeSchoolKidAge(data.age_years) : current.age_years,
+      nextAgeYears,
+      nextDateOfBirth,
       data.details !== undefined ? normalizeOptionalText(data.details, 500) : current.details,
       kidId,
       userId,
     ]
   );
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
+  };
 }
 
 async function deleteSchoolKid(userId, kidId) {
@@ -6121,7 +6185,7 @@ async function getSchoolKidsOverview(userId) {
   await ensureSchoolKidTables();
   const [kidsR, classesR, expensesR] = await Promise.all([
     query(
-      `SELECT id, kid_name, age_years, details, created_at, updated_at
+      `SELECT id, kid_name, age_years, date_of_birth, details, created_at, updated_at
        FROM school_kids
        WHERE user_id = $1
        ORDER BY lower(kid_name), id`,
@@ -6150,7 +6214,8 @@ async function getSchoolKidsOverview(userId) {
   const kids = kidsR.rows.map((row) => ({
     id: Number(row.id),
     kid_name: row.kid_name,
-    age_years: row.age_years != null ? Number(row.age_years) : null,
+    age_years: row.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(row.date_of_birth) : (row.age_years != null ? Number(row.age_years) : null),
+    date_of_birth: row.date_of_birth || null,
     details: row.details || '',
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -6291,7 +6356,8 @@ async function getSchoolKidDetail(userId, kidId) {
     kid: {
       id: Number(kid.id),
       kid_name: kid.kid_name,
-      age_years: kid.age_years != null ? Number(kid.age_years) : null,
+      age_years: kid.date_of_birth ? deriveSchoolKidAgeFromDateOfBirth(kid.date_of_birth) : (kid.age_years != null ? Number(kid.age_years) : null),
+      date_of_birth: kid.date_of_birth || null,
       details: kid.details || '',
       created_at: kid.created_at,
       updated_at: kid.updated_at,

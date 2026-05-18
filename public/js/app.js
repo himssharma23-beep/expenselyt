@@ -16391,6 +16391,9 @@ function renderSchoolKidsPage() {
     if (hasAgeA !== hasAgeB) return hasAgeA ? -1 : 1;
     return String(a?.kid_name || '').localeCompare(String(b?.kid_name || ''));
   });
+  const kidOptions = _schoolKidsList.length
+    ? _schoolKidsList.map((kid) => `<option value="${Number(kid.id)}" ${String(kid.id) === String(_selectedSchoolKidId) ? 'selected' : ''}>${escHtml(kid.kid_name)}${kid.age_years != null ? ` · ${escHtml(formatSchoolKidAgeLabel(kid))}` : ''}</option>`).join('')
+    : '<option value="">No kids yet</option>';
   const kidCards = orderedKids.map((kid) => {
     const active = String(kid.id) === String(_selectedSchoolKidId);
     const classCount = Number(kid.class_count || 0);
@@ -16398,7 +16401,8 @@ function renderSchoolKidsPage() {
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
         <div style="min-width:0">
           <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
-          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${escHtml(formatSchoolKidAgeLabel(kid))}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.64);margin-top:4px">${escHtml(formatSchoolKidDobLabel(kid))}</div>
         </div>
         <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
       </div>
@@ -16885,6 +16889,22 @@ function getSelectedSchoolKidClass() {
   return (_schoolKidDetail?.classes || []).find((item) => String(item.id) === String(_selectedSchoolKidClassId)) || null;
 }
 
+function formatSchoolKidAgeLabel(kid) {
+  const age = Number(kid?.age_years);
+  return Number.isFinite(age) && age >= 0 ? `Age ${age}` : 'Age not available';
+}
+
+function formatSchoolKidDobLabel(kid) {
+  const dob = String(kid?.date_of_birth || '').trim();
+  return dob ? `DOB ${fmtDate(dob)}` : 'DOB not set';
+}
+
+function formatSchoolKidMeta(kid, { includeClassCount = false } = {}) {
+  const parts = [formatSchoolKidAgeLabel(kid), formatSchoolKidDobLabel(kid)];
+  if (includeClassCount && Number(kid?.class_count || 0)) parts.push(`${Number(kid.class_count)} class records`);
+  return parts.join(' · ');
+}
+
 function syncSelectedSchoolKidClass() {
   if (!_schoolKidDetail?.classes?.length) {
     _selectedSchoolKidClassId = null;
@@ -17259,7 +17279,8 @@ function renderSchoolKidsPage() {
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
         <div style="min-width:0">
           <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
-          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${escHtml(formatSchoolKidAgeLabel(kid))}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.64);margin-top:4px">${escHtml(formatSchoolKidDobLabel(kid))}</div>
         </div>
         <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
       </div>
@@ -17280,7 +17301,7 @@ function renderSchoolKidsPage() {
     return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
   })() : '';
 
-  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${escHtml(formatSchoolKidMeta(selectedKid, { includeClassCount: true }))}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
   repairMojibakeInNode(main);
 }
 
@@ -17313,7 +17334,7 @@ function renderSchoolKidsPage() {
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
         <div style="min-width:0">
           <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
-          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${kid.age_years != null ? `Age ${Number(kid.age_years)}` : 'Age not set'}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${escHtml(formatSchoolKidAgeLabel(kid))}</div><div style="font-size:11px;color:rgba(255,255,255,.64);margin-top:4px">${escHtml(formatSchoolKidDobLabel(kid))}</div>
         </div>
         <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
       </div>
@@ -17484,7 +17505,7 @@ function showSchoolKidModal(kidId = null) {
   openModal(kidId ? 'Edit Kid' : 'Add Kid', `
     <div class="fg">
       <label class="fl">Kid Name *<input class="fi" id="schoolKidName" value="${escHtml(kid.kid_name || '')}"></label>
-      <label class="fl">Age<input class="fi" type="number" min="0" max="30" id="schoolKidAge" value="${kid.age_years != null ? Number(kid.age_years) : ''}"></label>
+      <label class="fl">Date of Birth<input class="fi" type="date" id="schoolKidDob" value="${escHtml(kid.date_of_birth || '')}" max="${todayStr()}"></label>
       <label class="fl full">Details<textarea class="fi" rows="4" id="schoolKidDetails" placeholder="Any notes about the child or school journey">${escHtml(kid.details || '')}</textarea></label>
     </div>
     <div class="fa" style="margin-top:16px">
@@ -17498,7 +17519,7 @@ function showSchoolKidModal(kidId = null) {
 async function saveSchoolKid(kidId = null) {
   const body = {
     kid_name: document.getElementById('schoolKidName')?.value?.trim() || '',
-    age_years: document.getElementById('schoolKidAge')?.value || '',
+    date_of_birth: document.getElementById('schoolKidDob')?.value || '',
     details: document.getElementById('schoolKidDetails')?.value?.trim() || '',
   };
   if (!body.kid_name) { toast('Kid name is required', 'warning'); return; }
