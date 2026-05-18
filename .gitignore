@@ -1,3 +1,6 @@
 node_modules
 .env
 .git
+videos/
+tools/ffmpeg/
+data/video-subtitles-cache/

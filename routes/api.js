@@ -4,15 +4,19 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 const Tesseract = require('tesseract.js');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
+const pgTenantDb = require('../db/postgres-tenants');
+const pgVideoDb = require('../db/postgres-videos');
 const pgPetrolDb = require('../db/postgres-petrol');
 const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
 const { assertPostgresConfigured } = require('../db/provider');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeMessagePayload, sendExpoPushNotifications } = require('../utils/push-notifications');
 const {
   sendSplitShareEmailsToTargets,
@@ -2973,6 +2977,35 @@ function withUpload(req, res, next) {
   });
 }
 
+function ensureTenantUploadDir() {
+  const uploadDir = path.join(__dirname, '..', 'public', 'uploads', 'tenants');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  return uploadDir;
+}
+
+function sanitizeUploadBaseName(name) {
+  return String(name || 'file')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-z0-9_-]+/gi, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60) || 'file';
+}
+
+function saveTenantUploadFile(file) {
+  if (!file) throw Object.assign(new Error('No file uploaded'), { statusCode: 400 });
+  const ext = path.extname(String(file.originalname || '')).slice(0, 12).toLowerCase() || '.bin';
+  const baseName = sanitizeUploadBaseName(file.originalname || 'tenant-file');
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${baseName}${ext}`;
+  const uploadDir = ensureTenantUploadDir();
+  const absPath = path.join(uploadDir, filename);
+  fs.writeFileSync(absPath, file.buffer);
+  return {
+    path: `/uploads/tenants/${filename}`,
+    name: String(file.originalname || filename).trim() || filename,
+  };
+}
+
 // Return sheet names — uses xlsx-populate which supports AES-encrypted xlsx
 router.post('/expenses/import-excel/sheets', withUpload, async (req, res) => {
   try {
@@ -5926,7 +5959,137 @@ router.get('/auth/me/access', requireAuth, (req, res) => {
 });
 
 // ─── ADMIN ROUTES ────────────────────────────────────────────
-const { requireAdmin } = require('../middleware/auth');
+router.get('/admin/videos/settings', requireAdmin, async (_req, res) => {
+  try {
+    const settings = await Promise.resolve(pgVideoDb.getVideoLibrarySettings());
+    res.json({ success: true, settings });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load video settings' });
+  }
+});
+
+router.put('/admin/videos/settings', requireAdmin, async (req, res) => {
+  try {
+    const settings = await Promise.resolve(pgVideoDb.saveVideoLibrarySettings(req.body || {}, req.session.userId));
+    const library = await Promise.resolve(pgVideoDb.listVideoLibrary());
+    res.json({
+      success: true,
+      settings,
+      library_summary: {
+        configured: !!library?.configured,
+        root_exists: library?.root_exists !== false,
+        video_count: Array.isArray(library?.videos) ? library.videos.length : 0,
+        message: library?.message || '',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not save video settings' });
+  }
+});
+
+router.get('/videos/library', requireAuth, async (req, res) => {
+  try {
+    const library = await Promise.resolve(pgVideoDb.listVideoLibrary(req.session.userId));
+    const videos = Array.isArray(library?.videos)
+      ? library.videos.map((video) => ({
+          ...video,
+          stream_url: `/api/videos/stream/${encodeURIComponent(video.id)}`,
+        }))
+      : [];
+    res.json({
+      success: true,
+      configured: !!library?.configured,
+      root_exists: library?.root_exists !== false,
+      message: library?.message || '',
+      settings: library?.settings || null,
+      subtitle_engine: library?.subtitle_engine || { available: false, message: '' },
+      videos,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load videos' });
+  }
+});
+
+router.post('/videos/progress', requireAuth, async (req, res) => {
+  try {
+    const progress = await Promise.resolve(pgVideoDb.saveVideoWatchProgress(req.session.userId, req.body || {}));
+    res.json({ success: true, progress });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save video progress' });
+  }
+});
+
+router.get('/videos/stream/:token', requireAuth, async (req, res) => {
+  try {
+    const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Video not found' });
+
+    const fileSize = Number(target.stats?.size || 0);
+    const range = String(req.headers.range || '').trim();
+    const contentType = target.mime_type || 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(target.filename || 'video')}`);
+
+    if (!range) {
+      res.setHeader('Content-Length', fileSize);
+      return fs.createReadStream(target.absolute_path).pipe(res);
+    }
+
+    const match = range.match(/bytes=(\d*)-(\d*)/i);
+    if (!match) {
+      res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.end();
+    }
+
+    let start = match[1] === '' ? NaN : Number(match[1]);
+    let end = match[2] === '' ? NaN : Number(match[2]);
+
+    if (Number.isNaN(start) && !Number.isNaN(end)) {
+      start = Math.max(fileSize - end, 0);
+      end = fileSize - 1;
+    } else {
+      if (Number.isNaN(start)) start = 0;
+      if (Number.isNaN(end) || end >= fileSize) end = fileSize - 1;
+    }
+
+    if (start < 0 || end < start || start >= fileSize) {
+      res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.end();
+    }
+
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Content-Length', end - start + 1);
+    fs.createReadStream(target.absolute_path, { start, end }).pipe(res);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || 'Could not stream video' });
+    } else {
+      res.end();
+    }
+  }
+});
+
+router.get('/videos/subtitles/:token', requireAuth, async (req, res) => {
+  try {
+    const target = await Promise.resolve(pgVideoDb.resolveSubtitleStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Subtitle file not found' });
+
+    const raw = await fs.promises.readFile(target.absolute_path, 'utf8');
+    const body = target.extension === '.srt'
+      ? pgVideoDb.convertSrtToVtt(raw)
+      : String(raw || '').replace(/^\uFEFF/, '');
+
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.send(body);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load subtitles' });
+  }
+});
 
 router.get('/admin/public-stats', requireAdmin, async (req, res) => {
   try {
@@ -8583,6 +8746,594 @@ router.post('/school-kids/import-excel', withUpload, async (req, res) => {
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not import school kids excel.' });
+  }
+});
+
+function normalizeTenantImportNumber(value, { allowNegative = false } = {}) {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0;
+    const normalized = Math.round(value * 100) / 100;
+    return allowNegative ? normalized : Math.max(0, normalized);
+  }
+  const cleaned = String(value).replace(/[^0-9.\-]/g, '');
+  if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return 0;
+  const parsed = Number(cleaned);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.round(parsed * 100) / 100;
+  return allowNegative ? normalized : Math.max(0, normalized);
+}
+
+function normalizeTenantImportInt(value) {
+  if (value == null || value === '') return 0;
+  const cleaned = String(value).replace(/[^0-9\-]/g, '');
+  if (!cleaned || cleaned === '-') return 0;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+}
+
+function tenantImportRoomLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^room\b/i.test(raw)) return raw.replace(/\s+/g, ' ').trim();
+  return `Room ${raw}`;
+}
+
+function splitTenantPortionAndName(portionValue, nameValue) {
+  const portionRaw = String(portionValue || '').trim();
+  const nameRaw = String(nameValue || '').trim();
+  if (nameRaw) return { portion: portionRaw, tenant_name: nameRaw };
+  const match = portionRaw.match(/^(\d+)\s+(.+)$/);
+  if (match) {
+    return { portion: match[1].trim(), tenant_name: match[2].trim() };
+  }
+  return { portion: portionRaw, tenant_name: nameRaw };
+}
+
+function findTenantImportHeaderRow(rows, requiredHeaders = []) {
+  for (let index = 0; index < Math.min(rows.length, 8); index += 1) {
+    const normalized = (rows[index] || []).map((cell) => normalizeExcelHeader(cell));
+    if (requiredHeaders.every((header) => normalized.includes(header))) return index;
+  }
+  return -1;
+}
+
+function mapTenantDetailHeader(normalized) {
+  if (['portion', 'room', 'room no', 'room number'].includes(normalized)) return 'portion';
+  if (['tenant', 'name', 'tenant name'].includes(normalized)) return 'tenant_name';
+  if (['start from', 'from', 'start date', 'start'].includes(normalized)) return 'start_date';
+  if (['end from', 'to', 'end date', 'end'].includes(normalized)) return 'end_date';
+  if (['contract period', 'contract', 'contract months'].includes(normalized)) return 'contract_period';
+  if (['permanent address', 'address', 'tenant address'].includes(normalized)) return 'tenant_address';
+  if (['address proof', 'proof type'].includes(normalized)) return 'address_proof_type';
+  if (['proof id', 'proof no', 'id number', 'aadhaar number'].includes(normalized)) return 'proof_id';
+  if (['contact number', 'contact', 'mobile', 'phone number'].includes(normalized)) return 'contact_number';
+  if (['job', 'occupation'].includes(normalized)) return 'job';
+  if (['job location', 'work location'].includes(normalized)) return 'job_location';
+  if (['amount settled', 'settled amount'].includes(normalized)) return 'amount_settled';
+  if (['security deposit', 'security deposited', 'deposit'].includes(normalized)) return 'security_deposit';
+  return null;
+}
+
+function mapTenantChargesHeader(normalized) {
+  if (['portion', 'room', 'room no', 'room number'].includes(normalized)) return 'portion';
+  if (['name', 'tenant', 'tenant name'].includes(normalized)) return 'tenant_name';
+  if (['electricity per unit', 'electricity unit', 'electricity rate'].includes(normalized)) return 'electricity_unit_price';
+  if (['sewarage and water charges', 'sewerage and water charges', 'sewerage water charges'].includes(normalized)) return 'sewerage_water_charge';
+  if (['cleaning charges', 'cleaning charge'].includes(normalized)) return 'cleaning_charge';
+  if (['car parking', 'car parking charges'].includes(normalized)) return 'car_parking';
+  if (['bike parking', 'bike parking charges'].includes(normalized)) return 'bike_parking';
+  if (['implemented on', 'implemented from'].includes(normalized)) return 'implemented_on';
+  return null;
+}
+
+function mapTenantInvoiceHeader(normalized) {
+  if (['name', 'tenant', 'tenant name'].includes(normalized)) return 'tenant_name';
+  if (['rent date', 'invoice date', 'month'].includes(normalized)) return 'rent_date';
+  if (['rent paid on', 'paid on', 'payment date'].includes(normalized)) return 'rent_paid_on';
+  if (['montly rent', 'monthly rent', 'rent'].includes(normalized)) return 'monthly_rent';
+  if (['meter reading electricity last', 'last', 'previous units', 'last units'].includes(normalized)) return 'last_units';
+  if (['meter reading electricity current', 'current', 'current units'].includes(normalized)) return 'current_units';
+  if (['total units', 'units', 'units used'].includes(normalized)) return 'total_units';
+  if (['electricity bill', 'electricity amount'].includes(normalized)) return 'electricity_bill';
+  if (['sewarage and water charges', 'sewerage and water charges', 'sewerage water charges'].includes(normalized)) return 'sewerage_water_charge';
+  if (['cleaning charges', 'cleaning charge'].includes(normalized)) return 'cleaning_charge';
+  if (['parking charges', 'parking charge'].includes(normalized)) return 'parking_charge';
+  if (['other charges detail', 'other charge detail', 'remarks', 'details'].includes(normalized)) return 'other_charges_detail';
+  if (['other charges', 'other charge'].includes(normalized)) return 'other_charges';
+  if (['total'].includes(normalized)) return 'total_amount';
+  if (['payment paid', 'paid amount'].includes(normalized)) return 'payment_paid';
+  if (['pending amount', 'pending'].includes(normalized)) return 'pending_amount';
+  return null;
+}
+
+function parseTenantWorkbookImport(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: false });
+  const sheets = workbook.SheetNames.map((name) => ({
+    name,
+    normalized: normalizeExcelHeader(name),
+    rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: false }),
+  }));
+
+  const detailSheet = sheets.find((sheet) => findTenantImportHeaderRow(sheet.rows, ['portion', 'tenant']) >= 0) || null;
+  const chargesSheet = sheets.find((sheet) => sheet !== detailSheet && findTenantImportHeaderRow(sheet.rows, ['portion', 'electricity per unit']) >= 0) || null;
+  const invoiceSheets = sheets.filter((sheet) => {
+    if (sheet === detailSheet || sheet === chargesSheet) return false;
+    if (sheet.normalized.startsWith('portion')) return true;
+    const firstRow = (sheet.rows[0] || []).map((cell) => normalizeExcelHeader(cell));
+    return firstRow.includes('rent date') && firstRow.includes('name');
+  });
+
+  const rooms = [];
+  const tenants = [];
+  const charges = [];
+  const invoices = [];
+  const roomSeen = new Set();
+
+  function addRoom(portion) {
+    const roomLabel = tenantImportRoomLabel(portion);
+    const key = normalizeExcelHeader(roomLabel);
+    if (!roomLabel || roomSeen.has(key)) return;
+    roomSeen.add(key);
+    rooms.push({ portion: String(portion || '').trim(), room_label: roomLabel });
+  }
+
+  if (detailSheet) {
+    const headerRowIndex = findTenantImportHeaderRow(detailSheet.rows, ['portion', 'tenant']);
+    const headerRow = detailSheet.rows[headerRowIndex] || [];
+    const columnMap = {};
+    headerRow.forEach((cell, index) => {
+      const alias = mapTenantDetailHeader(normalizeExcelHeader(cell));
+      if (alias && columnMap[alias] == null) columnMap[alias] = index;
+    });
+    for (let rowIndex = headerRowIndex + 1; rowIndex < detailSheet.rows.length; rowIndex += 1) {
+      const row = detailSheet.rows[rowIndex] || [];
+      if (!row.some((cell) => String(cell || '').trim())) continue;
+      const split = splitTenantPortionAndName(row[columnMap.portion], row[columnMap.tenant_name]);
+      if (!split.portion) continue;
+      addRoom(split.portion);
+      const startDate = parseExcelDate(row[columnMap.start_date]);
+      const endDate = parseExcelDate(row[columnMap.end_date]);
+      const tenantNotes = [
+        row[columnMap.address_proof_type] ? `Address proof: ${String(row[columnMap.address_proof_type]).trim()}` : '',
+        row[columnMap.proof_id] ? `Proof ID: ${String(row[columnMap.proof_id]).trim()}` : '',
+        row[columnMap.job] ? `Job: ${String(row[columnMap.job]).trim()}` : '',
+        row[columnMap.job_location] ? `Job location: ${String(row[columnMap.job_location]).trim()}` : '',
+        row[columnMap.amount_settled] ? `Amount settled: ${normalizeTenantImportNumber(row[columnMap.amount_settled], { allowNegative: true })}` : '',
+        endDate ? `End date: ${endDate}` : '',
+      ].filter(Boolean).join('\n');
+      tenants.push({
+        portion: split.portion,
+        room_label: tenantImportRoomLabel(split.portion),
+        tenant_name: split.tenant_name || 'Tenant',
+        start_date: startDate || null,
+        end_date: endDate || null,
+        contract_months: normalizeTenantImportInt(row[columnMap.contract_period]) || null,
+        tenant_address: String(row[columnMap.tenant_address] || '').trim(),
+        contact_number: String(row[columnMap.contact_number] || '').trim(),
+        security_deposit: normalizeTenantImportNumber(row[columnMap.security_deposit]),
+        rent_amount: 0,
+        electricity_unit_price: 0,
+        sewerage_charge: 0,
+        water_charge: 0,
+        cleaning_charge: 0,
+        opening_electricity_units: 0,
+        notes: tenantNotes,
+      });
+    }
+  }
+
+  if (chargesSheet) {
+    const headerRowIndex = findTenantImportHeaderRow(chargesSheet.rows, ['portion', 'electricity per unit']);
+    const headerRow = chargesSheet.rows[headerRowIndex] || [];
+    const columnMap = {};
+    headerRow.forEach((cell, index) => {
+      const alias = mapTenantChargesHeader(normalizeExcelHeader(cell));
+      if (alias && columnMap[alias] == null) columnMap[alias] = index;
+    });
+    for (let rowIndex = headerRowIndex + 1; rowIndex < chargesSheet.rows.length; rowIndex += 1) {
+      const row = chargesSheet.rows[rowIndex] || [];
+      if (!row.some((cell) => String(cell || '').trim())) continue;
+      const split = splitTenantPortionAndName(row[columnMap.portion], row[columnMap.tenant_name]);
+      if (!split.portion) continue;
+      addRoom(split.portion);
+      const carParking = normalizeTenantImportNumber(row[columnMap.car_parking]);
+      const bikeParking = normalizeTenantImportNumber(row[columnMap.bike_parking]);
+      const implementedOn = parseExcelDate(row[columnMap.implemented_on]);
+      const noteParts = [];
+      if (carParking) noteParts.push(`Car parking: ${carParking}`);
+      if (bikeParking) noteParts.push(`Bike parking: ${bikeParking}`);
+      if (implementedOn) noteParts.push(`Implemented on: ${implementedOn}`);
+      charges.push({
+        portion: split.portion,
+        room_label: tenantImportRoomLabel(split.portion),
+        tenant_name: split.tenant_name || 'Tenant',
+        start_date: implementedOn || null,
+        implemented_on: implementedOn || null,
+        electricity_unit_price: normalizeTenantImportNumber(row[columnMap.electricity_unit_price]),
+        sewerage_charge: normalizeTenantImportNumber(row[columnMap.sewerage_water_charge]),
+        water_charge: 0,
+        cleaning_charge: normalizeTenantImportNumber(row[columnMap.cleaning_charge]),
+        notes: noteParts.join('\n'),
+      });
+    }
+  }
+
+  for (const sheet of invoiceSheets) {
+    const roomPortionMatch = sheet.name.match(/portion\s*([0-9a-z]+)/i);
+    const roomPortion = roomPortionMatch ? roomPortionMatch[1] : '';
+    if (!roomPortion) continue;
+    addRoom(roomPortion);
+    const firstRow = sheet.rows[0] || [];
+    const secondRow = sheet.rows[1] || [];
+    const columnMap = {};
+    const columnCount = Math.max(firstRow.length, secondRow.length);
+    for (let index = 0; index < columnCount; index += 1) {
+      const normalized = normalizeExcelHeader(`${firstRow[index] || ''} ${secondRow[index] || ''}`) || normalizeExcelHeader(firstRow[index] || secondRow[index] || '');
+      const alias = mapTenantInvoiceHeader(normalized);
+      if (alias && columnMap[alias] == null) columnMap[alias] = index;
+    }
+    for (let rowIndex = 2; rowIndex < sheet.rows.length; rowIndex += 1) {
+      const row = sheet.rows[rowIndex] || [];
+      if (!row.some((cell) => String(cell || '').trim())) continue;
+      const tenantName = String(row[columnMap.tenant_name] || '').trim();
+      const rentDate = parseExcelDate(row[columnMap.rent_date]);
+      if (!tenantName || !rentDate) continue;
+      const invoiceMonth = String(rentDate).slice(0, 7);
+      const previousUnits = normalizeTenantImportInt(row[columnMap.last_units]);
+      const currentUnits = normalizeTenantImportInt(row[columnMap.current_units]);
+      const unitsUsedRaw = normalizeTenantImportInt(row[columnMap.total_units]);
+      const unitsUsed = unitsUsedRaw || (currentUnits - previousUnits);
+      const electricityBill = normalizeTenantImportNumber(row[columnMap.electricity_bill], { allowNegative: true });
+      const rate = unitsUsed ? Math.round((electricityBill / unitsUsed) * 100) / 100 : 0;
+      const parkingCharge = normalizeTenantImportNumber(row[columnMap.parking_charge], { allowNegative: true });
+      const otherCharge = normalizeTenantImportNumber(row[columnMap.other_charges], { allowNegative: true });
+      const totalAmount = normalizeTenantImportNumber(row[columnMap.total_amount], { allowNegative: true });
+      const pendingAmount = normalizeTenantImportNumber(row[columnMap.pending_amount], { allowNegative: true });
+      const paidAmount = normalizeTenantImportNumber(row[columnMap.payment_paid], { allowNegative: true });
+      const noteParts = [
+        row[columnMap.other_charges_detail] ? `Other details: ${String(row[columnMap.other_charges_detail]).trim()}` : '',
+        paidAmount ? `Payment paid: ${paidAmount}` : '',
+        pendingAmount ? `Pending amount: ${pendingAmount}` : '',
+      ].filter(Boolean);
+      invoices.push({
+        portion: roomPortion,
+        room_label: tenantImportRoomLabel(roomPortion),
+        tenant_name: tenantName,
+        start_date: rentDate,
+        invoice_month: invoiceMonth,
+        due_date: parseExcelDate(row[columnMap.rent_paid_on]) || rentDate,
+        contact_number_snapshot: '',
+        rent_amount_snapshot: normalizeTenantImportNumber(row[columnMap.monthly_rent], { allowNegative: true }),
+        electricity_unit_price_snapshot: rate,
+        sewerage_charge_snapshot: normalizeTenantImportNumber(row[columnMap.sewerage_water_charge], { allowNegative: true }),
+        water_charge_snapshot: 0,
+        cleaning_charge_snapshot: normalizeTenantImportNumber(row[columnMap.cleaning_charge], { allowNegative: true }),
+        other_charges_snapshot: Math.round((parkingCharge + otherCharge) * 100) / 100,
+        previous_electricity_units: previousUnits,
+        current_electricity_units: currentUnits,
+        electricity_units_used: unitsUsed,
+        electricity_amount: electricityBill,
+        total_amount: totalAmount,
+        notes: noteParts.join('\n'),
+      });
+    }
+  }
+
+  if (!tenants.length && !charges.length && !invoices.length) {
+    throw new Error('No tenant rows were detected in this workbook.');
+  }
+
+  return {
+    sheets_used: {
+      details: detailSheet?.name || '',
+      charges: chargesSheet?.name || '',
+      invoices: invoiceSheets.map((sheet) => sheet.name),
+    },
+    rooms,
+    tenants,
+    charges,
+    invoices,
+  };
+}
+
+function parseTenantInvoiceImportSheet(buffer, selectedSheet = '') {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: false });
+  const availableSheets = Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+  const sheetName = String(selectedSheet || '').trim() || availableSheets[0] || '';
+  if (!sheetName) throw new Error('No sheets found in this workbook.');
+  if (!workbook.Sheets[sheetName]) throw new Error('Selected sheet was not found in this workbook.');
+  const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false });
+  if (!sheetRows.length) throw new Error('The selected sheet is empty.');
+
+  const firstRow = sheetRows[0] || [];
+  const secondRow = sheetRows[1] || [];
+  const columnMap = {};
+  const columnCount = Math.max(firstRow.length, secondRow.length);
+  for (let index = 0; index < columnCount; index += 1) {
+    const normalized = normalizeExcelHeader(`${firstRow[index] || ''} ${secondRow[index] || ''}`)
+      || normalizeExcelHeader(firstRow[index] || secondRow[index] || '');
+    const alias = mapTenantInvoiceHeader(normalized);
+    if (alias && columnMap[alias] == null) columnMap[alias] = index;
+  }
+
+  if (columnMap.rent_date == null) throw new Error('Could not detect the Rent date column.');
+
+  const invoices = [];
+  for (let rowIndex = 2; rowIndex < sheetRows.length; rowIndex += 1) {
+    const row = sheetRows[rowIndex] || [];
+    if (!row.some((cell) => String(cell || '').trim())) continue;
+    const rentDate = parseExcelDate(row[columnMap.rent_date]);
+    if (!rentDate) continue;
+    const invoiceMonth = String(rentDate).slice(0, 7);
+    const previousUnits = normalizeTenantImportInt(row[columnMap.last_units]);
+    const currentUnits = normalizeTenantImportInt(row[columnMap.current_units]);
+    const unitsUsedRaw = normalizeTenantImportInt(row[columnMap.total_units]);
+    const unitsUsed = unitsUsedRaw || Math.max(0, currentUnits - previousUnits);
+    const electricityBill = normalizeTenantImportNumber(row[columnMap.electricity_bill], { allowNegative: true });
+    const electricityRate = unitsUsed ? Math.round((electricityBill / unitsUsed) * 100) / 100 : 0;
+    const sewerageWater = normalizeTenantImportNumber(row[columnMap.sewerage_water_charge], { allowNegative: true });
+    const cleaningCharge = normalizeTenantImportNumber(row[columnMap.cleaning_charge], { allowNegative: true });
+    const parkingCharge = normalizeTenantImportNumber(row[columnMap.parking_charge], { allowNegative: true });
+    const otherCharge = normalizeTenantImportNumber(row[columnMap.other_charges], { allowNegative: true });
+    const totalAmount = normalizeTenantImportNumber(row[columnMap.total_amount], { allowNegative: true });
+    const paidAmount = normalizeTenantImportNumber(row[columnMap.payment_paid], { allowNegative: true });
+    const pendingAmount = normalizeTenantImportNumber(row[columnMap.pending_amount], { allowNegative: true });
+    const noteParts = [
+      row[columnMap.other_charges_detail] ? `Other details: ${String(row[columnMap.other_charges_detail]).trim()}` : '',
+      paidAmount ? `Payment paid: ${paidAmount}` : '',
+      pendingAmount ? `Pending amount: ${pendingAmount}` : '',
+    ].filter(Boolean);
+    invoices.push({
+      invoice_month: invoiceMonth,
+      due_date: parseExcelDate(row[columnMap.rent_paid_on]) || rentDate,
+      rent_amount_snapshot: normalizeTenantImportNumber(row[columnMap.monthly_rent], { allowNegative: true }),
+      electricity_unit_price_snapshot: electricityRate,
+      sewerage_charge_snapshot: sewerageWater,
+      water_charge_snapshot: 0,
+      cleaning_charge_snapshot: cleaningCharge,
+      other_charges_snapshot: Math.round((parkingCharge + otherCharge) * 100) / 100,
+      previous_electricity_units: previousUnits,
+      current_electricity_units: currentUnits,
+      electricity_units_used: unitsUsed,
+      electricity_amount: electricityBill,
+      total_amount: totalAmount,
+      notes: noteParts.join('\n'),
+    });
+  }
+
+  if (!invoices.length) throw new Error('No valid invoice rows found in this sheet.');
+  return {
+    sheet: sheetName,
+    invoices,
+    preview: invoices.slice(0, 25),
+    invoice_count: invoices.length,
+    total_amount: invoices.reduce((sum, row) => Math.round((sum + (Number(row.total_amount || 0) || 0)) * 100) / 100, 0),
+  };
+}
+
+router.get('/tenants/overview', async (req, res) => {
+  try {
+    const overview = await Promise.resolve(pgTenantDb.listTenantsOverview(req.session.userId));
+    res.json(overview);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load tenants.' });
+  }
+});
+
+router.post('/tenants/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = saveTenantUploadFile(req.file);
+    res.json({ success: true, file });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not upload file.' });
+  }
+});
+
+router.post('/tenants/records/:id/import-invoices-excel/sheets', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Please choose an excel file first.' });
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true, raw: false });
+    res.json({ sheets: Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not read excel file.' });
+  }
+});
+
+router.post('/tenants/records/:id/import-invoices-excel/preview', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Please choose an excel file first.' });
+    const parsed = parseTenantInvoiceImportSheet(req.file.buffer, req.body.sheet);
+    res.json({
+      success: true,
+      sheet: parsed.sheet,
+      invoice_count: Number(parsed.invoice_count || 0),
+      total_amount: Number(parsed.total_amount || 0),
+      preview: parsed.preview || [],
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview tenant invoices.' });
+  }
+});
+
+router.post('/tenants/records/:id/import-invoices-excel', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Please choose an excel file first.' });
+    const parsed = parseTenantInvoiceImportSheet(req.file.buffer, req.body.sheet);
+    const result = await Promise.resolve(pgTenantDb.importTenantInvoiceRows(req.session.userId, req.params.id, parsed.invoices));
+    res.json({
+      success: true,
+      imported: Number(result.imported || 0),
+      sheet: parsed.sheet,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not import tenant invoices.' });
+  }
+});
+
+router.post('/tenants/buildings', async (req, res) => {
+  try {
+    const building = await Promise.resolve(pgTenantDb.createTenantBuilding(req.session.userId, req.body || {}));
+    res.json({ success: true, building });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create building.' });
+  }
+});
+
+router.put('/tenants/buildings/:id', async (req, res) => {
+  try {
+    const building = await Promise.resolve(pgTenantDb.updateTenantBuilding(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, building });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update building.' });
+  }
+});
+
+router.delete('/tenants/buildings/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantBuilding(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete building.' });
+  }
+});
+
+router.post('/tenants/buildings/:id/rooms', async (req, res) => {
+  try {
+    const room = await Promise.resolve(pgTenantDb.createTenantRoom(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, room });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create room.' });
+  }
+});
+
+router.put('/tenants/rooms/:id', async (req, res) => {
+  try {
+    const room = await Promise.resolve(pgTenantDb.updateTenantRoom(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, room });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update room.' });
+  }
+});
+
+router.delete('/tenants/rooms/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantRoom(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete room.' });
+  }
+});
+
+router.post('/tenants/records', async (req, res) => {
+  try {
+    const tenant = await Promise.resolve(pgTenantDb.createTenantRecord(req.session.userId, req.body || {}));
+    res.json({ success: true, tenant });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create tenant.' });
+  }
+});
+
+router.put('/tenants/records/:id', async (req, res) => {
+  try {
+    const tenant = await Promise.resolve(pgTenantDb.updateTenantRecord(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, tenant });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update tenant.' });
+  }
+});
+
+router.delete('/tenants/records/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantRecord(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete tenant.' });
+  }
+});
+
+router.post('/tenants/records/:id/invoices', async (req, res) => {
+  try {
+    const invoice = await Promise.resolve(pgTenantDb.createOrUpdateTenantInvoice(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, invoice });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save invoice.' });
+  }
+});
+
+router.post('/tenants/buildings/:id/invoices/bulk', async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgTenantDb.bulkCreateTenantInvoices(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate bulk invoices.' });
+  }
+});
+
+router.get('/tenants/buildings/:id/invoice-month-share-links', async (req, res) => {
+  try {
+    const links = await Promise.resolve(pgTenantDb.listTenantInvoiceMonthShareLinks(
+      req.session.userId,
+      req.params.id,
+      req.query.month || req.query.invoice_month || ''
+    ));
+    res.json({ success: true, links });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load month share links.' });
+  }
+});
+
+router.post('/tenants/buildings/:id/invoice-month-share-links', async (req, res) => {
+  try {
+    const link = await Promise.resolve(pgTenantDb.createTenantInvoiceMonthShareLink(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, link });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create month share link.' });
+  }
+});
+
+router.get('/tenants/invoices/:id/share-links', async (req, res) => {
+  try {
+    const links = await Promise.resolve(pgTenantDb.listTenantInvoiceShareLinks(req.session.userId, req.params.id));
+    res.json({ success: true, links });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load invoice share links.' });
+  }
+});
+
+router.post('/tenants/invoices/:id/share-links', async (req, res) => {
+  try {
+    const link = await Promise.resolve(pgTenantDb.createTenantInvoiceShareLink(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, link });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create invoice share link.' });
+  }
+});
+
+router.delete('/tenants/invoice-share-links/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantInvoiceShareLink(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete invoice share link.' });
+  }
+});
+
+router.delete('/tenants/invoice-month-share-links/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantInvoiceMonthShareLink(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete month share link.' });
+  }
+});
+
+router.delete('/tenants/invoices/:id', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgTenantDb.deleteTenantInvoice(req.session.userId, req.params.id));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete invoice.' });
   }
 });
 

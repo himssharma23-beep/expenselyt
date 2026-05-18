@@ -477,6 +477,7 @@ let dividePaidBy = 'self';
 function canAccessTab(tab) {
   if (_userRole === 'admin') return true;
   if (tab === 'admin') return false;
+  if (tab === 'tenants') return _accessiblePages.includes('tenants') || _accessiblePages.includes('societies');
   if (tab === 'ailookup') return _accessiblePages.includes(tab) && (_aiLookupAccessModes.offline || _aiLookupAccessModes.online);
   return _accessiblePages.includes(tab);
 }
@@ -966,10 +967,17 @@ async function deleteOwnAccount() {
   window.location.href = res.redirect || '/login';
 }
 
-function switchTab(tab) {
+async function switchTab(tab) {
   if (!canAccessTab(tab)) {
     toast('You do not have access to this page. Please upgrade your plan.', 'error');
     return;
+  }
+  if (currentTab === 'videos' && tab !== 'videos') {
+    if (typeof window.flushVideoPlaybackProgressWithTimeout === 'function') {
+      try { await window.flushVideoPlaybackProgressWithTimeout(1200); } catch (_err) {}
+    } else if (typeof window.flushVideoPlaybackProgress === 'function') {
+      try { await window.flushVideoPlaybackProgress(); } catch (_err) {}
+    }
   }
   currentTab = tab;
   selectedFriend = null;
@@ -1011,12 +1019,20 @@ function loadTab() {
   else if (currentTab === 'emi') loadEMI();
   else if (currentTab === 'reports') loadReports();
   else if (currentTab === 'trips') loadTrips();
+  else if (currentTab === 'videos') {
+    if (typeof loadVideosPage === 'function') loadVideosPage();
+    else toast('Videos page is not loaded. Please refresh.', 'error');
+  }
   else if (currentTab === 'emitracker') loadEmiTracker();
   else if (currentTab === 'friendemis') loadFriendEmiTracker();
   else if (currentTab === 'creditcards') loadCreditCards();
   else if (currentTab === 'banks') loadBankAccounts();
   else if (currentTab === 'planner') loadPlanner();
   else if (currentTab === 'societies') loadSocieties();
+  else if (currentTab === 'tenants') {
+    if (typeof loadTenantsPage === 'function') loadTenantsPage();
+    else toast('Tenants page is not loaded. Please refresh.', 'error');
+  }
   else if (currentTab === 'schoolkids') loadSchoolKids();
   else if (currentTab === 'tracker') loadTracker();
   else if (currentTab === 'habittracker') loadHabitTracker();
@@ -1074,9 +1090,11 @@ function getNotificationTargetTab(item) {
     divide: 'divide',
     livesplit: 'livesplit',
     trips: 'trips',
+    videos: 'videos',
     reports: 'reports',
     planner: 'planner',
     societies: 'societies',
+    tenants: 'tenants',
     schoolkids: 'schoolkids',
     tracker: 'tracker',
     recurring: 'recurring',
@@ -2215,7 +2233,7 @@ async function previewExcel() {
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th><th>Type</th></tr></thead>
         <tbody>${data.preview.map(r => `<tr>
-          <td>${r.purchase_date}</td><td>${r.item_name}</td>
+          <td>${fmtDate(r.purchase_date)}</td><td>${r.item_name}</td>
           <td class="td-m">${fmtCur(r.amount)}</td>
           <td><span class="badge ${r.is_extra?'b-extra':'b-fair'}">${r.is_extra?'Extra':'Regular'}</span></td>
         </tr>`).join('')}</tbody>
@@ -6708,6 +6726,146 @@ function tripFilteredRows() {
   });
 }
 
+function tripCardTone(status, index = 0) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'completed') return 'amber';
+  if (normalized === 'upcoming' || normalized === 'ongoing' || normalized === 'pending') return 'blue';
+  return ['green', 'blue', 'amber', 'violet'][index % 4];
+}
+
+function tripTransportIcon(icon) {
+  const glyphs = {
+    plane: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 16l20-4-20-4 5 4-1 4 4-2 12 2-12 2-4-2 1 4z"/></svg>',
+    train: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="3" width="12" height="13" rx="2"/><path d="M8 7h8M9 20l3-3 3 3M8 16h.01M16 16h.01"/></svg>',
+    bus: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="12" rx="2"/><path d="M8 16v2M16 16v2M7 19h10M7 8h10"/></svg>',
+    bike: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M6 17l4-8h4l4 8M10 9l2 8M12 9l-2-3"/></svg>',
+    car: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16l1.5-5h11L19 16"/><path d="M4 16h16v3H4z"/><circle cx="7.5" cy="19" r="1.5"/><circle cx="16.5" cy="19" r="1.5"/></svg>',
+    ship: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-8 7 8H5z"/><path d="M4 17c2 2 4 2 6 0 2 2 4 2 6 0 2 2 4 2 4 2"/><path d="M12 7V4"/></svg>',
+    family: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="2.5"/><circle cx="16" cy="9" r="2"/><path d="M5.5 18a3.5 3.5 0 0 1 7 0M13 18a3 3 0 0 1 6 0"/></svg>',
+    office: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16"/><path d="M7 20V6h10v14"/><path d="M10 10h4M10 13h4"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6-5.4 6-11a6 6 0 1 0-12 0c0 5.6 6 11 6 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+  };
+  return glyphs[icon] || glyphs.pin;
+}
+
+function tripRowIconGlyph(trip) {
+  const transport = String(trip?.transport_mode || '').toLowerCase();
+  const category = String(trip?.category || '').toLowerCase();
+  if (transport.includes('flight') || transport.includes('plane') || transport.includes('air')) return tripTransportIcon('plane');
+  if (transport.includes('train') || transport.includes('rail') || transport.includes('metro')) return tripTransportIcon('train');
+  if (transport.includes('bus') || transport.includes('coach')) return tripTransportIcon('bus');
+  if (transport.includes('bike') || transport.includes('cycle') || transport.includes('scooter') || transport.includes('motorcycle')) return tripTransportIcon('bike');
+  if (transport.includes('car') || transport.includes('cab') || transport.includes('taxi') || transport.includes('auto')) return tripTransportIcon('car');
+  if (transport.includes('ship') || transport.includes('boat') || transport.includes('cruise') || transport.includes('ferry')) return tripTransportIcon('ship');
+  if (category.includes('family')) return tripTransportIcon('family');
+  if (category.includes('office') || category.includes('work') || category.includes('business')) return tripTransportIcon('office');
+  return tripTransportIcon('pin');
+}
+
+function tripCategoryChip(category) {
+  const value = String(category || '').trim();
+  if (!value) return '';
+  const normalized = value.toLowerCase();
+  const palette = normalized.includes('family')
+    ? ['#FFF1CF', '#D48A00']
+    : normalized.includes('office')
+      ? ['#E7F0FF', '#2E63D2']
+      : ['#E8F4EC', '#2D8A62'];
+  return `<span class="trip-ledger-inline-chip" style="background:${palette[0]};color:${palette[1]}">${escHtml(value.replace(/\btrip\b/i, '').trim() || value)}</span>`;
+}
+
+function tripMemberInitials(members = [], maxVisible = 3) {
+  const list = (members || []).map((member) => {
+    const name = String(member?.member_name || member || '').trim();
+    if (!name) return null;
+    const parts = name.split(/\s+/).filter(Boolean);
+    const initials = parts.slice(0, 2).map((part) => part[0]?.toUpperCase() || '').join('') || name.slice(0, 1).toUpperCase();
+    return { name, initials };
+  }).filter(Boolean);
+  const visible = list.slice(0, maxVisible);
+  const extra = Math.max(0, list.length - visible.length);
+  return `
+    <div class="trip-ledger-avatar-stack">
+      ${visible.map((item) => `<span class="trip-ledger-avatar" title="${escHtml(item.name)}">${escHtml(item.initials)}</span>`).join('')}
+      ${extra ? `<span class="trip-ledger-avatar trip-ledger-avatar-more">+${extra}</span>` : ''}
+    </div>`;
+}
+
+let _tripRowMenuTripId = null;
+
+function tripFindListItem(tripId) {
+  return (_tripsFiltered || _trips || []).find((trip) => String(trip?.id) === String(tripId)) || null;
+}
+
+function tripRowMenuItems(trip) {
+  const canEditTrip = !!(trip.isOwner || trip.userPermission !== 'view');
+  return `
+    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'share');closeTripRowMenu()">&#128257; Share trip</button>` : ''}
+    ${canEditTrip ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'itinerary');closeTripRowMenu()">&#9776; Add itinerary</button>` : ''}
+    <button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'pdf');closeTripRowMenu()">&#128196; Download PDF</button>
+    ${canEditTrip ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'settle');closeTripRowMenu()">&#8377; Settle trip</button>` : ''}
+    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'edit');closeTripRowMenu()">&#9998; Edit trip</button>` : ''}
+    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item danger" onclick="handleTripRowAction(${trip.id}, 'delete');closeTripRowMenu()">&#128465; Delete trip</button>` : ''}`;
+}
+
+function tripRowMenuDocumentClick(event) {
+  const menu = document.getElementById('tripRowFloatingMenu');
+  if (menu?.contains(event.target)) return;
+  if (event.target?.closest?.('.trip-ledger-more-btn')) return;
+  closeTripRowMenu();
+}
+
+function closeTripRowMenu() {
+  const menu = document.getElementById('tripRowFloatingMenu');
+  if (menu) menu.remove();
+  _tripRowMenuTripId = null;
+  document.removeEventListener('click', tripRowMenuDocumentClick, true);
+  window.removeEventListener('resize', closeTripRowMenu);
+  window.removeEventListener('scroll', closeTripRowMenu, true);
+}
+
+function toggleTripRowMenu(event, tripId) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const trigger = event?.currentTarget || event?.target?.closest?.('.trip-ledger-more-btn');
+  if (!trigger) return;
+  if (String(_tripRowMenuTripId) === String(tripId)) {
+    closeTripRowMenu();
+    return;
+  }
+  closeTripRowMenu();
+  const trip = tripFindListItem(tripId);
+  if (!trip) return;
+  const menu = document.createElement('div');
+  menu.id = 'tripRowFloatingMenu';
+  menu.className = 'trip-ledger-menu-list trip-ledger-floating-menu';
+  menu.innerHTML = tripRowMenuItems(trip);
+  document.body.appendChild(menu);
+  const rect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let left = rect.left;
+  if (left + menuRect.width > window.innerWidth - 12) left = window.innerWidth - menuRect.width - 12;
+  left = Math.max(12, left);
+  let top = rect.bottom + 6;
+  if (top + menuRect.height > window.innerHeight - 12) top = Math.max(12, rect.top - menuRect.height - 6);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  _tripRowMenuTripId = tripId;
+  window.setTimeout(() => {
+    document.addEventListener('click', tripRowMenuDocumentClick, true);
+  }, 0);
+  window.addEventListener('resize', closeTripRowMenu);
+  window.addEventListener('scroll', closeTripRowMenu, true);
+}
+
+function tripRowActionMenu(trip) {
+  return `
+    <div class="trip-ledger-row-actions">
+      <button type="button" class="trip-ledger-open-btn" onclick="openTripDetail(${trip.id})"><span>&#128194;</span> Open</button>
+      <button type="button" class="trip-ledger-more-btn" aria-label="Trip actions" onclick="toggleTripRowMenu(event, ${trip.id})">&#8942;</button>
+    </div>`;
+}
+
 async function loadTrips() {
   const data = await api('/api/trips');
   _trips = data?.trips || [];
@@ -6746,58 +6904,45 @@ function renderTripList() {
   const displayMember = tripsFilters.member || 'all';
   const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
 
-  const tripActionButtons = (trip) => {
-    const canEditTrip = !!(trip.isOwner || trip.userPermission !== 'view');
-    return `
-    <div class="trip-table-actions trip-table-actions-desktop" role="group" aria-label="Trip actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
-      <button type="button" class="btn btn-s btn-sm" onclick="openTripDetail(${trip.id})">Open</button>
-      <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)" style="min-width:128px">
-        <option value="">More</option>
-        ${trip.isOwner ? '<option value="share">Share trip</option>' : ''}
-        ${canEditTrip ? '<option value="itinerary">Add itinerary</option>' : ''}
-        <option value="pdf">Download PDF</option>
-        ${canEditTrip ? '<option value="settle">Settle trip</option>' : ''}
-        ${trip.isOwner ? '<option value="edit">Edit trip</option>' : ''}
-        ${trip.isOwner ? '<option value="delete">Delete trip</option>' : ''}
-      </select>
-    </div>
-    <div class="trip-table-actions-mobile">
-      <select class="fi trip-action-select" aria-label="Trip actions" onchange="handleTripRowAction(${trip.id}, this.value, this)">
-        <option value="">Actions</option>
-        <option value="view">View details</option>
-        ${trip.isOwner ? '<option value="share">Share trip</option>' : ''}
-        ${canEditTrip ? '<option value="itinerary">Add itinerary</option>' : ''}
-        <option value="pdf">Download PDF</option>
-        ${canEditTrip ? '<option value="settle">Settle trip</option>' : ''}
-        ${trip.isOwner ? '<option value="edit">Edit trip</option>' : ''}
-        ${trip.isOwner ? '<option value="delete">Delete trip</option>' : ''}
-      </select>
-    </div>`;
-  };
-
   const tableRows = pageRows.map((trip) => {
     const startText = trip.start_date ? fmtDate(trip.start_date) : '-';
     const endText = trip.end_date ? fmtDate(trip.end_date) : '-';
     const datesText = trip.start_date && trip.end_date
-      ? `${startText} to ${endText}`
+      ? `${startText}<br>${endText}`
       : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
     const countdownText = tripStartsInLabel(trip.start_date);
     const displayAmount = tripDisplayAmount(trip, displayMember);
     const isShared = trip.is_owner === false || trip.isOwner === false;
+    const nights = trip.start_date && trip.end_date
+      ? Math.max(1, Math.round((new Date(`${normalizeInputDate(trip.end_date)}T00:00:00`).getTime() - new Date(`${normalizeInputDate(trip.start_date)}T00:00:00`).getTime()) / 86400000))
+      : 0;
     const sharedMeta = isShared
-      ? `<div style="margin-top:4px;font-size:12px;color:var(--blue);font-weight:700">Shared by ${escHtml(trip.owner_name || 'Owner')} &middot; ${escHtml(String(trip.userPermission || 'view'))} access</div>`
+      ? `<div style="margin-top:5px;font-size:12px;color:var(--blue);font-weight:700">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>`
       : '';
+    const tone = tripCardTone(trip.status, 0);
     return `
       <tr>
-        <td class="trip-actions-cell" style="width:1%;white-space:nowrap">${tripActionButtons(trip)}</td>
-        <td style="min-width:150px">
-          <button class="btn-d" style="font-weight:700;color:var(--green);text-align:left">${escHtml(trip.destination || trip.name || '-')}</button>
-          ${sharedMeta}
+        <td class="trip-actions-cell" style="width:160px;min-width:160px;white-space:nowrap">${tripRowActionMenu(trip)}</td>
+        <td style="min-width:250px">
+          <div class="trip-ledger-destination-cell">
+            <span class="trip-ledger-row-icon trip-ledger-row-icon-${tone}">${tripRowIconGlyph(trip)}</span>
+            <div style="min-width:0">
+              <div style="font-size:15px;font-weight:800;color:#1E6B49">${escHtml(trip.destination || trip.name || '-')}</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                ${tripCategoryChip(trip.category)}
+                ${countdownText ? `<span class="trip-ledger-inline-chip" style="background:#E1F4EA;color:#267453">&#9702; ${escHtml(countdownText)}</span>` : ''}
+              </div>
+              ${sharedMeta}
+            </div>
+          </div>
         </td>
-        <td style="min-width:180px;white-space:normal;line-height:1.35">${escHtml(datesText)}${countdownText ? `<div style="margin-top:4px;font-size:12px;font-weight:700;color:var(--green)">${escHtml(countdownText)}</div>` : ''}</td>
-        <td class="td-m" style="font-weight:700;color:var(--green);min-width:150px">${fmtCur(displayAmount)}</td>
-        <td style="min-width:120px">${tripStatusBadge(trip.status)}</td>
-        <td style="min-width:180px;max-width:220px;color:var(--t2);white-space:normal;line-height:1.35">${escHtml(tripMembersPreview(trip.members) || '-')}</td>
+        <td style="min-width:145px;white-space:normal;line-height:1.35;color:var(--t2)">
+          <div>${datesText}</div>
+          <div style="margin-top:4px;font-size:12px;color:var(--t3)">${nights ? `${nights} night${nights !== 1 ? 's' : ''}` : '-'}</div>
+        </td>
+        <td class="td-m" style="font-weight:800;color:#1E6B49;min-width:160px">${fmtCur(displayAmount)}</td>
+        <td style="min-width:135px">${tripStatusBadge(trip.status)}</td>
+        <td style="min-width:150px">${tripMemberInitials(trip.members, 3)}</td>
       </tr>
     `;
   }).join('');
@@ -6819,65 +6964,83 @@ function renderTripList() {
     : '';
 
   document.getElementById('main').innerHTML = `
-    <div class="tab-content">
-      <div class="trip-page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-        <div>
-          <div style="font-size:22px;font-weight:800">My Trips</div>
-          <div style="font-size:13px;color:var(--t2);margin-top:3px">Track your own trips and any trips shared with you, including members, distance, and spend.</div>
+    <div class="tab-content trip-ledger-page">
+      <div class="trip-ledger-banner">
+        <div class="trip-ledger-brand">
+          <div class="trip-ledger-brand-title">TripLedger</div>
+          <div class="trip-ledger-brand-sub">Travel expense tracker</div>
         </div>
-        <div class="trip-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">PDF</button>
-          <button class="btn btn-s" onclick="showTripExcelImport()">Import Excel</button>
+        <div class="trip-ledger-banner-actions">
+          <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">&#128196; PDF</button>
+          <button class="btn btn-s" onclick="showTripExcelImport()">&#128194; Import Excel</button>
           <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">
-        <div class="card" style="padding:14px 16px">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Total Trips</div>
-          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.length}</div>
+      <div class="trip-ledger-head-copy">
+        <div style="font-size:22px;font-weight:900;color:var(--t1)">My Trips</div>
+        <div style="font-size:13px;color:var(--t2);margin-top:4px">Track your own trips and any trips shared with you, including members, distance, and spend.</div>
+      </div>
+
+      <div class="trip-ledger-stats">
+        <div class="trip-ledger-stat-card trip-ledger-stat-green">
+          <div class="trip-ledger-stat-icon">&#9702;</div>
+          <div class="trip-ledger-stat-label">Total Trips</div>
+          <div class="trip-ledger-stat-value">${filtered.length}</div>
+          <div class="trip-ledger-stat-meta">all time</div>
         </div>
-        <div class="card" style="padding:14px 16px">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Upcoming / Ongoing</div>
-          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div>
+        <div class="trip-ledger-stat-card trip-ledger-stat-blue">
+          <div class="trip-ledger-stat-icon">&#128197;</div>
+          <div class="trip-ledger-stat-label">Upcoming / Ongoing</div>
+          <div class="trip-ledger-stat-value">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div>
+          <div class="trip-ledger-stat-meta">planned ahead</div>
         </div>
-        <div class="card" style="padding:14px 16px">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Completed</div>
-          <div style="font-size:22px;font-weight:800;line-height:1.1">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div>
+        <div class="trip-ledger-stat-card trip-ledger-stat-amber">
+          <div class="trip-ledger-stat-icon">&#10003;</div>
+          <div class="trip-ledger-stat-label">Completed</div>
+          <div class="trip-ledger-stat-value">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div>
+          <div class="trip-ledger-stat-meta">trips done</div>
         </div>
-        <div class="card" style="padding:14px 16px">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Tracked Spend</div>
-          <div style="font-size:22px;font-weight:800;line-height:1.1;color:var(--green)">${fmtCur(totalSpend)}</div>
+        <div class="trip-ledger-stat-card trip-ledger-stat-violet">
+          <div class="trip-ledger-stat-icon">&#8377;</div>
+          <div class="trip-ledger-stat-label">Tracked Spend</div>
+          <div class="trip-ledger-stat-value" style="color:#7B45F2">${fmtCur(totalSpend)}</div>
+          <div class="trip-ledger-stat-meta">total expenditure</div>
         </div>
       </div>
 
-      <div class="card" style="margin-bottom:14px;padding:14px 16px">
-        <div class="trip-filters-grid" style="display:grid;grid-template-columns:1.2fr repeat(4,minmax(160px,.9fr));gap:10px;align-items:end">
+      <div class="card trip-ledger-filter-card">
+        <div class="trip-ledger-filter-grid">
           <label class="fl" style="margin:0;font-size:12px">Search
-            <input id="tripsSearchInput" class="fi" style="height:44px" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
+            <input id="tripsSearchInput" class="fi trip-ledger-filter-input" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
           </label>
           <label class="fl" style="margin:0;font-size:12px">Status
-            <select class="fi" style="height:44px" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
+            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
           </label>
           <label class="fl" style="margin:0;font-size:12px">Category
-            <select class="fi" style="height:44px" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
+            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
           </label>
           <label class="fl" style="margin:0;font-size:12px">Transport
-            <select class="fi" style="height:44px" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
+            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
           </label>
-          <label class="fl" style="margin:0;font-size:12px">Member share
-            <select class="fi" style="height:44px" onchange="setTripsFilter('member', this.value)">${tripOptionsHtml(memberOptions, tripsFilters.member, true, 'All members')}</select>
-          </label>
+          <button class="btn btn-g trip-ledger-clear-btn" onclick="tripsFilters={search:'',status:'all',category:'all',transport:'all',member:'all'};tripsPage=1;renderTripList()">&#9711; Clear</button>
         </div>
       </div>
 
       ${pageRows.length ? `
-        <div class="card">
+        <div class="card trip-ledger-table-card">
+          <div class="trip-ledger-table-head">
+            <div>
+              <div style="font-size:18px;font-weight:800;color:var(--t1)">All Trips</div>
+              <div style="font-size:12px;color:var(--t3);margin-top:3px">Sorted by most recent first</div>
+            </div>
+            <span class="badge" style="padding:6px 12px;background:#F4F6F6;color:#8B9297;font-weight:700">${filtered.length} trip${filtered.length !== 1 ? 's' : ''}</span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th style="width:156px;min-width:156px">Actions</th>
+                  <th style="width:160px;min-width:160px">Actions</th>
                   <th>Destination</th>
                   <th>Dates</th>
                   <th class="td-m">Total Expenditure</th>
@@ -6899,9 +7062,23 @@ function renderTripList() {
       ${pagination}
     </div>
   `;
+
+  if (preserveTripSearchFocus) {
+    const nextInput = document.getElementById('tripsSearchInput');
+    if (nextInput) {
+      nextInput.focus();
+      if (preservedTripSearchSelection) {
+        const nextLength = nextInput.value.length;
+        const startSel = Math.min(preservedTripSearchSelection.start, nextLength);
+        const endSel = Math.min(preservedTripSearchSelection.end, nextLength);
+        nextInput.setSelectionRange(startSel, endSel);
+      }
+    }
+  }
 }
 
 function handleTripRowAction(tripId, action, el) {
+  if (el && typeof el.removeAttribute === 'function') el.removeAttribute('open');
   if (!action) return;
   if (action === 'view') openTripDetail(tripId);
   else if (action === 'share') showTripShareModal(tripId);
@@ -6910,7 +7087,6 @@ function handleTripRowAction(tripId, action, el) {
   else if (action === 'settle') showTripSettlementModal(tripId);
   else if (action === 'edit') showTripModal(tripId);
   else if (action === 'delete') tripDelete(tripId);
-  if (el) el.value = '';
 }
 
 async function openTripDetail(tripId) {
@@ -8442,7 +8618,7 @@ async function showFriendsShareModal() {
             <div style="color:var(--em);word-break:break-all;line-height:1.5">${url}</div>
             <button class="btn-d" style="color:var(--red);flex-shrink:0;margin-left:8px" onclick="deleteShareLink(${l.id})" title="Delete link">x</button>
           </div>
-          <div style="color:var(--t3);line-height:1.5">${expired ? '! Expired' : l.expires_at ? `Expires ${l.expires_at}` : 'No expiry'} - ${l.view_count} views</div>
+          <div style="color:var(--t3);line-height:1.5">${expired ? '! Expired' : l.expires_at ? `Expires ${fmtDate(l.expires_at)}` : 'No expiry'} - ${l.view_count} views</div>
           ${!expired ? `<button class="btn btn-g btn-sm" style="margin-top:6px" onclick="navigator.clipboard.writeText('${url}').then(()=>toast('Copied!','success'))">Copy Link</button>` : ''}
         </div>`;
       }).join('');
@@ -8557,6 +8733,8 @@ const ALL_PAGES = [
   { key: 'banks',       label: 'Bank Accounts' },
   { key: 'planner',     label: 'Planner' },
   { key: 'societies',   label: 'Societies' },
+  { key: 'tenants',     label: 'Tenants' },
+  { key: 'videos',      label: 'Videos' },
   { key: 'schoolkids',  label: 'School Kids' },
   { key: 'tracker',     label: 'Daily Tracker' },
   { key: 'habittracker', label: 'Habit Tracker' },
@@ -10765,7 +10943,7 @@ function buildEmiMonthlySummaryHtml() {
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
       <div>
         <div style="font-weight:600;font-size:13px">${escHtml(i.name)}</div>
-        <div style="font-size:11px;opacity:0.65">${i.due_date}${i.tag ? ' &middot; ' + escHtml(i.tag) : ''}</div>
+        <div style="font-size:11px;opacity:0.65">${fmtDate(i.due_date)}${i.tag ? ' &middot; ' + escHtml(i.tag) : ''}</div>
       </div>
       <div style="text-align:right">
         <div style="font-family:var(--mono);font-size:13px;font-weight:600">${fmtCur(i.emi_amount)}</div>
@@ -12239,7 +12417,7 @@ async function previewCcExcelImport() {
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Description</th><th class="td-m">Amount</th></tr></thead>
         <tbody>${data.preview.map(r => `<tr>
-          <td>${r.txn_date}</td>
+          <td>${fmtDate(r.txn_date)}</td>
           <td>${escHtml(r.description)}</td>
           <td class="td-m">${fmtCur(r.amount)}</td>
         </tr>`).join('')}</tbody>

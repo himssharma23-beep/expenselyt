@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Shared tenant invoice from Expense Lite AI.">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Shared Invoice - Expense Lite AI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--em:#145A3C;--em-l:#1D7A52;--em-xl:#E2F5EC;--bg:#F4F5F7;--t1:#1A1D24;--t2:#5F6B7A;--t3:#9CA3B0;--br:#E4E7EC;--white:#FFF;--mono:'JetBrains Mono',monospace;--ff:'DM Sans',sans-serif}
+body{font-family:var(--ff);background:var(--bg);color:var(--t1);min-height:100vh}
+.topbar{background:var(--em);padding:14px 24px;display:flex;align-items:center;gap:10px}
+.topbar-title{font-size:17px;font-weight:800;color:#fff}
+.topbar-sub{font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.12em;text-transform:uppercase}
+.page{max-width:860px;margin:0 auto;padding:28px 18px}
+.hero{background:linear-gradient(135deg,#175C3C 0%,#1E6B49 100%);border-radius:22px;padding:20px 22px;color:#fff;box-shadow:0 18px 40px rgba(20,90,60,.16)}
+.hero-kicker{font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.72)}
+.hero-title{margin-top:6px;font-size:30px;font-weight:800;line-height:1.05}
+.hero-sub{margin-top:6px;font-size:14px;color:rgba(255,255,255,.8)}
+.hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+.hero-card{border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:11px 12px;background:rgba(255,255,255,.08)}
+.hero-card-label{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.72)}
+.hero-card-value{margin-top:5px;font-size:14px;font-weight:800;font-family:var(--mono)}
+.stack{display:grid;gap:14px;margin-top:16px}
+.card{background:var(--white);border:1px solid var(--br);border-radius:18px;padding:16px 18px;box-shadow:0 10px 28px rgba(17,24,39,.05)}
+.card-title{font-size:16px;font-weight:800}
+.card-sub{margin-top:4px;font-size:12px;color:var(--t3)}
+.meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.meta-item{border:1px solid #edf2ef;border-radius:14px;padding:12px;background:#fbfdfc}
+.meta-label{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--t3)}
+.meta-value{margin-top:6px;font-size:14px;font-weight:700}
+.meta-value.money{font-family:var(--mono)}
+table{width:100%;border-collapse:collapse}
+td{padding:11px 12px;border-top:1px solid #edf2ef;font-size:14px;vertical-align:top}
+tr:first-child td{border-top:none}
+td:first-child{width:36%;color:var(--t2)}
+td:last-child{font-weight:600}
+.money{font-family:var(--mono)}
+.charges{display:grid;gap:8px}
+.charge-row{display:flex;justify-content:space-between;gap:12px}
+.badge{display:inline-flex;align-items:center;border:1px solid #dbeadf;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;background:#f4fbf6;color:#1E6B49}
+.footer{text-align:center;padding:26px 18px 34px;font-size:12px;color:var(--t3)}
+.loading,.error{padding:70px 16px;text-align:center;color:var(--t3)}
+.error h2{color:#C94444;margin-bottom:8px}
+@media (max-width:720px){.hero-grid,.meta-grid{grid-template-columns:1fr 1fr}.hero-title{font-size:24px}.page{padding:18px 14px}}
+@media (max-width:560px){.hero-grid,.meta-grid{grid-template-columns:1fr}.topbar{padding:12px 14px}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <img src="/favicon.svg" alt="Expense Lite AI logo" width="34" height="34">
+  <div>
+    <div class="topbar-title">Expense Lite AI</div>
+    <div class="topbar-sub">Shared Tenant Invoice</div>
+  </div>
+</div>
+<div class="page">
+  <div id="content" class="loading">Loading invoice...</div>
+</div>
+<div class="footer">Read-only invoice link from Expense Lite AI</div>
+<script>
+const token = location.pathname.split('/ti/')[1]?.split('/')[0] || '';
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtDate = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return esc(raw);
+  return parsed.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+};
+const monthLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return esc(raw || '-');
+  const [year, month] = raw.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
+};
+
+function renderInvoice(data) {
+  const invoice = data?.invoice || {};
+  const otherChargeItems = Array.isArray(invoice.other_charge_items) ? invoice.other_charge_items.filter((item) => Number(item?.amount || 0) !== 0) : [];
+  const rows = [
+    ['Invoice Month', monthLabel(invoice.invoice_month)],
+    ['Rent', `<span class="money">${money(invoice.rent_amount_snapshot || 0)}</span>`],
+  ];
+  if (Number(invoice.electricity_units_used || 0) !== 0 || Number(invoice.electricity_amount || 0) !== 0) {
+    rows.push(['Electricity', `${Number(invoice.electricity_units_used || 0)} units × <span class="money">${money(invoice.electricity_unit_price_snapshot || 0)}</span> = <span class="money">${money(invoice.electricity_amount || 0)}</span>`]);
+  }
+  if (Number(invoice.sewerage_charge_snapshot || 0) !== 0) rows.push(['Sewerage', `<span class="money">${money(invoice.sewerage_charge_snapshot || 0)}</span>`]);
+  if (Number(invoice.water_charge_snapshot || 0) !== 0) rows.push(['Water', `<span class="money">${money(invoice.water_charge_snapshot || 0)}</span>`]);
+  if (Number(invoice.cleaning_charge_snapshot || 0) !== 0) rows.push(['Cleaning', `<span class="money">${money(invoice.cleaning_charge_snapshot || 0)}</span>`]);
+  rows.push(['Status', esc(String(invoice.payment_status || 'pending').replace(/_/g, ' ')) + (String(invoice.payment_status || '') === 'pending' ? '' : ` - <span class="money">${money(invoice.paid_amount || 0)}</span>`)]);
+  if (otherChargeItems.length || Number(invoice.other_charges_snapshot || 0) !== 0) {
+    rows.push(['Other Charges', otherChargeItems.length
+      ? `<div class="charges">${otherChargeItems.map((item) => `<div class="charge-row"><span>${esc(item.detail || 'Other charge')}</span><strong class="money">${money(item.amount || 0)}</strong></div>`).join('')}</div>`
+      : `<span class="money">${money(invoice.other_charges_snapshot || 0)}</span>`]);
+  }
+  rows.push(['Total', `<span class="money">${money(invoice.total_amount || 0)}</span>`]);
+
+  document.getElementById('content').innerHTML = `
+    <div class="hero">
+      <div class="hero-kicker">Tenant Invoice</div>
+      <div class="hero-title">${esc(invoice.tenant_name_snapshot || 'Tenant')}</div>
+      <div class="hero-sub">${esc(invoice.building_name_snapshot || '')} - ${esc(invoice.room_label_snapshot || '')}</div>
+      <div class="hero-grid">
+        <div class="hero-card">
+          <div class="hero-card-label">Invoice Month</div>
+          <div class="hero-card-value">${esc(monthLabel(invoice.invoice_month))}</div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-card-label">Due Date</div>
+          <div class="hero-card-value">${esc(fmtDate(invoice.due_date))}</div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-card-label">Status</div>
+          <div class="hero-card-value">${esc(String(invoice.payment_status || 'pending').replace(/_/g, ' '))}</div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-card-label">Total</div>
+          <div class="hero-card-value">${money(invoice.total_amount || 0)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <div class="card-title">Invoice Details</div>
+        <div class="card-sub">Shared by ${esc(data.owner_name || 'Owner')}${data.expires_at ? ` • Expires ${esc(fmtDate(data.expires_at))}` : ''}</div>
+        <table style="margin-top:14px">
+          <tbody>
+            ${rows.map((row) => `<tr><td>${row[0]}</td><td>${row[1]}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-title">Snapshot Info</div>
+        <div class="meta-grid">
+          <div class="meta-item">
+            <div class="meta-label">Contact</div>
+            <div class="meta-value">${esc(invoice.contact_number_snapshot || '-')}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Previous Units</div>
+            <div class="meta-value money">${esc(String(invoice.previous_electricity_units ?? 0))}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Current Units</div>
+            <div class="meta-value money">${esc(String(invoice.current_electricity_units ?? 0))}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Units Used</div>
+            <div class="meta-value money">${esc(String(invoice.electricity_units_used ?? 0))}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadInvoice() {
+  try {
+    const response = await fetch(`/api/public/tenant-invoice/${encodeURIComponent(token)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Link not found');
+    renderInvoice(data);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="error"><h2>Link not available</h2><p>${esc(err.message || 'This invoice link is invalid or expired.')}</p></div>`;
+  }
+}
+
+loadInvoice();
+</script>
+</body>
+</html>

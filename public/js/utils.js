@@ -241,7 +241,7 @@ function fmtDate(d) {
   if (!d) return "";
   const raw = String(d).trim();
   let dt;
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
   if (m) {
     dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   } else {

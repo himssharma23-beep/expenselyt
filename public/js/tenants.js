@@ -1,0 +1,2492 @@
+let _tenantOverview = null;
+let _tenantLoading = false;
+let _selectedTenantBuildingId = null;
+let _selectedTenantRecordId = null;
+let _tenantPageTab = 'overview';
+let _tenantModalFiles = { address_proof: null, photo_attachment: null, proof_attachments: [] };
+let _tenantReportFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', room_id: 'all' };
+let _tenantInvoiceFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', activity: 'active' };
+let _tenantInvoicePager = { page: 1, pageSize: 10 };
+let _tenantReportPager = { tenantPage: 1, roomPage: 1, monthPage: 1, pageSize: 8 };
+
+function tenantLocalDateValue(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function tenantCurrentMonthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function tenantMonthLabel(monthKey) {
+  const raw = String(monthKey || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return raw || '-';
+  const date = new Date(`${raw}-01T00:00:00`);
+  return date.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+function tenantDateLabel(value) {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  if (!raw) return '-';
+  if (typeof fmtDate === 'function') {
+    const formatted = fmtDate(raw);
+    if (formatted && formatted !== raw) return formatted;
+  }
+  const directMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (directMatch) {
+    const date = new Date(`${directMatch[1]}T00:00:00`);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function tenantPaginationPages(current, total) {
+  if (typeof paginationPages === 'function') return paginationPages(current, total);
+  const pages = [];
+  if (total <= 7) {
+    for (let i = 1; i <= total; i += 1) pages.push(i);
+    return pages;
+  }
+  pages.push(1);
+  if (current > 3) pages.push('...');
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  for (let i = start; i <= end; i += 1) pages.push(i);
+  if (current < total - 2) pages.push('...');
+  pages.push(total);
+  return pages;
+}
+
+function tenantPaginate(list = [], page = 1, pageSize = 10) {
+  const total = Array.isArray(list) ? list.length : 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, Number(page || 1)), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    total,
+    totalPages,
+    page: safePage,
+    start,
+    end: Math.min(start + pageSize, total),
+    items: (list || []).slice(start, start + pageSize),
+  };
+}
+
+function tenantPagerHtml({ page, totalPages, start, end, total, onPage }) {
+  if (!(totalPages > 1)) return '';
+  const pageCall = (targetPage) => String(onPage || 'void(0)').includes('__PAGE__')
+    ? String(onPage).replace(/__PAGE__/g, String(targetPage))
+    : `${onPage}(${targetPage})`;
+  return `
+    <div class="pagination" style="padding:12px 0 2px">
+      <div class="pg-meta">
+        <span class="pg-range">${start + 1}-${end} of ${total}</span>
+      </div>
+      <div class="pg-controls">
+        <button class="pg-nav" ${page <= 1 ? 'disabled' : ''} onclick="${pageCall(page - 1)}">Prev</button>
+        <div class="pg-pages">
+          ${tenantPaginationPages(page, totalPages).map((p) => p === '...'
+            ? '<span class="pg-ellipsis">...</span>'
+            : `<button class="pg-num ${p === page ? 'active' : ''}" onclick="${pageCall(p)}">${p}</button>`).join('')}
+        </div>
+        <button class="pg-nav" ${page >= totalPages ? 'disabled' : ''} onclick="${pageCall(page + 1)}">Next</button>
+      </div>
+    </div>`;
+}
+
+function tenantInputDateValue(value, fallback = '') {
+  if (!value) return fallback;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return tenantLocalDateValue(value);
+  }
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  const directMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (directMatch) return directMatch[1];
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return tenantLocalDateValue(parsed);
+  return fallback;
+}
+
+function tenantNum(value) {
+  return Math.round((Number(value || 0) || 0) * 100) / 100;
+}
+
+function tenantDefaultStartDate() {
+  return tenantLocalDateValue(new Date());
+}
+
+function tenantIsInactive(record) {
+  if (!record) return false;
+  if (!record.is_active) return true;
+  const endDate = String(record.end_date || '').trim();
+  if (endDate && endDate <= tenantDefaultStartDate()) return true;
+  return false;
+}
+
+function tenantDefaultShareExpiryDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 7);
+  return tenantLocalDateValue(date);
+}
+
+function tenantDefaultName(value) {
+  return String(value || '').trim() || 'Tenant';
+}
+
+function tenantInitials(name) {
+  return String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('') || 'T';
+}
+
+function tenantRoomTone(room) {
+  return room?.active_tenant ? 'green' : 'amber';
+}
+
+function tenantBuildingTone(index) {
+  return ['green', 'blue', 'amber', 'green'][index % 4] || 'green';
+}
+
+function tenantChip(text, tone = 'neutral') {
+  return `<span class="tenant-ledger-chip tenant-ledger-chip-${tone}">${escHtml(text || '')}</span>`;
+}
+
+function tenantStatCard(label, value, meta, tone, icon) {
+  return `
+    <div class="tenant-ledger-stat-card tenant-ledger-stat-${tone}">
+      <span class="tenant-ledger-stat-icon">${icon}</span>
+      <div class="tenant-ledger-stat-label">${label}</div>
+      <div class="tenant-ledger-stat-value">${value}</div>
+      <div class="tenant-ledger-stat-meta">${meta}</div>
+    </div>`;
+}
+
+function tenantFindBuilding(buildingId) {
+  return (_tenantOverview?.buildings || []).find((item) => String(item.id) === String(buildingId)) || null;
+}
+
+function tenantFindRecord(recordId) {
+  return (_tenantOverview?.tenants || []).find((item) => String(item.id) === String(recordId)) || null;
+}
+
+function tenantFindRoom(roomId) {
+  return (_tenantOverview?.rooms || []).find((item) => String(item.id) === String(roomId)) || null;
+}
+
+function tenantCurrentChargeProfile(record, dateValue = tenantDefaultStartDate()) {
+  const history = Array.isArray(record?.charge_history) ? record.charge_history : [];
+  const target = String(dateValue || '').trim();
+  return history.find((row) => {
+    const from = String(row.effective_from || '');
+    const to = String(row.effective_to || '');
+    if (!from || from > target) return false;
+    if (to && to < target) return false;
+    return true;
+  }) || history[0] || null;
+}
+
+function tenantChargeHistoryHtml(history = []) {
+  const list = Array.isArray(history) ? history : [];
+  if (!list.length) {
+    return '<div style="font-size:12px;color:var(--t3)">No historic charge slabs saved yet.</div>';
+  }
+  return list.map((row) => `
+    <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr 1fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--br)">
+      <div>
+        <div style="font-size:12px;font-weight:800;color:var(--t1)">${escHtml(tenantDateLabel(row.effective_from))} ${row.effective_to ? `to ${escHtml(tenantDateLabel(row.effective_to))}` : 'onwards'}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:4px">Opening units ${Number(row.opening_electricity_units || 0)}</div>
+      </div>
+      <div style="font-size:12px;color:var(--t1)">Rent ${fmtCur(row.rent_amount || 0)}</div>
+      <div style="font-size:12px;color:var(--t1)">Unit ${fmtCur(row.electricity_unit_price || 0)}</div>
+      <div style="font-size:12px;color:var(--t1)">Sewerage ${fmtCur(row.sewerage_charge || 0)}</div>
+      <div style="font-size:12px;color:var(--t1)">Water ${fmtCur(row.water_charge || 0)} · Cleaning ${fmtCur(row.cleaning_charge || 0)}</div>
+    </div>`).join('');
+}
+
+function tenantInvoiceStatusLabel(status) {
+  const normalized = String(status || 'pending').trim().toLowerCase();
+  if (normalized === 'paid') return 'Paid';
+  if (normalized === 'partial_paid') return 'Partial Paid';
+  return 'Pending';
+}
+
+function tenantInvoiceStatusTone(status) {
+  const normalized = String(status || 'pending').trim().toLowerCase();
+  if (normalized === 'paid') return 'green';
+  if (normalized === 'partial_paid') return 'amber';
+  return 'neutral';
+}
+
+function tenantInvoiceTenantCell(invoice) {
+  const tenant = tenantFindRecord(invoice?.tenant_id);
+  const inactive = tenantIsInactive(tenant);
+  return `
+    <div style="display:grid;gap:4px">
+      <div>${escHtml(invoice?.tenant_name_snapshot || '-')}</div>
+      ${inactive ? `<div>${tenantChip(tenant?.end_date ? `Inactive · Ended ${tenantDateLabel(tenant.end_date)}` : 'Inactive', 'amber')}</div>` : ''}
+    </div>`;
+}
+
+function tenantInvoiceStatusOptions(selectedStatus) {
+  const current = String(selectedStatus || 'pending').trim().toLowerCase();
+  return [
+    ['pending', 'Pending'],
+    ['paid', 'Paid'],
+    ['partial_paid', 'Partial Paid'],
+  ].map(([value, label]) => `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function tenantInvoiceStatusButtons(invoice) {
+  const current = String(invoice?.payment_status || 'pending').trim().toLowerCase();
+  const statusIcons = {
+    pending: `
+      <svg class="tenant-status-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8"></circle>
+        <path d="M12 8v4l3 2"></path>
+      </svg>`,
+    paid: `
+      <svg class="tenant-status-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8"></circle>
+        <path d="m8.5 12 2.3 2.3 4.7-4.8"></path>
+      </svg>`,
+    partial_paid: `
+      <svg class="tenant-status-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4a8 8 0 1 1-8 8"></path>
+        <path d="M12 4v8H4"></path>
+      </svg>`,
+  };
+  return `
+    <div class="tenant-status-toggle">
+      ${[
+        ['pending', 'Pending'],
+        ['paid', 'Paid'],
+        ['partial_paid', 'Partial'],
+      ].map(([value, label]) => `
+        <button
+          type="button"
+          class="tenant-status-btn ${current === value ? `active ${value}` : ''}"
+          title="${label}"
+          aria-label="${label}"
+          onclick="updateTenantInvoiceStatusInline(${Number(invoice?.id || 0)}, '${value}')"
+        >${statusIcons[value] || ''}</button>
+      `).join('')}
+    </div>`;
+}
+
+function tenantActionIcon(name) {
+  const icons = {
+    invoice: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3h7l4 4v14H7z"></path>
+        <path d="M14 3v5h5"></path>
+        <path d="M10 12h5"></path>
+        <path d="M10 16h4"></path>
+      </svg>`,
+    import: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4v10"></path>
+        <path d="m8 10 4 4 4-4"></path>
+        <path d="M5 19h14"></path>
+      </svg>`,
+    view: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"></path>
+        <circle cx="12" cy="12" r="2.6"></circle>
+      </svg>`,
+    pdf: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3h7l4 4v14H7z"></path>
+        <path d="M14 3v5h5"></path>
+        <path d="M12 10v7"></path>
+        <path d="m9 14 3 3 3-3"></path>
+      </svg>`,
+    share: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 1 0-7l1.2-1.2a5 5 0 0 1 7 7L17 13"></path>
+        <path d="M14 11a5 5 0 0 1 0 7l-1.2 1.2a5 5 0 0 1-7-7L7 11"></path>
+      </svg>`,
+    edit: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m4 20 4.2-1 9.4-9.4a1.8 1.8 0 0 0 0-2.5l-.7-.7a1.8 1.8 0 0 0-2.5 0L5 15.8 4 20z"></path>
+        <path d="m13.5 7.5 3 3"></path>
+      </svg>`,
+    delete: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16"></path>
+        <path d="M9 7V4h6v3"></path>
+        <path d="M7 7l1 13h8l1-13"></path>
+        <path d="M10 11v6"></path>
+        <path d="M14 11v6"></path>
+      </svg>`,
+  };
+  return icons[name] || icons.edit;
+}
+
+function tenantInvoiceOtherChargeRows(items = []) {
+  const list = Array.isArray(items) && items.length ? items : [{ detail: '', amount: '' }];
+  return list.map((item, index) => `
+    <div class="fg tenant-invoice-other-row" data-index="${index}" style="margin-bottom:8px">
+      <label class="fl">Detail<input class="fi tenant-invoice-other-detail" value="${escHtml(item.detail || '')}" placeholder="Expense / adjustment"></label>
+      <label class="fl">Amount<input class="fi tenant-invoice-other-amount" type="number" step="0.01" value="${escHtml(item.amount === '' || item.amount == null ? '' : String(item.amount))}" placeholder="Amount"></label>
+    </div>`).join('');
+}
+
+function addTenantInvoiceOtherChargeRow() {
+  const wrap = document.getElementById('tenantInvoiceOtherRows');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantInvoiceOtherChargeRows([{ detail: '', amount: '' }]));
+}
+
+function tenantBulkRowOtherChargeRows(tenantId, items = []) {
+  const list = Array.isArray(items) && items.length ? items : [{ detail: '', amount: '' }];
+  return list.map((item) => `
+    <div class="tenant-bulk-other-row" data-tenant-id="${Number(tenantId)}" style="display:grid;grid-template-columns:minmax(160px,1.4fr) minmax(110px,.8fr) auto;gap:8px;margin-bottom:8px">
+      <input class="fi tenant-bulk-other-detail" value="${escHtml(item.detail || '')}" placeholder="Expense">
+      <input class="fi tenant-bulk-other-amount" type="number" step="0.01" value="${escHtml(item.amount === '' || item.amount == null ? '' : String(item.amount))}" placeholder="Amount">
+      <button class="btn btn-g btn-sm" style="color:var(--red)" onclick="removeTenantBulkOtherChargeRow(this)">Remove</button>
+    </div>`).join('');
+}
+
+function tenantBulkInvoicePriorInvoice(tenant, monthKey) {
+  const target = String(monthKey || '').trim();
+  const invoices = Array.isArray(tenant?.invoices) ? tenant.invoices : [];
+  const exact = invoices.find((invoice) => String(invoice.invoice_month || '') === target);
+  if (exact) return exact;
+  return invoices
+    .filter((invoice) => String(invoice.invoice_month || '') < target)
+    .sort((a, b) => String(b.invoice_month || '').localeCompare(String(a.invoice_month || '')) || Number(b.id) - Number(a.id))[0] || null;
+}
+
+function tenantBulkInvoiceChargeProfile(tenant, monthKey) {
+  return tenantCurrentChargeProfile(tenant, `${String(monthKey || tenantCurrentMonthKey())}-01`) || tenant || {};
+}
+
+function tenantBulkInvoiceOtherItems(tenantId) {
+  return [...document.querySelectorAll(`.tenant-bulk-other-row[data-tenant-id="${Number(tenantId)}"]`)]
+    .map((row) => {
+      const detail = row.querySelector('.tenant-bulk-other-detail')?.value?.trim() || '';
+      const amountRaw = row.querySelector('.tenant-bulk-other-amount')?.value || '';
+      const amount = amountRaw === '' ? 0 : Number(amountRaw);
+      if (!detail && !amount) return null;
+      return { detail, amount };
+    })
+    .filter(Boolean);
+}
+
+function tenantBulkInvoiceEstimate(tenant, monthKey) {
+  const tenantId = Number(tenant?.id || 0);
+  const profile = tenantBulkInvoiceChargeProfile(tenant, monthKey);
+  const priorInvoice = tenantBulkInvoicePriorInvoice(tenant, monthKey);
+  const previousUnits = priorInvoice ? Number(priorInvoice.current_electricity_units || 0) : Number(profile.opening_electricity_units || tenant?.opening_electricity_units || 0);
+  const currentUnits = Number(document.getElementById(`tenantBulkCurrentUnits_${tenantId}`)?.value || previousUnits);
+  const usedUnits = Math.max(0, currentUnits - previousUnits);
+  const electricityAmount = tenantNum(usedUnits * tenantNum(profile.electricity_unit_price || tenant?.electricity_unit_price || 0));
+  const otherItems = tenantBulkInvoiceOtherItems(tenantId);
+  const otherTotal = tenantNum(otherItems.reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
+  const total = tenantNum(
+    tenantNum(profile.rent_amount || tenant?.rent_amount || 0)
+    + tenantNum(profile.sewerage_charge || tenant?.sewerage_charge || 0)
+    + tenantNum(profile.water_charge || tenant?.water_charge || 0)
+    + tenantNum(profile.cleaning_charge || tenant?.cleaning_charge || 0)
+    + electricityAmount
+    + otherTotal
+  );
+  return { profile, previousUnits, currentUnits, usedUnits, electricityAmount, otherItems, otherTotal, total };
+}
+
+function updateTenantBulkInvoiceRow(tenantId) {
+  const tenant = tenantFindRecord(tenantId);
+  const monthKey = document.getElementById('tenantBulkInvoiceMonth')?.value || tenantCurrentMonthKey();
+  if (!tenant) return;
+  const estimate = tenantBulkInvoiceEstimate(tenant, monthKey);
+  const totalEl = document.getElementById(`tenantBulkEstimate_${Number(tenantId)}`);
+  const prevEl = document.getElementById(`tenantBulkPrevUnits_${Number(tenantId)}`);
+  if (totalEl) totalEl.textContent = fmtCur(estimate.total);
+  if (prevEl) prevEl.textContent = String(estimate.previousUnits);
+  const currentInput = document.getElementById(`tenantBulkCurrentUnits_${Number(tenantId)}`);
+  if (currentInput) currentInput.min = String(estimate.previousUnits);
+  const status = document.getElementById(`tenantBulkStatus_${Number(tenantId)}`)?.value || 'pending';
+  const paidWrap = document.getElementById(`tenantBulkPaidWrap_${Number(tenantId)}`);
+  if (paidWrap) paidWrap.style.display = status === 'partial_paid' ? '' : 'none';
+  updateTenantBulkInvoiceTotals();
+}
+
+function updateTenantBulkInvoiceTotals() {
+  const monthKey = document.getElementById('tenantBulkInvoiceMonth')?.value || tenantCurrentMonthKey();
+  const tenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(_selectedTenantBuildingId) && tenant.is_active);
+  const total = tenantNum(tenants.reduce((sum, tenant) => sum + tenantBulkInvoiceEstimate(tenant, monthKey).total, 0));
+  const totalEl = document.getElementById('tenantBulkInvoiceGrandTotal');
+  if (totalEl) totalEl.textContent = fmtCur(total);
+}
+
+function addTenantBulkOtherChargeRow(tenantId) {
+  const wrap = document.getElementById(`tenantBulkOtherWrap_${Number(tenantId)}`);
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantBulkRowOtherChargeRows(tenantId, [{ detail: '', amount: '' }]));
+}
+
+function removeTenantBulkOtherChargeRow(button) {
+  const row = button?.closest('.tenant-bulk-other-row');
+  const tenantId = Number(row?.dataset?.tenantId || 0);
+  row?.remove();
+  if (tenantId > 0 && !document.querySelector(`.tenant-bulk-other-row[data-tenant-id="${tenantId}"]`)) {
+    addTenantBulkOtherChargeRow(tenantId);
+  }
+  if (tenantId > 0) updateTenantBulkInvoiceRow(tenantId);
+}
+
+function setTenantPageTab(tab) {
+  _tenantPageTab = String(tab || 'overview');
+  renderTenantsPage();
+}
+
+function bindTenantsPageInteractions(main) {
+  if (!main) return;
+  main.querySelectorAll('[data-tenant-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setTenantPageTab(button.dataset.tenantTab || 'overview');
+    });
+  });
+}
+
+async function loadTenantsPage() {
+  _tenantLoading = true;
+  renderTenantsPage();
+  try {
+    const overview = await api('/api/tenants/overview');
+    if (overview?.error) {
+      _tenantOverview = { buildings: [], rooms: [], tenants: [], invoices: [], totals: {} };
+      toast(overview.error || 'Could not load tenants.', 'error');
+    } else {
+      _tenantOverview = overview;
+    }
+    const buildings = _tenantOverview?.buildings || [];
+    if (!_selectedTenantBuildingId && buildings.length) _selectedTenantBuildingId = buildings[0].id;
+    if (_selectedTenantBuildingId && !buildings.some((item) => String(item.id) === String(_selectedTenantBuildingId))) {
+      _selectedTenantBuildingId = buildings[0]?.id || null;
+    }
+    const selectedBuilding = tenantFindBuilding(_selectedTenantBuildingId);
+    const buildingTenants = (selectedBuilding?.rooms || []).map((room) => room.active_tenant).filter(Boolean);
+    if (!_selectedTenantRecordId && buildingTenants.length) _selectedTenantRecordId = buildingTenants[0].id;
+    if (_selectedTenantRecordId && !_tenantOverview?.tenants?.some((item) => String(item.id) === String(_selectedTenantRecordId))) {
+      _selectedTenantRecordId = buildingTenants[0]?.id || null;
+    }
+  } catch (error) {
+    console.error('loadTenantsPage failed', error);
+    _tenantOverview = _tenantOverview || { buildings: [], rooms: [], tenants: [], invoices: [], totals: {} };
+    toast('Could not load tenants.', 'error');
+  } finally {
+    _tenantLoading = false;
+    renderTenantsPage();
+  }
+}
+
+function openTenantBuilding(buildingId) {
+  _selectedTenantBuildingId = buildingId;
+  const selectedBuilding = tenantFindBuilding(buildingId);
+  const firstTenant = (selectedBuilding?.rooms || []).map((room) => room.active_tenant).find(Boolean);
+  _selectedTenantRecordId = firstTenant?.id || null;
+  renderTenantsPage();
+}
+
+function setTenantSelectedBuilding(buildingId) {
+  openTenantBuilding(buildingId);
+}
+
+function openTenantRecord(recordId) {
+  _selectedTenantRecordId = recordId;
+  renderTenantsPage();
+}
+
+function setTenantReportFilter(key, value) {
+  _tenantReportFilters = {
+    ..._tenantReportFilters,
+    [key]: String(value ?? '').trim(),
+  };
+  _tenantReportPager.tenantPage = 1;
+  _tenantReportPager.roomPage = 1;
+  _tenantReportPager.monthPage = 1;
+  renderTenantsPage();
+}
+
+function resetTenantReportFilters() {
+  _tenantReportFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', room_id: 'all' };
+  _tenantReportPager.tenantPage = 1;
+  _tenantReportPager.roomPage = 1;
+  _tenantReportPager.monthPage = 1;
+  renderTenantsPage();
+}
+
+function setTenantInvoiceFilter(key, value) {
+  _tenantInvoiceFilters = {
+    ..._tenantInvoiceFilters,
+    [key]: String(value ?? '').trim(),
+  };
+  _tenantInvoicePager.page = 1;
+  renderTenantsPage();
+}
+
+function resetTenantInvoiceFilters() {
+  _tenantInvoiceFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', activity: 'active' };
+  _tenantInvoicePager.page = 1;
+  renderTenantsPage();
+}
+
+function tenantInvoiceSortKey(monthKey) {
+  const raw = String(monthKey || '').trim();
+  return /^\d{4}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function tenantMonthYearFromKey(monthKey) {
+  return Number(String(monthKey || '').slice(0, 4)) || 0;
+}
+
+function tenantPdfHelper() {
+  if (typeof _P === 'undefined') {
+    toast('PDF generator is not available right now.', 'error');
+    return null;
+  }
+  return _P;
+}
+
+function getTenantBuildingInvoices(building) {
+  return (_tenantOverview?.invoices || []).filter((invoice) => {
+    const tenant = tenantFindRecord(invoice.tenant_id);
+    return String(tenant?.building_id || '') === String(building?.id || '');
+  });
+}
+
+function getTenantMonthInvoices(building, monthKey) {
+  const month = tenantInvoiceSortKey(monthKey);
+  if (!month) return [];
+  return getTenantBuildingInvoices(building)
+    .filter((invoice) => tenantInvoiceSortKey(invoice.invoice_month) === month)
+    .sort((a, b) => String(a.room_label_snapshot || '').localeCompare(String(b.room_label_snapshot || '')) || String(a.tenant_name_snapshot || '').localeCompare(String(b.tenant_name_snapshot || '')) || Number(a.id) - Number(b.id));
+}
+
+function getTenantFilteredInvoices(building, filters = _tenantInvoiceFilters) {
+  const buildingTenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(building?.id || ''));
+  const buildingInvoices = getTenantBuildingInvoices(building);
+  const years = [...new Set(buildingInvoices.map((invoice) => tenantMonthYearFromKey(invoice.invoice_month)).filter(Boolean))].sort((a, b) => b - a);
+  const months = [...new Set(buildingInvoices.map((invoice) => tenantInvoiceSortKey(invoice.invoice_month)).filter(Boolean))].sort();
+  const activeYear = filters.year === 'all' || years.includes(Number(filters.year)) ? filters.year : 'all';
+  const activeTenantId = filters.tenant_id === 'all' || buildingTenants.some((tenant) => String(tenant.id) === String(filters.tenant_id)) ? filters.tenant_id : 'all';
+  const activeActivity = ['all', 'active', 'inactive'].includes(String(filters.activity || '').trim()) ? String(filters.activity || 'all').trim() : 'all';
+  const activeMonthFrom = months.includes(filters.month_from) ? filters.month_from : '';
+  const activeMonthTo = months.includes(filters.month_to) ? filters.month_to : '';
+  const invoices = buildingInvoices.filter((invoice) => {
+    const tenant = tenantFindRecord(invoice.tenant_id);
+    if (activeYear !== 'all' && tenantMonthYearFromKey(invoice.invoice_month) !== Number(activeYear)) return false;
+    if (activeTenantId !== 'all' && String(invoice.tenant_id) !== String(activeTenantId)) return false;
+    if (activeActivity === 'active' && tenantIsInactive(tenant)) return false;
+    if (activeActivity === 'inactive' && !tenantIsInactive(tenant)) return false;
+    const monthKey = tenantInvoiceSortKey(invoice.invoice_month);
+    if (activeMonthFrom && monthKey && monthKey < activeMonthFrom) return false;
+    if (activeMonthTo && monthKey && monthKey > activeMonthTo) return false;
+    return true;
+  }).sort((a, b) => String(b.invoice_month || '').localeCompare(String(a.invoice_month || '')) || Number(b.id) - Number(a.id));
+  return { buildingTenants, buildingInvoices, invoices, years, months, activeYear, activeTenantId, activeActivity, activeMonthFrom, activeMonthTo };
+}
+
+function setTenantInvoicePage(page) {
+  _tenantInvoicePager.page = Math.max(1, Number(page || 1));
+  renderTenantsPage();
+}
+
+function setTenantReportPage(section, page) {
+  const keyMap = {
+    tenant: 'tenantPage',
+    room: 'roomPage',
+    month: 'monthPage',
+  };
+  const key = keyMap[String(section || '').trim()];
+  if (!key) return;
+  _tenantReportPager[key] = Math.max(1, Number(page || 1));
+  renderTenantsPage();
+}
+
+function getTenantReportSnapshot(building) {
+  const buildingRooms = building?.rooms || [];
+  const roomMap = new Map(buildingRooms.map((room) => [String(room.id), room]));
+  const buildingTenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(building?.id || ''));
+  const buildingInvoices = getTenantBuildingInvoices(building);
+  const years = [...new Set(buildingInvoices.map((invoice) => tenantMonthYearFromKey(invoice.invoice_month)).filter(Boolean))].sort((a, b) => b - a);
+  const months = [...new Set(buildingInvoices.map((invoice) => tenantInvoiceSortKey(invoice.invoice_month)).filter(Boolean))].sort();
+  const activeYear = _tenantReportFilters.year === 'all' || years.includes(Number(_tenantReportFilters.year))
+    ? _tenantReportFilters.year
+    : 'all';
+  const activeTenantId = _tenantReportFilters.tenant_id === 'all' || buildingTenants.some((tenant) => String(tenant.id) === String(_tenantReportFilters.tenant_id))
+    ? _tenantReportFilters.tenant_id
+    : 'all';
+  const activeRoomId = _tenantReportFilters.room_id === 'all' || buildingRooms.some((room) => String(room.id) === String(_tenantReportFilters.room_id))
+    ? _tenantReportFilters.room_id
+    : 'all';
+  const activeMonthFrom = months.includes(_tenantReportFilters.month_from) ? _tenantReportFilters.month_from : '';
+  const activeMonthTo = months.includes(_tenantReportFilters.month_to) ? _tenantReportFilters.month_to : '';
+  const filteredInvoices = buildingInvoices.filter((invoice) => {
+    const tenant = tenantFindRecord(invoice.tenant_id);
+    if (activeYear !== 'all' && tenantMonthYearFromKey(invoice.invoice_month) !== Number(activeYear)) return false;
+    if (activeTenantId !== 'all' && String(invoice.tenant_id) !== String(activeTenantId)) return false;
+    if (activeRoomId !== 'all' && String(tenant?.room_id || '') !== String(activeRoomId)) return false;
+    const monthKey = tenantInvoiceSortKey(invoice.invoice_month);
+    if (activeMonthFrom && monthKey && monthKey < activeMonthFrom) return false;
+    if (activeMonthTo && monthKey && monthKey > activeMonthTo) return false;
+    return true;
+  }).sort((a, b) => String(b.invoice_month || '').localeCompare(String(a.invoice_month || '')) || Number(b.id) - Number(a.id));
+  const totalAmount = filteredInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0);
+  const totalRent = filteredInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.rent_amount_snapshot || 0), 0);
+  const totalElectricity = filteredInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.electricity_amount || 0), 0);
+  const totalOther = filteredInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.other_charges_snapshot || 0), 0);
+  const invoiceCount = filteredInvoices.length;
+  const avgInvoice = invoiceCount ? tenantNum(totalAmount / invoiceCount) : 0;
+  const tenantTotals = buildingTenants.map((tenant) => {
+    const total = filteredInvoices
+      .filter((invoice) => String(invoice.tenant_id) === String(tenant.id))
+      .reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0);
+    return { tenant, total: tenantNum(total) };
+  }).filter((entry) => entry.total > 0).sort((a, b) => b.total - a.total);
+  const roomTotals = buildingRooms.map((room) => {
+    const total = filteredInvoices
+      .filter((invoice) => {
+        const tenant = tenantFindRecord(invoice.tenant_id);
+        return String(tenant?.room_id || '') === String(room.id);
+      })
+      .reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0);
+    return { room, total: tenantNum(total) };
+  }).filter((entry) => entry.total > 0).sort((a, b) => b.total - a.total);
+  const monthRows = [...new Set(filteredInvoices.map((invoice) => tenantInvoiceSortKey(invoice.invoice_month)).filter(Boolean))]
+    .sort((a, b) => b.localeCompare(a))
+    .map((monthKey) => {
+      const monthInvoices = filteredInvoices.filter((invoice) => tenantInvoiceSortKey(invoice.invoice_month) === monthKey);
+      return {
+        monthKey,
+        invoice_count: monthInvoices.length,
+        total: tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0)),
+        electricity: tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.electricity_amount || 0), 0)),
+      };
+    });
+  return {
+    roomMap,
+    buildingTenants,
+    buildingRooms,
+    filteredInvoices,
+    years,
+    months,
+    activeYear,
+    activeTenantId,
+    activeRoomId,
+    activeMonthFrom,
+    activeMonthTo,
+    totalAmount,
+    totalRent,
+    totalElectricity,
+    totalOther,
+    invoiceCount,
+    avgInvoice,
+    tenantTotals,
+    roomTotals,
+    monthRows,
+  };
+}
+
+function downloadTenantInvoicePdf(invoiceId) {
+  const pdf = tenantPdfHelper();
+  if (!pdf) return;
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const doc = pdf.init(false);
+  const title = `Tenant Invoice - ${invoice.tenant_name_snapshot || 'Tenant'}`;
+  let y = pdf.header(doc, title, tenantMonthLabel(invoice.invoice_month));
+  y = pdf.cards(doc, y, [
+    { label: 'Total', value: pdf.cur(invoice.total_amount || 0), color: 'green' },
+    { label: 'Status', value: tenantInvoiceStatusLabel(invoice.payment_status), color: '' },
+    { label: 'Due Date', value: pdf.dt(invoice.due_date), color: '' },
+  ]);
+  y = pdf.section(doc, y, 'Invoice Snapshot');
+  const body = [
+    ['Tenant', invoice.tenant_name_snapshot || 'Tenant'],
+    ['Building', invoice.building_name_snapshot || '-'],
+    ['Room', invoice.room_label_snapshot || '-'],
+    ['Invoice Month', tenantMonthLabel(invoice.invoice_month)],
+    ['Rent', pdf.cur(invoice.rent_amount_snapshot || 0)],
+  ];
+  if (Number(invoice.electricity_units_used || 0) !== 0 || Number(invoice.electricity_amount || 0) !== 0) {
+    body.push(['Electricity', `${Number(invoice.electricity_units_used || 0)} units * ${pdf.cur(invoice.electricity_unit_price_snapshot || 0)} = ${pdf.cur(invoice.electricity_amount || 0)}`]);
+  }
+  if (Number(invoice.sewerage_charge_snapshot || 0) !== 0) body.push(['Sewerage', pdf.cur(invoice.sewerage_charge_snapshot || 0)]);
+  if (Number(invoice.water_charge_snapshot || 0) !== 0) body.push(['Water', pdf.cur(invoice.water_charge_snapshot || 0)]);
+  if (Number(invoice.cleaning_charge_snapshot || 0) !== 0) body.push(['Cleaning', pdf.cur(invoice.cleaning_charge_snapshot || 0)]);
+  body.push(['Status', `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'pending' ? '' : ` - ${pdf.cur(invoice.paid_amount || 0)}`}`]);
+  const chargeItems = Array.isArray(invoice.other_charge_items) ? invoice.other_charge_items.filter((item) => tenantNum(item.amount || 0) !== 0) : [];
+  if (chargeItems.length) {
+    body.push(['Other Charges', chargeItems.map((item) => `${item.detail || 'Other charge'}: ${pdf.cur(item.amount || 0)}`).join(' | ')]);
+  } else if (Number(invoice.other_charges_snapshot || 0) !== 0) {
+    body.push(['Other Charges', pdf.cur(invoice.other_charges_snapshot || 0)]);
+  }
+  body.push(['Previous Units', Number(invoice.previous_electricity_units || 0)]);
+  body.push(['Current Units', Number(invoice.current_electricity_units || 0)]);
+  body.push(['Total', pdf.cur(invoice.total_amount || 0)]);
+  if (invoice.notes) body.push(['Notes', invoice.notes]);
+  pdf.table(doc, y, [['Field', 'Value']], body, {
+    0: { cellWidth: 54, fontStyle: 'bold' },
+    1: { cellWidth: 118 },
+  });
+  pdf.save(doc, `Tenant Invoice ${invoice.tenant_name_snapshot || 'Tenant'} ${tenantMonthLabel(invoice.invoice_month)}`);
+}
+
+function downloadTenantReportPdf(buildingId = _selectedTenantBuildingId) {
+  const pdf = tenantPdfHelper();
+  if (!pdf) return;
+  const building = tenantFindBuilding(buildingId);
+  if (!building) { toast('Building not found.', 'error'); return; }
+  const snapshot = getTenantReportSnapshot(building);
+  const doc = pdf.init(true);
+  const subtitleParts = [];
+  if (snapshot.activeYear !== 'all') subtitleParts.push(`Year ${snapshot.activeYear}`);
+  if (snapshot.activeMonthFrom) subtitleParts.push(`From ${tenantMonthLabel(snapshot.activeMonthFrom)}`);
+  if (snapshot.activeMonthTo) subtitleParts.push(`To ${tenantMonthLabel(snapshot.activeMonthTo)}`);
+  if (snapshot.activeTenantId !== 'all') {
+    const tenant = tenantFindRecord(snapshot.activeTenantId);
+    if (tenant) subtitleParts.push(`Tenant ${tenant.tenant_name}`);
+  }
+  if (snapshot.activeRoomId !== 'all') {
+    const room = tenantFindRoom(snapshot.activeRoomId);
+    if (room) subtitleParts.push(`Room ${room.room_label}`);
+  }
+  let y = pdf.header(doc, `Tenant Report - ${building.name || 'Building'}`, subtitleParts.join(' · ') || 'All filters');
+  y = pdf.cards(doc, y, [
+    { label: 'Selected Total', value: pdf.cur(snapshot.totalAmount), color: 'green' },
+    { label: 'Rent Total', value: pdf.cur(snapshot.totalRent), color: '' },
+    { label: 'Electricity', value: pdf.cur(snapshot.totalElectricity), color: '' },
+    { label: 'Avg / Invoice', value: pdf.cur(snapshot.avgInvoice), color: '' },
+  ]);
+  y = pdf.section(doc, y, 'Monthly Breakdown');
+  y = pdf.table(doc, y, [['Month', 'Invoices', 'Electricity', 'Total']], snapshot.monthRows.map((row) => [
+    tenantMonthLabel(row.monthKey),
+    Number(row.invoice_count || 0),
+    pdf.cur(row.electricity),
+    pdf.cur(row.total),
+  ]), {
+    1: { halign: 'center', cellWidth: 25 },
+    2: { halign: 'right', cellWidth: 38 },
+    3: { halign: 'right', cellWidth: 40, fontStyle: 'bold' },
+  }, true);
+  y = pdf.section(doc, y, 'Tenant Totals');
+  y = pdf.table(doc, y, [['Tenant', 'Room', 'Total']], (snapshot.tenantTotals.length ? snapshot.tenantTotals : [{ tenant: { tenant_name: 'No rows' }, total: 0 }]).map((entry) => [
+    entry.tenant?.tenant_name || 'No rows',
+    entry.tenant ? (snapshot.roomMap.get(String(entry.tenant.room_id))?.room_label || '-') : '-',
+    entry.tenant ? pdf.cur(entry.total) : '-',
+  ]), {
+    2: { halign: 'right', cellWidth: 44, fontStyle: 'bold' },
+  }, true);
+  y = pdf.section(doc, y, 'Room Totals');
+  pdf.table(doc, y, [['Room', 'Floor / Type', 'Total']], (snapshot.roomTotals.length ? snapshot.roomTotals : [{ room: { room_label: 'No rows', floor_label: '-' }, total: 0 }]).map((entry) => [
+    entry.room?.room_label || 'No rows',
+    entry.room ? (entry.room.floor_label || entry.room.room_type || '-') : '-',
+    entry.room ? pdf.cur(entry.total) : '-',
+  ]), {
+    2: { halign: 'right', cellWidth: 44, fontStyle: 'bold' },
+  }, true);
+  pdf.save(doc, `Tenant Report ${building.name || 'Building'}`);
+}
+
+function downloadTenantMonthInvoicesPdf(buildingId = _selectedTenantBuildingId, monthKey = tenantCurrentMonthKey()) {
+  const pdf = tenantPdfHelper();
+  if (!pdf) return;
+  const building = tenantFindBuilding(buildingId);
+  if (!building) { toast('Building not found.', 'error'); return; }
+  const monthInvoices = getTenantMonthInvoices(building, monthKey);
+  if (!monthInvoices.length) { toast('No invoices found for this month.', 'warning'); return; }
+  const totalAmount = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0));
+  const totalPaid = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.paid_amount || 0), 0));
+  const pendingAmount = tenantNum(totalAmount - totalPaid);
+  const doc = pdf.init(true);
+  let y = pdf.header(doc, `Tenant Invoices - ${building.name || 'Building'}`, tenantMonthLabel(monthKey));
+  y = pdf.cards(doc, y, [
+    { label: 'Invoices', value: String(monthInvoices.length), color: '' },
+    { label: 'Total', value: pdf.cur(totalAmount), color: 'green' },
+    { label: 'Paid', value: pdf.cur(totalPaid), color: '' },
+    { label: 'Pending', value: pdf.cur(pendingAmount), color: '' },
+  ]);
+  y = pdf.section(doc, y, 'Monthly Invoice Snapshot');
+  pdf.table(doc, y, [['Tenant', 'Room', 'Electricity', 'Status', 'Due Date', 'Total']], monthInvoices.map((invoice) => [
+    invoice.tenant_name_snapshot || 'Tenant',
+    invoice.room_label_snapshot || '-',
+    `${Number(invoice.electricity_units_used || 0)} units • ${pdf.cur(invoice.electricity_amount || 0)}`,
+    `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'partial_paid' ? ` • ${pdf.cur(invoice.paid_amount || 0)}` : invoice.payment_status === 'paid' ? ` • ${pdf.cur(invoice.paid_amount || invoice.total_amount || 0)}` : ''}`,
+    pdf.dt(invoice.due_date),
+    pdf.cur(invoice.total_amount || 0),
+  ]), {
+    2: { cellWidth: 44 },
+    3: { cellWidth: 42 },
+    4: { cellWidth: 28 },
+    5: { halign: 'right', cellWidth: 30, fontStyle: 'bold' },
+  }, true);
+  pdf.save(doc, `Tenant Invoices ${building.name || 'Building'} ${tenantMonthLabel(monthKey)}`);
+}
+
+function renderTenantReportsTab(building) {
+  const snapshot = getTenantReportSnapshot(building);
+  const {
+    roomMap, buildingTenants, buildingRooms, years, months,
+    activeYear, activeTenantId, activeRoomId, activeMonthFrom, activeMonthTo,
+    totalAmount, totalRent, totalElectricity, totalOther, invoiceCount, avgInvoice,
+    tenantTotals, roomTotals, monthRows,
+  } = snapshot;
+  const pagedTenantTotals = tenantPaginate(tenantTotals, _tenantReportPager.tenantPage, _tenantReportPager.pageSize);
+  const pagedRoomTotals = tenantPaginate(roomTotals, _tenantReportPager.roomPage, _tenantReportPager.pageSize);
+  const pagedMonthRows = tenantPaginate(monthRows, _tenantReportPager.monthPage, _tenantReportPager.pageSize);
+  _tenantReportPager.tenantPage = pagedTenantTotals.page;
+  _tenantReportPager.roomPage = pagedRoomTotals.page;
+  _tenantReportPager.monthPage = pagedMonthRows.page;
+
+  return `
+    <div class="tenant-ledger-stack">
+      <div class="card tenant-ledger-section-card">
+        <div class="tenant-ledger-section-head">
+          <div>
+            <div class="tenant-ledger-section-title">Reports Filters</div>
+            <div class="tenant-ledger-section-sub">Check totals by year, month range, tenant, or room.</div>
+          </div>
+          <button class="btn btn-s btn-sm" onclick="downloadTenantReportPdf(${Number(building?.id || 0)})">Report PDF</button>
+        </div>
+        <div class="tenant-ledger-report-filters">
+          <label class="fl">Year
+            <select class="fi" onchange="setTenantReportFilter('year', this.value)">
+              <option value="all" ${activeYear === 'all' ? 'selected' : ''}>All years</option>
+              ${years.map((year) => `<option value="${year}" ${String(activeYear) === String(year) ? 'selected' : ''}>${year}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">From Month
+            <select class="fi" onchange="setTenantReportFilter('month_from', this.value)">
+              <option value="" ${!activeMonthFrom ? 'selected' : ''}>Start</option>
+              ${months.map((month) => `<option value="${escHtml(month)}" ${activeMonthFrom === month ? 'selected' : ''}>${escHtml(tenantMonthLabel(month))}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">To Month
+            <select class="fi" onchange="setTenantReportFilter('month_to', this.value)">
+              <option value="" ${!activeMonthTo ? 'selected' : ''}>Till now</option>
+              ${months.map((month) => `<option value="${escHtml(month)}" ${activeMonthTo === month ? 'selected' : ''}>${escHtml(tenantMonthLabel(month))}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">Tenant
+            <select class="fi" onchange="setTenantReportFilter('tenant_id', this.value)">
+              <option value="all" ${activeTenantId === 'all' ? 'selected' : ''}>All tenants</option>
+              ${buildingTenants.map((tenant) => `<option value="${Number(tenant.id)}" ${String(activeTenantId) === String(tenant.id) ? 'selected' : ''}>${escHtml(tenant.tenant_name || 'Tenant')}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">Room
+            <select class="fi" onchange="setTenantReportFilter('room_id', this.value)">
+              <option value="all" ${activeRoomId === 'all' ? 'selected' : ''}>All rooms</option>
+              ${buildingRooms.map((room) => `<option value="${Number(room.id)}" ${String(activeRoomId) === String(room.id) ? 'selected' : ''}>${escHtml(room.room_label || 'Room')}</option>`).join('')}
+            </select>
+          </label>
+          <div class="fl" style="align-self:end">
+            <button class="btn btn-s btn-sm" onclick="resetTenantReportFilters()">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tenant-ledger-report-stats">
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-kicker">Selected Total</div>
+          <div class="tenant-ledger-report-value">${fmtCur(totalAmount)}</div>
+          <div class="tenant-ledger-section-sub">${invoiceCount} invoice snapshot${invoiceCount === 1 ? '' : 's'}</div>
+        </div>
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-kicker">Rent Total</div>
+          <div class="tenant-ledger-report-value">${fmtCur(totalRent)}</div>
+          <div class="tenant-ledger-section-sub">base rent in filtered rows</div>
+        </div>
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-kicker">Electricity Total</div>
+          <div class="tenant-ledger-report-value">${fmtCur(totalElectricity)}</div>
+          <div class="tenant-ledger-section-sub">meter-based spend</div>
+        </div>
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-kicker">Avg / Invoice</div>
+          <div class="tenant-ledger-report-value">${fmtCur(avgInvoice)}</div>
+          <div class="tenant-ledger-section-sub">including negative adjustments</div>
+        </div>
+      </div>
+
+      <div class="tenant-ledger-overview-grid">
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-head">
+            <div>
+              <div class="tenant-ledger-section-title">Tenant Totals</div>
+              <div class="tenant-ledger-section-sub">Till now for the selected filters</div>
+            </div>
+          </div>
+          <div class="tenant-ledger-report-list">
+            ${pagedTenantTotals.items.length ? pagedTenantTotals.items.map((entry) => `
+              <div class="tenant-ledger-report-row">
+                <div>
+                  <div class="tenant-ledger-room-title">${escHtml(entry.tenant.tenant_name || 'Tenant')}</div>
+                  <div class="tenant-ledger-room-sub">${escHtml(roomMap.get(String(entry.tenant.room_id))?.room_label || '-')}</div>
+                </div>
+                <div class="tenant-ledger-report-amount">${fmtCur(entry.total)}</div>
+              </div>`).join('') : '<div style="color:var(--t3);font-size:13px">No tenant totals for these filters.</div>'}
+          </div>
+          ${tenantPagerHtml({
+            page: pagedTenantTotals.page,
+            totalPages: pagedTenantTotals.totalPages,
+            start: pagedTenantTotals.start,
+            end: pagedTenantTotals.end,
+            total: pagedTenantTotals.total,
+            onPage: `setTenantReportPage('tenant', __PAGE__)`,
+          })}
+        </div>
+        <div class="card tenant-ledger-section-card">
+          <div class="tenant-ledger-section-head">
+            <div>
+              <div class="tenant-ledger-section-title">Room Totals</div>
+              <div class="tenant-ledger-section-sub">Till now for each room</div>
+            </div>
+          </div>
+          <div class="tenant-ledger-report-list">
+            ${pagedRoomTotals.items.length ? pagedRoomTotals.items.map((entry) => `
+              <div class="tenant-ledger-report-row">
+                <div>
+                  <div class="tenant-ledger-room-title">${escHtml(entry.room.room_label || 'Room')}</div>
+                  <div class="tenant-ledger-room-sub">${escHtml(entry.room.floor_label || entry.room.room_type || 'Room total till now')}</div>
+                </div>
+                <div class="tenant-ledger-report-amount">${fmtCur(entry.total)}</div>
+              </div>`).join('') : '<div style="color:var(--t3);font-size:13px">No room totals for these filters.</div>'}
+          </div>
+          ${tenantPagerHtml({
+            page: pagedRoomTotals.page,
+            totalPages: pagedRoomTotals.totalPages,
+            start: pagedRoomTotals.start,
+            end: pagedRoomTotals.end,
+            total: pagedRoomTotals.total,
+            onPage: `setTenantReportPage('room', __PAGE__)`,
+          })}
+        </div>
+      </div>
+
+      <div class="card tenant-ledger-section-card tenant-ledger-table-card">
+        <div class="tenant-ledger-section-head">
+          <div>
+            <div class="tenant-ledger-section-title">Monthly Breakdown</div>
+            <div class="tenant-ledger-section-sub">Year/month totals from invoice snapshots.</div>
+          </div>
+          <div class="tenant-ledger-section-sub">${fmtCur(totalOther)} other charges impact in selected rows</div>
+        </div>
+        <div class="tenant-ledger-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Invoices</th>
+                <th>Electricity</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${pagedMonthRows.items.length ? pagedMonthRows.items.map((row) => `
+                <tr>
+                  <td>${escHtml(tenantMonthLabel(row.monthKey))}</td>
+                  <td>${Number(row.invoice_count || 0)}</td>
+                  <td>${fmtCur(row.electricity)}</td>
+                  <td style="font-weight:800">${fmtCur(row.total)}</td>
+                </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--t3)">No report rows found for these filters.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        ${tenantPagerHtml({
+          page: pagedMonthRows.page,
+          totalPages: pagedMonthRows.totalPages,
+          start: pagedMonthRows.start,
+          end: pagedMonthRows.end,
+          total: pagedMonthRows.total,
+          onPage: `setTenantReportPage('month', __PAGE__)`,
+        })}
+      </div>
+    </div>`;
+}
+
+function renderTenantBuildingsRail(buildings = []) {
+  return buildings.map((building, index) => {
+    const active = String(building.id) === String(_selectedTenantBuildingId);
+    const tone = tenantBuildingTone(index);
+    return `
+      <button class="tenant-ledger-building-card tenant-ledger-building-${tone} ${active ? 'active' : ''}" onclick="openTenantBuilding(${Number(building.id)})">
+        <div class="tenant-ledger-building-head">
+          <div>
+            <div class="tenant-ledger-building-title">${escHtml(building.name || 'Building')}</div>
+            <div class="tenant-ledger-building-sub">${escHtml(building.address || 'Address not added')}</div>
+          </div>
+          <span class="tenant-ledger-room-pill">${Number(building.room_count || 0)} rooms</span>
+        </div>
+        <div class="tenant-ledger-building-chip-row">
+          ${tenantChip(`${Number(building.occupied_count || 0)} occupied`, 'green')}
+          ${tenantChip(`${Number(building.vacant_count || 0)} vacant`, 'amber')}
+        </div>
+      </button>`;
+  }).join('');
+}
+
+function renderTenantOverviewTab(building, selectedTenant) {
+  const rooms = building?.rooms || [];
+  const occupied = rooms.filter((room) => room.active_tenant);
+  const vacant = rooms.filter((room) => !room.active_tenant);
+  const tenants = occupied.map((room) => room.active_tenant).filter(Boolean);
+  const totalRent = occupied.reduce((sum, room) => sum + tenantNum(room.active_tenant?.rent_amount || room.default_rent || 0), 0);
+  const highestRent = Math.max(1, ...occupied.map((room) => tenantNum(room.active_tenant?.rent_amount || room.default_rent || 0)));
+  return `
+    <div class="tenant-ledger-overview-grid">
+      <div class="card tenant-ledger-section-card">
+        <div class="tenant-ledger-section-head">
+          <div>
+            <div class="tenant-ledger-section-title">Rooms</div>
+            <div class="tenant-ledger-section-sub">${rooms.length} rooms - ${occupied.length} occupied</div>
+          </div>
+          <button class="btn btn-p btn-sm" onclick="showTenantRoomModal()">+ Add Room</button>
+        </div>
+        <div class="tenant-ledger-overview-meter">
+          <div class="tenant-ledger-overview-meter-fill" style="width:${rooms.length ? Math.round((occupied.length / rooms.length) * 100) : 0}%"></div>
+        </div>
+        <div class="tenant-ledger-overview-split">
+          <div class="tenant-ledger-overview-metric">
+            <div class="tenant-ledger-overview-metric-label">Occupied</div>
+            <div class="tenant-ledger-overview-metric-value">${occupied.length}</div>
+          </div>
+          <div class="tenant-ledger-overview-metric">
+            <div class="tenant-ledger-overview-metric-label">Vacant</div>
+            <div class="tenant-ledger-overview-metric-value">${vacant.length}</div>
+          </div>
+        </div>
+        <div class="tenant-ledger-room-list tenant-ledger-room-list-compact">
+          ${rooms.length ? rooms.map((room) => `
+            <div class="tenant-ledger-room-row">
+              <div class="tenant-ledger-room-main">
+                <span class="tenant-ledger-room-icon tenant-ledger-room-icon-${tenantRoomTone(room)}">${room.active_tenant ? 'O' : 'V'}</span>
+                <div class="tenant-ledger-room-copy">
+                  <div class="tenant-ledger-room-title">${escHtml(room.room_label || 'Room')}</div>
+                  <div class="tenant-ledger-room-sub">${escHtml(room.floor_label || room.room_type || 'No floor/type')}</div>
+                  <div class="tenant-ledger-room-status ${room.active_tenant ? 'occupied' : 'vacant'}">${room.active_tenant ? `Occupied by ${escHtml(room.active_tenant.tenant_name || 'Tenant')}` : 'Vacant'}</div>
+                </div>
+              </div>
+              <div class="tenant-ledger-room-side">
+                <div class="tenant-ledger-room-rent">${fmtCur(room.default_rent || room.active_tenant?.rent_amount || 0)}/mo</div>
+                <div class="tenant-ledger-room-actions tenant-ledger-front-actions">
+                  <button class="trip-icon-btn" title="Edit Room" onclick="showTenantRoomModal(${Number(room.id)})">${tenantActionIcon('edit')}</button>
+                  <button class="trip-icon-btn danger" title="Delete Room" onclick="deleteTenantRoom(${Number(room.id)})">${tenantActionIcon('delete')}</button>
+                </div>
+              </div>
+            </div>`).join('') : '<div style="color:var(--t3);font-size:13px">No rooms yet.</div>'}
+        </div>
+      </div>
+      <div class="card tenant-ledger-section-card">
+        <div class="tenant-ledger-section-head">
+          <div>
+            <div class="tenant-ledger-section-title">Tenants</div>
+            <div class="tenant-ledger-section-sub">${tenants.length} active tenant${tenants.length === 1 ? '' : 's'} in this building</div>
+          </div>
+          ${tenants.length ? `<button class="btn btn-s btn-sm" onclick="setTenantPageTab('tenants')">View All</button>` : '<button class="btn btn-p btn-sm" onclick="showTenantRecordModal()">+ Add Tenant</button>'}
+        </div>
+        <div class="tenant-ledger-overview-meter tenant-ledger-overview-meter-gold">
+          <div class="tenant-ledger-overview-meter-fill tenant-ledger-overview-meter-fill-gold" style="width:${rooms.length ? Math.round((tenants.length / rooms.length) * 100) : 0}%"></div>
+        </div>
+        <div class="tenant-ledger-overview-split">
+          <div class="tenant-ledger-overview-metric">
+            <div class="tenant-ledger-overview-metric-label">Monthly Rent</div>
+            <div class="tenant-ledger-overview-metric-value">${fmtCur(totalRent)}</div>
+          </div>
+          <div class="tenant-ledger-overview-metric">
+            <div class="tenant-ledger-overview-metric-label">Selected</div>
+            <div class="tenant-ledger-overview-metric-value">${selectedTenant ? escHtml(tenantInitials(selectedTenant.tenant_name)) : '-'}</div>
+          </div>
+        </div>
+        ${tenants.length ? `
+          <div class="tenant-ledger-tenant-graph-list">
+            ${tenants.map((tenant) => {
+              const room = tenantFindRoom(tenant.room_id);
+              const rent = tenantNum(tenant.rent_amount || 0);
+              const width = Math.max(18, Math.round((rent / highestRent) * 100));
+              return `
+                <button type="button" class="tenant-ledger-tenant-graph-row ${String(selectedTenant?.id || '') === String(tenant.id) ? 'active' : ''}" onclick="openTenantRecord(${Number(tenant.id)})">
+                  <div class="tenant-ledger-tenant-graph-main">
+                    <span class="tenant-ledger-tenant-avatar">${tenantInitials(tenant.tenant_name)}</span>
+                    <div>
+                      <div class="tenant-ledger-tenant-name">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+                      <div class="tenant-ledger-tenant-sub">${escHtml(room?.room_label || '-')} - Started ${escHtml(tenantDateLabel(tenant.start_date))}</div>
+                    </div>
+                  </div>
+                  <div class="tenant-ledger-tenant-graph-bar-wrap">
+                    <div class="tenant-ledger-tenant-graph-bar" style="width:${width}%"></div>
+                    <div class="tenant-ledger-tenant-graph-value">${fmtCur(rent)}</div>
+                  </div>
+                </button>`;
+            }).join('')}
+          </div>
+        ` : `
+          <div style="margin-top:14px;color:var(--t3);font-size:13px">No active tenants in this building yet.</div>
+        `}
+      </div>
+    </div>`;
+}
+
+function renderTenantRecordsTab(building) {
+  const rooms = building?.rooms || [];
+  const tenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(building?.id || ''));
+  return `
+    <div class="card tenant-ledger-section-card tenant-ledger-table-card">
+      <div class="tenant-ledger-section-head">
+        <div>
+          <div class="tenant-ledger-section-title">Tenant Records</div>
+          <div class="tenant-ledger-section-sub">Keep contracts, vehicles, charges, and tenant items together.</div>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="showTenantRecordModal()">+ Add Tenant</button>
+      </div>
+      <div class="tenant-ledger-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Tenant</th>
+              <th>Room</th>
+              <th>Contact</th>
+              <th>Rent</th>
+              <th>Charges</th>
+              <th>Contract</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tenants.length ? tenants.map((tenant) => {
+              const room = rooms.find((item) => String(item.id) === String(tenant.room_id));
+              const charges = tenantNum(tenant.sewerage_charge) + tenantNum(tenant.water_charge) + tenantNum(tenant.cleaning_charge);
+              const contractLabel = [
+                tenant.contract_months ? `${Number(tenant.contract_months)} months` : '',
+                tenant.end_date ? `Till ${fmtDate(tenant.end_date)}` : '',
+              ].filter(Boolean).join(' · ') || '-';
+              return `
+                <tr onclick="openTenantRecord(${Number(tenant.id)})" style="cursor:pointer;background:${String(tenant.id) === String(_selectedTenantRecordId) ? '#f5fbf7' : ''}">
+                  <td>
+                    <div style="font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:4px">${tenant.is_active ? 'Active' : 'Inactive'}</div>
+                  </td>
+                  <td>${escHtml(room?.room_label || '-')}</td>
+                  <td>${escHtml(tenant.contact_number || '-')}</td>
+                  <td>${fmtCur(tenant.rent_amount || 0)}</td>
+                  <td>${fmtCur(charges)}</td>
+                  <td>${escHtml(contractLabel)}</td>
+                  <td class="tenant-ledger-actions-cell">
+                    <div class="tenant-ledger-front-actions">
+                      <button class="trip-icon-btn" title="Generate Invoice" onclick="event.stopPropagation();showTenantInvoiceModal(${Number(tenant.id)})">${tenantActionIcon('invoice')}</button>
+                      <button class="trip-icon-btn" title="Import Invoices" onclick="event.stopPropagation();showTenantInvoiceImportModal(${Number(tenant.id)})">${tenantActionIcon('import')}</button>
+                      <button class="trip-icon-btn" title="Edit Tenant" onclick="event.stopPropagation();showTenantRecordModal(${Number(tenant.id)})">${tenantActionIcon('edit')}</button>
+                      <button class="trip-icon-btn danger" title="Delete Tenant" onclick="event.stopPropagation();deleteTenantRecord(${Number(tenant.id)})">${tenantActionIcon('delete')}</button>
+                    </div>
+                  </td>
+                </tr>`;
+            }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--t3)">No tenant records in this building yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function renderTenantInvoicesTab(building) {
+  const { buildingTenants, invoices, years, months, activeYear, activeTenantId, activeActivity, activeMonthFrom, activeMonthTo } = getTenantFilteredInvoices(building);
+  const pagedInvoices = tenantPaginate(invoices, _tenantInvoicePager.page, _tenantInvoicePager.pageSize);
+  _tenantInvoicePager.page = pagedInvoices.page;
+  const composeTenantId = activeTenantId !== 'all'
+    ? activeTenantId
+    : (_selectedTenantRecordId && buildingTenants.some((tenant) => String(tenant.id) === String(_selectedTenantRecordId))
+        ? String(_selectedTenantRecordId)
+        : String(buildingTenants[0]?.id || ''));
+  return `
+    <div class="card tenant-ledger-section-card tenant-ledger-table-card">
+      <div class="tenant-ledger-section-head">
+        <div>
+          <div class="tenant-ledger-section-title">Monthly Rent Invoices</div>
+          <div class="tenant-ledger-section-sub">Invoices keep a snapshot of rent and utility charges, so old invoices stay unchanged.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+          <button class="btn btn-s btn-sm" onclick="showTenantMonthInvoiceExportModal(${Number(building?.id || 0)})">Month PDF / Share</button>
+          <button class="btn btn-s btn-sm" onclick="showTenantBulkInvoiceModal()">Bulk Generate</button>
+          ${composeTenantId ? `<button class="btn btn-p btn-sm" onclick="showTenantInvoiceModal(${Number(composeTenantId)})">Generate Invoice</button>` : ''}
+        </div>
+      </div>
+      <div class="tenant-ledger-report-filters" style="margin-top:16px">
+        <label class="fl">Tenant
+          <select class="fi" onchange="setTenantInvoiceFilter('tenant_id', this.value)">
+            <option value="all" ${activeTenantId === 'all' ? 'selected' : ''}>All tenants</option>
+            ${buildingTenants.map((tenant) => `<option value="${Number(tenant.id)}" ${String(activeTenantId) === String(tenant.id) ? 'selected' : ''}>${escHtml(tenant.tenant_name || 'Tenant')}${tenantIsInactive(tenant) ? ' (Inactive)' : ''}</option>`).join('')}
+          </select>
+        </label>
+        <label class="fl">Tenant Type
+          <select class="fi" onchange="setTenantInvoiceFilter('activity', this.value)">
+            <option value="all" ${activeActivity === 'all' ? 'selected' : ''}>All tenants</option>
+            <option value="active" ${activeActivity === 'active' ? 'selected' : ''}>Active only</option>
+            <option value="inactive" ${activeActivity === 'inactive' ? 'selected' : ''}>Inactive only</option>
+          </select>
+        </label>
+        <label class="fl">Year
+          <select class="fi" onchange="setTenantInvoiceFilter('year', this.value)">
+            <option value="all" ${activeYear === 'all' ? 'selected' : ''}>All years</option>
+            ${years.map((year) => `<option value="${year}" ${String(activeYear) === String(year) ? 'selected' : ''}>${year}</option>`).join('')}
+          </select>
+        </label>
+        <label class="fl">From Month
+          <select class="fi" onchange="setTenantInvoiceFilter('month_from', this.value)">
+            <option value="" ${!activeMonthFrom ? 'selected' : ''}>Start</option>
+            ${months.map((month) => `<option value="${escHtml(month)}" ${activeMonthFrom === month ? 'selected' : ''}>${escHtml(tenantMonthLabel(month))}</option>`).join('')}
+          </select>
+        </label>
+        <label class="fl">To Month
+          <select class="fi" onchange="setTenantInvoiceFilter('month_to', this.value)">
+            <option value="" ${!activeMonthTo ? 'selected' : ''}>Till now</option>
+            ${months.map((month) => `<option value="${escHtml(month)}" ${activeMonthTo === month ? 'selected' : ''}>${escHtml(tenantMonthLabel(month))}</option>`).join('')}
+          </select>
+        </label>
+        <div class="fl" style="align-self:end">
+          <button class="btn btn-s btn-sm" onclick="resetTenantInvoiceFilters()">Clear</button>
+        </div>
+      </div>
+      <div class="tenant-ledger-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Tenant</th>
+              <th>Room</th>
+              <th>Electricity</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Due Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pagedInvoices.items.length ? pagedInvoices.items.map((invoice) => `
+              <tr>
+                <td>${escHtml(tenantMonthLabel(invoice.invoice_month))}</td>
+                <td>${tenantInvoiceTenantCell(invoice)}</td>
+                <td>${escHtml(invoice.room_label_snapshot || '-')}</td>
+                <td>${Number(invoice.electricity_units_used || 0)} units • ${fmtCur(invoice.electricity_amount || 0)}</td>
+                <td style="font-weight:800">${fmtCur(invoice.total_amount || 0)}</td>
+                <td>
+                  <div style="display:grid;gap:6px;min-width:150px">
+                    ${tenantInvoiceStatusButtons(invoice)}
+                    <div>${tenantChip(`${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'partial_paid' ? ` · ${fmtCur(invoice.paid_amount || 0)}` : invoice.payment_status === 'paid' ? ` · ${fmtCur(invoice.paid_amount || invoice.total_amount || 0)}` : ''}`, tenantInvoiceStatusTone(invoice.payment_status))}</div>
+                  </div>
+                </td>
+                <td>${escHtml(tenantDateLabel(invoice.due_date))}</td>
+                <td class="tenant-ledger-actions-cell">
+                  <div class="tenant-ledger-front-actions">
+                    <button class="trip-icon-btn" title="View Invoice" onclick="showTenantInvoiceViewModal(${Number(invoice.id)})">${tenantActionIcon('view')}</button>
+                    <button class="trip-icon-btn" title="Download Invoice PDF" onclick="downloadTenantInvoicePdf(${Number(invoice.id)})">${tenantActionIcon('pdf')}</button>
+                    <button class="trip-icon-btn" title="Share Invoice" onclick="showTenantInvoiceShareModal(${Number(invoice.id)})">${tenantActionIcon('share')}</button>
+                    <button class="trip-icon-btn" title="Edit Invoice" onclick="showTenantInvoiceEditModal(${Number(invoice.id)})">${tenantActionIcon('edit')}</button>
+                    <button class="trip-icon-btn danger" title="Delete Invoice" onclick="deleteTenantInvoice(${Number(invoice.id)})">${tenantActionIcon('delete')}</button>
+                  </div>
+                </td>
+              </tr>`).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No invoices generated yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      ${tenantPagerHtml({
+        page: pagedInvoices.page,
+        totalPages: pagedInvoices.totalPages,
+        start: pagedInvoices.start,
+        end: pagedInvoices.end,
+        total: pagedInvoices.total,
+        onPage: 'setTenantInvoicePage',
+      })}
+    </div>`;
+}
+
+function renderTenantsPage() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const overview = _tenantOverview || { buildings: [], rooms: [], tenants: [], invoices: [], totals: {} };
+  const buildings = overview.buildings || [];
+  const selectedBuilding = tenantFindBuilding(_selectedTenantBuildingId);
+  const selectedTenant = tenantFindRecord(_selectedTenantRecordId);
+  const emptyBlock = `
+    <div class="card" style="padding:56px;text-align:center">
+      <div style="font-size:28px;font-weight:900;color:var(--t1)">Create your first building</div>
+      <div style="font-size:14px;color:var(--t2);line-height:1.7;margin-top:10px">Track rooms, tenant contracts, vehicles, charges, items provided, and monthly invoices in one place.</div>
+      <button class="btn btn-p" style="margin-top:18px" onclick="showTenantBuildingModal()">+ Add Building</button>
+    </div>`;
+  const tabs = [
+    ['overview', 'Overview'],
+    ['tenants', 'Tenants'],
+    ['invoices', 'Invoices'],
+    ['reports', 'Reports'],
+  ].map(([key, label]) => `<button type="button" class="tenant-ledger-tab ${_tenantPageTab === key ? 'active' : ''}" data-tenant-tab="${escHtml(key)}" onclick="setTenantPageTab('${key}')">${label}</button>`).join('');
+  const buildingOptions = buildings.map((building) => `
+    <option value="${Number(building.id)}" ${String(building.id) === String(_selectedTenantBuildingId) ? 'selected' : ''}>${escHtml(building.name || 'Building')}</option>
+  `).join('');
+  const content = !selectedBuilding
+    ? emptyBlock
+    : _tenantPageTab === 'tenants'
+      ? renderTenantRecordsTab(selectedBuilding)
+      : _tenantPageTab === 'invoices'
+        ? renderTenantInvoicesTab(selectedBuilding)
+        : _tenantPageTab === 'reports'
+          ? renderTenantReportsTab(selectedBuilding)
+        : renderTenantOverviewTab(selectedBuilding, selectedTenant);
+  const selectedRooms = selectedBuilding?.rooms || [];
+  const selectedOccupied = selectedRooms.filter((room) => room.active_tenant);
+  const selectedVacant = selectedRooms.filter((room) => !room.active_tenant);
+  const selectedBuildingRent = selectedOccupied.reduce((sum, room) => sum + tenantNum(room.active_tenant?.rent_amount || room.default_rent || 0), 0);
+  const selectedBuildingInvoices = (_tenantOverview?.invoices || []).filter((invoice) => {
+    const tenant = tenantFindRecord(invoice.tenant_id);
+    return String(tenant?.building_id || '') === String(selectedBuilding?.id || '');
+  });
+
+  main.innerHTML = `
+    <div class="tab-content tenant-ledger-page">
+      <div class="tenant-ledger-head-row">
+        <div class="tenant-ledger-head-copy">
+          <div class="tenant-ledger-page-title">Tenants</div>
+          <div class="tenant-ledger-page-sub">Manage buildings, rooms, tenants, meter-based invoices, and charge snapshots.</div>
+        </div>
+        <div class="tenant-ledger-toolbar-actions">
+          <button class="btn btn-s btn-sm" onclick="loadTenantsPage()">Refresh</button>
+          <button class="btn btn-p btn-sm" onclick="showTenantBuildingModal()">+ Add Building</button>
+        </div>
+      </div>
+      ${_tenantLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading tenants...</div>' : ''}
+      ${!_tenantLoading && !buildings.length ? emptyBlock : ''}
+      ${!_tenantLoading && buildings.length ? `
+        <div class="tenant-ledger-top-card card">
+          <div class="tenant-ledger-selector-block">
+            <label class="tenant-ledger-selector-label" for="tenantSelectedBuilding">Selected Building</label>
+            <select id="tenantSelectedBuilding" class="fi tenant-ledger-selector-input" onchange="setTenantSelectedBuilding(this.value)">
+              ${buildingOptions}
+            </select>
+          </div>
+          <div class="tenant-ledger-top-metrics">
+            <div class="tenant-ledger-top-metric">
+              <div class="tenant-ledger-top-metric-label">Buildings</div>
+              <div class="tenant-ledger-top-metric-value">${Number(overview.totals?.building_count || 0)}</div>
+            </div>
+            <div class="tenant-ledger-top-metric">
+              <div class="tenant-ledger-top-metric-label">Rooms</div>
+              <div class="tenant-ledger-top-metric-value">${Number(overview.totals?.room_count || 0)}</div>
+            </div>
+            <div class="tenant-ledger-top-metric">
+              <div class="tenant-ledger-top-metric-label">Occupied</div>
+              <div class="tenant-ledger-top-metric-value">${Number(overview.totals?.occupied_count || 0)}</div>
+            </div>
+            <div class="tenant-ledger-top-metric">
+              <div class="tenant-ledger-top-metric-label">Monthly Rent</div>
+              <div class="tenant-ledger-top-metric-value">${fmtCur(overview.totals?.monthly_rent || 0)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="tenant-ledger-main">
+          <div class="tenant-ledger-hero">
+            <div class="tenant-ledger-hero-top">
+              <div>
+                <div class="tenant-ledger-hero-label">Building</div>
+                <div class="tenant-ledger-hero-title">${escHtml(selectedBuilding?.name || 'Building')}</div>
+                <div class="tenant-ledger-hero-sub">${escHtml(selectedBuilding?.address || 'Address not added')}</div>
+              </div>
+              <div class="tenant-ledger-hero-actions">
+                <button class="btn btn-s btn-sm" onclick="showTenantRoomModal()">+ Add Room</button>
+                <button class="btn btn-s btn-sm" onclick="showTenantBuildingModal(${Number(selectedBuilding?.id || 0)})">Edit</button>
+                <button class="btn btn-p btn-sm" onclick="showTenantRecordModal()">+ Add Tenant</button>
+              </div>
+            </div>
+            <div class="tenant-ledger-hero-stats">
+              <div class="tenant-ledger-hero-stat">
+                <div class="tenant-ledger-hero-stat-label">Rooms</div>
+                <div class="tenant-ledger-hero-stat-value">${selectedRooms.length}</div>
+                <div class="tenant-ledger-hero-stat-meta">registered rooms</div>
+              </div>
+              <div class="tenant-ledger-hero-stat">
+                <div class="tenant-ledger-hero-stat-label">Occupied</div>
+                <div class="tenant-ledger-hero-stat-value">${selectedOccupied.length}</div>
+                <div class="tenant-ledger-hero-stat-meta">${selectedVacant.length} vacant</div>
+              </div>
+              <div class="tenant-ledger-hero-stat">
+                <div class="tenant-ledger-hero-stat-label">Monthly Rent</div>
+                <div class="tenant-ledger-hero-stat-value">${fmtCur(selectedBuildingRent)}</div>
+                <div class="tenant-ledger-hero-stat-meta">active tenants</div>
+              </div>
+              <div class="tenant-ledger-hero-stat">
+                <div class="tenant-ledger-hero-stat-label">Invoices</div>
+                <div class="tenant-ledger-hero-stat-value">${selectedBuildingInvoices.length}</div>
+                <div class="tenant-ledger-hero-stat-meta">saved snapshots</div>
+              </div>
+            </div>
+          </div>
+          <div class="tenant-ledger-tab-row">
+            <div class="tenant-ledger-tab-label">Sections</div>
+            <div class="tenant-ledger-tab-set">${tabs}</div>
+          </div>
+          <div class="tenant-ledger-section-shell">
+            ${_tenantPageTab === 'tenants' ? `
+              <div class="tenant-ledger-section-kicker">Tenants</div>
+              <div class="tenant-ledger-section-caption">Contracts, charges, vehicles, and inventory for this building</div>
+            ` : `
+              ${_tenantPageTab === 'invoices' ? `
+                <div class="tenant-ledger-section-kicker">Invoices</div>
+                <div class="tenant-ledger-section-caption">Monthly rent snapshots for this building</div>
+              ` : _tenantPageTab === 'reports' ? `
+                <div class="tenant-ledger-section-kicker">Reports</div>
+                <div class="tenant-ledger-section-caption">Check year totals, month ranges, tenant totals, and room totals till now</div>
+              ` : ''}
+            `}
+            ${content}
+          </div>
+        </div>
+      ` : ''}
+    </div>`;
+  bindTenantsPageInteractions(main);
+}
+
+function showTenantBuildingModal(buildingId = null) {
+  const building = buildingId ? tenantFindBuilding(buildingId) : null;
+  openModal(building ? 'Edit Building' : 'Add Building', `
+    <div class="fg">
+      <label class="fl full">Building Name *<input class="fi" id="tenantBuildingName" value="${escHtml(building?.name || '')}" placeholder="e.g. Sharma Residency"></label>
+      <label class="fl full">Address<textarea class="fi" id="tenantBuildingAddress" rows="3" placeholder="Full building address">${escHtml(building?.address || '')}</textarea></label>
+      <label class="fl full">Notes<textarea class="fi" id="tenantBuildingNotes" rows="3" placeholder="Optional notes">${escHtml(building?.notes || '')}</textarea></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTenantBuilding(${buildingId || 'null'})">${building ? 'Update Building' : 'Add Building'}</button>
+      ${building ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteTenantBuilding(${Number(building.id)})">Delete</button>` : ''}
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function saveTenantBuilding(buildingId = null) {
+  const body = {
+    name: document.getElementById('tenantBuildingName')?.value?.trim() || '',
+    address: document.getElementById('tenantBuildingAddress')?.value?.trim() || '',
+    notes: document.getElementById('tenantBuildingNotes')?.value?.trim() || '',
+  };
+  if (!body.name) { toast('Building name is required', 'warning'); return; }
+  const result = buildingId
+    ? await api(`/api/tenants/buildings/${Number(buildingId)}`, { method: 'PUT', body })
+    : await api('/api/tenants/buildings', { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save building.', 'error'); return; }
+  closeModal();
+  _selectedTenantBuildingId = Number(result.building?.id || buildingId || _selectedTenantBuildingId);
+  toast(buildingId ? 'Building updated' : 'Building added', 'success');
+  await loadTenantsPage();
+}
+
+async function deleteTenantBuilding(buildingId) {
+  if (!await confirmDialog('Delete this building, its rooms, tenants, and invoices?')) return;
+  const result = await api(`/api/tenants/buildings/${Number(buildingId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete building.', 'error'); return; }
+  closeModal();
+  if (String(_selectedTenantBuildingId) === String(buildingId)) _selectedTenantBuildingId = null;
+  toast('Building deleted', 'success');
+  await loadTenantsPage();
+}
+
+function showTenantInvoiceImportModal(recordId) {
+  const tenant = tenantFindRecord(recordId);
+  if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  const room = tenantFindRoom(tenant.room_id);
+  openModal(`Import Invoices - ${escHtml(tenant.tenant_name || 'Tenant')}`, `
+    <div style="display:grid;gap:14px">
+      <div class="card" style="padding:14px;background:#f7faf8">
+        <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:6px;line-height:1.6">${escHtml(room?.room_label || 'Room')} • This import ignores the sheet's Name column and attaches every invoice row to this tenant.</div>
+      </div>
+      <label class="fl full">Invoice Sheet (.xlsx / .xls)
+        <input type="file" accept=".xlsx,.xls,.ods" id="tenantInvoiceImportFile" class="fi">
+      </label>
+      <div style="font-size:12px;color:var(--t3);line-height:1.7">
+        Expected columns from your invoice sheet:
+        <br><b>Rent date</b>, <b>Rent paid on</b>, <b>Monthly rent</b>, meter <b>last/current</b>, <b>Total Units</b>, <b>Electricity Bill</b>,
+        <br><b>Sewarage and water charges</b>, <b>Cleaning Charges</b>, <b>Parking Charges</b>, <b>other charges detail</b>, <b>other charges</b>, <b>Total</b>.
+      </div>
+      <div id="tenantInvoiceImportSheetArea"></div>
+      <div id="tenantInvoiceImportPreview"></div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="loadTenantInvoiceImportSheets(${Number(recordId)})">Read File</button>
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function getSelectedTenantInvoiceImportSheet() {
+  return [...document.querySelectorAll('.tenant-invoice-import-sheet-cb:checked')].map((checkbox) => checkbox.value)[0] || '';
+}
+
+async function loadTenantInvoiceImportSheets(recordId) {
+  const file = document.getElementById('tenantInvoiceImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const area = document.getElementById('tenantInvoiceImportSheetArea');
+  const preview = document.getElementById('tenantInvoiceImportPreview');
+  if (area) area.innerHTML = `<div style="color:var(--t3);font-size:13px">Reading file...</div>`;
+  if (preview) preview.innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  const response = await fetch(`/api/tenants/records/${Number(recordId)}/import-invoices-excel/sheets`, {
+    method: 'POST',
+    body: fd,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (area) area.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not read file.')}</div>`;
+    return;
+  }
+  const sheets = Array.isArray(data?.sheets) ? data.sheets : [];
+  if (!sheets.length) {
+    if (area) area.innerHTML = `<div style="color:var(--amber);font-size:13px">No sheets found in this file.</div>`;
+    return;
+  }
+  if (area) area.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--t3)">Choose the invoice sheet to preview first.</div>
+      <button class="btn btn-s btn-sm" onclick="previewTenantInvoiceImport(${Number(recordId)})">Preview Import</button>
+    </div>
+    <div style="display:grid;gap:8px;margin-top:10px">
+      ${sheets.map((sheet, index) => `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+          <input type="radio" name="tenantInvoiceImportSheet" class="tenant-invoice-import-sheet-cb" value="${escHtml(sheet)}" ${index === 0 ? 'checked' : ''}>
+          <span style="font-weight:700;color:var(--t2)">${escHtml(sheet)}</span>
+        </label>`).join('')}
+    </div>`;
+}
+
+async function previewTenantInvoiceImport(recordId) {
+  const file = document.getElementById('tenantInvoiceImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const sheet = getSelectedTenantInvoiceImportSheet();
+  if (!sheet) { toast('Please choose a sheet first.', 'warning'); return; }
+  const preview = document.getElementById('tenantInvoiceImportPreview');
+  if (preview) preview.innerHTML = `<div style="color:var(--t3);font-size:13px">Loading preview...</div>`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheet', sheet);
+  const response = await fetch(`/api/tenants/records/${Number(recordId)}/import-invoices-excel/preview`, {
+    method: 'POST',
+    body: fd,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (preview) preview.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not preview tenant invoices.')}</div>`;
+    return;
+  }
+  const rowsHtml = (data.preview || []).map((row) => `
+    <tr>
+      <td>${escHtml(tenantMonthLabel(row.invoice_month))}</td>
+      <td style="text-align:right">${fmtCur(row.rent_amount_snapshot || 0)}</td>
+      <td style="text-align:right">${Number(row.previous_electricity_units || 0)}</td>
+      <td style="text-align:right">${Number(row.current_electricity_units || 0)}</td>
+      <td>${Number(row.electricity_units_used || 0)} units</td>
+      <td style="text-align:right">${fmtCur(row.electricity_amount || 0)}</td>
+      <td style="text-align:right">${fmtCur(row.other_charges_snapshot || 0)}</td>
+      <td style="text-align:right;font-weight:800">${fmtCur(row.total_amount || 0)}</td>
+    </tr>`).join('');
+  if (preview) preview.innerHTML = `
+    <div class="card" style="padding:16px">
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Sheet</div><div style="font-weight:800;color:var(--t1)">${escHtml(data.sheet || sheet)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Invoice Rows</div><div style="font-weight:800;color:var(--t1)">${Number(data.invoice_count || 0)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);text-transform:uppercase">Total Amount</div><div style="font-weight:800;color:var(--green)">${fmtCur(data.total_amount || 0)}</div></div>
+      </div>
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Month</th><th style="text-align:right">Rent</th><th style="text-align:right">Previous</th><th style="text-align:right">Current</th><th>Units</th><th style="text-align:right">Electricity</th><th style="text-align:right">Other</th><th style="text-align:right">Total</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No valid invoice rows found.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="fa" style="margin-top:16px">
+        <button class="btn btn-p" onclick="importTenantInvoicesExcel(${Number(recordId)})">Import Selected Sheet</button>
+      </div>
+    </div>`;
+}
+
+async function importTenantInvoicesExcel(recordId) {
+  const file = document.getElementById('tenantInvoiceImportFile')?.files?.[0];
+  if (!file) { toast('Please choose an excel file first.', 'warning'); return; }
+  const responseTenant = tenantFindRecord(recordId);
+  if (!responseTenant) { toast('Tenant not found.', 'error'); return; }
+  const sheet = getSelectedTenantInvoiceImportSheet();
+  if (!sheet) { toast('Please choose a sheet first.', 'warning'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('sheet', sheet);
+  const response = await fetch(`/api/tenants/records/${Number(recordId)}/import-invoices-excel`, {
+    method: 'POST',
+    body: fd,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    toast(data?.error || 'Could not import tenant invoices.', 'error');
+    return;
+  }
+  closeModal();
+  _selectedTenantRecordId = Number(recordId);
+  toast(`Imported ${Number(data.imported || 0)} invoice rows for ${responseTenant.tenant_name || 'tenant'}.`, 'success', 5000);
+  await loadTenantsPage();
+}
+
+function showTenantRoomModal(roomId = null) {
+  const selectedBuilding = tenantFindBuilding(_selectedTenantBuildingId);
+  if (!selectedBuilding) { toast('Select a building first.', 'warning'); return; }
+  const room = roomId ? tenantFindRoom(roomId) : null;
+  openModal(room ? 'Edit Room' : 'Add Room', `
+    <div class="fg">
+      <label class="fl">Room Label *<input class="fi" id="tenantRoomLabel" value="${escHtml(room?.room_label || '')}" placeholder="e.g. Room 101"></label>
+      <label class="fl">Floor / Wing<input class="fi" id="tenantRoomFloor" value="${escHtml(room?.floor_label || '')}" placeholder="e.g. First Floor"></label>
+      <label class="fl">Room Type<input class="fi" id="tenantRoomType" value="${escHtml(room?.room_type || '')}" placeholder="e.g. 1BHK / PG / Studio"></label>
+      <label class="fl full">Notes<textarea class="fi" id="tenantRoomNotes" rows="3">${escHtml(room?.notes || '')}</textarea></label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTenantRoom(${roomId || 'null'})">${room ? 'Update Room' : 'Add Room'}</button>
+      ${room ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteTenantRoom(${Number(room.id)})">Delete</button>` : ''}
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function saveTenantRoom(roomId = null) {
+  const body = {
+    room_label: document.getElementById('tenantRoomLabel')?.value?.trim() || '',
+    floor_label: document.getElementById('tenantRoomFloor')?.value?.trim() || '',
+    room_type: document.getElementById('tenantRoomType')?.value?.trim() || '',
+    notes: document.getElementById('tenantRoomNotes')?.value?.trim() || '',
+  };
+  if (!body.room_label) { toast('Room label is required', 'warning'); return; }
+  const result = roomId
+    ? await api(`/api/tenants/rooms/${Number(roomId)}`, { method: 'PUT', body })
+    : await api(`/api/tenants/buildings/${Number(_selectedTenantBuildingId)}/rooms`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save room.', 'error'); return; }
+  closeModal();
+  toast(roomId ? 'Room updated' : 'Room added', 'success');
+  await loadTenantsPage();
+}
+
+async function deleteTenantRoom(roomId) {
+  if (!await confirmDialog('Delete this room and all tenant records inside it?')) return;
+  const result = await api(`/api/tenants/rooms/${Number(roomId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete room.', 'error'); return; }
+  closeModal();
+  toast('Room deleted', 'success');
+  await loadTenantsPage();
+}
+
+function tenantModalVehicleRows(rows = []) {
+  return (rows.length ? rows : [{ vehicle_type: '', vehicle_number: '', notes: '' }]).map((row, index) => `
+    <div class="fg tenant-vehicle-row" data-index="${index}" style="margin-bottom:8px">
+      <label class="fl">Type<input class="fi tenant-vehicle-type" value="${escHtml(row.vehicle_type || '')}" placeholder="2 wheeler / 4 wheeler"></label>
+      <label class="fl">Vehicle Number<input class="fi tenant-vehicle-number" value="${escHtml(row.vehicle_number || '')}" placeholder="PB10AB1234"></label>
+      <label class="fl">Notes<input class="fi tenant-vehicle-notes" value="${escHtml(row.notes || '')}" placeholder="Optional"></label>
+    </div>`).join('');
+}
+
+function tenantModalItemRows(rows = []) {
+  return (rows.length ? rows : [{ item_name: '', quantity: '', notes: '' }]).map((row, index) => `
+    <div class="fg tenant-item-row" data-index="${index}" style="margin-bottom:8px">
+      <label class="fl">Item<input class="fi tenant-item-name" value="${escHtml(row.item_name || '')}" placeholder="Cooler / Cylinder"></label>
+      <label class="fl">Quantity<input class="fi tenant-item-quantity" type="number" min="0" step="1" value="${escHtml(row.quantity === '' || row.quantity == null ? '' : String(row.quantity))}" placeholder="Optional"></label>
+      <label class="fl">Notes<input class="fi tenant-item-notes" value="${escHtml(row.notes || '')}" placeholder="Optional"></label>
+    </div>`).join('');
+}
+
+function tenantAttachmentBadge(file, index, kind) {
+  return `<span class="badge" style="display:inline-flex;align-items:center;gap:6px;margin:4px 6px 0 0">
+    ${escHtml(file?.name || file?.path || 'file')}
+    <button type="button" onclick="removeTenantModalFile('${kind}', ${Number(index)})" style="border:none;background:none;color:inherit;cursor:pointer;font-size:12px">x</button>
+  </span>`;
+}
+
+function renderTenantModalAttachments() {
+  const addressWrap = document.getElementById('tenantAddressProofWrap');
+  const photoWrap = document.getElementById('tenantPhotoWrap');
+  const proofWrap = document.getElementById('tenantProofListWrap');
+  if (addressWrap) {
+    addressWrap.innerHTML = _tenantModalFiles.address_proof
+      ? tenantAttachmentBadge(_tenantModalFiles.address_proof, 0, 'address_proof')
+      : '<span style="font-size:12px;color:var(--t3)">No file uploaded</span>';
+  }
+  if (photoWrap) {
+    photoWrap.innerHTML = _tenantModalFiles.photo_attachment
+      ? tenantAttachmentBadge(_tenantModalFiles.photo_attachment, 0, 'photo_attachment')
+      : '<span style="font-size:12px;color:var(--t3)">No photo uploaded</span>';
+  }
+  if (proofWrap) {
+    proofWrap.innerHTML = _tenantModalFiles.proof_attachments.length
+      ? _tenantModalFiles.proof_attachments.map((file, index) => tenantAttachmentBadge(file, index, 'proof_attachments')).join('')
+      : '<span style="font-size:12px;color:var(--t3)">No supporting proofs uploaded</span>';
+  }
+}
+
+async function uploadTenantModalFile(inputId, kind) {
+  const input = document.getElementById(inputId);
+  const file = input?.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const response = await fetch('/api/tenants/upload', { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  input.value = '';
+  if (!response.ok || data?.error) {
+    toast(data?.error || 'Could not upload file.', 'error');
+    return;
+  }
+  if (kind === 'proof_attachments') _tenantModalFiles.proof_attachments.push(data.file);
+  else _tenantModalFiles[kind] = data.file;
+  renderTenantModalAttachments();
+  toast('File uploaded', 'success');
+}
+
+function removeTenantModalFile(kind, index = 0) {
+  if (kind === 'proof_attachments') _tenantModalFiles.proof_attachments.splice(index, 1);
+  else _tenantModalFiles[kind] = null;
+  renderTenantModalAttachments();
+}
+
+function addTenantVehicleRow() {
+  const wrap = document.getElementById('tenantVehicleRows');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantModalVehicleRows([{ vehicle_type: '', vehicle_number: '', notes: '' }]));
+}
+
+function addTenantItemRow() {
+  const wrap = document.getElementById('tenantItemRows');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantModalItemRows([{ item_name: '', quantity: '', notes: '' }]));
+}
+
+function collectTenantModalRows(selector, mapper) {
+  return [...document.querySelectorAll(selector)].map((row) => mapper(row)).filter(Boolean);
+}
+
+function showTenantRecordModal(recordId = null) {
+  const selectedBuilding = tenantFindBuilding(_selectedTenantBuildingId);
+  if (!selectedBuilding) { toast('Select a building first.', 'warning'); return; }
+  if (!(selectedBuilding.rooms || []).length) { toast('Add a room before adding a tenant.', 'warning'); return; }
+  const record = recordId ? tenantFindRecord(recordId) : null;
+  const activeChargeProfile = tenantCurrentChargeProfile(record, tenantDefaultStartDate());
+  const rooms = (selectedBuilding.rooms || []).filter((room) => {
+    const occupiedByAnother = room.active_tenant && String(room.active_tenant.id) !== String(record?.id || '');
+    return !occupiedByAnother;
+  });
+  if (!rooms.length && !record) {
+    toast('No vacant rooms available in this building.', 'warning');
+    return;
+  }
+  _tenantModalFiles = {
+    address_proof: record?.address_proof || null,
+    photo_attachment: record?.photo_attachment || null,
+    proof_attachments: [...(record?.proof_attachments || [])],
+  };
+  openModal(record ? 'Edit Tenant' : 'Add Tenant', `
+    <div class="fg">
+      <label class="fl">Tenant Name<input class="fi" id="tenantRecordName" value="${escHtml(record?.tenant_name || '')}" placeholder="Optional"></label>
+      <label class="fl">Room<select class="fi" id="tenantRecordRoom">${rooms.map((room) => `<option value="${Number(room.id)}" ${String(room.id) === String(record?.room_id || '') ? 'selected' : ''}>${escHtml(room.room_label || 'Room')}</option>`).join('')}</select></label>
+      <label class="fl">Start From<input class="fi" type="date" id="tenantRecordStartDate" value="${escHtml(tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}"></label>
+      <label class="fl">End Date<input class="fi" type="date" id="tenantRecordEndDate" value="${escHtml(tenantInputDateValue(record?.end_date, ''))}"></label>
+      <label class="fl">Charge Effective From<input class="fi" type="date" id="tenantChargeEffectiveFrom" value="${escHtml(record ? tenantDefaultStartDate() : tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}"></label>
+      <label class="fl">Contract Period (months)<input class="fi" type="number" min="0" step="1" id="tenantRecordContractMonths" value="${escHtml(String(record?.contract_months ?? ''))}"></label>
+      <label class="fl">Contact Number<input class="fi" id="tenantRecordContact" value="${escHtml(record?.contact_number || '')}"></label>
+      <label class="fl">Security Deposited<input class="fi" type="number" min="0" step="0.01" id="tenantRecordSecurity" value="${escHtml(String(record?.security_deposit || 0))}"></label>
+      <label class="fl">Rent / Month<input class="fi" type="number" min="0" step="0.01" id="tenantRecordRent" value="${escHtml(String((activeChargeProfile?.rent_amount ?? record?.rent_amount) || 0))}"></label>
+      <label class="fl">Electricity / Unit<input class="fi" type="number" min="0" step="0.01" id="tenantRecordUnitPrice" value="${escHtml(String((activeChargeProfile?.electricity_unit_price ?? record?.electricity_unit_price) || 0))}"></label>
+      <label class="fl">Opening Meter Units<input class="fi" type="number" min="0" step="1" id="tenantRecordOpeningUnits" value="${escHtml(String((activeChargeProfile?.opening_electricity_units ?? record?.opening_electricity_units) || 0))}"></label>
+      <label class="fl">Sewerage Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordSewerage" value="${escHtml(String((activeChargeProfile?.sewerage_charge ?? record?.sewerage_charge) || 0))}"></label>
+      <label class="fl">Water Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordWater" value="${escHtml(String((activeChargeProfile?.water_charge ?? record?.water_charge) || 0))}"></label>
+      <label class="fl">Cleaning Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordCleaning" value="${escHtml(String((activeChargeProfile?.cleaning_charge ?? record?.cleaning_charge) || 0))}"></label>
+      <label class="fl full">Tenant Address<textarea class="fi" id="tenantRecordAddress" rows="3">${escHtml(record?.tenant_address || '')}</textarea></label>
+      <label class="fl full">Notes<textarea class="fi" id="tenantRecordNotes" rows="3">${escHtml(record?.notes || '')}</textarea></label>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="font-size:15px;font-weight:800;color:var(--t1)">Charge History</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">Every rate change is saved with its own effective period.</div>
+      <div style="margin-top:10px">${tenantChargeHistoryHtml(record?.charge_history || [])}</div>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">Address Proof & Attachments</div>
+      </div>
+      <div style="margin-top:10px;display:grid;gap:12px">
+        <div>
+          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Address Proof</div>
+          <div id="tenantAddressProofWrap"></div>
+          <input type="file" id="tenantAddressProofInput" style="display:none" onchange="uploadTenantModalFile('tenantAddressProofInput','address_proof')">
+          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantAddressProofInput').click()">Upload Address Proof</button>
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Tenant Photo</div>
+          <div id="tenantPhotoWrap"></div>
+          <input type="file" id="tenantPhotoInput" accept="image/*" style="display:none" onchange="uploadTenantModalFile('tenantPhotoInput','photo_attachment')">
+          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantPhotoInput').click()">Upload Photo</button>
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Supporting Proof Attachments</div>
+          <div id="tenantProofListWrap"></div>
+          <input type="file" id="tenantProofInput" style="display:none" onchange="uploadTenantModalFile('tenantProofInput','proof_attachments')">
+          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantProofInput').click()">Upload Supporting Proof</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">Vehicle Details</div>
+        <button class="btn btn-s btn-sm" onclick="addTenantVehicleRow()">+ Add Vehicle</button>
+      </div>
+      <div id="tenantVehicleRows" style="margin-top:10px">${tenantModalVehicleRows(record?.vehicles || [])}</div>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">Items Provided</div>
+        <button class="btn btn-s btn-sm" onclick="addTenantItemRow()">+ Add Item</button>
+      </div>
+      <div id="tenantItemRows" style="margin-top:10px">${tenantModalItemRows(record?.provided_items || [])}</div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTenantRecord(${recordId || 'null'})">${record ? 'Update Tenant' : 'Add Tenant'}</button>
+      ${record ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteTenantRecord(${Number(record.id)})">Delete</button>` : ''}
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+  renderTenantModalAttachments();
+}
+
+async function saveTenantRecord(recordId = null) {
+  const vehicles = collectTenantModalRows('.tenant-vehicle-row', (row) => {
+    const vehicle_type = row.querySelector('.tenant-vehicle-type')?.value?.trim() || '';
+    const vehicle_number = row.querySelector('.tenant-vehicle-number')?.value?.trim() || '';
+    const notes = row.querySelector('.tenant-vehicle-notes')?.value?.trim() || '';
+    if (!vehicle_type && !vehicle_number && !notes) return null;
+    return { vehicle_type, vehicle_number, notes };
+  });
+  const provided_items = collectTenantModalRows('.tenant-item-row', (row) => {
+    const item_name = row.querySelector('.tenant-item-name')?.value?.trim() || '';
+    const quantityValue = row.querySelector('.tenant-item-quantity')?.value || '';
+    const quantity = Number(quantityValue || 0);
+    const notes = row.querySelector('.tenant-item-notes')?.value?.trim() || '';
+    if (!item_name && !quantity && !notes) return null;
+    return { item_name, quantity, notes };
+  });
+  const body = {
+    building_id: Number(_selectedTenantBuildingId || 0),
+    room_id: Number(document.getElementById('tenantRecordRoom')?.value || 0),
+    tenant_name: tenantDefaultName(document.getElementById('tenantRecordName')?.value),
+    start_date: document.getElementById('tenantRecordStartDate')?.value || tenantDefaultStartDate(),
+    end_date: document.getElementById('tenantRecordEndDate')?.value || '',
+    charge_effective_from: document.getElementById('tenantChargeEffectiveFrom')?.value || tenantDefaultStartDate(),
+    contract_months: document.getElementById('tenantRecordContractMonths')?.value || '',
+    tenant_address: document.getElementById('tenantRecordAddress')?.value?.trim() || '',
+    contact_number: document.getElementById('tenantRecordContact')?.value?.trim() || '',
+    security_deposit: Number(document.getElementById('tenantRecordSecurity')?.value || 0),
+    rent_amount: Number(document.getElementById('tenantRecordRent')?.value || 0),
+    electricity_unit_price: Number(document.getElementById('tenantRecordUnitPrice')?.value || 0),
+    opening_electricity_units: Number(document.getElementById('tenantRecordOpeningUnits')?.value || 0),
+    sewerage_charge: Number(document.getElementById('tenantRecordSewerage')?.value || 0),
+    water_charge: Number(document.getElementById('tenantRecordWater')?.value || 0),
+    cleaning_charge: Number(document.getElementById('tenantRecordCleaning')?.value || 0),
+    notes: document.getElementById('tenantRecordNotes')?.value?.trim() || '',
+    address_proof: _tenantModalFiles.address_proof,
+    photo_attachment: _tenantModalFiles.photo_attachment,
+    proof_attachments: _tenantModalFiles.proof_attachments,
+    vehicles,
+    provided_items,
+  };
+  if (!(body.room_id > 0)) {
+    toast('Please select a room.', 'warning');
+    return;
+  }
+  const result = recordId
+    ? await api(`/api/tenants/records/${Number(recordId)}`, { method: 'PUT', body })
+    : await api('/api/tenants/records', { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save tenant.', 'error'); return; }
+  closeModal();
+  _selectedTenantRecordId = Number(result.tenant?.id || recordId || _selectedTenantRecordId);
+  toast(recordId ? 'Tenant updated' : 'Tenant added', 'success');
+  await loadTenantsPage();
+}
+
+async function deleteTenantRecord(recordId) {
+  if (!await confirmDialog('Delete this tenant record and all invoices for it?')) return;
+  const result = await api(`/api/tenants/records/${Number(recordId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete tenant.', 'error'); return; }
+  closeModal();
+  if (String(_selectedTenantRecordId) === String(recordId)) _selectedTenantRecordId = null;
+  toast('Tenant deleted', 'success');
+  await loadTenantsPage();
+}
+
+function showTenantInvoiceModal(recordId) {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  const buildingTenants = (_tenantOverview?.tenants || [])
+    .filter((tenant) => String(tenant.building_id) === String(building?.id || '') && tenant.is_active);
+  const fallbackTenantId = _selectedTenantRecordId && buildingTenants.some((tenant) => String(tenant.id) === String(_selectedTenantRecordId))
+    ? Number(_selectedTenantRecordId)
+    : Number(buildingTenants[0]?.id || 0);
+  const resolvedRecordId = Number(recordId || fallbackTenantId || 0);
+  const tenant = tenantFindRecord(resolvedRecordId);
+  if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  _selectedTenantRecordId = Number(tenant.id);
+  const latestInvoice = (tenant.invoices || [])[0] || null;
+  const previousUnits = latestInvoice ? Number(latestInvoice.current_electricity_units || 0) : Number(tenant.opening_electricity_units || 0);
+  const tenantOptions = buildingTenants.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(tenant.id) ? 'selected' : ''}>${escHtml(item.tenant_name || 'Tenant')}</option>`).join('');
+  openModal(`Invoice - ${escHtml(tenant.tenant_name)}`, `
+    <div class="card" style="padding:14px;margin-bottom:14px;background:#f7faf8">
+      <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${previousUnits}</div>
+    </div>
+    <div class="fg">
+      <label class="fl full">Tenant
+        <select class="fi" id="tenantInvoiceTenantId" onchange="changeTenantInvoiceModalTenant(this.value)">
+          ${tenantOptions}
+        </select>
+      </label>
+      <label class="fl">Invoice Month *<input class="fi" type="month" id="tenantInvoiceMonth" value="${escHtml(tenantCurrentMonthKey())}"></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(new Date().toISOString().slice(0, 10))}"></label>
+      <label class="fl">Previous Units<input class="fi" type="number" id="tenantInvoicePrevUnits" value="${previousUnits}" disabled></label>
+      <label class="fl">Current Units *<input class="fi" type="number" min="${previousUnits}" step="1" id="tenantInvoiceCurrentUnits" value="" placeholder="Enter current reading"></label>
+      <label class="fl">Payment Status
+        <select class="fi" id="tenantInvoiceStatus" onchange="toggleTenantInvoicePaidAmount()">
+          <option value="pending">Pending</option>
+          <option value="paid">Paid</option>
+          <option value="partial_paid">Partial Paid</option>
+        </select>
+      </label>
+      <label class="fl" id="tenantInvoicePaidAmountWrap" style="display:none">Paid Amount<input class="fi" type="number" min="0" step="0.01" id="tenantInvoicePaidAmount" value="0"></label>
+      <label class="fl full">Notes<textarea class="fi" id="tenantInvoiceNotes" rows="3" placeholder="Optional notes for this month"></textarea></label>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">Other Charges</div>
+        <button class="btn btn-s btn-sm" onclick="addTenantInvoiceOtherChargeRow()">+ Add Charge</button>
+      </div>
+      <div id="tenantInvoiceOtherRows" style="margin-top:10px">${tenantInvoiceOtherChargeRows([])}</div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTenantInvoice(Number(document.getElementById('tenantInvoiceTenantId')?.value || 0))">Save Invoice</button>
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+  toggleTenantInvoicePaidAmount();
+}
+
+function changeTenantInvoiceModalTenant(value) {
+  const tenantId = Number(value || 0);
+  if (!tenantId) return;
+  showTenantInvoiceModal(tenantId);
+}
+
+function showTenantBulkInvoiceModal() {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  if (!building) { toast('Select a building first.', 'warning'); return; }
+  const tenants = (_tenantOverview?.tenants || [])
+    .filter((tenant) => String(tenant.building_id) === String(building.id) && tenant.is_active)
+    .sort((a, b) => (a.room_id - b.room_id) || String(a.tenant_name || '').localeCompare(String(b.tenant_name || '')));
+  if (!tenants.length) { toast('No active tenants available in this building.', 'warning'); return; }
+  const monthKey = tenantCurrentMonthKey();
+  window.__modalClassName = 'modal-wide tenant-bulk-modal';
+  openModal(`Generate Monthly Bills - ${escHtml(building.name || 'Building')}`, `
+    <div class="card" style="padding:16px;margin-bottom:16px;border:1px solid #cfe0ff">
+      <div style="font-size:22px;font-weight:900;color:var(--t1)">Generate Monthly Bills</div>
+      <div class="fg" style="margin-top:14px">
+        <label class="fl">Billing Month
+          <input class="fi" type="month" id="tenantBulkInvoiceMonth" value="${escHtml(monthKey)}" onchange="refreshTenantBulkInvoiceModal()">
+        </label>
+        <label class="fl">Default Due Date
+          <input class="fi" type="date" id="tenantBulkInvoiceDueDate" value="${escHtml(tenantDefaultStartDate())}">
+        </label>
+      </div>
+    </div>
+    <div class="tenant-bulk-list">
+      ${tenants.map((tenant) => {
+        const estimate = tenantBulkInvoiceEstimate(tenant, monthKey);
+        return `
+          <div class="tenant-bulk-card">
+            <div class="tenant-bulk-card-top">
+              <div class="tenant-bulk-name">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+              <div class="tenant-bulk-total" id="tenantBulkEstimate_${Number(tenant.id)}">${fmtCur(estimate.total)}</div>
+            </div>
+            <div class="tenant-bulk-grid">
+              <div class="tenant-bulk-field">
+                <div class="tenant-bulk-label">Last Reading</div>
+                <div class="tenant-bulk-badge" id="tenantBulkPrevUnits_${Number(tenant.id)}">${estimate.previousUnits}</div>
+              </div>
+              <label class="tenant-bulk-field">
+                <div class="tenant-bulk-label">Current Reading</div>
+                <input class="fi" type="number" min="${estimate.previousUnits}" step="1" id="tenantBulkCurrentUnits_${Number(tenant.id)}" value="" placeholder="Enter reading" oninput="updateTenantBulkInvoiceRow(${Number(tenant.id)})">
+              </label>
+              <div class="tenant-bulk-field">
+                <div class="tenant-bulk-label">Payment</div>
+                <select class="fi" id="tenantBulkStatus_${Number(tenant.id)}" onchange="updateTenantBulkInvoiceRow(${Number(tenant.id)})">
+                  <option value="pending">Pending</option>
+                  <option value="paid">Paid</option>
+                  <option value="partial_paid">Partial Paid</option>
+                </select>
+                <div id="tenantBulkPaidWrap_${Number(tenant.id)}" style="display:none;margin-top:8px">
+                  <input class="fi" type="number" min="0" step="0.01" id="tenantBulkPaidAmount_${Number(tenant.id)}" value="0" placeholder="Paid amount">
+                </div>
+              </div>
+            </div>
+            <div class="tenant-bulk-extra">
+              <div class="tenant-bulk-extra-head">
+                <div class="tenant-bulk-label">Extra Expenses</div>
+                <button class="btn btn-s btn-sm" onclick="addTenantBulkOtherChargeRow(${Number(tenant.id)})">+ Add Expense</button>
+              </div>
+              <div id="tenantBulkOtherWrap_${Number(tenant.id)}">${tenantBulkRowOtherChargeRows(tenant.id, [])}</div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+    <div class="card" style="padding:18px;margin-top:16px;border:1px solid #cfe7d6;background:#f7fbf8;text-align:center">
+      <div style="font-size:14px;font-weight:800;color:#1E6B49">Total Billed (All Tenants)</div>
+      <div id="tenantBulkInvoiceGrandTotal" style="font-size:34px;font-weight:900;color:#1E6B49;margin-top:8px">${fmtCur(tenants.reduce((sum, tenant) => sum + tenantBulkInvoiceEstimate(tenant, monthKey).total, 0))}</div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTenantBulkInvoices()">Generate All Bills</button>
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function refreshTenantBulkInvoiceModal() {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  const tenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(building?.id || '') && tenant.is_active);
+  tenants.forEach((tenant) => updateTenantBulkInvoiceRow(tenant.id));
+}
+
+async function saveTenantBulkInvoices() {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  if (!building) { toast('Select a building first.', 'warning'); return; }
+  const monthKey = document.getElementById('tenantBulkInvoiceMonth')?.value || '';
+  const dueDate = document.getElementById('tenantBulkInvoiceDueDate')?.value || '';
+  const tenants = (_tenantOverview?.tenants || []).filter((tenant) => String(tenant.building_id) === String(building.id) && tenant.is_active);
+  const rows = tenants.map((tenant) => {
+    const estimate = tenantBulkInvoiceEstimate(tenant, monthKey);
+    const status = document.getElementById(`tenantBulkStatus_${Number(tenant.id)}`)?.value || 'pending';
+    return {
+      tenant_id: Number(tenant.id),
+      due_date: dueDate,
+      current_electricity_units: Number(document.getElementById(`tenantBulkCurrentUnits_${Number(tenant.id)}`)?.value || estimate.previousUnits),
+      payment_status: status,
+      paid_amount: Number(document.getElementById(`tenantBulkPaidAmount_${Number(tenant.id)}`)?.value || 0),
+      other_charge_items: estimate.otherItems,
+      notes: '',
+    };
+  }).filter((row) => Number.isFinite(row.current_electricity_units));
+  const result = await api(`/api/tenants/buildings/${Number(building.id)}/invoices/bulk`, {
+    method: 'POST',
+    body: { invoice_month: monthKey, due_date: dueDate, rows },
+  });
+  if (!result?.success) { toast(result?.error || 'Could not generate bulk invoices.', 'error'); return; }
+  closeModal();
+  toast(`Generated ${Number(result.invoices_saved || 0)} bills for ${tenantMonthLabel(monthKey)}.`, 'success', 5000);
+  await loadTenantsPage();
+}
+
+function showTenantInvoiceEditModal(invoiceId) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const tenant = tenantFindRecord(invoice.tenant_id);
+  if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  openModal(`Edit Invoice - ${escHtml(tenantMonthLabel(invoice.invoice_month))}`, `
+    <div class="card" style="padding:14px;margin-bottom:14px;background:#f7faf8">
+      <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(invoice.room_label_snapshot || 'Room')} • Saved month ${escHtml(tenantMonthLabel(invoice.invoice_month))}</div>
+    </div>
+    <div class="fg">
+      <label class="fl">Invoice Month<input class="fi" type="month" id="tenantInvoiceMonth" value="${escHtml(invoice.invoice_month || '')}" disabled></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(String(invoice.due_date || '').slice(0, 10))}"></label>
+      <label class="fl">Previous Units<input class="fi" type="number" id="tenantInvoicePrevUnits" value="${Number(invoice.previous_electricity_units || 0)}" disabled></label>
+      <label class="fl">Current Units *<input class="fi" type="number" min="${Number(invoice.previous_electricity_units || 0)}" step="1" id="tenantInvoiceCurrentUnits" value="${Number(invoice.current_electricity_units || 0)}"></label>
+      <label class="fl">Payment Status
+        <select class="fi" id="tenantInvoiceStatus" onchange="toggleTenantInvoicePaidAmount()">
+          <option value="pending" ${invoice.payment_status === 'pending' ? 'selected' : ''}>Pending</option>
+          <option value="paid" ${invoice.payment_status === 'paid' ? 'selected' : ''}>Paid</option>
+          <option value="partial_paid" ${invoice.payment_status === 'partial_paid' ? 'selected' : ''}>Partial Paid</option>
+        </select>
+      </label>
+      <label class="fl" id="tenantInvoicePaidAmountWrap" style="${invoice.payment_status === 'partial_paid' ? '' : 'display:none'}">Paid Amount<input class="fi" type="number" min="0" step="0.01" id="tenantInvoicePaidAmount" value="${escHtml(String(invoice.paid_amount || 0))}"></label>
+      <label class="fl full">Notes<textarea class="fi" id="tenantInvoiceNotes" rows="3" placeholder="Optional notes for this month">${escHtml(invoice.notes || '')}</textarea></label>
+    </div>
+    <div class="card" style="padding:14px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">Other Charges</div>
+        <button class="btn btn-s btn-sm" onclick="addTenantInvoiceOtherChargeRow()">+ Add Charge</button>
+      </div>
+      <div id="tenantInvoiceOtherRows" style="margin-top:10px">${tenantInvoiceOtherChargeRows(invoice.other_charge_items || [])}</div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveTenantInvoice(${Number(tenant.id)}, ${Number(invoice.id)})">Update Invoice</button>
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+  toggleTenantInvoicePaidAmount();
+}
+
+async function saveTenantInvoice(recordId, invoiceId = null) {
+  const existingInvoice = invoiceId ? (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId)) : null;
+  const otherChargeItems = collectTenantModalRows('.tenant-invoice-other-row', (row) => {
+    const detail = row.querySelector('.tenant-invoice-other-detail')?.value?.trim() || '';
+    const amountValue = row.querySelector('.tenant-invoice-other-amount')?.value || '';
+    const amount = amountValue === '' ? 0 : Number(amountValue);
+    if (!detail && !amount) return null;
+    return { detail, amount };
+  });
+  const body = {
+    invoice_month: existingInvoice?.invoice_month || document.getElementById('tenantInvoiceMonth')?.value || '',
+    due_date: document.getElementById('tenantInvoiceDueDate')?.value || '',
+    current_electricity_units: Number(document.getElementById('tenantInvoiceCurrentUnits')?.value || 0),
+    payment_status: document.getElementById('tenantInvoiceStatus')?.value || 'pending',
+    paid_amount: Number(document.getElementById('tenantInvoicePaidAmount')?.value || 0),
+    other_charge_items: otherChargeItems,
+    notes: document.getElementById('tenantInvoiceNotes')?.value?.trim() || '',
+  };
+  if (!body.invoice_month || !Number.isFinite(body.current_electricity_units)) {
+    toast('Invoice month and current units are required', 'warning');
+    return;
+  }
+  const result = await api(`/api/tenants/records/${Number(recordId)}/invoices`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save invoice.', 'error'); return; }
+  closeModal();
+  toast(invoiceId ? 'Invoice updated' : 'Invoice saved', 'success');
+  await loadTenantsPage();
+}
+
+async function updateTenantInvoiceStatusInline(invoiceId, nextStatus) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const tenant = tenantFindRecord(invoice.tenant_id);
+  if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  if (String(nextStatus) === 'partial_paid') {
+    showTenantPartialStatusModal(invoiceId);
+    return;
+  }
+  const paidAmount = String(nextStatus) === 'paid'
+    ? Number(invoice.total_amount || 0)
+    : 0;
+  const result = await api(`/api/tenants/records/${Number(invoice.tenant_id)}/invoices`, {
+    method: 'POST',
+    body: {
+      invoice_month: invoice.invoice_month,
+      due_date: String(invoice.due_date || '').slice(0, 10),
+      current_electricity_units: Number(invoice.current_electricity_units || 0),
+      payment_status: nextStatus,
+      paid_amount: paidAmount,
+      other_charge_items: invoice.other_charge_items || [],
+      notes: invoice.notes || '',
+    },
+  });
+  if (!result?.success) { toast(result?.error || 'Could not update invoice status.', 'error'); return; }
+  toast('Invoice status updated', 'success');
+  await loadTenantsPage();
+}
+
+function showTenantPartialStatusModal(invoiceId) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const tenant = tenantFindRecord(invoice.tenant_id);
+  const remaining = tenantNum((invoice.total_amount || 0) - (invoice.paid_amount || 0));
+  openModal(`Partial Payment - ${escHtml(tenant?.tenant_name || invoice.tenant_name_snapshot || 'Tenant')}`, `
+    <div style="display:grid;gap:14px">
+      <div class="card" style="padding:14px;background:#f7faf8">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">${escHtml(invoice.tenant_name_snapshot || tenant?.tenant_name || 'Tenant')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(tenantMonthLabel(invoice.invoice_month))} - Total ${fmtCur(invoice.total_amount || 0)}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <span class="tenant-partial-pill">Already Paid ${fmtCur(invoice.paid_amount || 0)}</span>
+          <span class="tenant-partial-pill">Remaining ${fmtCur(remaining)}</span>
+        </div>
+      </div>
+      <label class="fl full">Paid Amount
+        <input class="fi" type="number" min="0" step="0.01" id="tenantPartialPaidAmount" value="${escHtml(String(invoice.paid_amount || ''))}" placeholder="Enter paid amount">
+      </label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveTenantPartialStatus(${Number(invoice.id)})">Save Partial Payment</button>
+      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function saveTenantPartialStatus(invoiceId) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const paidAmount = Number(document.getElementById('tenantPartialPaidAmount')?.value || 0);
+  const result = await api(`/api/tenants/records/${Number(invoice.tenant_id)}/invoices`, {
+    method: 'POST',
+    body: {
+      invoice_month: invoice.invoice_month,
+      due_date: String(invoice.due_date || '').slice(0, 10),
+      current_electricity_units: Number(invoice.current_electricity_units || 0),
+      payment_status: 'partial_paid',
+      paid_amount: paidAmount,
+      other_charge_items: invoice.other_charge_items || [],
+      notes: invoice.notes || '',
+    },
+  });
+  if (!result?.success) { toast(result?.error || 'Could not save partial payment.', 'error'); return; }
+  closeModal();
+  toast('Invoice status updated', 'success');
+  await loadTenantsPage();
+}
+
+function showTenantInvoiceViewModal(invoiceId) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const otherChargesHtml = (invoice.other_charge_items || []).length
+    ? `<div style="display:grid;gap:6px">${invoice.other_charge_items.map((item) => `<div style="display:flex;justify-content:space-between;gap:12px"><span>${escHtml(item.detail || 'Other charge')}</span><strong>${fmtCur(item.amount || 0)}</strong></div>`).join('')}</div>`
+    : fmtCur(invoice.other_charges_snapshot || 0);
+  openModal(`Invoice - ${escHtml(tenantMonthLabel(invoice.invoice_month))}`, `
+    <div style="display:grid;gap:12px">
+      <div class="card" style="padding:16px;background:#f7faf8">
+        <div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(invoice.tenant_name_snapshot || 'Tenant')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(invoice.building_name_snapshot || '')} • ${escHtml(invoice.room_label_snapshot || '')}</div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <tbody>
+            <tr><td>Invoice Month</td><td>${escHtml(tenantMonthLabel(invoice.invoice_month))}</td></tr>
+            <tr><td>Rent</td><td>${fmtCur(invoice.rent_amount_snapshot || 0)}</td></tr>
+            <tr><td>Electricity</td><td>${Number(invoice.electricity_units_used || 0)} units × ${fmtCur(invoice.electricity_unit_price_snapshot || 0)} = ${fmtCur(invoice.electricity_amount || 0)}</td></tr>
+            <tr><td>Sewerage</td><td>${fmtCur(invoice.sewerage_charge_snapshot || 0)}</td></tr>
+            <tr><td>Water</td><td>${fmtCur(invoice.water_charge_snapshot || 0)}</td></tr>
+            <tr><td>Cleaning</td><td>${fmtCur(invoice.cleaning_charge_snapshot || 0)}</td></tr>
+            <tr><td>Status</td><td>${escHtml(tenantInvoiceStatusLabel(invoice.payment_status))}${invoice.payment_status !== 'pending' ? ` · ${fmtCur(invoice.paid_amount || 0)}` : ''}</td></tr>
+            <tr><td>Other Charges</td><td>${otherChargesHtml}</td></tr>
+            <tr><td style="font-weight:900">Total</td><td style="font-weight:900">${fmtCur(invoice.total_amount || 0)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="downloadTenantInvoicePdf(${Number(invoice.id)})">Download PDF</button>
+      <button class="btn btn-s" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+async function showTenantInvoiceShareModal(invoiceId) {
+  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
+  if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const response = await api(`/api/tenants/invoices/${Number(invoiceId)}/share-links`);
+  if (!response?.success) { toast(response?.error || 'Could not load invoice share links.', 'error'); return; }
+  const links = Array.isArray(response.links) ? response.links : [];
+  const rows = links.length
+    ? links.map((link) => {
+        const url = `${location.origin}/ti/${link.token}`;
+        const isExpired = link.expires_at && new Date(link.expires_at).getTime() < Date.now();
+        return `
+          <div style="border:1px solid var(--br);border-radius:12px;padding:12px;display:grid;gap:8px;${isExpired ? 'opacity:.55;' : ''}">
+            <div style="font-size:12px;color:var(--em);word-break:break-all;line-height:1.5">${escHtml(url)}</div>
+            <div style="font-size:11px;color:var(--t3)">${isExpired ? 'Expired' : (link.expires_at ? `Expires ${escHtml(tenantDateLabel(link.expires_at))}` : 'No expiry')} - ${Number(link.view_count || 0)} view${Number(link.view_count || 0) === 1 ? '' : 's'}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${!isExpired ? `<button class="btn btn-s btn-sm" onclick="copyTenantInvoiceShareLink('${escHtml(url)}')">Copy Link</button>` : ''}
+              <button class="btn btn-s btn-sm" style="color:var(--red)" onclick="deleteTenantInvoiceShareLink(${Number(invoiceId)}, ${Number(link.id)})">Delete</button>
+            </div>
+          </div>`;
+      }).join('')
+    : '<div style="font-size:12px;color:var(--t3);padding:4px 0">No share links created yet.</div>';
+  openModal(`Share Invoice - ${escHtml(tenantMonthLabel(invoice.invoice_month))}`, `
+    <div style="display:grid;gap:14px">
+      <div class="card" style="padding:14px;background:#f7faf8">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">${escHtml(invoice.tenant_name_snapshot || 'Tenant')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(invoice.building_name_snapshot || '')} - ${escHtml(invoice.room_label_snapshot || '')} - ${escHtml(tenantMonthLabel(invoice.invoice_month))}</div>
+      </div>
+      <div class="fg">
+        <label class="fl full">Expiry Date<input class="fi" type="date" id="tenantInvoiceShareExpiry" value="${escHtml(tenantDefaultShareExpiryDate())}"></label>
+      </div>
+      <div class="fa" style="margin-top:-2px">
+        <button class="btn btn-p" onclick="createTenantInvoiceShareLink(${Number(invoiceId)})">Create Share Link</button>
+      </div>
+      <div style="border-top:1px solid var(--br);padding-top:14px;display:grid;gap:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--t1)">Existing Links</div>
+        <div style="display:grid;gap:10px">${rows}</div>
+      </div>
+    </div>`);
+}
+
+function tenantMonthInvoiceShareLinksHtml(links = []) {
+  if (!links.length) {
+    return '<div style="font-size:12px;color:var(--t3);padding:4px 0">No month share links created yet.</div>';
+  }
+  return links.map((link) => {
+    const url = `${location.origin}/tim/${link.token}`;
+    const isExpired = link.expires_at && new Date(link.expires_at).getTime() < Date.now();
+    return `
+      <div style="border:1px solid var(--br);border-radius:12px;padding:12px;display:grid;gap:8px;${isExpired ? 'opacity:.55;' : ''}">
+        <div style="font-size:12px;color:var(--em);word-break:break-all;line-height:1.5">${escHtml(url)}</div>
+        <div style="font-size:11px;color:var(--t3)">${isExpired ? 'Expired' : `Expires ${escHtml(tenantDateLabel(link.expires_at))}`} - ${Number(link.view_count || 0)} view${Number(link.view_count || 0) === 1 ? '' : 's'}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${!isExpired ? `<button class="btn btn-s btn-sm" onclick="copyTenantInvoiceShareLink('${escHtml(url)}')">Copy Link</button>` : ''}
+          <button class="btn btn-s btn-sm" style="color:var(--red)" onclick="deleteTenantInvoiceMonthShareLink(${Number(link.building_id)}, ${Number(link.id)})">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function showTenantMonthInvoiceExportModal(buildingId = _selectedTenantBuildingId) {
+  const building = tenantFindBuilding(buildingId);
+  if (!building) { toast('Building not found.', 'error'); return; }
+  const allMonths = [...new Set(getTenantBuildingInvoices(building).map((invoice) => tenantInvoiceSortKey(invoice.invoice_month)).filter(Boolean))].sort();
+  const defaultMonth = document.getElementById('tenantMonthInvoiceExportMonth')?.value
+    || _tenantInvoiceFilters.month_to
+    || _tenantInvoiceFilters.month_from
+    || allMonths[allMonths.length - 1]
+    || tenantCurrentMonthKey();
+  const selectedMonth = tenantInvoiceSortKey(defaultMonth) || tenantCurrentMonthKey();
+  const monthInvoices = getTenantMonthInvoices(building, selectedMonth);
+  const response = await api(`/api/tenants/buildings/${Number(building.id)}/invoice-month-share-links?month=${encodeURIComponent(selectedMonth)}`);
+  if (!response?.success) { toast(response?.error || 'Could not load month share links.', 'error'); return; }
+  const totalAmount = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0));
+  openModal(`Month PDF / Share - ${escHtml(building.name || 'Building')}`, `
+    <div style="display:grid;gap:14px">
+      <div class="card" style="padding:14px;background:#f7faf8">
+        <div style="font-size:15px;font-weight:800;color:var(--t1)">${escHtml(building.name || 'Building')}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:4px">${monthInvoices.length} invoice${monthInvoices.length === 1 ? '' : 's'} found for ${escHtml(tenantMonthLabel(selectedMonth))}</div>
+      </div>
+      <div class="fg">
+        <label class="fl">Month
+          <input class="fi" type="month" id="tenantMonthInvoiceExportMonth" value="${escHtml(selectedMonth)}" onchange="showTenantMonthInvoiceExportModal(${Number(building.id)})">
+        </label>
+        <label class="fl">Expiry Date
+          <input class="fi" type="date" id="tenantMonthInvoiceShareExpiry" value="${escHtml(tenantDefaultShareExpiryDate())}">
+        </label>
+      </div>
+      <div class="card" style="padding:14px">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:12px;color:var(--t3)">Selected Month</div>
+            <div style="font-size:16px;font-weight:800;color:var(--t1);margin-top:4px">${escHtml(tenantMonthLabel(selectedMonth))}</div>
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--t3)">Total Amount</div>
+            <div style="font-size:16px;font-weight:800;color:var(--t1);margin-top:4px">${fmtCur(totalAmount)}</div>
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--t3)">Invoices</div>
+            <div style="font-size:16px;font-weight:800;color:var(--t1);margin-top:4px">${monthInvoices.length}</div>
+          </div>
+        </div>
+      </div>
+      <div class="fa" style="margin-top:-2px">
+        <button class="btn btn-p" onclick="downloadTenantMonthInvoicesPdf(${Number(building.id)}, document.getElementById('tenantMonthInvoiceExportMonth')?.value || '${escHtml(selectedMonth)}')">Generate PDF</button>
+        <button class="btn btn-s" onclick="createTenantInvoiceMonthShareLink(${Number(building.id)})">Create Share Link</button>
+      </div>
+      <div style="border-top:1px solid var(--br);padding-top:14px;display:grid;gap:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--t1)">Existing Links</div>
+        <div style="display:grid;gap:10px">${tenantMonthInvoiceShareLinksHtml(Array.isArray(response.links) ? response.links : [])}</div>
+      </div>
+    </div>`);
+}
+
+async function createTenantInvoiceShareLink(invoiceId) {
+  const expires_at = document.getElementById('tenantInvoiceShareExpiry')?.value || null;
+  const response = await api(`/api/tenants/invoices/${Number(invoiceId)}/share-links`, {
+    method: 'POST',
+    body: { expires_at },
+  });
+  if (!response?.success || !response?.link?.token) {
+    toast(response?.error || 'Could not create invoice share link.', 'error');
+    return;
+  }
+  toast('Invoice share link created', 'success');
+  const url = `${location.origin}/ti/${response.link.token}`;
+  try { await navigator.clipboard.writeText(url); toast('Link copied', 'success'); } catch (_err) {}
+  await showTenantInvoiceShareModal(invoiceId);
+}
+
+async function createTenantInvoiceMonthShareLink(buildingId) {
+  const invoice_month = document.getElementById('tenantMonthInvoiceExportMonth')?.value || '';
+  const expires_at = document.getElementById('tenantMonthInvoiceShareExpiry')?.value || null;
+  const response = await api(`/api/tenants/buildings/${Number(buildingId)}/invoice-month-share-links`, {
+    method: 'POST',
+    body: { invoice_month, expires_at },
+  });
+  if (!response?.success || !response?.link?.token) {
+    toast(response?.error || 'Could not create month share link.', 'error');
+    return;
+  }
+  toast('Month share link created', 'success');
+  const url = `${location.origin}/tim/${response.link.token}`;
+  try { await navigator.clipboard.writeText(url); toast('Link copied', 'success'); } catch (_err) {}
+  await showTenantMonthInvoiceExportModal(buildingId);
+}
+
+async function deleteTenantInvoiceShareLink(invoiceId, linkId) {
+  if (!await confirmDialog('Delete this invoice share link?')) return;
+  const response = await api(`/api/tenants/invoice-share-links/${Number(linkId)}`, { method: 'DELETE' });
+  if (!response?.success) {
+    toast(response?.error || 'Could not delete invoice share link.', 'error');
+    return;
+  }
+  toast('Invoice share link deleted', 'success');
+  await showTenantInvoiceShareModal(invoiceId);
+}
+
+async function deleteTenantInvoiceMonthShareLink(buildingId, linkId) {
+  if (!await confirmDialog('Delete this month share link?')) return;
+  const response = await api(`/api/tenants/invoice-month-share-links/${Number(linkId)}`, { method: 'DELETE' });
+  if (!response?.success) {
+    toast(response?.error || 'Could not delete month share link.', 'error');
+    return;
+  }
+  toast('Month share link deleted', 'success');
+  await showTenantMonthInvoiceExportModal(buildingId);
+}
+
+async function copyTenantInvoiceShareLink(url) {
+  try {
+    await navigator.clipboard.writeText(String(url || ''));
+    toast('Link copied', 'success');
+  } catch (_err) {
+    toast('Could not copy link.', 'error');
+  }
+}
+
+async function deleteTenantInvoice(invoiceId) {
+  if (!await confirmDialog('Delete this invoice?')) return;
+  const result = await api(`/api/tenants/invoices/${Number(invoiceId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete invoice.', 'error'); return; }
+  toast('Invoice deleted', 'success');
+  await loadTenantsPage();
+}
+
+function toggleTenantInvoicePaidAmount() {
+  const status = document.getElementById('tenantInvoiceStatus')?.value || 'pending';
+  const wrap = document.getElementById('tenantInvoicePaidAmountWrap');
+  if (wrap) wrap.style.display = status === 'partial_paid' ? '' : 'none';
+}
+
+window.setTenantPageTab = setTenantPageTab;
+window.setTenantSelectedBuilding = setTenantSelectedBuilding;
+window.openTenantBuilding = openTenantBuilding;
+window.setTenantInvoiceFilter = setTenantInvoiceFilter;
+window.setTenantInvoicePage = setTenantInvoicePage;
+window.resetTenantInvoiceFilters = resetTenantInvoiceFilters;
+window.setTenantReportFilter = setTenantReportFilter;
+window.setTenantReportPage = setTenantReportPage;
+window.resetTenantReportFilters = resetTenantReportFilters;
+window.addTenantInvoiceOtherChargeRow = addTenantInvoiceOtherChargeRow;
+window.toggleTenantInvoicePaidAmount = toggleTenantInvoicePaidAmount;
+window.changeTenantInvoiceModalTenant = changeTenantInvoiceModalTenant;
+window.downloadTenantInvoicePdf = downloadTenantInvoicePdf;
+window.downloadTenantMonthInvoicesPdf = downloadTenantMonthInvoicesPdf;
+window.downloadTenantReportPdf = downloadTenantReportPdf;
+window.showTenantPartialStatusModal = showTenantPartialStatusModal;
+window.saveTenantPartialStatus = saveTenantPartialStatus;
+window.showTenantBulkInvoiceModal = showTenantBulkInvoiceModal;
+window.refreshTenantBulkInvoiceModal = refreshTenantBulkInvoiceModal;
+window.saveTenantBulkInvoices = saveTenantBulkInvoices;
+window.addTenantBulkOtherChargeRow = addTenantBulkOtherChargeRow;
+window.removeTenantBulkOtherChargeRow = removeTenantBulkOtherChargeRow;
+window.updateTenantBulkInvoiceRow = updateTenantBulkInvoiceRow;
+window.updateTenantInvoiceStatusInline = updateTenantInvoiceStatusInline;
+window.showTenantInvoiceShareModal = showTenantInvoiceShareModal;
+window.showTenantMonthInvoiceExportModal = showTenantMonthInvoiceExportModal;
+window.createTenantInvoiceShareLink = createTenantInvoiceShareLink;
+window.createTenantInvoiceMonthShareLink = createTenantInvoiceMonthShareLink;
+window.deleteTenantInvoiceShareLink = deleteTenantInvoiceShareLink;
+window.deleteTenantInvoiceMonthShareLink = deleteTenantInvoiceMonthShareLink;
+window.copyTenantInvoiceShareLink = copyTenantInvoiceShareLink;

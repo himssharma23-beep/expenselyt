@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Shared monthly tenant invoices from Expense Lite AI.">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Shared Monthly Invoices - Expense Lite AI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--em:#145A3C;--em-l:#1D7A52;--em-xl:#E2F5EC;--bg:#F4F5F7;--t1:#1A1D24;--t2:#5F6B7A;--t3:#9CA3B0;--br:#E4E7EC;--white:#FFF;--mono:'JetBrains Mono',monospace;--ff:'DM Sans',sans-serif}
+body{font-family:var(--ff);background:var(--bg);color:var(--t1);min-height:100vh}
+.topbar{background:var(--em);padding:14px 24px;display:flex;align-items:center;gap:10px}
+.topbar-title{font-size:17px;font-weight:800;color:#fff}
+.topbar-sub{font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.12em;text-transform:uppercase}
+.page{max-width:1100px;margin:0 auto;padding:28px 18px}
+.hero{background:linear-gradient(135deg,#175C3C 0%,#1E6B49 100%);border-radius:22px;padding:20px 22px;color:#fff;box-shadow:0 18px 40px rgba(20,90,60,.16)}
+.hero-kicker{font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.72)}
+.hero-title{margin-top:6px;font-size:30px;font-weight:800;line-height:1.05}
+.hero-sub{margin-top:6px;font-size:14px;color:rgba(255,255,255,.8)}
+.hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+.hero-card{border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:11px 12px;background:rgba(255,255,255,.08)}
+.hero-card-label{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.72)}
+.hero-card-value{margin-top:5px;font-size:14px;font-weight:800;font-family:var(--mono)}
+.stack{display:grid;gap:14px;margin-top:16px}
+.card{background:var(--white);border:1px solid var(--br);border-radius:18px;padding:16px 18px;box-shadow:0 10px 28px rgba(17,24,39,.05)}
+.card-title{font-size:16px;font-weight:800}
+.card-sub{margin-top:4px;font-size:12px;color:var(--t3)}
+table{width:100%;border-collapse:collapse}
+th,td{padding:11px 12px;border-top:1px solid #edf2ef;font-size:14px;vertical-align:top;text-align:left}
+tr:first-child td, thead th{border-top:none}
+thead th{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);background:#f6fbf8}
+.money{font-family:var(--mono)}
+.footer{text-align:center;padding:26px 18px 34px;font-size:12px;color:var(--t3)}
+.loading,.error{padding:70px 16px;text-align:center;color:var(--t3)}
+.error h2{color:#C94444;margin-bottom:8px}
+@media (max-width:720px){.hero-grid{grid-template-columns:1fr 1fr}.hero-title{font-size:24px}.page{padding:18px 14px}}
+@media (max-width:560px){.hero-grid{grid-template-columns:1fr}.topbar{padding:12px 14px}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <img src="/favicon.svg" alt="Expense Lite AI logo" width="34" height="34">
+  <div>
+    <div class="topbar-title">Expense Lite AI</div>
+    <div class="topbar-sub">Shared Monthly Tenant Invoices</div>
+  </div>
+</div>
+<div class="page">
+  <div id="content" class="loading">Loading monthly invoices...</div>
+</div>
+<div class="footer">Read-only monthly invoice link from Expense Lite AI</div>
+<script>
+const token = location.pathname.split('/tim/')[1]?.split('/')[0] || '';
+const esc = (value) => String(value ?? '').replace(/[&<>\"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]));
+const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtDate = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return esc(raw);
+  return parsed.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+};
+const monthLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return esc(raw || '-');
+  const [year, month] = raw.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
+};
+function renderMonth(data) {
+  const invoices = Array.isArray(data?.invoices) ? data.invoices : [];
+  const totalAmount = invoices.reduce((sum, invoice) => sum + Number(invoice.total_amount || 0), 0);
+  const totalPaid = invoices.reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0);
+  const totalPending = totalAmount - totalPaid;
+  document.getElementById('content').innerHTML = `
+    <div class="hero">
+      <div class="hero-kicker">Monthly Tenant Invoices</div>
+      <div class="hero-title">${esc(data?.building?.name || 'Building')}</div>
+      <div class="hero-sub">${esc(data?.building?.address || '')}${data?.building?.address ? ' • ' : ''}${esc(monthLabel(data?.invoice_month || ''))}</div>
+      <div class="hero-grid">
+        <div class="hero-card"><div class="hero-card-label">Month</div><div class="hero-card-value">${esc(monthLabel(data?.invoice_month || ''))}</div></div>
+        <div class="hero-card"><div class="hero-card-label">Invoices</div><div class="hero-card-value">${invoices.length}</div></div>
+        <div class="hero-card"><div class="hero-card-label">Total</div><div class="hero-card-value">${money(totalAmount)}</div></div>
+        <div class="hero-card"><div class="hero-card-label">Pending</div><div class="hero-card-value">${money(totalPending)}</div></div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <div class="card-title">Invoice List</div>
+        <div class="card-sub">Shared by ${esc(data?.owner_name || 'Owner')}${data?.expires_at ? ` • Expires ${esc(fmtDate(data.expires_at))}` : ''}</div>
+        <table style="margin-top:14px">
+          <thead>
+            <tr>
+              <th>Tenant</th>
+              <th>Room</th>
+              <th>Electricity</th>
+              <th>Status</th>
+              <th>Due Date</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${invoices.map((invoice) => `
+              <tr>
+                <td>${esc(invoice.tenant_name_snapshot || 'Tenant')}</td>
+                <td>${esc(invoice.room_label_snapshot || '-')}</td>
+                <td>${Number(invoice.electricity_units_used || 0)} units • <span class="money">${money(invoice.electricity_amount || 0)}</span></td>
+                <td>${esc(String(invoice.payment_status || 'pending').replace(/_/g, ' '))}${invoice.payment_status !== 'pending' ? ` • <span class="money">${money(invoice.paid_amount || 0)}</span>` : ''}</td>
+                <td>${esc(fmtDate(invoice.due_date))}</td>
+                <td class="money">${money(invoice.total_amount || 0)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+async function loadMonth() {
+  try {
+    const response = await fetch(`/api/public/tenant-invoice-month/${encodeURIComponent(token)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Link not found');
+    renderMonth(data);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="error"><h2>Link not available</h2><p>${esc(err.message || 'This monthly invoice link is invalid or expired.')}</p></div>`;
+  }
+}
+loadMonth();
+</script>
+</body>
+</html>
