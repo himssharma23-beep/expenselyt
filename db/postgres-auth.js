@@ -850,7 +850,7 @@ async function deactivatePushDeviceToken(userId, token) {
   return (result.rowCount || 0) > 0;
 }
 
-async function getAdminPushUsers(search = '') {
+async function getAdminPushUsers(search = '', planId = null) {
   const trimmed = String(search || '').trim();
   const params = [];
   let whereSql = `WHERE u.deleted_at IS NULL`;
@@ -862,6 +862,11 @@ async function getAdminPushUsers(search = '') {
       OR u.email ILIKE $${params.length}
     )`;
   }
+  const normalizedPlanId = Number(planId || 0);
+  if (Number.isInteger(normalizedPlanId) && normalizedPlanId > 0) {
+    params.push(normalizedPlanId);
+    whereSql += ` AND current_plan.plan_id = $${params.length}`;
+  }
   const result = await query(
     `SELECT
        u.id,
@@ -869,12 +874,24 @@ async function getAdminPushUsers(search = '') {
        u.username,
        u.email,
        u.is_active,
+       current_plan.plan_id,
+       current_plan.plan_name,
        COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) AS push_device_count,
        MAX(t.last_seen_at) FILTER (WHERE t.deleted_at IS NULL) AS push_last_seen_at
      FROM users u
+     LEFT JOIN LATERAL (
+       SELECT s.plan_id, p.name AS plan_name
+       FROM user_subscriptions s
+       JOIN plans p ON p.id = s.plan_id
+       WHERE s.user_id = u.id
+         AND s.status = 'active'
+         AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
+       ORDER BY s.end_date NULLS LAST, s.id DESC
+       LIMIT 1
+     ) current_plan ON TRUE
      LEFT JOIN push_device_tokens t ON t.user_id = u.id
      ${whereSql}
-     GROUP BY u.id
+     GROUP BY u.id, current_plan.plan_id, current_plan.plan_name
      ORDER BY
        COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) DESC,
        lower(u.display_name) ASC
@@ -887,6 +904,8 @@ async function getAdminPushUsers(search = '') {
     username: row.username,
     email: row.email,
     is_active: !!row.is_active,
+    plan_id: row.plan_id ? Number(row.plan_id) : null,
+    plan_name: row.plan_name || null,
     push_device_count: Number(row.push_device_count || 0),
     push_last_seen_at: row.push_last_seen_at || null,
   }));

@@ -6314,7 +6314,8 @@ router.post('/admin/users/:id/otp', requireAdmin, async (req, res) => {
 
 router.get('/admin/notifications/users', requireAdmin, async (req, res) => {
   try {
-    const users = await Promise.resolve(pgDb.getAdminPushUsers(req.query.search || ''));
+    const planId = req.query.plan_id ? Number(req.query.plan_id) : null;
+    const users = await Promise.resolve(pgDb.getAdminPushUsers(req.query.search || '', planId));
     res.json({ users });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -9258,6 +9259,15 @@ router.post('/tenants/records/:id/invoices', async (req, res) => {
     res.json({ success: true, invoice });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not save invoice.' });
+  }
+});
+
+router.patch('/tenants/invoices/:id/status', async (req, res) => {
+  try {
+    const invoice = await Promise.resolve(pgTenantDb.updateTenantInvoicePaymentStatus(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, invoice });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update invoice status.' });
   }
 });
 

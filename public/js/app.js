@@ -7223,31 +7223,40 @@ function renderTripDetail() {
     ? members.map((member) => {
         const key = memberShareKey(member);
         const totals = peopleMap[key] || { totalShare: 0, totalGave: 0 };
-        return `<div style="display:flex;flex-direction:column;gap:3px;padding:8px 10px;border-radius:14px;background:linear-gradient(180deg,#fbfdfc 0%,#f3f9f6 100%);border:1px solid #d8e8df;min-width:112px">
-          <span style="font-size:12px;font-weight:700;line-height:1.2">${escHtml(member.member_name)}</span>
-          <span style="font-size:10px;color:var(--t3);line-height:1.2;text-transform:uppercase;letter-spacing:.04em">Share</span>
-          <span style="font-size:17px;font-weight:900;color:var(--green);line-height:1.1">${fmtCur(totals.totalShare || 0)}</span>
+        const initial = escHtml(String(member.member_name || '?').trim().charAt(0).toUpperCase() || '?');
+        return `<div class="trip-detail-member-card">
+          <div class="trip-detail-member-avatar">${initial}</div>
+          <div class="trip-detail-member-name">${escHtml(member.member_name)}</div>
+          <div class="trip-detail-member-label">Share</div>
+          <div class="trip-detail-member-share">${fmtCur(totals.totalShare || 0)}</div>
         </div>`;
       }).join('')
     : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
-  const summaryCards = [
-    ['Transport', escHtml(trip.transport_mode || '-')],
-  ].map(([label, value]) => `<div class="card" style="padding:12px 14px;min-height:0"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">${label}</div><div style="font-size:14px;font-weight:700;line-height:1.2">${value}</div></div>`).join('');
+  const transportLabel = escHtml(trip.transport_mode || '-');
   const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
-  const sharedAccessHtml = trip.isOwner
+  const sharedAccessBlockHtml = trip.isOwner
     ? (sharedUsers.length
-      ? `<div class="card" style="padding:12px 14px;min-height:0">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:6px">Shared With</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ? `
+          <div class="trip-detail-side-meta-row">
+            <div class="trip-detail-side-icon">&#128101;</div>
+            <div style="min-width:0;flex:1">
+              <div class="trip-detail-side-label">Shared With</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
             ${sharedUsers.map((user) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid #d8e8df;background:#f3f9f6;font-size:12px;font-weight:700;color:var(--text)">${escHtml(user.display_name || user.member_name || 'User')} <span style="color:var(--t3);font-weight:600">${escHtml(user.permission === 'edit' ? 'edit' : 'view')}</span></span>`).join('')}
+              </div>
+            </div>
           </div>
-        </div>`
+        `
       : '')
-    : `<div class="card" style="padding:12px 14px;min-height:0">
-        <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Shared Access</div>
-        <div style="font-size:14px;font-weight:700;line-height:1.35">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>
-        <div style="font-size:12px;color:var(--t2);margin-top:4px">${escHtml(trip.userPermission === 'edit' ? 'Can edit trip details and expenses' : 'View-only access')}</div>
-      </div>`;
+    : `
+        <div class="trip-detail-side-meta-row">
+          <div class="trip-detail-side-icon">&#128274;</div>
+          <div style="min-width:0;flex:1">
+            <div class="trip-detail-side-label">Shared Access</div>
+            <div class="trip-detail-side-value" style="margin-top:6px">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>
+            <div class="trip-detail-side-meta">${escHtml(trip.userPermission === 'edit' ? 'Can edit trip details and expenses' : 'View-only access')}</div>
+          </div>
+        </div>`;
 
   const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
   const itineraryGroups = itineraryItems.reduce((acc, item) => {
@@ -7420,10 +7429,10 @@ function renderTripDetail() {
     : '';
 
   document.getElementById('main').innerHTML = `
-    <div class="tab-content" data-trip-detail-view="1">
+    <div class="tab-content trip-detail-ledger-page" data-trip-detail-view="1">
       <div class="trip-detail-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
         <div class="trip-detail-title-block">
-          <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">Back</button>
+          <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">My Trips</button>
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
             <div style="min-width:0;flex:1">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -7453,20 +7462,30 @@ function renderTripDetail() {
         </div>
       </div>
 
-      <div class="trip-detail-summary-grid" style="display:grid;grid-template-columns:minmax(260px,1.5fr) minmax(190px,.95fr) repeat(2,minmax(130px,.7fr));gap:10px;margin-bottom:14px;align-items:stretch">
-        <div class="card" style="padding:12px 14px;min-height:0">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:5px">Trip Members</div>
-          <div style="display:flex;flex-wrap:wrap;gap:5px">${memberChips}</div>
+      <div class="trip-detail-summary-layout">
+        <div class="card trip-detail-members-panel">
+          <div class="trip-detail-panel-label">Trip Members</div>
+          <div class="trip-detail-members-grid">${memberChips}</div>
           ${trip.notes ? `<div style="margin-top:6px;font-size:11px;color:var(--t2);line-height:1.35">${escHtml(trip.notes)}</div>` : ''}
         </div>
-        <div class="card" style="display:flex;flex-direction:column;justify-content:center;padding:12px 14px;min-height:0">
-          <div style="font-size:11px;color:var(--t3);margin-bottom:3px">Grand Total</div>
-          <div style="font-size:20px;font-weight:900;color:var(--green);line-height:1.1">${fmtCur(trip.grand_total || 0)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:3px">${spendingExpenseCount} item${spendingExpenseCount !== 1 ? 's' : ''}${settlementEntries.length ? ` · ${settlementEntries.length} payment${settlementEntries.length !== 1 ? 's' : ''}` : ''}</div>
+        <div class="trip-detail-side-stack">
+          <div class="card trip-detail-total-panel">
+            <div class="trip-detail-panel-label">Grand Total</div>
+            <div class="trip-detail-total-value">${fmtCur(trip.grand_total || 0)}</div>
+            <div class="trip-detail-total-meta">${spendingExpenseCount} item${spendingExpenseCount !== 1 ? 's' : ''}${settlementEntries.length ? ` · ${settlementEntries.length} payment${settlementEntries.length !== 1 ? 's' : ''}` : ''}</div>
+          </div>
+          <div class="card trip-detail-side-info-panel">
+            <div class="trip-detail-side-meta-row">
+              <div class="trip-detail-side-icon trip-detail-side-icon-transport">${tripRowIconGlyph(trip)}</div>
+              <div style="min-width:0;flex:1">
+                <div class="trip-detail-side-label">Transport</div>
+                <div class="trip-detail-side-value">${transportLabel}</div>
+              </div>
+            </div>
+            ${sharedAccessBlockHtml}
+          </div>
         </div>
-        ${summaryCards}
       </div>
-      ${sharedAccessHtml}
       <div class="trip-detail-actions-mobile" style="margin-bottom:14px">
         ${canManageExpenses ? '<button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>' : ''}
         ${canEdit ? '<button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>' : ''}
@@ -8671,9 +8690,12 @@ async function deleteShareLink(id) {
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | ai | currencies
+let _adminExpenseStatsSearch = '';
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
 let _adminNotifSearch = '';
+let _adminNotifPlanFilter = 'all';
+let _adminNotifPlans = [];
 let _adminNotifUserIndex = new Map();
 let _adminNotifDraftTitle = '';
 let _adminNotifDraftMessage = '';
@@ -8920,8 +8942,23 @@ function renderAdminExpenseStats() {
   const stats = _adminExpenseStats || {};
   const totalExpenseItems = Number(stats.expense_items || 0);
   const userRows = Array.isArray(stats.users) ? stats.users : [];
-  const rowsHtml = userRows.length
-    ? userRows.map((user, index) => `
+  const q = String(_adminExpenseStatsSearch || '').trim().toLowerCase();
+  const filteredRows = q
+    ? userRows.filter((user) => {
+        const haystack = [
+          user.username,
+          user.display_name,
+          user.email,
+          user.mobile,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(q);
+      })
+    : userRows;
+  const rowsHtml = filteredRows.length
+    ? filteredRows.map((user, index) => `
         <tr>
           <td>${index + 1}</td>
           <td style="font-weight:700;color:var(--t1)">@${escHtml(user.username || '-')}</td>
@@ -8940,13 +8977,18 @@ function renderAdminExpenseStats() {
             <div class="card-title">Expense Items Added By Users</div>
             <div style="font-size:12px;color:var(--t3)">Live total of all saved expense rows across users.</div>
           </div>
-          <button class="btn btn-s btn-sm" onclick="loadAdminExpenseStats()">Refresh</button>
         </div>
-      </div>
-      <div class="card" style="padding:22px;max-width:420px">
-        <div style="font-size:12px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.05em">Total Expense Items</div>
-        <div style="font-size:40px;font-weight:800;color:var(--t1);margin-top:10px;font-family:'JetBrains Mono',monospace">${totalExpenseItems.toLocaleString('en-IN')}</div>
-        <div style="font-size:13px;color:var(--t2);margin-top:8px">This is the sum of expense items users have saved in the app.</div>
+        <div class="admin-expense-stats-grid admin-expense-stats-grid-inline">
+          <div class="card admin-expense-stat-card">
+            <div class="admin-expense-stat-label">Total Expense Items</div>
+            <div class="admin-expense-stat-value">${totalExpenseItems.toLocaleString('en-IN')}</div>
+            <div class="admin-expense-stat-hint">This is the sum of expense items users have saved in the app.</div>
+          </div>
+          <button class="card admin-expense-refresh-card" onclick="loadAdminExpenseStats()">
+            <span class="admin-expense-refresh-title">Refresh</span>
+            <span class="admin-expense-refresh-hint">Reload the live user expense count and table.</span>
+          </button>
+        </div>
       </div>
       <div class="card" style="padding:18px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
@@ -8954,7 +8996,15 @@ function renderAdminExpenseStats() {
             <div class="card-title">User-wise Expense Items</div>
             <div style="font-size:12px;color:var(--t3)">Shows each user and how many expense items they have added.</div>
           </div>
-          <div style="font-size:12px;color:var(--t3)">Users: ${userRows.length}</div>
+          <div style="font-size:12px;color:var(--t3)">Users: ${filteredRows.length}${filteredRows.length !== userRows.length ? ` of ${userRows.length}` : ''}</div>
+        </div>
+        <div class="admin-expense-search-row">
+          <input
+            class="fi"
+            type="text"
+            placeholder="Search username, name, email, or phone"
+            value="${escHtml(_adminExpenseStatsSearch || '')}"
+            oninput="_adminExpenseStatsSearch=this.value;renderAdminExpenseStats()">
         </div>
         <div style="overflow:auto">
           <table style="width:100%;border-collapse:collapse;min-width:760px">
@@ -9088,8 +9138,15 @@ function _adminNotifToggleVisible(selectAll) {
 
 async function loadAdminNotifications() {
   _adminNotifCaptureUiState();
-  const data = await api(`/api/admin/notifications/users${_adminNotifSearch ? `?search=${encodeURIComponent(_adminNotifSearch)}` : ''}`);
+  const query = new URLSearchParams();
+  if (_adminNotifSearch) query.set('search', _adminNotifSearch);
+  if (_adminNotifPlanFilter && _adminNotifPlanFilter !== 'all') query.set('plan_id', _adminNotifPlanFilter);
+  const [data, plansData] = await Promise.all([
+    api(`/api/admin/notifications/users${query.toString() ? `?${query.toString()}` : ''}`),
+    api('/api/admin/plans'),
+  ]);
   _adminNotifUsers = data?.users || [];
+  _adminNotifPlans = (plansData?.plans || []).filter((plan) => !!plan?.id).map((plan) => ({ id: Number(plan.id), name: plan.name || `Plan ${plan.id}` }));
   (_adminNotifUsers || []).forEach((user) => {
     if (user?.id) _adminNotifUserIndex.set(user.id, user);
   });
@@ -9102,6 +9159,9 @@ function renderAdminNotifications() {
   const selectedReadyUsers = selectedUsers.filter((user) => Number(user.push_device_count || 0) > 0);
   const totalDevices = selectedReadyUsers.reduce((sum, user) => sum + Number(user.push_device_count || 0), 0);
   const allVisibleSelected = users.length > 0 && users.every((user) => _adminNotifSelected.has(user.id));
+  const planOptions = ['<option value="all">All plans</option>']
+    .concat((_adminNotifPlans || []).map((plan) => `<option value="${plan.id}" ${String(_adminNotifPlanFilter) === String(plan.id) ? 'selected' : ''}>${escHtml(plan.name)}</option>`))
+    .join('');
 
   const userCards = users.map((user) => {
     const selected = _adminNotifSelected.has(user.id);
@@ -9122,6 +9182,7 @@ function renderAdminNotifications() {
               <div style="font-weight:700;color:var(--t1)">${escHtml(user.display_name || '')}</div>
               <div style="font-size:12px;color:var(--t2)">@${escHtml(user.username || '')}</div>
               <div style="font-size:12px;color:var(--t3);word-break:break-all">${escHtml(user.email || '')}</div>
+              ${user.plan_name ? `<div style="font-size:11px;color:var(--em);margin-top:6px;font-weight:700">Plan: ${escHtml(user.plan_name)}</div>` : ''}
             </div>
             <span style="font-size:11px;padding:4px 8px;border-radius:999px;background:${ready ? 'var(--green-l)' : 'var(--border-l)'};color:${ready ? 'var(--green)' : 'var(--t3)'};white-space:nowrap">${ready ? `${user.push_device_count} device${user.push_device_count === 1 ? '' : 's'}` : 'No device'}</span>
           </div>
@@ -9157,6 +9218,7 @@ function renderAdminNotifications() {
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:12px">
+          <select class="fi" id="adminNotifPlanFilter" style="max-width:180px" onchange="_adminNotifPlanFilter=this.value;_adminNotifListScrollTop=0;loadAdminNotifications()">${planOptions}</select>
           <input class="fi" id="adminNotifSearch" placeholder="Search by name, username, or email" value="${escHtml(_adminNotifSearch)}" oninput="_adminNotifSearch=this.value.trim()" onkeydown="if(event.key==='Enter'){_adminNotifSearch=this.value.trim();_adminNotifListScrollTop=0;loadAdminNotifications()}">
           <button class="btn btn-p btn-sm" onclick="_adminNotifSearch=document.getElementById('adminNotifSearch').value.trim();_adminNotifListScrollTop=0;loadAdminNotifications()">Search</button>
         </div>
@@ -10099,6 +10161,132 @@ async function loadAdminPlans() {
       <button class="btn btn-p btn-sm" onclick="showPlanModal(null)">+ New Plan</button>
     </div>
     ${cards}`;
+}
+async function loadAdminPlans() {
+  const data = await api('/api/admin/plans');
+  const plans = data?.plans || [];
+  const normalizedPlans = plans.map((plan) => ({
+    ...plan,
+    description: cleanMojibakeText(plan.description),
+    pages: Array.isArray(plan.pages) ? plan.pages : [],
+    ai_lookup_mode: AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === plan.ai_lookup_mode)?.key || 'both',
+    allow_live_split_friend_delete: !!plan.allow_live_split_friend_delete,
+    live_split_nudge_enabled: !!plan.live_split_nudge_enabled,
+    live_split_nudge_limit: plan.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0,
+    live_split_nudge_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.live_split_nudge_limit_period || '').toLowerCase()) ? String(plan.live_split_nudge_limit_period).toLowerCase() : 'day',
+    live_split_nudge_same_friend_daily_limit: plan.live_split_nudge_same_friend_daily_limit != null ? Number(plan.live_split_nudge_same_friend_daily_limit) : 1,
+    voice_ai_enabled: !!plan.voice_ai_enabled,
+    voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
+    voice_ai_limit_period: ['day', 'week', 'month', 'year'].includes(String(plan.voice_ai_limit_period || '').toLowerCase()) ? String(plan.voice_ai_limit_period).toLowerCase() : 'day',
+  }));
+
+  const cards = normalizedPlans.length ? normalizedPlans.map((p) => {
+    const pageLabels = p.pages.map((k) => ALL_PAGES.find((x) => x.key === k)?.label || k).join(', ') || '-';
+    const aiModeLabel = AI_LOOKUP_MODE_OPTIONS.find((opt) => opt.key === p.ai_lookup_mode)?.label || 'Both';
+    const voiceLabel = !p.voice_ai_enabled || p.voice_ai_limit === 0
+      ? 'Disabled'
+      : p.voice_ai_limit === -1
+        ? 'Unlimited'
+        : `${p.voice_ai_limit}/${p.voice_ai_limit_period}`;
+    const liveSplitDeleteLabel = p.allow_live_split_friend_delete ? 'Allowed' : 'Blocked';
+    const liveSplitNudgeLabel = !p.live_split_nudge_enabled || p.live_split_nudge_limit === 0
+      ? 'Disabled'
+      : p.live_split_nudge_limit === -1
+        ? 'Unlimited'
+        : `${p.live_split_nudge_limit}/${p.live_split_nudge_limit_period}`;
+    const liveSplitSameFriendLabel = p.live_split_nudge_same_friend_daily_limit === -1
+      ? 'Unlimited per friend/day'
+      : `${p.live_split_nudge_same_friend_daily_limit || 1}/friend/day`;
+    const statusColor = p.is_active ? 'var(--green)' : 'var(--t3)';
+    return `<div class="card admin-plan-card">
+      <div class="admin-plan-head">
+        <div class="admin-plan-copy">
+          <div class="admin-plan-name-row">
+            <div class="admin-plan-name">${escHtml(p.name)}</div>
+            ${p.is_free ? '<span class="admin-plan-chip blue">Free</span>' : ''}
+            ${p.auto_assign_on_signup ? '<span class="admin-plan-chip green">Signup Default</span>' : ''}
+          </div>
+          <div class="admin-plan-desc">${escHtml(p.description || 'No description added yet.')}</div>
+        </div>
+        <div class="admin-plan-side">
+          <span class="admin-plan-status" style="color:${statusColor}">${p.is_active ? 'Active' : 'Inactive'}</span>
+          <div class="admin-plan-actions">
+            <button class="btn btn-s btn-sm" onclick="adminDuplicatePlan(${p.id})">Duplicate</button>
+            <button class="btn btn-s btn-sm" onclick="showPlanModal(${p.id})">Edit</button>
+            <button class="btn btn-s btn-sm admin-plan-delete-btn" onclick="adminDeletePlan(${p.id})">Delete</button>
+          </div>
+        </div>
+      </div>
+      <div class="admin-plan-stat-grid">
+        <div class="admin-plan-stat">
+          <div class="admin-plan-stat-label">Monthly</div>
+          <div class="admin-plan-stat-value">${p.price_monthly > 0 ? fmtCur(p.price_monthly) : 'Free'}</div>
+        </div>
+        <div class="admin-plan-stat">
+          <div class="admin-plan-stat-label">Yearly</div>
+          <div class="admin-plan-stat-value">${p.price_yearly > 0 ? fmtCur(p.price_yearly) : 'Free'}</div>
+        </div>
+        <div class="admin-plan-stat">
+          <div class="admin-plan-stat-label">AI Queries</div>
+          <div class="admin-plan-stat-value">${p.ai_query_limit === -1 || p.ai_query_limit == null ? 'Unlimited' : p.ai_query_limit === 0 ? 'None' : p.ai_query_limit}</div>
+        </div>
+        <div class="admin-plan-stat">
+          <div class="admin-plan-stat-label">AI Mode</div>
+          <div class="admin-plan-stat-value">${escHtml(aiModeLabel)}</div>
+        </div>
+      </div>
+      <div class="admin-plan-meta-row">
+        <span class="admin-plan-pill">Voice AI: <strong>${escHtml(voiceLabel)}</strong></span>
+        <span class="admin-plan-pill">Live Split Nudges: <strong>${escHtml(liveSplitNudgeLabel)}</strong></span>
+        <span class="admin-plan-pill">Same Friend Cap: <strong>${escHtml(liveSplitSameFriendLabel)}</strong></span>
+        <span class="admin-plan-pill">Delete Friend: <strong>${escHtml(liveSplitDeleteLabel)}</strong></span>
+      </div>
+      <div class="admin-plan-pages"><span class="admin-plan-pages-label">Pages</span>${escHtml(cleanMojibakeText(pageLabels) || '-')}</div>
+    </div>`;
+  }).join('') : '<div style="color:var(--t3);text-align:center;padding:30px">No plans yet. Create one to control page access.</div>';
+
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:26px;font-weight:900;color:var(--t1);line-height:1.1">Plans (${plans.length})</div>
+        <div style="font-size:13px;color:var(--t3);margin-top:6px">Control access, pricing, AI limits, and live split rules from one clean place.</div>
+      </div>
+      <button class="btn btn-p btn-sm" onclick="showPlanModal(null)">+ New Plan</button>
+    </div>
+    <div class="admin-plan-list">${cards}</div>`;
+}
+
+async function adminDuplicatePlan(planId) {
+  const data = await api('/api/admin/plans');
+  const plan = data?.plans?.find((item) => String(item.id) === String(planId));
+  if (!plan) { toast('Plan not found', 'error'); return; }
+  const body = {
+    name: `${plan.name || 'Plan'} Copy`,
+    description: cleanMojibakeText(plan.description || ''),
+    price_monthly: Number(plan.price_monthly || 0),
+    price_yearly: Number(plan.price_yearly || 0),
+    is_free: plan.is_free ? 1 : 0,
+    is_active: plan.is_active ? 1 : 0,
+    auto_assign_on_signup: 0,
+    allow_live_split_friend_delete: plan.allow_live_split_friend_delete ? 1 : 0,
+    live_split_nudge_enabled: plan.live_split_nudge_enabled ? 1 : 0,
+    live_split_nudge_limit: plan.live_split_nudge_limit != null ? Number(plan.live_split_nudge_limit) : 0,
+    live_split_nudge_limit_period: plan.live_split_nudge_limit_period || 'day',
+    live_split_nudge_same_friend_daily_limit: plan.live_split_nudge_same_friend_daily_limit != null ? Number(plan.live_split_nudge_same_friend_daily_limit) : 1,
+    ai_query_limit: plan.ai_query_limit != null ? Number(plan.ai_query_limit) : -1,
+    ai_lookup_mode: plan.ai_lookup_mode || 'both',
+    voice_ai_enabled: plan.voice_ai_enabled ? 1 : 0,
+    voice_ai_limit: plan.voice_ai_limit != null ? Number(plan.voice_ai_limit) : 0,
+    voice_ai_limit_period: plan.voice_ai_limit_period || 'day',
+    pages: Array.isArray(plan.pages) ? plan.pages : [],
+  };
+  const r = await api('/api/admin/plans', { method: 'POST', body });
+  if (r?.success || r?.id) {
+    toast('Plan duplicated', 'success');
+    await loadAdminPlans();
+    return;
+  }
+  toast(r?.error || 'Could not duplicate plan', 'error');
 }
 
 async function showPlanModal(planId) {

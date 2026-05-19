@@ -1284,6 +1284,35 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   return mapInvoiceRow(result.rows[0]);
 }
 
+async function updateTenantInvoicePaymentStatus(userId, invoiceId, data = {}) {
+  await ensureTenantTables();
+  const invoice = await getInvoiceOwnedByUser(userId, invoiceId);
+  if (!invoice) throw validationError('Invoice not found');
+
+  const totalAmount = num(invoice.total_amount || 0);
+  const paymentStatus = normalizeTenantPaymentStatus(data.payment_status);
+  let paidAmountInput = data.paid_amount !== undefined
+    ? normalizeAmount(data.paid_amount, 'Paid amount', { allowZero: true, allowNegative: false })
+    : num(invoice.paid_amount || 0);
+
+  if (paymentStatus === 'pending') paidAmountInput = 0;
+  if (paymentStatus === 'paid') paidAmountInput = totalAmount;
+  if (paymentStatus === 'partial_paid' && (paidAmountInput <= 0 || paidAmountInput >= totalAmount)) {
+    throw validationError('Partial paid amount must be greater than 0 and less than total amount');
+  }
+
+  const result = await query(
+    `UPDATE tenant_invoices
+     SET payment_status = $1,
+         paid_amount = $2,
+         updated_at = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    [paymentStatus, paidAmountInput, invoiceId]
+  );
+  return mapInvoiceRow(result.rows[0]);
+}
+
 async function deleteTenantInvoice(userId, invoiceId) {
   await ensureTenantTables();
   const result = await query(
@@ -2084,6 +2113,7 @@ module.exports = {
   updateTenantRecord,
   deleteTenantRecord,
   createOrUpdateTenantInvoice,
+  updateTenantInvoicePaymentStatus,
   bulkCreateTenantInvoices,
   deleteTenantInvoice,
   listTenantInvoiceShareLinks,

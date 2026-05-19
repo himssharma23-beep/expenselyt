@@ -185,6 +185,25 @@ async function saveVideoPlaybackProgress(forceComplete = false) {
     return;
   }
   if (!forceComplete && !(current > 0) && !(duration > 0)) return;
+  if (forceComplete) {
+    const optimisticProgress = {
+      ...(video.progress || {}),
+      current_seconds: duration,
+      duration_seconds: duration,
+      progress_percent: 100,
+      is_completed: true,
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    _videoLibraryData = {
+      ..._videoLibraryData,
+      videos: Array.isArray(_videoLibraryData?.videos)
+        ? _videoLibraryData.videos.map((item) => String(item.relative_path || '') === String(video.relative_path || '')
+          ? { ...item, progress: optimisticProgress }
+          : item)
+        : [],
+    };
+  }
   const result = await api('/api/videos/progress', {
     method: 'POST',
     body: {
@@ -281,6 +300,26 @@ function setupVideoPlayerProgress() {
   };
   player.onended = () => {
     clearVideoProgressTimer();
+    const duration = Number(player.duration || 0);
+    if (duration > 0) {
+      const completedNow = {
+        ...(video.progress || {}),
+        current_seconds: duration,
+        duration_seconds: duration,
+        progress_percent: 100,
+        is_completed: true,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      _videoLibraryData = {
+        ..._videoLibraryData,
+        videos: Array.isArray(_videoLibraryData?.videos)
+          ? _videoLibraryData.videos.map((item) => String(item.relative_path || '') === String(video.relative_path || '')
+            ? { ...item, progress: completedNow }
+            : item)
+          : [],
+      };
+    }
     saveVideoPlaybackProgress(true).catch(() => {});
     updateVideoControlsUI();
   };

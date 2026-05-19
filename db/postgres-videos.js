@@ -419,6 +419,7 @@ async function saveVideoWatchProgress(userId, payload = {}) {
   const effectiveCurrent = isCompleted ? safeDuration : Math.max(0, currentSeconds);
   const progressPercent = isCompleted ? 100 : inferredPercent;
   const completedAt = isCompleted ? new Date().toISOString() : null;
+  const preserveCompletedOnReset = !isCompleted && effectiveCurrent <= 5;
   const result = await query(
     `INSERT INTO video_watch_progress (
       user_id, relative_path, current_seconds, duration_seconds, progress_percent, is_completed, completed_at, last_watched_at, updated_at
@@ -427,15 +428,37 @@ async function saveVideoWatchProgress(userId, payload = {}) {
      )
      ON CONFLICT (user_id, relative_path)
      DO UPDATE SET
-       current_seconds = EXCLUDED.current_seconds,
-       duration_seconds = EXCLUDED.duration_seconds,
-       progress_percent = EXCLUDED.progress_percent,
-       is_completed = EXCLUDED.is_completed,
-       completed_at = CASE WHEN EXCLUDED.is_completed THEN EXCLUDED.completed_at ELSE NULL END,
+       current_seconds = CASE
+         WHEN video_watch_progress.is_completed = TRUE AND $8 = TRUE
+           THEN video_watch_progress.current_seconds
+         ELSE EXCLUDED.current_seconds
+       END,
+       duration_seconds = CASE
+         WHEN video_watch_progress.is_completed = TRUE AND $8 = TRUE
+           THEN GREATEST(video_watch_progress.duration_seconds, EXCLUDED.duration_seconds)
+         ELSE EXCLUDED.duration_seconds
+       END,
+       progress_percent = CASE
+         WHEN video_watch_progress.is_completed = TRUE AND $8 = TRUE
+           THEN video_watch_progress.progress_percent
+         ELSE EXCLUDED.progress_percent
+       END,
+       is_completed = CASE
+         WHEN video_watch_progress.is_completed = TRUE AND $8 = TRUE
+           THEN TRUE
+         ELSE EXCLUDED.is_completed
+       END,
+       completed_at = CASE
+         WHEN video_watch_progress.is_completed = TRUE AND $8 = TRUE
+           THEN video_watch_progress.completed_at
+         WHEN EXCLUDED.is_completed
+           THEN EXCLUDED.completed_at
+         ELSE NULL
+       END,
        last_watched_at = NOW(),
        updated_at = NOW()
      RETURNING relative_path, current_seconds, duration_seconds, progress_percent, is_completed, completed_at, last_watched_at, updated_at`,
-    [cleanUserId, relativePath, effectiveCurrent, safeDuration, progressPercent, isCompleted, completedAt]
+    [cleanUserId, relativePath, effectiveCurrent, safeDuration, progressPercent, isCompleted, completedAt, preserveCompletedOnReset]
   );
   const row = result.rows[0] || {};
   return {

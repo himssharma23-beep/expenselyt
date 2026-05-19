@@ -9,6 +9,21 @@ let _tenantInvoiceFilters = { year: 'all', month_from: '', month_to: '', tenant_
 let _tenantInvoicePager = { page: 1, pageSize: 10 };
 let _tenantReportPager = { tenantPage: 1, roomPage: 1, monthPage: 1, pageSize: 8 };
 
+function tenantCaptureViewportPosition() {
+  const scroller = document.scrollingElement || document.documentElement || document.body;
+  return Number(scroller?.scrollTop || window.scrollY || 0);
+}
+
+function tenantRestoreViewportPosition(scrollTop = 0) {
+  const target = Math.max(0, Number(scrollTop || 0));
+  const apply = () => window.scrollTo({ top: target, behavior: 'auto' });
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(apply);
+  });
+}
+
 function tenantLocalDateValue(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
   const year = date.getFullYear();
@@ -2160,30 +2175,25 @@ async function saveTenantInvoice(recordId, invoiceId = null) {
 async function updateTenantInvoiceStatusInline(invoiceId, nextStatus) {
   const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
-  const tenant = tenantFindRecord(invoice.tenant_id);
-  if (!tenant) { toast('Tenant not found.', 'error'); return; }
   if (String(nextStatus) === 'partial_paid') {
     showTenantPartialStatusModal(invoiceId);
     return;
   }
+  const scrollTop = tenantCaptureViewportPosition();
   const paidAmount = String(nextStatus) === 'paid'
     ? Number(invoice.total_amount || 0)
     : 0;
-  const result = await api(`/api/tenants/records/${Number(invoice.tenant_id)}/invoices`, {
-    method: 'POST',
+  const result = await api(`/api/tenants/invoices/${Number(invoice.id)}/status`, {
+    method: 'PATCH',
     body: {
-      invoice_month: invoice.invoice_month,
-      due_date: String(invoice.due_date || '').slice(0, 10),
-      current_electricity_units: Number(invoice.current_electricity_units || 0),
       payment_status: nextStatus,
       paid_amount: paidAmount,
-      other_charge_items: invoice.other_charge_items || [],
-      notes: invoice.notes || '',
     },
   });
   if (!result?.success) { toast(result?.error || 'Could not update invoice status.', 'error'); return; }
   toast('Invoice status updated', 'success');
   await loadTenantsPage();
+  tenantRestoreViewportPosition(scrollTop);
 }
 
 function showTenantPartialStatusModal(invoiceId) {
@@ -2214,23 +2224,20 @@ function showTenantPartialStatusModal(invoiceId) {
 async function saveTenantPartialStatus(invoiceId) {
   const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
+  const scrollTop = tenantCaptureViewportPosition();
   const paidAmount = Number(document.getElementById('tenantPartialPaidAmount')?.value || 0);
-  const result = await api(`/api/tenants/records/${Number(invoice.tenant_id)}/invoices`, {
-    method: 'POST',
+  const result = await api(`/api/tenants/invoices/${Number(invoice.id)}/status`, {
+    method: 'PATCH',
     body: {
-      invoice_month: invoice.invoice_month,
-      due_date: String(invoice.due_date || '').slice(0, 10),
-      current_electricity_units: Number(invoice.current_electricity_units || 0),
       payment_status: 'partial_paid',
       paid_amount: paidAmount,
-      other_charge_items: invoice.other_charge_items || [],
-      notes: invoice.notes || '',
     },
   });
   if (!result?.success) { toast(result?.error || 'Could not save partial payment.', 'error'); return; }
   closeModal();
   toast('Invoice status updated', 'success');
   await loadTenantsPage();
+  tenantRestoreViewportPosition(scrollTop);
 }
 
 function showTenantInvoiceViewModal(invoiceId) {
