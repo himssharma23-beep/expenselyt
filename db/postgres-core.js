@@ -3875,9 +3875,12 @@ async function getTrips(userId) {
      JOIN trips t ON t.id = at.trip_id
      JOIN users owner_u ON owner_u.id = t.user_id
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(amount), 0) AS total_expenditure, COUNT(*) AS expense_count
+       SELECT
+         COALESCE(SUM(amount), 0) AS total_expenditure,
+         COUNT(*) AS expense_count
        FROM trip_expenses
        WHERE trip_id = t.id
+         AND lower(COALESCE(split_mode, '')) <> 'settlement'
      ) exp ON TRUE
      LEFT JOIN LATERAL (
        SELECT COALESCE(
@@ -5151,11 +5154,29 @@ async function createShareLink(userId, data) {
   const token = typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : crypto.randomBytes(20).toString('hex');
-  await query(
-    `INSERT INTO share_links (user_id, token, link_type, filters, expires_at)
-     VALUES ($1, $2, $3, $4::text, $5)`,
-    [userId, token, data.link_type || 'friends', data.filters ? JSON.stringify(data.filters) : null, data.expires_at || null]
-  );
+  const params = [
+    userId,
+    token,
+    data.link_type || 'friends',
+    data.filters ? JSON.stringify(data.filters) : null,
+    data.expires_at || null,
+  ];
+  const sql = `INSERT INTO share_links (user_id, token, link_type, filters, expires_at)
+               VALUES ($1, $2, $3, $4::text, $5)`;
+  try {
+    await query(sql, params);
+  } catch (err) {
+    const isPrimaryKeyError = err?.code === '23505' && String(err?.constraint || '').trim() === 'share_links_pkey';
+    if (!isPrimaryKeyError) throw err;
+    await query(
+      `SELECT setval(
+         pg_get_serial_sequence('share_links', 'id'),
+         COALESCE((SELECT MAX(id) FROM share_links), 0) + 1,
+         FALSE
+       )`
+    );
+    await query(sql, params);
+  }
   return token;
 }
 

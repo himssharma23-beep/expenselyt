@@ -6,6 +6,8 @@ const router = express.Router();
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { spawn, spawnSync } = require('child_process');
 const Tesseract = require('tesseract.js');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
@@ -33,9 +35,605 @@ const {
 const { sendLiveSplitInviteEmail } = require('../utils/mailer');
 const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
 const {
+  notifyLiveSplitInviteReceived,
+  notifyLiveSplitInviteResponded,
   notifyLiveSplitTripCreated,
   notifyLiveSplitSessionShared,
 } = require('../utils/live-split-notifications');
+
+const VIDEO_MOBILE_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-mobile-cache');
+const VIDEO_AUDIO_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-audio-cache');
+const VIDEO_ALT_STREAM_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-alt-stream-cache');
+const VIDEO_HLS_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-hls-cache');
+const mobileVideoTranscodePromises = new Map();
+const audioClipCachePromises = new Map();
+const altVideoCachePromises = new Map();
+const hlsCachePromises = new Map();
+const ffmpegMp4EncoderCache = new Map();
+
+function hashMobileVideoKey(target) {
+  return crypto
+    .createHash('sha1')
+    .update(JSON.stringify({
+      version: 2,
+      path: String(target?.absolute_path || ''),
+      size: Number(target?.stats?.size || 0),
+      mtimeMs: Number(target?.stats?.mtimeMs || 0),
+    }))
+    .digest('hex');
+}
+
+function ffmpegEncoderListIncludes(output = '', encoderName = '') {
+  const safeName = String(encoderName || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!safeName) return false;
+  return new RegExp(`^\\s*[^\\s]{6}\\s+${safeName}\\b`, 'mi').test(String(output || ''));
+}
+
+function getPreferredMp4VideoEncoder(ffmpegCommand) {
+  const key = String(ffmpegCommand || '').trim() || 'ffmpeg';
+  if (ffmpegMp4EncoderCache.has(key)) return ffmpegMp4EncoderCache.get(key);
+  const task = (() => {
+    const result = spawnSync(ffmpegCommand, ['-hide_banner', '-encoders'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    const output = `${String(result.stdout || '')}\n${String(result.stderr || '')}`;
+    if (ffmpegEncoderListIncludes(output, 'libx264')) {
+      return {
+        name: 'libx264',
+        args: ['-preset', 'veryfast', '-crf', '22'],
+      };
+    }
+    if (ffmpegEncoderListIncludes(output, 'libopenh264')) {
+      return {
+        name: 'libopenh264',
+        args: ['-b:v', '3500k', '-maxrate', '4500k', '-bufsize', '7000k'],
+      };
+    }
+    if (ffmpegEncoderListIncludes(output, 'mpeg4')) {
+      return {
+        name: 'mpeg4',
+        args: ['-q:v', '5'],
+      };
+    }
+    throw new Error('No browser-compatible MP4 video encoder is available in the installed ffmpeg build.');
+  })();
+  ffmpegMp4EncoderCache.set(key, task);
+  return task;
+}
+
+function streamTranscodedMp4ToResponse(req, res, target, ffmpegCommand, audioStreamIndex = null) {
+  const videoEncoder = getPreferredMp4VideoEncoder(ffmpegCommand);
+  const audioMap = Number.isInteger(Number(audioStreamIndex)) && Number(audioStreamIndex) >= 0
+    ? `0:${Number(audioStreamIndex)}`
+    : '0:a:0?';
+  let clientClosed = false;
+  res.status(200);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Cache-Control', 'private, max-age=0, no-store');
+  res.setHeader('Accept-Ranges', 'none');
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent((target?.filename || 'video').replace(/\.[^.]+$/, '') + '.mp4')}`);
+  if (typeof res.flushHeaders === 'function') {
+    try { res.flushHeaders(); } catch (_err) {}
+  }
+
+  const ffmpeg = spawn(ffmpegCommand, [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-i', target.absolute_path,
+    '-map', '0:v:0',
+    '-map', audioMap,
+    '-sn',
+    '-dn',
+    '-c:v', videoEncoder.name,
+    ...videoEncoder.args,
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-ac', '2',
+    '-b:a', '128k',
+    '-movflags', 'frag_keyframe+empty_moov+faststart',
+    '-max_muxing_queue_size', '2048',
+    '-f', 'mp4',
+    'pipe:1',
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stderr = '';
+  let responseStarted = false;
+  ffmpeg.stdout.on('data', () => {
+    responseStarted = true;
+  });
+  ffmpeg.stderr.on('data', (chunk) => {
+    stderr += String(chunk || '');
+  });
+  ffmpeg.on('error', (error) => {
+    if (clientClosed) return;
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Could not transcode video' });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  ffmpeg.on('close', (code) => {
+    if (clientClosed) return;
+    if (code === 0) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    if (!responseStarted && !res.headersSent) {
+      res.status(500).json({ error: stderr.trim() || 'Could not transcode video' });
+      return;
+    }
+    if (!res.writableEnded) res.end();
+  });
+  req.on('close', () => {
+    clientClosed = true;
+    if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+  });
+  return ffmpeg.stdout.pipe(res);
+}
+
+function streamLocalFileWithRange(req, res, target) {
+  const fileSize = Number(target?.stats?.size || 0);
+  const range = String(req.headers.range || '').trim();
+  const contentType = target?.mime_type || 'application/octet-stream';
+
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(target?.filename || 'video')}`);
+
+  if (!range) {
+    res.setHeader('Content-Length', fileSize);
+    return fs.createReadStream(target.absolute_path).pipe(res);
+  }
+
+  const match = range.match(/bytes=(\d*)-(\d*)/i);
+  if (!match) {
+    res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+    return res.end();
+  }
+
+  let start = match[1] === '' ? NaN : Number(match[1]);
+  let end = match[2] === '' ? NaN : Number(match[2]);
+
+  if (Number.isNaN(start) && !Number.isNaN(end)) {
+    start = Math.max(fileSize - end, 0);
+    end = fileSize - 1;
+  } else {
+    if (Number.isNaN(start)) start = 0;
+    if (Number.isNaN(end) || end >= fileSize) end = fileSize - 1;
+  }
+
+  if (start < 0 || end < start || start >= fileSize) {
+    res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+    return res.end();
+  }
+
+  res.status(206);
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+  res.setHeader('Content-Length', end - start + 1);
+  return fs.createReadStream(target.absolute_path, { start, end }).pipe(res);
+}
+
+function setVideoHlsCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, Origin');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Type');
+}
+
+function rewriteHlsMediaPlaylist(rawManifest = '', token = '', requestedAudioTrack = '') {
+  const querySuffix = requestedAudioTrack ? `?audio_stream=${encodeURIComponent(requestedAudioTrack)}` : '';
+  return String(rawManifest || '').split(/\r?\n/).map((line) => {
+    if (!line || line.startsWith('#')) return line;
+    return `/api/videos/hls/${encodeURIComponent(token)}/${encodeURIComponent(line)}${querySuffix}`;
+  }).join('\n');
+}
+
+function buildHlsMasterPlaylist(token = '', audioTracks = []) {
+  const tracks = Array.isArray(audioTracks) ? audioTracks : [];
+  if (!tracks.length) return '#EXTM3U\n#EXT-X-VERSION:3\n';
+  const defaultTrack = tracks.find((track) => track?.is_default) || tracks[0];
+  const orderedTracks = [
+    defaultTrack,
+    ...tracks.filter((track) => String(track?.id || '') !== String(defaultTrack?.id || '')),
+  ].filter(Boolean);
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+  orderedTracks.forEach((track) => {
+    const trackId = String(track?.id || '').trim();
+    if (!trackId) return;
+    const label = String(track?.label || track?.short_label || trackId).replace(/[\r\n]+/g, ' ').trim();
+    lines.push(`# Audio: ${label}`);
+    lines.push('#EXT-X-STREAM-INF:BANDWIDTH=2800000,CODECS="avc1.64001f,mp4a.40.2"');
+    lines.push(`/api/videos/hls/${encodeURIComponent(token)}/master.m3u8?audio_stream=${encodeURIComponent(trackId)}`);
+  });
+  return `${lines.join('\n')}\n`;
+}
+
+function hlsCacheAudioKey(audioStream = '') {
+  const raw = String(audioStream || '').trim();
+  if (!raw) return 'default';
+  const numeric = raw.startsWith('audio:') ? raw.slice(6) : raw;
+  return /^\d+$/.test(numeric) ? `audio-${numeric}` : 'default';
+}
+
+function hashHlsCacheKey(target, audioStream = '') {
+  return crypto
+    .createHash('sha1')
+    .update(JSON.stringify({
+      version: 2,
+      path: String(target?.absolute_path || ''),
+      size: Number(target?.stats?.size || 0),
+      mtimeMs: Number(target?.stats?.mtimeMs || 0),
+      audio: hlsCacheAudioKey(audioStream),
+    }))
+    .digest('hex');
+}
+
+async function ensureHlsCache(target, ffmpegCommand, audioStream = '') {
+  await fs.promises.mkdir(VIDEO_HLS_CACHE_DIR, { recursive: true });
+  const videoEncoder = getPreferredMp4VideoEncoder(ffmpegCommand);
+  const cacheKey = hashHlsCacheKey(target, audioStream);
+  const finalDir = path.join(VIDEO_HLS_CACHE_DIR, cacheKey);
+  const masterPath = path.join(finalDir, 'master.m3u8');
+  const cacheReady = async () => {
+    const masterStats = await fs.promises.stat(masterPath).catch(() => null);
+    if (!(masterStats?.isFile() && Number(masterStats.size || 0) > 0)) return false;
+    const firstSegmentStats = await fs.promises.stat(path.join(finalDir, 'seg_000.ts')).catch(() => null);
+    return !!(firstSegmentStats?.isFile() && Number(firstSegmentStats.size || 0) > 0);
+  };
+
+  try {
+    if (await cacheReady()) {
+      return { cacheKey, dir: finalDir, masterPath };
+    }
+  } catch (_err) {}
+
+  if (hlsCachePromises.has(cacheKey)) {
+    return hlsCachePromises.get(cacheKey);
+  }
+
+  const task = (async () => {
+    const requestedAudio = String(audioStream || '').trim();
+    const requestedAudioIndex = requestedAudio.startsWith('audio:') ? requestedAudio.slice(6) : requestedAudio;
+    const audioMap = /^\d+$/.test(requestedAudioIndex) ? `0:${Number(requestedAudioIndex)}` : '0:a:0?';
+    const segmentPattern = path.join(finalDir, 'seg_%03d.ts');
+
+    await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.mkdir(finalDir, { recursive: true });
+    try {
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn(ffmpegCommand, [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-i', target.absolute_path,
+          '-map', '0:v:0',
+          '-map', audioMap,
+          '-sn',
+          '-dn',
+          '-c:v', videoEncoder.name,
+          ...videoEncoder.args,
+          '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac',
+          '-b:a', '160k',
+          '-ac', '2',
+          '-f', 'hls',
+          '-hls_time', '6',
+          '-hls_list_size', '0',
+          '-hls_flags', 'independent_segments+append_list',
+          '-hls_segment_filename', segmentPattern,
+          '-max_muxing_queue_size', '2048',
+          '-y',
+          masterPath,
+        ], {
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+
+        let stderr = '';
+        let settled = false;
+        const finishResolve = async () => {
+          if (settled) return;
+          if (await cacheReady()) {
+            settled = true;
+            resolve();
+          }
+        };
+        const pollTimer = setInterval(() => {
+          finishResolve().catch(() => {});
+        }, 500);
+        ffmpeg.stderr.on('data', (chunk) => {
+          stderr += String(chunk || '');
+        });
+        ffmpeg.on('error', (error) => {
+          clearInterval(pollTimer);
+          if (!settled) reject(error);
+        });
+        ffmpeg.on('close', (code) => {
+          clearInterval(pollTimer);
+          if (code === 0) {
+            finishResolve().then(() => {
+              if (!settled) {
+                settled = true;
+                resolve();
+              }
+            }).catch(reject);
+            return;
+          }
+          if (!settled) reject(new Error(stderr.trim() || 'HLS transcoding failed'));
+        });
+      });
+
+      return { cacheKey, dir: finalDir, masterPath };
+    } finally {
+      hlsCachePromises.delete(cacheKey);
+    }
+  })();
+
+  hlsCachePromises.set(cacheKey, task);
+  return task;
+}
+
+async function ensureMobileVideoCacheFile(target, ffmpegCommand) {
+  await fs.promises.mkdir(VIDEO_MOBILE_CACHE_DIR, { recursive: true });
+  const videoEncoder = getPreferredMp4VideoEncoder(ffmpegCommand);
+  const cacheKey = hashMobileVideoKey(target);
+  const finalPath = path.join(VIDEO_MOBILE_CACHE_DIR, `${cacheKey}.mp4`);
+
+  try {
+    const existingStats = await fs.promises.stat(finalPath);
+    if (existingStats.isFile() && Number(existingStats.size || 0) > 0) {
+      return {
+        absolute_path: finalPath,
+        stats: existingStats,
+        filename: (target.filename || 'video').replace(/\.[^.]+$/, '.mp4'),
+        mime_type: 'video/mp4',
+      };
+    }
+  } catch (_err) {}
+
+  if (!mobileVideoTranscodePromises.has(cacheKey)) {
+    mobileVideoTranscodePromises.set(cacheKey, (async () => {
+      const tempPath = path.join(VIDEO_MOBILE_CACHE_DIR, `${cacheKey}.${process.pid}.${Date.now()}.tmp.mp4`);
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn(ffmpegCommand, [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-i', target.absolute_path,
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+          '-sn',
+          '-dn',
+          '-c:v', videoEncoder.name,
+          ...videoEncoder.args,
+          '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac',
+          '-ac', '2',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+          '-max_muxing_queue_size', '2048',
+          '-y',
+          tempPath,
+        ], {
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+
+        let stderr = '';
+        ffmpeg.stderr.on('data', (chunk) => {
+          stderr += String(chunk || '');
+        });
+        ffmpeg.on('error', (error) => reject(error));
+        ffmpeg.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          const error = new Error(stderr.trim() || 'Mobile transcoding failed');
+          reject(error);
+        });
+      });
+
+      try {
+        await fs.promises.rename(tempPath, finalPath);
+      } catch (_renameErr) {
+        try {
+          const finalStats = await fs.promises.stat(finalPath);
+          if (!(finalStats.isFile() && Number(finalStats.size || 0) > 0)) throw _renameErr;
+        } finally {
+          await fs.promises.unlink(tempPath).catch(() => {});
+        }
+      }
+
+      return finalPath;
+    })().finally(() => {
+      mobileVideoTranscodePromises.delete(cacheKey);
+    }));
+  }
+
+  const resolvedPath = await mobileVideoTranscodePromises.get(cacheKey);
+  const stats = await fs.promises.stat(resolvedPath);
+  return {
+    absolute_path: resolvedPath,
+    stats,
+    filename: (target.filename || 'video').replace(/\.[^.]+$/, '.mp4'),
+    mime_type: 'video/mp4',
+  };
+}
+
+function hashAudioClipKey(target, streamIndex, startSeconds) {
+  return crypto
+    .createHash('sha1')
+    .update(JSON.stringify({
+      path: String(target?.absolute_path || ''),
+      size: Number(target?.stats?.size || 0),
+      mtimeMs: Number(target?.stats?.mtimeMs || 0),
+      streamIndex: Number(streamIndex || 0),
+      startSeconds: Number(startSeconds || 0),
+    }))
+    .digest('hex');
+}
+
+async function ensureAudioClipCacheFile(target, ffmpegCommand, streamIndex, startSeconds = 0) {
+  await fs.promises.mkdir(VIDEO_AUDIO_CACHE_DIR, { recursive: true });
+  const cacheKey = hashAudioClipKey(target, streamIndex, startSeconds);
+  const finalPath = path.join(VIDEO_AUDIO_CACHE_DIR, `${cacheKey}.m4a`);
+
+  try {
+    const existingStats = await fs.promises.stat(finalPath);
+    if (existingStats.isFile() && Number(existingStats.size || 0) > 0) {
+      return {
+        absolute_path: finalPath,
+        filename: `${String(target?.filename || 'audio').replace(/\.[^.]+$/, '')}.m4a`,
+        mime_type: 'audio/mp4',
+        stats: existingStats,
+      };
+    }
+  } catch (_err) {}
+
+  if (audioClipCachePromises.has(cacheKey)) {
+    return audioClipCachePromises.get(cacheKey);
+  }
+
+  const task = (async () => {
+    const tempPath = `${finalPath}.tmp.m4a`;
+    try {
+      try { await fs.promises.unlink(tempPath); } catch (_err) {}
+      const ffmpegArgs = [
+        '-v', 'error',
+        '-i', target.absolute_path,
+      ];
+      if (Number(startSeconds || 0) > 0) ffmpegArgs.push('-ss', String(Number(startSeconds || 0)));
+      ffmpegArgs.push(
+        '-map', `0:${Number(streamIndex || 0)}`,
+        '-vn',
+        '-sn',
+        '-dn',
+        '-map_metadata', '-1',
+        '-c:a', 'aac',
+        '-avoid_negative_ts', 'make_zero',
+        '-movflags', 'faststart',
+        '-y',
+        tempPath
+      );
+
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn(ffmpegCommand, ffmpegArgs, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        ffmpeg.stderr.on('data', (chunk) => {
+          stderr += String(chunk || '');
+        });
+        ffmpeg.on('error', reject);
+        ffmpeg.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
+        });
+      });
+
+      await fs.promises.rename(tempPath, finalPath);
+      const stats = await fs.promises.stat(finalPath);
+      return {
+        absolute_path: finalPath,
+        filename: `${String(target?.filename || 'audio').replace(/\.[^.]+$/, '')}.m4a`,
+        mime_type: 'audio/mp4',
+        stats,
+      };
+    } finally {
+      audioClipCachePromises.delete(cacheKey);
+      try { await fs.promises.unlink(tempPath); } catch (_err) {}
+    }
+  })();
+
+  audioClipCachePromises.set(cacheKey, task);
+  return task;
+}
+
+function hashAltVideoKey(target, streamIndex) {
+  return crypto
+    .createHash('sha1')
+    .update(JSON.stringify({
+      version: 4,
+      path: String(target?.absolute_path || ''),
+      size: Number(target?.stats?.size || 0),
+      mtimeMs: Number(target?.stats?.mtimeMs || 0),
+      streamIndex: Number(streamIndex || 0),
+    }))
+    .digest('hex');
+}
+
+async function ensureAlternateVideoCacheFile(target, ffmpegCommand, streamIndex) {
+  await fs.promises.mkdir(VIDEO_ALT_STREAM_CACHE_DIR, { recursive: true });
+  const cacheKey = hashAltVideoKey(target, streamIndex);
+  const finalPath = path.join(VIDEO_ALT_STREAM_CACHE_DIR, `${cacheKey}.mp4`);
+
+  try {
+    const existingStats = await fs.promises.stat(finalPath);
+    if (existingStats.isFile() && Number(existingStats.size || 0) > 0) {
+      return {
+        absolute_path: finalPath,
+        filename: `${String(target?.filename || 'video').replace(/\.[^.]+$/, '')}.mp4`,
+        mime_type: 'video/mp4',
+        stats: existingStats,
+      };
+    }
+  } catch (_err) {}
+
+  if (altVideoCachePromises.has(cacheKey)) {
+    return altVideoCachePromises.get(cacheKey);
+  }
+
+  const task = (async () => {
+    const tempPath = `${finalPath}.tmp.mp4`;
+    try {
+      try { await fs.promises.unlink(tempPath); } catch (_err) {}
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn(ffmpegCommand, [
+          '-v', 'error',
+          '-i', target.absolute_path,
+          '-map', '0:v:0',
+          '-map', `0:${Number(streamIndex || 0)}`,
+          '-sn',
+          '-dn',
+          '-map_metadata', '-1',
+          '-fflags', '+genpts',
+          '-avoid_negative_ts', 'make_zero',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-movflags', '+faststart',
+          '-y',
+          tempPath,
+        ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        ffmpeg.stderr.on('data', (chunk) => {
+          stderr += String(chunk || '');
+        });
+        ffmpeg.on('error', reject);
+        ffmpeg.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
+        });
+      });
+
+      await fs.promises.rename(tempPath, finalPath);
+      const stats = await fs.promises.stat(finalPath);
+      return {
+        absolute_path: finalPath,
+        filename: `${String(target?.filename || 'video').replace(/\.[^.]+$/, '')}.mp4`,
+        mime_type: 'video/mp4',
+        stats,
+      };
+    } finally {
+      altVideoCachePromises.delete(cacheKey);
+      try { await fs.promises.unlink(tempPath); } catch (_err) {}
+    }
+  })();
+
+  altVideoCachePromises.set(cacheKey, task);
+  return task;
+}
 
 function normalizeOcrAmount(value) {
   if (value === null || value === undefined) return null;
@@ -171,28 +769,9 @@ function parseReceiptDraftFromText(text) {
     }
   }
 
-  const itemRows = [];
-  const seen = new Set();
-  for (const line of lines) {
-    if (/\b(total|subtotal|gst|cgst|sgst|tax|round off|cash|change|invoice|receipt|date|time|phone|upi|card|amount due|balance due)\b/i.test(line)) continue;
-    const match = line.match(/^(.+?)\s+([0-9]+(?:[.,][0-9]{2})?)$/);
-    if (!match) continue;
-    const itemName = String(match[1] || '').replace(/^[^a-z0-9]+/i, '').trim();
-    const amount = normalizeOcrAmount(match[2]);
-    if (!itemName || itemName.length < 2 || !amount) continue;
-    if (/^\d+$/.test(itemName) || itemName.length > 80) continue;
-    const key = `${itemName.toLowerCase()}|${amount.toFixed(2)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    itemRows.push({
-      item_name: itemName,
-      amount,
-      purchase_date: receiptDate,
-      category: null,
-      is_extra: false,
-      selected: true,
-    });
-  }
+  const itemRows = lines
+    .map((line) => parseReceiptItemCandidateLine(line, receiptDate))
+    .filter(Boolean);
 
   let items = itemRows.filter((row) => row.amount < 100000);
   if (totalAmount && items.length > 1) {
@@ -220,6 +799,133 @@ function parseReceiptDraftFromText(text) {
     items,
     raw_text: lines.join('\n'),
   };
+}
+
+function cleanReceiptItemName(name) {
+  return String(name || '')
+    .replace(/^\d+\s+(?=[A-Z][A-Z0-9%/ ]{2,})/, '')
+    .replace(/\s*-\s*[A-Za-z,& ]{1,20}-\s*$/g, '')
+    .replace(/\s+-[A-Z,]{1,12}$/g, '')
+    .replace(/\s+[A-Z]$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseReceiptItemCandidateLine(line, purchaseDate = null) {
+  const value = normalizeOcrLine(line);
+  if (!value) return null;
+  if (/\b(total|subtotal|gst|cgst|sgst|tax|round off|cash|change|invoice|receipt|date|time|phone|upi|card|amount due|balance due|approval|approved|mastercard|visa|auth|reference|member)\b/i.test(value)) return null;
+  if (/\bTPD\/[A-Z0-9]+\b/i.test(value)) return null;
+  const match = value.match(/^(.+?)\s+([0-9]+(?:[.,][0-9]{2}))\s*[A-Z]?\s*$/);
+  if (!match) return null;
+  const amount = normalizeOcrAmount(match[2]);
+  let itemName = cleanReceiptItemName(match[1]);
+  if (!itemName || itemName.length < 2 || !amount) return null;
+  if (!/[A-Za-z]/.test(itemName)) return null;
+  if (/^\d+\s*@\s*$/i.test(itemName)) return null;
+  if (/^\d+\s*[x@]\s*[0-9.]+$/i.test(itemName)) return null;
+  if (/^\d+\s+(?:ea|each|pcs|qty|units?)$/i.test(itemName)) return null;
+  if (/^\d+$/.test(itemName) || itemName.length > 100) return null;
+  return {
+    item_name: itemName,
+    amount,
+    purchase_date: purchaseDate,
+    category: null,
+    is_extra: false,
+    selected: true,
+  };
+}
+
+function normalizeReceiptNameKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9% ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function receiptNameLooksSame(a, b) {
+  const left = normalizeReceiptNameKey(a);
+  const right = normalizeReceiptNameKey(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function parseReceiptDiscountCandidateLine(line) {
+  const value = normalizeOcrLine(line);
+  if (!value) return null;
+  const match = value.match(/^(?:\d+\s+)?TPD\/(\d+)\s+([0-9]+(?:[.,][0-9]{2}))-\s*[A-Z]?\s*$/i);
+  if (!match) return null;
+  const amount = normalizeOcrAmount(match[2]);
+  if (!amount) return null;
+  return {
+    ref_sku: String(match[1] || '').trim(),
+    amount,
+  };
+}
+
+function parseReceiptDetailedItemLine(line, purchaseDate = null) {
+  const value = normalizeOcrLine(line);
+  if (!value) return null;
+  const discountLine = parseReceiptDiscountCandidateLine(value);
+  if (discountLine) return { type: 'discount', ...discountLine };
+  const item = parseReceiptItemCandidateLine(value, purchaseDate);
+  if (!item) return null;
+  const skuMatch = value.match(/^(\d{3,})\s+/);
+  return {
+    type: 'item',
+    sku: skuMatch ? String(skuMatch[1]) : '',
+    ...item,
+  };
+}
+
+function buildDetailedReceiptItemsFromOcr(ocrText = '', purchaseDate = null) {
+  const detailedRows = [];
+  const lastItemIndexBySku = new Map();
+  String(ocrText || '')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const parsed = parseReceiptDetailedItemLine(line, purchaseDate);
+      if (!parsed) return;
+      if (parsed.type === 'item') {
+        const row = {
+          item_name: parsed.item_name,
+          amount: parsed.amount,
+          purchase_date: parsed.purchase_date || purchaseDate,
+          category: null,
+          is_extra: false,
+          selected: true,
+          _sku: parsed.sku || '',
+          _raw: normalizeOcrLine(line),
+        };
+        detailedRows.push(row);
+        if (row._sku) lastItemIndexBySku.set(row._sku, detailedRows.length - 1);
+        return;
+      }
+      if (parsed.type === 'discount') {
+        let targetIndex = -1;
+        if (parsed.ref_sku && lastItemIndexBySku.has(parsed.ref_sku)) {
+          targetIndex = Number(lastItemIndexBySku.get(parsed.ref_sku));
+        } else if (parsed.ref_sku) {
+          for (let index = detailedRows.length - 1; index >= 0; index -= 1) {
+            const raw = String(detailedRows[index]?._raw || '');
+            if (raw && new RegExp(`\\b${parsed.ref_sku}\\b`).test(raw)) {
+              targetIndex = index;
+              break;
+            }
+          }
+        }
+        if (targetIndex < 0 && detailedRows.length) {
+          targetIndex = detailedRows.length - 1;
+        }
+        if (targetIndex >= 0 && detailedRows[targetIndex]) {
+          detailedRows[targetIndex].amount = roundCurrencyAmount(Math.max(0, Number(detailedRows[targetIndex].amount || 0) - Number(parsed.amount || 0)));
+        }
+      }
+    });
+  return detailedRows
+    .filter((row) => Number(row?.amount || 0) > 0)
+    .map(({ _sku, _raw, ...row }) => row);
 }
 
 function sanitizeReceiptItems(items, fallbackDate = null) {
@@ -348,6 +1054,58 @@ function normalizeReceiptItemMatchKey(row) {
   return `${name}|${amount.toFixed(2)}`;
 }
 
+function reconcileReceiptItemsWithOcr(aiItems = [], ocrText = '', purchaseDate = null) {
+  const aiRows = (Array.isArray(aiItems) ? aiItems : []).filter((row) => {
+    const itemName = String(row?.item_name || '').trim();
+    return itemName && !/^\d+\s*@\s*[0-9.]+$/i.test(itemName) && !/^\d+\s*@?$/i.test(itemName);
+  }).map((row) => ({ ...row }));
+  const ocrRows = buildDetailedReceiptItemsFromOcr(ocrText, purchaseDate);
+  if (!ocrRows.length) return aiRows;
+
+  const aiSubtotal = roundCurrencyAmount(aiRows.reduce((sum, row) => sum + Number(row?.amount || 0), 0));
+  const ocrSubtotal = roundCurrencyAmount(ocrRows.reduce((sum, row) => sum + Number(row?.amount || 0), 0));
+  const ocrLooksWeak = (
+    (ocrRows.length <= 1 && aiRows.length >= 2)
+    || (aiRows.length >= 4 && ocrRows.length <= Math.max(1, Math.floor(aiRows.length / 3)))
+    || (aiSubtotal > 0 && ocrSubtotal > 0 && ocrSubtotal < aiSubtotal * 0.4)
+  );
+  if (ocrLooksWeak) return aiRows;
+
+  const usedAiIndexes = new Set();
+  const finalRows = [];
+  ocrRows.forEach((ocrRow) => {
+    const exactIndex = aiRows.findIndex((aiRow, index) => (
+      !usedAiIndexes.has(index)
+      && normalizeReceiptItemMatchKey(aiRow) === normalizeReceiptItemMatchKey(ocrRow)
+    ));
+    if (exactIndex >= 0) {
+      usedAiIndexes.add(exactIndex);
+      finalRows.push(aiRows[exactIndex]);
+      return;
+    }
+    const nameIndex = aiRows.findIndex((aiRow, index) => (
+      !usedAiIndexes.has(index)
+      && receiptNameLooksSame(aiRow?.item_name, ocrRow?.item_name)
+    ));
+    if (nameIndex >= 0) {
+      usedAiIndexes.add(nameIndex);
+      finalRows.push({
+        ...aiRows[nameIndex],
+        item_name: ocrRow.item_name,
+        amount: ocrRow.amount,
+        purchase_date: ocrRow.purchase_date || aiRows[nameIndex].purchase_date || purchaseDate || '',
+      });
+      return;
+    }
+    finalRows.push({
+      ...ocrRow,
+      purchase_date: ocrRow.purchase_date || purchaseDate || '',
+    });
+  });
+
+  return orderReceiptItemsByReference(finalRows, ocrRows);
+}
+
 function dedupeReceiptItemsHeuristically(items = []) {
   const deduped = [];
   const seen = new Set();
@@ -358,6 +1116,35 @@ function dedupeReceiptItemsHeuristically(items = []) {
     deduped.push(item);
   }
   return deduped;
+}
+
+function mergeReceiptItemsByPageMaxCount(drafts = [], purchaseDate = '') {
+  const pages = (Array.isArray(drafts) ? drafts : []).filter(Boolean);
+  const maxCountByKey = new Map();
+  const sampleByKey = new Map();
+  const firstSeenOrder = [];
+  pages.forEach((page) => {
+    const rows = sanitizeReceiptItems(page?.items, purchaseDate);
+    const counts = new Map();
+    rows.forEach((row) => {
+      const key = normalizeReceiptItemMatchKey(row);
+      if (!key) return;
+      counts.set(key, Number(counts.get(key) || 0) + 1);
+      if (!sampleByKey.has(key)) {
+        sampleByKey.set(key, row);
+        firstSeenOrder.push(key);
+      }
+    });
+    counts.forEach((count, key) => {
+      const existing = Number(maxCountByKey.get(key) || 0);
+      if (count > existing) maxCountByKey.set(key, count);
+    });
+  });
+  return firstSeenOrder.flatMap((key) => {
+    const sample = sampleByKey.get(key);
+    const count = Number(maxCountByKey.get(key) || 0);
+    return Array.from({ length: count }, () => ({ ...sample }));
+  });
 }
 
 function orderReceiptItemsByReference(items = [], referenceItems = []) {
@@ -382,9 +1169,7 @@ function mergeReceiptDraftPages(drafts = []) {
     .map((page) => normalizeOcrAmount(page?.total_amount))
     .filter((value) => value > 0)
     .sort((a, b) => b - a)[0] || null;
-  const combinedItems = dedupeReceiptItemsHeuristically(
-    pages.flatMap((page) => sanitizeReceiptItems(page?.items, purchaseDate))
-  );
+  const combinedItems = mergeReceiptItemsByPageMaxCount(pages, purchaseDate);
   const rawText = pages.map((page, index) => `--- PAGE ${index + 1} ---\n${String(page?.raw_text || '').trim()}`.trim()).filter(Boolean).join('\n\n');
   return {
     merchant,
@@ -422,8 +1207,10 @@ function getOpenAiReceiptScanModel() {
 }
 
 function getOpenAiReceiptScanTimeoutMs() {
-  const raw = Number(process.env.OPENAI_RECEIPT_SCAN_TIMEOUT_MS || 12000);
-  if (!Number.isFinite(raw) || raw < 3000) return 12000;
+  const raw = Number(process.env.OPENAI_RECEIPT_SCAN_TIMEOUT_MS || 45000);
+  if (!Number.isFinite(raw)) return 45000;
+  if (raw < 10000) return 10000;
+  if (raw > 120000) return 120000;
   return Math.round(raw);
 }
 
@@ -442,7 +1229,7 @@ async function postOpenAiResponseWithTimeout(body, apiKey, timeoutMs = getOpenAi
     });
   } catch (err) {
     if (err?.name === 'AbortError') {
-      throw new Error(`OpenAI receipt scan timed out after ${timeoutMs}ms`);
+      throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
     }
     throw err;
   } finally {
@@ -454,6 +1241,20 @@ function getOpenAiAiLookupConfig() {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
   const model = String(
     process.env.OPENAI_AI_LOOKUP_MODEL ||
+    process.env.OPENAI_MODEL ||
+    'gpt-4.1-mini'
+  ).trim();
+  return {
+    apiKey,
+    model,
+    enabled: !!apiKey,
+  };
+}
+
+function getOpenAiVideoCatalogConfig() {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  const model = String(
+    process.env.OPENAI_VIDEO_CATALOG_MODEL ||
     process.env.OPENAI_MODEL ||
     'gpt-4.1-mini'
   ).trim();
@@ -533,6 +1334,238 @@ function extractOpenAiOutputText(payload) {
     }
   }
   return parts.join('\n').trim();
+}
+
+function tryParseJsonObjectText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_err) {
+    // Keep trying below.
+  }
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    try {
+      return JSON.parse(fencedMatch[1].trim());
+    } catch (_err) {
+      // Keep trying below.
+    }
+  }
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = raw.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch (_err) {
+      // Keep trying below.
+    }
+  }
+  return null;
+}
+
+function normalizePosterUrlCandidate(value) {
+  const raw = String(value || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return '';
+  if (/\s/.test(raw)) return '';
+  if (/m\.media-amazon\.com/i.test(raw)) return '';
+  if (/\.(jpg|jpeg|png|webp|gif)(?:[?#].*)?$/i.test(raw)) return raw;
+  if (/(image\.tmdb\.org|upload\.wikimedia\.org|static\.tvmaze\.com)/i.test(raw)) return raw;
+  return '';
+}
+
+function withPromiseTimeout(promise, timeoutMs, message) {
+  const maxMs = Math.max(1000, Number(timeoutMs || 0));
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      setTimeout(() => {
+        const err = new Error(message || 'Operation timed out.');
+        err.statusCode = 504;
+        reject(err);
+      }, maxMs);
+    }),
+  ]);
+}
+
+function sleep(ms) {
+  const delay = Math.max(0, Number(ms || 0));
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function buildVideoCatalogAiReuseKey(item) {
+  const year = Number(item?.release_year || 0) > 0 ? String(item.release_year) : '';
+  const mediaType = String(item?.media_type || 'movie').trim().toLowerCase() || 'movie';
+  const raw = String(item?.display_title || item?.folder_name || '').trim().toLowerCase();
+  const cleaned = raw
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b(?:1080p|720p|2160p|4k|hdr|hevc|x264|x265|ddp5?\.?1|aac|bluray|brrip|webrip|web-dl|multi(?:\s*audio)?|dual\s*audio|proper|remux|uncut|extended|hindi|eng(?:lish)?|tam(?:il)?|tel(?:ugu)?|mal(?:ayalam)?|peruguy|allmovieshub(?:\.in)?|sample)\b/gi, ' ')
+    .replace(/\b\d+x\d+\b/gi, ' ')
+    .replace(/\bs\d{1,2}e\d{1,3}\b/gi, ' ')
+    .replace(/\bseason\s*\d+\b/gi, ' ')
+    .replace(/\bepisode\s*\d+\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${mediaType}|${year}|${cleaned || raw}`;
+}
+
+function scoreVideoCatalogAiCandidate(item) {
+  const raw = String(item?.display_title || item?.folder_name || '').trim();
+  let score = 0;
+  if (/\b(sample|allmovieshub|peruguy)\b/i.test(raw)) score += 8;
+  if (/\[[^\]]+\]/.test(raw)) score += 3;
+  if (/\b(?:1080p|720p|2160p|4k|hdr|hevc|x264|x265|bluray|brrip|webrip|web-dl|multi(?:\s*audio)?|dual\s*audio|proper|remux|uncut|extended)\b/i.test(raw)) score += 4;
+  if (/\b(?:hin|hindi|eng|english|tam|tamil|tel|telugu|mal|malayalam)\b/i.test(raw)) score += 2;
+  if (/\bs\d{1,2}e\d{1,3}\b/i.test(raw)) score += 1;
+  if (raw.length > 80) score += 2;
+  return score;
+}
+
+function isOpenAiQuotaExhaustedError(err) {
+  const status = Number(err?.statusCode || err?.status || 0);
+  const message = String(err?.message || '').toLowerCase();
+  if (status !== 429) return false;
+  return (
+    message.includes('insufficient_quota') ||
+    message.includes('quota') ||
+    message.includes('billing') ||
+    message.includes('balance') ||
+    message.includes('credit')
+  );
+}
+
+async function fetchVideoCatalogMetadataDraft(item) {
+  const config = getOpenAiVideoCatalogConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI video cataloging is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'display_title',
+      'media_type',
+      'release_year',
+      'genres',
+      'synopsis',
+      'cast_members',
+      'creators',
+      'tags',
+      'original_language',
+      'country',
+      'content_rating',
+      'poster_url',
+      'runtime_minutes',
+      'season_count',
+      'episode_count',
+      'confidence',
+      'note',
+    ],
+    properties: {
+      display_title: { type: 'string' },
+      media_type: { type: 'string', enum: ['movie', 'series'] },
+      release_year: { type: ['integer', 'null'] },
+      genres: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+      synopsis: { type: 'string' },
+      cast_members: { type: 'array', items: { type: 'string' }, maxItems: 24 },
+      creators: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      tags: { type: 'array', items: { type: 'string' }, maxItems: 24 },
+      original_language: { type: 'string' },
+      country: { type: 'string' },
+      content_rating: { type: 'string' },
+      poster_url: { type: 'string' },
+      runtime_minutes: { type: ['integer', 'null'] },
+      season_count: { type: ['integer', 'null'] },
+      episode_count: { type: 'integer' },
+      confidence: { type: 'integer' },
+      note: { type: 'string' },
+    },
+  };
+
+  const body = {
+    model: config.model,
+    input: [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'input_text',
+            text: [
+              'You are enriching a private movie and TV series catalog from folder names and filenames.',
+              'Infer metadata only when you are reasonably confident the title is a recognizable real movie or series.',
+              'If you are unsure, keep fields blank or null instead of inventing details.',
+              'Use concise, searchable metadata: genres, synopsis, cast, creators, language, country, rating, runtime, season count, episode count, and tags.',
+              'For series, keep display_title as the series title, not an episode name.',
+              'Use web search to identify the exact movie or series when needed.',
+              'If you can confidently find a real public poster image, return a direct poster image URL in poster_url.',
+              'poster_url must be a direct image URL, not a webpage URL.',
+              'If you cannot confidently find a direct poster image URL, return an empty string for poster_url.',
+              'confidence must be 0 to 100.',
+              'Return only valid JSON matching the schema.',
+            ].join(' '),
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: JSON.stringify({
+              folder_name: item.folder_name || '',
+              current_title: item.display_title || '',
+              current_type: item.media_type || '',
+              current_year: item.release_year || null,
+              file_count: Number(item.file_count || 0),
+              episode_count: Number(item.episode_count || 0),
+              season_count: item.season_count || null,
+              filenames: Array.isArray(item.files) ? item.files.slice(0, 40).map((file) => file.filename || file.relative_path || '') : [],
+              relative_paths: Array.isArray(item.files) ? item.files.slice(0, 40).map((file) => file.relative_path || '') : [],
+            }, null, 2),
+          },
+        ],
+      },
+    ],
+    tools: [
+      { type: 'web_search', search_context_size: 'low' },
+    ],
+    tool_choice: 'auto',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'video_catalog_metadata',
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  const response = await postOpenAiResponseWithTimeout(body, config.apiKey, 35000);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI video catalog request failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty video metadata result.');
+    err.statusCode = 502;
+    throw err;
+  }
+  const parsed = tryParseJsonObjectText(outputText);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const err = new Error('OpenAI returned invalid JSON for video catalog metadata.');
+    err.statusCode = 502;
+    throw err;
+  }
+  parsed.poster_url = normalizePosterUrlCandidate(parsed.poster_url);
+  return parsed;
 }
 
 function buildAiLookupOpenAiContext(summary, currentUser) {
@@ -2319,7 +3352,7 @@ async function parseLiveSplitVoiceWithOpenAi({ message, mode = 'split', currentE
   };
 }
 
-async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageBuffer = null, mimeType = 'image/jpeg') {
+async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType = 'image/jpeg') {
   const config = getOpenAiSmartCaptureConfig();
   if (!config.enabled) return null;
 
@@ -2352,18 +3385,34 @@ async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageB
   };
 
   const systemPrompt = [
-    'You extract expense rows from a bill, receipt, or invoice image.',
-    'Return a clean structured draft for an expense review screen.',
-    'Prefer the actual line items shown in the bill table.',
-    'Do not collapse all rows into a single total row if the image clearly shows individual items.',
-    'If the image is a payment history, bank statement snippet, wallet transaction list, or Razorpay-style transaction feed, treat each visible payment as its own row entry.',
-    'For transaction-list screenshots, do not use the first row, largest row, or merchant header as total_amount unless the image explicitly shows a labeled total.',
-    'Use the OCR text only as supporting context when the image text is hard to read.',
-    'Keep purchase_date in YYYY-MM-DD format. If the exact date is missing, infer the most likely date from the OCR text. If still unknown, return an empty string.',
-    'Use category only if the OCR text strongly suggests one, otherwise return an empty string.',
-    'Set is_extra to false unless the OCR text clearly indicates a luxury or non-essential item.',
-    'Set selected to true for all extracted expense rows.',
-    'If line items are unclear and the image is a single bill/receipt, return a single item using the merchant name and total amount.',
+    'You are an expert receipt and bill extraction engine.',
+    'Your job is to read the uploaded receipt image directly and return an exact, clean expense draft.',
+    'Use OCR text only as supporting context. The image is the primary source of truth.',
+    'Extract real purchased line items only.',
+    'Ignore handwriting, blue pen notes, circles, arrows, totals-side scribbles, desk/background objects, and any second partial receipt visible beside the main receipt.',
+    'Ignore member numbers, approval text, card details, references, invoice numbers, auth numbers, store footer text, and summary labels as expense items.',
+    'When a receipt shows discount lines such as TPD/..., coupon rows, instant savings, promo lines, or negative discount rows, attach that discount to the immediately preceding purchased item.',
+    'The returned item amount must always be the final net paid amount after discount, never the original pre-discount shelf amount.',
+    'Example: if an item is 21.99 and the next receipt line is 4.50- for that item, return amount 17.49 for that item row.',
+    'Preserve legitimate repeated purchases as separate rows when they appear multiple times on the receipt.',
+    'If the same item name and same amount appear on separate printed rows, keep every occurrence as a separate item row.',
+    'Example: if the receipt shows COTTAGE CHSE three times at 11.99, return three separate COTTAGE CHSE rows.',
+    'Example: if the receipt shows KS GRK YGRT three times at 11.99, return three separate KS GRK YGRT rows.',
+    'Example: if the receipt shows RAW CASHEWS twice at 16.99, return two separate RAW CASHEWS rows.',
+    'Example: if the receipt shows a short code-like line such as 100%WWSNWCH 7.19 before subtotal, include it as a real item row.',
+    'Do not deduplicate repeated items unless they are clearly the same physical printed row repeated by image overlap.',
+    'If a later row repeats the same item name and the same amount, keep it again as another purchased line item.',
+    'Read compact uppercase product-code descriptions carefully, including names that start with numbers or percent signs such as 100%WWSNWCH.',
+    'Do not drop the last purchased line item before subtotal just because it is short, abbreviated, or code-like.',
+    'Do not invent quantities, categories, or extra metadata not clearly supported by the receipt.',
+    'For warehouse receipts like Costco, item descriptions may be abbreviated. Keep the printed description as-is but cleaned.',
+    'Return total_amount only for the final receipt total, not subtotal or tax.',
+    'Keep purchase_date in YYYY-MM-DD format. If the exact date is unreadable, infer the most likely full date from the receipt. If still unknown, return an empty string.',
+    'Use category only when strongly obvious from the item text, otherwise return an empty string.',
+    'Set is_extra to false by default unless the item is clearly non-essential.',
+    'Set selected to true for every returned line item.',
+    'If you cannot confidently read one character in a compact item code, prefer the closest printed item text instead of dropping the whole purchased line.',
+    'If you cannot confidently read individual rows, return the best high-confidence rows only rather than guessing.',
   ].join(' ');
 
   const content = [
@@ -2371,7 +3420,6 @@ async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageB
       type: 'input_text',
       text: JSON.stringify({
         ocr_text: String(ocrText || ''),
-        fallback_draft: fallbackDraft || null,
       }),
     },
   ];
@@ -2422,7 +3470,19 @@ async function parseReceiptDraftWithOpenAi(ocrText, fallbackDraft = null, imageB
     throw new Error('OpenAI returned invalid JSON for receipt scan parsing.');
   }
 
-  return normalizeReceiptDraftShape(parsed, ocrText);
+  const draft = {
+    merchant: String(parsed?.merchant || '').trim() || 'Scanned receipt',
+    purchase_date: parseReceiptDateFromText(String(parsed?.purchase_date || '')) || '',
+    total_amount: normalizeOcrAmount(parsed?.total_amount),
+    items: sanitizeReceiptItems(parsed?.items, parseReceiptDateFromText(String(parsed?.purchase_date || '')) || ''),
+    raw_text: '',
+  };
+  if (!Array.isArray(draft?.items) || !draft.items.length) {
+    const err = new Error('AI could not extract any reliable expense rows from this receipt.');
+    err.statusCode = 422;
+    throw err;
+  }
+  return draft;
 }
 
 async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
@@ -2464,6 +3524,8 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
     'Return one combined receipt draft.',
     'Remove duplicate line items that appear on more than one page.',
     'Preserve distinct repeated purchases only when the item name, quantity context, or amount indicates they are truly separate bill rows.',
+    'If the exact same item name and amount appears twice on the same page draft, keep both rows.',
+    'Do not collapse legitimate repeated lines like RAW CASHEWS, COTTAGE CHSE, KS GRK YGRT, or LIMES 3 LB when they are separate purchases.',
     'Keep merchant and purchase date if visible across pages.',
     'Prefer the highest-confidence combined interpretation of the bill.',
     'Keep selected=true for kept rows.',
@@ -2516,7 +3578,14 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
   } catch (_err) {
     throw new Error('OpenAI returned invalid JSON for receipt merge.');
   }
-  return normalizeReceiptDraftShape(parsed, pages.map((page) => page?.raw_text || '').join('\n\n'));
+  const purchaseDate = parseReceiptDateFromText(String(parsed?.purchase_date || '')) || '';
+  return {
+    merchant: String(parsed?.merchant || '').trim() || 'Scanned receipt',
+    purchase_date: purchaseDate,
+    total_amount: normalizeOcrAmount(parsed?.total_amount),
+    items: sanitizeReceiptItems(parsed?.items, purchaseDate),
+    raw_text: '',
+  };
 }
 
 async function scanReceiptFile(file, options = {}) {
@@ -2531,42 +3600,38 @@ async function scanReceiptFile(file, options = {}) {
     throw err;
   }
 
-  const result = await Tesseract.recognize(file.buffer, 'eng', {
-    logger: () => {},
-  });
-  const text = String(result?.data?.text || '').trim();
-  if (!text) {
-    const err = new Error('Could not read text from this image');
-    err.statusCode = 422;
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI receipt scan is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
     throw err;
   }
 
-  const localDraft = normalizeReceiptDraftShape(parseReceiptDraftFromText(text), text);
-  const enableAi = options?.enableAi !== false;
-  let aiDraft = null;
-  let aiUsed = false;
-  let aiError = '';
-  if (enableAi && getOpenAiSmartCaptureConfig().enabled) {
-    try {
-      aiDraft = await parseReceiptDraftWithOpenAi(
-        text,
-        localDraft,
-        file.buffer,
-        String(file.mimetype || 'image/jpeg')
-      );
-      aiUsed = !!aiDraft;
-    } catch (err) {
-      aiError = err?.message || 'AI receipt parsing failed';
-    }
+  let aiDraft;
+  try {
+    aiDraft = await parseReceiptDraftWithOpenAi(
+      '',
+      file.buffer,
+      String(file.mimetype || 'image/jpeg')
+    );
+  } catch (err) {
+    const wrapped = new Error(err?.message || 'AI receipt parsing failed');
+    wrapped.statusCode = err?.statusCode || 422;
+    throw wrapped;
   }
-  const draft = finalizeReceiptDraft(mergeReceiptDrafts(localDraft, aiDraft));
+
+  const draft = aiDraft;
   return {
     success: true,
     draft: {
       ...draft,
-      confidence: Number(result?.data?.confidence || 0),
-      ai_used: aiUsed,
-      ai_error: aiError || null,
+      provider: 'openai',
+    },
+    debug: {
+      ocr_text: '',
+      ocr_rows: [],
+      ai_rows: Array.isArray(aiDraft?.items) ? aiDraft.items : [],
+      final_rows: Array.isArray(draft?.items) ? draft.items : [],
     },
   };
 }
@@ -2737,38 +3802,40 @@ router.post('/expenses/scan-images-batch', upload.array('files', 8), async (req,
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: 'No images uploaded' });
 
-    const usePerPageAi = files.length <= 1;
     const pageResults = [];
     for (const file of files) {
-      pageResults.push(await scanReceiptFile(file, { enableAi: usePerPageAi }));
+      pageResults.push(await scanReceiptFile(file));
     }
 
     const pageDrafts = pageResults.map((entry) => entry?.draft).filter(Boolean);
-    const mergedHeuristic = mergeReceiptDraftPages(pageDrafts);
-    let aiMerged = null;
-    let mergeAiUsed = false;
-    let mergeAiError = '';
-    if (pageDrafts.length > 1 && getOpenAiSmartCaptureConfig().enabled) {
-      try {
-        aiMerged = await mergeReceiptDraftPagesWithOpenAi(pageDrafts);
-        mergeAiUsed = !!aiMerged;
-      } catch (err) {
-        mergeAiError = err?.message || 'AI receipt merge failed';
-      }
+    let mergedDraft = pageDrafts[0] || null;
+    if (pageDrafts.length > 1) {
+      mergedDraft = await mergeReceiptDraftPagesWithOpenAi(pageDrafts);
     }
-    const mergedDraft = finalizeReceiptDraft(mergeReceiptDrafts(mergedHeuristic, aiMerged));
-    mergedDraft.items = orderReceiptItemsByReference(mergedDraft.items, mergedHeuristic.items);
+    if (!mergedDraft) {
+      const err = new Error('AI could not extract any reliable expense rows from these receipts.');
+      err.statusCode = 422;
+      throw err;
+    }
     res.json({
       success: true,
       draft: {
         ...mergedDraft,
         page_count: pageDrafts.length,
-        confidence: pageResults.length ? Math.round((pageResults.reduce((sum, entry) => sum + Number(entry?.draft?.confidence || 0), 0) / pageResults.length) * 100) / 100 : 0,
-        ai_used: pageResults.some((entry) => !!entry?.draft?.ai_used) || mergeAiUsed,
-        ai_error: mergeAiError || null,
-        batch_fast_mode: !usePerPageAi,
+        provider: 'openai',
       },
       pages: pageDrafts,
+      debug: {
+        final_rows: Array.isArray(mergedDraft?.items) ? mergedDraft.items : [],
+        pages: pageResults.map((entry, index) => ({
+          page: index + 1,
+          merchant: entry?.draft?.merchant || '',
+          total_amount: entry?.draft?.total_amount || 0,
+          ocr_rows: entry?.debug?.ocr_rows || [],
+          ai_rows: entry?.debug?.ai_rows || [],
+          final_rows: entry?.debug?.final_rows || [],
+        })),
+      },
     });
   } catch (err) {
     console.error('[expenses/scan-images-batch]', err);
@@ -3689,6 +4756,57 @@ function parseExcelDate(val) {
   return null;
 }
 
+function parseExpenseBucketImportAmount(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number' && Number.isFinite(val)) return Math.round(val * 100) / 100;
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '').trim();
+  if (!cleaned) return 0;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+}
+
+function parseExpenseBucketImportWorkbook(buffer, options = {}) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const requestedSheet = String(options?.sheet_name || '').trim();
+  const targetSheets = requestedSheet && workbook.Sheets[requestedSheet]
+    ? [requestedSheet]
+    : workbook.SheetNames;
+  const defaultName = String(options?.name || '').trim() || 'Imported expense';
+  const entryType = String(options?.entry_type || '').trim() || null;
+  const rows = [];
+  let skipped = 0;
+
+  for (const sheetName of targetSheets) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    for (const row of matrix) {
+      if (!Array.isArray(row) || !row.length) continue;
+      const entryDate = parseExcelDate(row[0]);
+      const amount = parseExpenseBucketImportAmount(row[1]);
+      if (!entryDate) {
+        const hasAnyValue = row.some((cell) => String(cell || '').trim());
+        if (hasAnyValue) skipped += 1;
+        continue;
+      }
+      if (!(amount > 0)) {
+        skipped += 1;
+        continue;
+      }
+      rows.push({
+        name: defaultName,
+        entry_type: entryType,
+        entry_date: entryDate,
+        amount,
+        source_sheet: sheetName,
+      });
+    }
+  }
+
+  rows.sort((a, b) => String(a.entry_date).localeCompare(String(b.entry_date)));
+  return { rows, skipped, sheet_names: targetSheets };
+}
+
 function parseImportDate(str) {
   if (!str) return null;
   // DD-MM-YYYY or DD/MM/YYYY
@@ -4454,6 +5572,7 @@ router.post('/live-split/invite', async (req, res) => {
         targetPhone: existing.mobile || null,
         targetName,
       }));
+      notifyLiveSplitInviteReceived(req.session.userId, Number(existing.id), Number(invite?.id || 0), { resent: false }).catch(() => {});
       return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
     }
 
@@ -4522,13 +5641,14 @@ router.post('/live-split/invite-user', async (req, res) => {
         await Promise.resolve(getCoreDb().addLiveSplitFriend(req.session.userId, targetName));
       }
     }
-    await Promise.resolve(getCoreDb().createLiveSplitInvite({
+    const invite = await Promise.resolve(getCoreDb().createLiveSplitInvite({
       inviterUserId: req.session.userId,
       targetUserId: Number(target.id),
       targetEmail: target.email || null,
       targetPhone: target.mobile || null,
       targetName,
     }));
+    notifyLiveSplitInviteReceived(req.session.userId, Number(target.id), Number(invite?.id || 0), { resent: false }).catch(() => {});
     return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send request.' });
@@ -4558,6 +5678,12 @@ router.post('/live-split/invites/:id/accept', async (req, res) => {
   try {
     const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
     const result = await Promise.resolve(getCoreDb().acceptLiveSplitInvite(req.session.userId, req.params.id, me || {}));
+    notifyLiveSplitInviteResponded(
+      Number(result?.inviter_user_id || 0),
+      Number(req.session.userId || 0),
+      Number(req.params.id || 0),
+      'accepted'
+    ).catch(() => {});
     return res.json({ success: true, ...result });
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -4567,7 +5693,17 @@ router.post('/live-split/invites/:id/accept', async (req, res) => {
 router.post('/live-split/invites/:id/reject', async (req, res) => {
   try {
     const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const invite = await Promise.resolve(getCoreDb().getIncomingLiveSplitInvites(req.session.userId, me?.email || '', me?.mobile || ''));
+    const currentInvite = (invite || []).find((item) => Number(item.id) === Number(req.params.id));
     await Promise.resolve(getCoreDb().rejectLiveSplitInvite(req.session.userId, req.params.id, me || {}));
+    if (currentInvite?.inviter_user_id) {
+      notifyLiveSplitInviteResponded(
+        Number(currentInvite.inviter_user_id || 0),
+        Number(req.session.userId || 0),
+        Number(req.params.id || 0),
+        'rejected'
+      ).catch(() => {});
+    }
     return res.json({ success: true });
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -4591,6 +5727,12 @@ router.post('/live-split/invites/:id/resend', async (req, res) => {
     const me = await Promise.resolve(pgDb.findUserById(req.session.userId));
     const inviterName = String(me?.display_name || me?.username || 'A friend').trim();
     const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const targetUserId = Number(invite.target_user_id || 0);
+    if (targetUserId > 0) {
+      notifyLiveSplitInviteReceived(req.session.userId, targetUserId, Number(invite.id || 0), { resent: true }).catch(() => {});
+      return res.json({ success: true, channel: 'push', message: 'Invite sent again as a push notification.' });
+    }
+
     const targetEmail = String(invite.target_email || invite.target_user_email || '').trim().toLowerCase();
     if (targetEmail) {
       const inviteLink = buildLiveSplitInviteRegisterUrl(appBase, invite.invite_token);
@@ -5987,13 +7129,178 @@ router.put('/admin/videos/settings', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/admin/videos/catalog/scan', requireAdmin, async (req, res) => {
+  try {
+    const scanPath = String(req.body?.scan_path || '').trim() || undefined;
+    const result = await Promise.resolve(pgVideoDb.scanVideoCatalogPath(scanPath, req.session.userId));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ root_path: result.root_path }));
+    res.json({
+      success: true,
+      result,
+      items,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not scan the video folder' });
+  }
+});
+
+router.post('/admin/videos/catalog/clear', requireAdmin, async (req, res) => {
+  try {
+    const root_path = String(req.body?.root_path || '').trim() || '';
+    const result = await Promise.resolve(pgVideoDb.clearVideoCatalog(root_path));
+    res.json({
+      success: true,
+      result,
+      items: [],
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not clear the video catalog structure' });
+  }
+});
+
+router.get('/admin/videos/catalog', requireAdmin, async (req, res) => {
+  try {
+    const status = String(req.query.status || 'all').trim();
+    const root_path = String(req.query.root_path || '').trim() || undefined;
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status, root_path }));
+    res.json({ success: true, items });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load catalog items' });
+  }
+});
+
+router.post('/admin/videos/catalog/ai-draft', requireAdmin, async (req, res) => {
+  try {
+    const requestedIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids : [];
+    const root_path = String(req.body?.root_path || '').trim() || undefined;
+    const sourceItems = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all', root_path }));
+    const needsPosterBackfill = (item) => !String(item?.poster_relative_path || '').trim();
+    const targetItems = requestedIds.length
+      ? sourceItems.filter((item) => requestedIds.map(Number).includes(Number(item.id || 0)))
+      : sourceItems.filter((item) => String(item.status || '') !== pgVideoDb.VIDEO_CATALOG_STATUSES.PUBLISHED || needsPosterBackfill(item));
+    targetItems.sort((a, b) => {
+      const scoreDiff = scoreVideoCatalogAiCandidate(a) - scoreVideoCatalogAiCandidate(b);
+      if (scoreDiff !== 0) return scoreDiff;
+      return String(a.display_title || a.folder_name || '').localeCompare(String(b.display_title || b.folder_name || ''));
+    });
+
+    const updatedIds = [];
+    const reusedMetadataByKey = new Map();
+    for (const item of targetItems) {
+      const reuseKey = buildVideoCatalogAiReuseKey(item);
+      const reusedMetadata = reusedMetadataByKey.get(reuseKey);
+      if (reusedMetadata) {
+        await withPromiseTimeout(
+          Promise.resolve(pgVideoDb.saveVideoCatalogAiMetadata(item.id, reusedMetadata, req.session.userId)),
+          15000,
+          'Saving reused AI metadata timed out for this title.'
+        );
+        updatedIds.push(Number(item.id || 0));
+        continue;
+      }
+      let metadata;
+      try {
+        metadata = await withPromiseTimeout(
+          fetchVideoCatalogMetadataDraft(item),
+          22000,
+          'AI metadata request timed out for this title.'
+        );
+      } catch (err) {
+        const status = Number(err?.statusCode || err?.status || 0);
+        if (status === 429) {
+          const quotaExhausted = isOpenAiQuotaExhaustedError(err);
+          const retryAfterMs = quotaExhausted ? 60000 : 30000;
+          return res.json({
+            success: false,
+            rate_limited: true,
+            quota_exhausted: quotaExhausted,
+            skipped_due_to_rate_limit: !quotaExhausted,
+            retry_after_ms: retryAfterMs,
+            error: quotaExhausted
+              ? 'OpenAI API credit appears exhausted. Please recharge or increase quota, then retry.'
+              : 'OpenAI rate limit reached. Please wait a bit and retry.',
+            updated_count: updatedIds.length,
+            updated_ids: updatedIds,
+          });
+        }
+        throw err;
+      }
+      await withPromiseTimeout(
+        Promise.resolve(pgVideoDb.saveVideoCatalogAiMetadata(item.id, metadata, req.session.userId)),
+        15000,
+        'Saving AI metadata timed out for this title.'
+      );
+      if (metadata && reuseKey) {
+        reusedMetadataByKey.set(reuseKey, metadata);
+      }
+      updatedIds.push(Number(item.id || 0));
+    }
+
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ root_path }));
+    res.json({
+      success: true,
+      updated_count: updatedIds.length,
+      updated_ids: updatedIds,
+      items,
+    });
+  } catch (err) {
+    const status = Number(err?.statusCode || err?.status || 0);
+    if (status === 429) {
+      const quotaExhausted = isOpenAiQuotaExhaustedError(err);
+      const retryAfterMs = 30000;
+      return res.json({
+        success: false,
+        rate_limited: true,
+        quota_exhausted: quotaExhausted,
+        retry_after_ms: retryAfterMs,
+        error: quotaExhausted
+          ? 'OpenAI API credit appears exhausted. Please recharge or increase quota, then retry.'
+          : 'OpenAI rate limit reached. Please wait a bit and retry.',
+        updated_count: 0,
+        updated_ids: [],
+      });
+    }
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not fetch AI metadata for the catalog' });
+  }
+});
+
+router.put('/admin/videos/catalog/:id', requireAdmin, async (req, res) => {
+  try {
+    const itemId = Number(req.params.id || 0);
+    if (!(itemId > 0)) {
+      return res.status(400).json({ error: 'Catalog item is invalid' });
+    }
+    const updated = await Promise.resolve(pgVideoDb.updateVideoCatalogItem(itemId, req.body || {}, req.session.userId));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
+    res.json({ success: true, updated, items });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update catalog item' });
+  }
+});
+
+router.post('/admin/videos/catalog/publish', requireAdmin, async (req, res) => {
+  try {
+    const itemIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids : [];
+    const result = await Promise.resolve(pgVideoDb.publishVideoCatalogItems(itemIds, req.session.userId));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
+    res.json({
+      success: true,
+      result,
+      items,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not publish catalog items' });
+  }
+});
+
 router.get('/videos/library', requireAuth, async (req, res) => {
   try {
     const library = await Promise.resolve(pgVideoDb.listVideoLibrary(req.session.userId));
     const videos = Array.isArray(library?.videos)
       ? library.videos.map((video) => ({
           ...video,
-          stream_url: `/api/videos/stream/${encodeURIComponent(video.id)}`,
+          stream_url: video.available === false ? '' : `/api/videos/stream/${encodeURIComponent(video.id)}`,
+          hls_url: video.available === false ? '' : `/api/videos/hls/${encodeURIComponent(video.id)}/master.m3u8`,
         }))
       : [];
     res.json({
@@ -6019,10 +7326,160 @@ router.post('/videos/progress', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/videos/hls/:token/master.m3u8', requireAuth, async (req, res) => {
+  try {
+    setVideoHlsCorsHeaders(res);
+    const requestedAudioTrack = String(req.query.audio_stream || '').trim();
+    const target = requestedAudioTrack
+      ? await Promise.resolve(pgVideoDb.resolveVideoAudioTrackTarget(req.params.token, requestedAudioTrack))
+      : await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Video not found' });
+    if (requestedAudioTrack && !target.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+
+    const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
+    if (!mediaTools?.available) {
+      return res.status(503).json({ error: mediaTools?.message || 'HLS transcoding is not available right now.' });
+    }
+
+    const availableAudioTracks = Array.isArray(target?.audio_tracks) ? target.audio_tracks.filter((track) => String(track?.id || '').trim()) : [];
+    if (!requestedAudioTrack && availableAudioTracks.length > 1) {
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      return res.send(buildHlsMasterPlaylist(req.params.token, availableAudioTracks));
+    }
+
+    const cache = await ensureHlsCache(target, pgVideoDb.ffmpegCommand(), requestedAudioTrack);
+    const rawManifest = await fs.promises.readFile(cache.masterPath, 'utf8');
+    const manifestBody = rewriteHlsMediaPlaylist(rawManifest, req.params.token, requestedAudioTrack);
+
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.send(manifestBody);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not prepare HLS playlist' });
+  }
+});
+
+router.get('/videos/hls/:token/:segment', requireAuth, async (req, res) => {
+  try {
+    setVideoHlsCorsHeaders(res);
+    const requestedAudioTrack = String(req.query.audio_stream || '').trim();
+    const segmentName = path.basename(String(req.params.segment || '').trim());
+    if (!segmentName || segmentName.includes('..')) return res.status(400).json({ error: 'Invalid HLS segment request' });
+
+    const target = requestedAudioTrack
+      ? await Promise.resolve(pgVideoDb.resolveVideoAudioTrackTarget(req.params.token, requestedAudioTrack))
+      : await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Video not found' });
+    if (requestedAudioTrack && !target.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+
+    const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
+    if (!mediaTools?.available) {
+      return res.status(503).json({ error: mediaTools?.message || 'HLS transcoding is not available right now.' });
+    }
+
+    const cache = await ensureHlsCache(target, pgVideoDb.ffmpegCommand(), requestedAudioTrack);
+    const segmentPath = path.join(cache.dir, segmentName);
+    const stats = await fs.promises.stat(segmentPath).catch(() => null);
+    if (!(stats?.isFile())) return res.status(404).json({ error: 'HLS segment not found' });
+
+    res.setHeader('Content-Type', segmentName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Length', String(stats.size || 0));
+    fs.createReadStream(segmentPath).pipe(res);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not serve HLS segment' });
+  }
+});
+
 router.get('/videos/stream/:token', requireAuth, async (req, res) => {
   try {
+    const requestedAudioTrack = String(req.query.audio_stream || '').trim();
+    if (requestedAudioTrack) {
+      const target = await Promise.resolve(pgVideoDb.resolveVideoAudioTrackTarget(req.params.token, requestedAudioTrack));
+      if (!target?.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+      const startSeconds = Math.max(0, Number(req.query.start_seconds || 0) || 0);
+      const audioOnly = String(req.query.audio_only || '').trim() === '1';
+
+      if (audioOnly) {
+        const cachedAudio = await ensureAudioClipCacheFile(
+          target,
+          pgVideoDb.ffmpegCommand(),
+          Number(target.audio_track.stream_index || 0),
+          startSeconds
+        );
+        return streamLocalFileWithRange(req, res, cachedAudio);
+      }
+
+      const cachedVideo = await ensureAlternateVideoCacheFile(
+        target,
+        pgVideoDb.ffmpegCommand(),
+        Number(target.audio_track.stream_index || 0)
+      );
+      return streamLocalFileWithRange(req, res, cachedVideo);
+
+      res.setHeader('Content-Type', audioOnly ? 'audio/mp4' : 'video/mp4');
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent((target.filename || 'video').replace(/\.[^.]+$/, '') + '.mp4')}`);
+
+      const ffmpegArgs = [
+        '-v', 'error',
+      ];
+      if (startSeconds > 0 && !audioOnly) {
+        ffmpegArgs.push('-ss', String(startSeconds));
+      }
+      ffmpegArgs.push('-i', target.absolute_path);
+      {
+        ffmpegArgs.push(
+          '-map', '0:v:0',
+          '-map', `0:${Number(target.audio_track.stream_index || 0)}`,
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-movflags', 'frag_keyframe+empty_moov+faststart',
+          '-f', 'mp4',
+          'pipe:1',
+        );
+      }
+
+      const ffmpeg = spawn(pgVideoDb.ffmpegCommand(), ffmpegArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (chunk) => {
+        stderr += String(chunk || '');
+      });
+      ffmpeg.on('error', (err) => {
+        if (!res.headersSent) {
+          res.status(500).json({ error: err.message || 'Could not switch audio track' });
+        } else {
+          res.end();
+        }
+      });
+      ffmpeg.on('close', (code) => {
+        if (code && !res.headersSent) {
+          res.status(500).json({ error: stderr.trim() || 'Could not switch audio track' });
+        } else if (code && !res.writableEnded) {
+          res.end();
+        }
+      });
+      req.on('close', () => {
+        if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+      });
+      return ffmpeg.stdout.pipe(res);
+    }
+
     const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Video not found' });
+
+    const ext = String(path.extname(target.absolute_path || target.filename || '') || '').toLowerCase();
+    const needsBrowserCompatibleTranscode = ['.mkv', '.avi', '.webm', '.ogg', '.ogv', '.wmv', '.flv', '.ts', '.m2ts', '.mpeg', '.mpg'].includes(ext);
+    if (needsBrowserCompatibleTranscode) {
+      const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
+      if (!mediaTools?.available) {
+        return res.status(503).json({ error: mediaTools?.message || 'Browser-compatible transcoding is not available right now.' });
+      }
+      const cachedTarget = await ensureMobileVideoCacheFile(target, pgVideoDb.ffmpegCommand());
+      return streamLocalFileWithRange(req, res, cachedTarget);
+    }
 
     const fileSize = Number(target.stats?.size || 0);
     const range = String(req.headers.range || '').trim();
@@ -6070,6 +7527,47 @@ router.get('/videos/stream/:token', requireAuth, async (req, res) => {
     } else {
       res.end();
     }
+  }
+});
+
+router.get('/videos/mobile-stream/:token', requireAuth, async (req, res) => {
+  try {
+    const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Video not found' });
+
+    const ext = String(path.extname(target.absolute_path || target.filename || '') || '').toLowerCase();
+    const platform = String(req.query.platform || '').trim().toLowerCase();
+    const forceTranscode = ['1', 'true', 'yes'].includes(String(req.query.transcode || '').trim().toLowerCase());
+    const needsIosTranscode = ['.mkv', '.avi', '.webm', '.ogg', '.ogv', '.wmv', '.flv', '.ts', '.m2ts', '.mpeg', '.mpg'].includes(ext);
+    const canDirectPlay = !forceTranscode && (['.mp4', '.m4v', '.mov'].includes(ext) || (platform !== 'ios' && !needsIosTranscode));
+
+    if (canDirectPlay) {
+      return streamLocalFileWithRange(req, res, target);
+    }
+
+    const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
+    if (!mediaTools?.available) {
+      return res.status(503).json({ error: mediaTools?.message || 'Mobile transcoding is not available right now.' });
+    }
+    return streamTranscodedMp4ToResponse(req, res, target, pgVideoDb.ffmpegCommand());
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(err.statusCode || 500).json({ error: err.message || 'Could not stream video for mobile' });
+    } else {
+      res.end();
+    }
+  }
+});
+
+router.get('/videos/poster/:token', requireAuth, async (req, res) => {
+  try {
+    const target = await Promise.resolve(pgVideoDb.resolvePosterStreamTarget(req.params.token));
+    if (!target) return res.status(404).json({ error: 'Poster not found' });
+    res.setHeader('Content-Type', target.mime_type || 'image/jpeg');
+    res.setHeader('Content-Length', String(target.stats.size || 0));
+    fs.createReadStream(target.absolute_path).pipe(res);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load poster' });
   }
 });
 
@@ -8068,6 +9566,105 @@ router.post('/trackers/:id/month-expense', (req, res) => {
 });
 
 // ─── RECURRING ENTRIES ───────────────────────────────────────
+router.get('/expense-buckets', (req, res) => {
+  Promise.resolve(getOpsDb().getExpenseBuckets(req.session.userId)).then((buckets) => {
+    res.json({ buckets });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.post('/expense-buckets', (req, res) => {
+  Promise.resolve(getOpsDb().addExpenseBucket(req.session.userId, req.body || {})).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.put('/expense-buckets/:id', (req, res) => {
+  Promise.resolve(getOpsDb().updateExpenseBucket(req.session.userId, req.params.id, req.body || {})).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.delete('/expense-buckets/:id', (req, res) => {
+  Promise.resolve(getOpsDb().deleteExpenseBucket(req.session.userId, req.params.id)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.get('/expense-buckets/:id/entries', (req, res) => {
+  Promise.resolve(getOpsDb().getExpenseBucketEntries(req.session.userId, req.params.id)).then((entries) => {
+    res.json({ entries });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.post('/expense-buckets/:id/entries', (req, res) => {
+  Promise.resolve(getOpsDb().addExpenseBucketEntry(req.session.userId, req.params.id, req.body || {})).then((id) => {
+    res.json({ success: true, id });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.put('/expense-buckets/:id/entries/:entryId', (req, res) => {
+  Promise.resolve(getOpsDb().updateExpenseBucketEntry(req.session.userId, req.params.id, req.params.entryId, req.body || {})).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.delete('/expense-buckets/:id/entries/:entryId', (req, res) => {
+  Promise.resolve(getOpsDb().deleteExpenseBucketEntry(req.session.userId, req.params.id, req.params.entryId)).then(() => {
+    res.json({ success: true });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
+router.post('/expense-buckets/:id/import-excel/preview', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = parseExpenseBucketImportWorkbook(req.file.buffer, {
+      sheet_name: req.body?.sheet_name || '',
+      name: req.body?.name || '',
+      entry_type: req.body?.entry_type || '',
+    });
+    res.json({
+      success: true,
+      count: parsed.rows.length,
+      skipped: parsed.skipped,
+      sheet_names: parsed.sheet_names,
+      preview: parsed.rows.slice(0, 50),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/expense-buckets/:id/import-excel', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const bucketId = Number(req.params.id || 0);
+    const parsed = parseExpenseBucketImportWorkbook(req.file.buffer, {
+      sheet_name: req.body?.sheet_name || '',
+      name: req.body?.name || '',
+      entry_type: req.body?.entry_type || '',
+    });
+    let imported = 0;
+    for (const row of parsed.rows) {
+      await Promise.resolve(getOpsDb().addExpenseBucketEntry(req.session.userId, bucketId, {
+        name: row.name,
+        entry_type: row.entry_type,
+        entry_date: row.entry_date,
+        amount: row.amount,
+        auto_add_enabled: 0,
+        auto_add_frequency: 'none',
+        reminder_enabled: 0,
+        reminder_days_before: 0,
+        reminder_frequency: 'once',
+        reminder_silent: 0,
+      }));
+      imported += 1;
+    }
+    res.json({ success: true, imported, skipped: parsed.skipped });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.get('/habit-trackers', (req, res) => {
   try {
     const { year, month } = req.query;

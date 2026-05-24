@@ -668,6 +668,9 @@
       scan_files: [],
       scan_items: [],
       scan_merchant: '',
+      scan_total_amount: 0,
+      scan_tax_override: '',
+      scan_debug: null,
       manual_items: [createTripManualEntry(0)],
       voice_only: false,
       voice_drafts: [],
@@ -675,13 +678,20 @@
     };
   }
 
-  function normalizeTripReceiptScanDraft(draft, { fallbackDate = todayLocalIso(), defaultAssignment = 'self', pageIndex = 0 } = {}) {
+  function normalizeTripReceiptScanDraft(draft, { fallbackDate = todayLocalIso(), defaultAssignment = 'self', pageIndex = 0, selectedFriendIds = [] } = {}) {
     const merchant = String(draft?.merchant || 'Scanned bill').trim() || 'Scanned bill';
     const purchaseDate = toLocalIsoDate(draft?.purchase_date, fallbackDate || todayLocalIso());
+    const totalAmount = Number(draft?.total_amount || 0) > 0 ? r2(draft.total_amount) : 0;
     const rows = Array.isArray(draft?.items) ? draft.items : [];
+    const defaultParticipantKeys = defaultAssignment === 'shared'
+      ? ['self', ...selectedFriendIds.map((id) => String(id))]
+      : defaultAssignment.startsWith('friend:')
+        ? [String(defaultAssignment.split(':')[1] || '')].filter(Boolean)
+        : ['self'];
     return {
       merchant,
       purchase_date: purchaseDate,
+      total_amount: totalAmount,
       items: rows.map((item, index) => ({
         key: `trip-scan-${Date.now()}-${pageIndex}-${index}`,
         item_name: String(item?.item_name || '').trim() || `Item ${index + 1}`,
@@ -691,6 +701,9 @@
         is_extra: !!item?.is_extra,
         selected: item?.selected !== false,
         assignment: defaultAssignment,
+        participant_keys: [...defaultParticipantKeys],
+        split_mode: 'equal',
+        split_values: {},
       })),
     };
   }
@@ -705,12 +718,16 @@
     return name && amount > 0 ? `${name}|${amount.toFixed(2)}` : '';
   }
 
-  function createTripManualEntry(index = 0, assignment = 'self') {
+  function createTripManualEntry(index = 0, assignment = 'self', form = state.tripCreate) {
+    const participantKeys = normalizeTripManualRowParticipantKeys({ assignment }, form);
     return {
       key: `trip-manual-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
       item_name: '',
       amount: '',
       assignment,
+      participant_keys: [...participantKeys],
+      split_mode: 'equal',
+      split_values: {},
     };
   }
 
@@ -736,7 +753,189 @@
     });
   }
 
+  function getTripScanParticipantOptions(form) {
+    return [
+      { key: 'self', name: 'You' },
+      ...tripCreateSelectedFriends(form).map((friend) => ({
+        key: String(friend.id),
+        name: String(friend.name || 'Friend').trim() || 'Friend',
+      })),
+    ];
+  }
+
+  function normalizeTripManualRowParticipantKeys(row, form) {
+    const availableKeys = getTripScanParticipantOptions(form).map((person) => String(person.key));
+    const availableKeySet = new Set(availableKeys);
+    const nextKeys = [...new Set((Array.isArray(row?.participant_keys) ? row.participant_keys : []).map((key) => String(key)).filter((key) => availableKeySet.has(key)))];
+    const looksUntouchedDefaultRow = nextKeys.length === 1
+      && nextKeys[0] === 'self'
+      && availableKeys.length > 1
+      && !String(row?.item_name || '').trim()
+      && !(n(row?.amount) > 0)
+      && !(row?.split_values && Object.keys(row.split_values).length);
+    if (looksUntouchedDefaultRow) return [...availableKeys];
+    if (nextKeys.length) return nextKeys;
+    const assignment = String(row?.assignment || 'self');
+    if (assignment === 'shared') return [...availableKeys];
+    if (assignment.startsWith('friend:')) {
+      const friendKey = String(assignment.split(':')[1] || '');
+      return availableKeySet.has(friendKey) ? [friendKey] : ['self'];
+    }
+    return availableKeys.length ? [...availableKeys] : ['self'];
+  }
+
+  function normalizeTripScanRowParticipantKeys(row, form) {
+    const availableKeys = new Set(getTripScanParticipantOptions(form).map((person) => String(person.key)));
+    const nextKeys = [...new Set((Array.isArray(row?.participant_keys) ? row.participant_keys : []).map((key) => String(key)).filter((key) => availableKeys.has(key)))];
+    if (nextKeys.length) return nextKeys;
+    const assignment = String(row?.assignment || 'self');
+    if (assignment === 'shared') return [...availableKeys];
+    if (assignment.startsWith('friend:')) {
+      const friendKey = String(assignment.split(':')[1] || '');
+      return availableKeys.has(friendKey) ? [friendKey] : ['self'];
+    }
+    return ['self'];
+  }
+
+  function getTripScanSubtotalAll(form) {
+    return r2((form?.scan_items || []).reduce((sum, item) => sum + n(item?.amount), 0));
+  }
+
+  function getTripScanReceiptTax(form) {
+    if (form && form.scan_tax_override !== '' && form.scan_tax_override !== null && form.scan_tax_override !== undefined) {
+      return Math.max(0, r2(Number(form.scan_tax_override || 0)));
+    }
+    const totalAmount = r2(Number(form?.scan_total_amount || 0));
+    const subtotal = getTripScanSubtotalAll(form);
+    const diff = r2(totalAmount - subtotal);
+    return diff > 0 ? diff : 0;
+  }
+
+  function getTripScanReceiptTaxPct(form) {
+    const subtotal = getTripScanSubtotalAll(form);
+    const tax = getTripScanReceiptTax(form);
+    return subtotal > 0 && tax > 0 ? (tax / subtotal) : 0;
+  }
+
+  function getTripScanSelectedTaxMap(form) {
+    const selectedRows = (form?.scan_items || []).filter((item) => item?.selected !== false);
+    const tax = getTripScanReceiptTax(form);
+    const allSubtotal = getTripScanSubtotalAll(form);
+    const selectedSubtotal = r2(selectedRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const allocation = {};
+    if (!(tax > 0) || !(selectedSubtotal > 0)) return allocation;
+    const targetTax = r2((selectedSubtotal / allSubtotal) * tax);
+    let used = 0;
+    selectedRows.forEach((item, index) => {
+      const rowAmount = n(item?.amount);
+      const share = index === selectedRows.length - 1
+        ? r2(targetTax - used)
+        : r2((rowAmount / selectedSubtotal) * targetTax);
+      used = r2(used + share);
+      allocation[String(item.key || '')] = share;
+    });
+    return allocation;
+  }
+
+  function getTripScanRowTaxShare(form, row) {
+    const allocation = getTripScanSelectedTaxMap(form);
+    return r2(allocation[String(row?.key || '')] || 0);
+  }
+
+  function getTripScanRowEffectiveAmount(form, row) {
+    return r2(n(row?.amount) + getTripScanRowTaxShare(form, row));
+  }
+
+  function normalizeTripScanRowSplitState(row, form) {
+    const participantKeys = normalizeTripScanRowParticipantKeys(row, form);
+    row.participant_keys = participantKeys;
+    const mode = ['equal', 'percent', 'fraction', 'amount', 'parts'].includes(String(row?.split_mode || '').toLowerCase())
+      ? String(row.split_mode).toLowerCase()
+      : 'equal';
+    row.split_mode = mode;
+    const people = getTripScanParticipantOptions(form).filter((person) => participantKeys.includes(String(person.key)));
+    const currentValues = row.split_values && typeof row.split_values === 'object' ? row.split_values : {};
+    const nextValues = {};
+    people.forEach((person) => {
+      if (currentValues[person.key] !== undefined && currentValues[person.key] !== null && currentValues[person.key] !== '') {
+        nextValues[person.key] = currentValues[person.key];
+      }
+    });
+    const hasAllValues = people.length && people.every((person) => nextValues[person.key] !== undefined && nextValues[person.key] !== null && nextValues[person.key] !== '');
+    row.split_values = hasAllValues ? nextValues : autoFillValues(mode, people, getTripScanRowEffectiveAmount(form, row));
+    return row;
+  }
+
+  function getTripScanRowPeople(row, form) {
+    const participantKeys = normalizeTripScanRowParticipantKeys(row, form);
+    return getTripScanParticipantOptions(form).filter((person) => participantKeys.includes(String(person.key)));
+  }
+
+  function computeTripScanRowSplit(row, form) {
+    const normalizedRow = normalizeTripScanRowSplitState(row, form);
+    const people = getTripScanRowPeople(normalizedRow, form);
+    const amount = getTripScanRowEffectiveAmount(form, normalizedRow);
+    if (!people.length) return { valid: false, error: 'No participants selected', shares: [] };
+    return computeShares(amount, String(normalizedRow.split_mode || 'equal'), people, normalizedRow.split_values || {});
+  }
+
+  function normalizeTripManualRowSplitState(row, form) {
+    row.participant_keys = normalizeTripManualRowParticipantKeys(row, form);
+    const mode = ['equal', 'percent', 'fraction', 'amount', 'parts'].includes(String(row?.split_mode || '').toLowerCase())
+      ? String(row.split_mode).toLowerCase()
+      : 'equal';
+    row.split_mode = mode;
+    const people = getTripScanParticipantOptions(form).filter((person) => row.participant_keys.includes(String(person.key)));
+    const currentValues = row.split_values && typeof row.split_values === 'object' ? row.split_values : {};
+    const nextValues = {};
+    people.forEach((person) => {
+      if (currentValues[person.key] !== undefined && currentValues[person.key] !== null && currentValues[person.key] !== '') {
+        nextValues[person.key] = currentValues[person.key];
+      }
+    });
+    const hasAllValues = people.length && people.every((person) => nextValues[person.key] !== undefined && nextValues[person.key] !== null && nextValues[person.key] !== '');
+    row.split_values = hasAllValues ? nextValues : autoFillValues(mode, people, n(row?.amount));
+    return row;
+  }
+
+  function getTripManualRowPeople(row, form) {
+    const participantKeys = normalizeTripManualRowParticipantKeys(row, form);
+    return getTripScanParticipantOptions(form).filter((person) => participantKeys.includes(String(person.key)));
+  }
+
+  function computeTripManualRowSplit(row, form) {
+    const normalizedRow = normalizeTripManualRowSplitState(row, form);
+    const people = getTripManualRowPeople(normalizedRow, form);
+    const amount = r2(n(normalizedRow?.amount));
+    if (!people.length) return { valid: false, error: 'No participants selected', shares: [] };
+    return computeShares(amount, String(normalizedRow.split_mode || 'equal'), people, normalizedRow.split_values || {});
+  }
+
+  function renderTripScanDebugRows(rows = []) {
+    if (!Array.isArray(rows) || !rows.length) return '<div style="font-size:12px;color:var(--t3)">No rows</div>';
+    return `
+      <div style="display:grid;gap:6px">
+        ${rows.map((row, index) => `
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:#fff">
+            <div style="min-width:0">
+              <div style="font-size:12px;font-weight:700;color:var(--t1)">${index + 1}. ${escHtml(String(row?.item_name || 'Row'))}</div>
+            </div>
+            <div style="font-size:12px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(row?.amount || 0)}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
   function computeTripRowSelfShare(row, friendCount = 0) {
+    if (Array.isArray(row?.participant_keys) && row.participant_keys.length && state.tripCreate) {
+      const split = String(row?.key || '').startsWith('trip-manual-')
+        ? computeTripManualRowSplit(row, state.tripCreate)
+        : computeTripScanRowSplit(row, state.tripCreate);
+      if (!split?.valid) return 0;
+      const selfShare = split.shares.find((share) => String(share.key) === 'self');
+      return r2(Number(selfShare?.share || 0));
+    }
     const amountValue = r2(row?.amount);
     if (!(amountValue > 0)) return 0;
     const assignment = String(row?.assignment || 'self');
@@ -1387,6 +1586,14 @@
         if (isSharedRow) {
           const targetName = String(group?.friend_name || '').trim();
           const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
+          const meId = Number(window._currentUser?.id || 0);
+          const selfKeys = currentUserNameKeys();
+          const ownerIsSelf = (meId > 0 && Number(group?.owner_user_id || 0) === meId)
+            || (!!textKey(ownerName) && selfKeys.includes(textKey(ownerName)));
+          const targetIsSelf = (meId > 0 && Number(group?.target_user_id || 0) === meId)
+            || (!!textKey(targetName) && selfKeys.includes(textKey(targetName)));
+          const ownerLabel = ownerIsSelf ? 'You' : ownerName;
+          const targetLabel = targetIsSelf ? 'You' : targetName;
           let targetShare = r2(group?.friend_share_amount);
           if (!(targetShare > 0)) {
             const byName = splits.find((split) => String(split?.friend_name || '').trim().toLowerCase() === targetName.toLowerCase());
@@ -1401,12 +1608,14 @@
           const payerTarget = !!payerKey && payerKey === textKey(targetName);
           const extraParticipants = splits
             .map((split) => ({
-              name: String(split?.friend_name || '').trim(),
+              name: (Number(split?.linked_user_id || 0) > 0 && meId > 0 && Number(split?.linked_user_id || 0) === meId)
+                ? 'You'
+                : String(split?.friend_name || '').trim(),
               share: r2(split?.share_amount),
               paid: textKey(split?.friend_name) === payerKey,
               contextOnly: true,
             }))
-            .filter((item) => item.name && item.name !== ownerName && item.name !== targetName)
+            .filter((item) => item.name && item.name !== ownerLabel && item.name !== targetLabel)
             .filter((item, index, arr) => arr.findIndex((v) => v.name.toLowerCase() === item.name.toLowerCase()) === index);
           return {
             key: `t-${group?.id || ''}-${group?.divide_date || ''}`,
@@ -1416,8 +1625,8 @@
             payer,
             total,
             participants: [
-              { name: ownerName, share: ownerShare, paid: payerOwner },
-              { name: targetName, share: targetShare, paid: payerTarget },
+              { name: ownerLabel, share: ownerShare, paid: payerOwner },
+              { name: targetLabel, share: targetShare, paid: payerTarget },
               ...extraParticipants,
             ].filter((item) => item.name),
           };
@@ -2111,6 +2320,37 @@
       });
     });
     const memberSummary = Object.values(memberSummaryMap);
+    const memberBalanceChips = (memberBalances || [])
+      .filter((item) => Math.abs(n(item?.amount)) > 0.005)
+      .map((item) => ({ ...item, amount: r2(item.amount) }))
+      .sort((a, b) => Math.abs(n(b.amount)) - Math.abs(n(a.amount)));
+    if (!state.tripDetailShowSplits || typeof state.tripDetailShowSplits !== 'object') state.tripDetailShowSplits = {};
+    const showItemSplits = !!state.tripDetailShowSplits[tid];
+    const renderEventSplitHtml = (event) => {
+      if (!showItemSplits) return '';
+      const participants = Array.isArray(event?.participants)
+        ? event.participants.filter((p) => String(p?.name || '').trim())
+        : [];
+      if (!participants.length) return '';
+      return `
+        <div style="margin-top:8px;padding:8px 10px;border:1px dashed #d8e5dd;border-radius:10px;background:#fbfdfb">
+          <div style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Each split</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${participants.map((p) => {
+              const share = r2(p?.share);
+              const isPayer = !!p?.paid;
+              const contextOnly = !!p?.contextOnly;
+              const tone = isPayer ? 'var(--green)' : (contextOnly ? 'var(--t2)' : 'var(--red)');
+              const bg = isPayer ? '#edfbf3' : (contextOnly ? '#f4f7f5' : '#fff1f1');
+              const label = contextOnly
+                ? `${escHtml(p.name)} · ${fmtCur(share)} in split`
+                : `${escHtml(p.name)} · ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
+              return `<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:${bg};color:${tone};font-size:11px;font-weight:600;line-height:1.2">${label}</span>`;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    };
     const status = String(trip.status || 'active').toLowerCase();
     const statusTone = status === 'completed' ? 'var(--t3)' : 'var(--green)';
     window.__modalClassName = 'modal-wide live-split-detail-modal';
@@ -2126,6 +2366,8 @@
             ${trip.added_to_expense
               ? `<div style="font-size:11px;font-weight:700;color:var(--green);padding:6px 10px;border-radius:999px;background:#edfbf3;border:1px solid #cdeeda">Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}</div>`
               : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}</button>`}
+            <button class="btn btn-g btn-sm" onclick="liveSplitToggleTripSplitView(${tid})">${showItemSplits ? 'Hide Each Split' : 'Show Each Split'}</button>
+            <button class="btn btn-s btn-sm" onclick="liveSplitDownloadTripPdf(${tid})">Trip PDF</button>
             <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
             </button>
@@ -2142,9 +2384,9 @@
             <button class="btn btn-g btn-sm" onclick="liveSplitDeleteTrip(${tid})">Delete Trip</button>
           </div>
         ` : ''}
-        ${memberBalances.length ? `
+        ${memberBalanceChips.length ? `
           <div class="live-split-summary-chips" style="display:flex;flex-wrap:wrap;gap:6px">
-            ${memberBalances.map((item) => {
+            ${memberBalanceChips.map((item) => {
               const amount = r2(item.amount);
               const tone = amount > 0 ? 'var(--green)' : amount < 0 ? 'var(--red)' : 'var(--t3)';
               const status = amount > 0 ? 'owes you' : amount < 0 ? 'you owe' : 'settled';
@@ -2216,6 +2458,7 @@
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap">${fmtCur(event.total)}</div>
                             </div>
                             <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}</div>
+                            ${renderEventSplitHtml(event)}
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
                               <div style="display:flex;flex-shrink:0">${actionHtml}</div>
@@ -2252,6 +2495,7 @@
                         <div class="ls-mobile-event-amount">${fmtCur(event.total)}</div>
                       </div>
                       <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}</div>
+                      ${renderEventSplitHtml(event)}
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
                         <div class="ls-mobile-event-actions">${actionHtml}</div>
@@ -2270,6 +2514,115 @@
   async function openTripEventDetails(tripId, groupId) {
     state.activeTripDetail = Number(tripId || 0) > 0 ? Number(tripId) : null;
     await openEventDetails(0, Number(groupId || 0));
+  }
+
+  async function liveSplitDownloadTripPdf(tripId) {
+    const tid = Number(tripId || 0);
+    if (!(tid > 0)) return;
+    const trip = (state.liveTrips || []).find((item) => Number(item.id) === tid);
+    if (!trip) {
+      toast('Trip not found', 'warning');
+      return;
+    }
+    if (typeof _P === 'undefined' || !_P || typeof _P.init !== 'function') {
+      toast('PDF tools are not ready yet', 'warning');
+      return;
+    }
+
+    const events = buildTripEvents(tid);
+    const memberSummaryMap = {};
+    events.forEach((event) => {
+      (event.participants || []).forEach((p) => {
+        if (!p?.name) return;
+        if (!memberSummaryMap[p.name]) memberSummaryMap[p.name] = { name: p.name, paid: 0, share: 0 };
+        memberSummaryMap[p.name].share = r2(memberSummaryMap[p.name].share + r2(p.share));
+        if (p.paid) memberSummaryMap[p.name].paid = r2(memberSummaryMap[p.name].paid + r2(event.total));
+      });
+    });
+    const memberSummary = Object.values(memberSummaryMap);
+    const members = Array.isArray(trip.members) ? trip.members : [];
+    const memberNames = members.map((member) => String(member?.name || member?.display_name || member?.username || '').trim()).filter(Boolean);
+    const subtitleParts = [
+      `${members.length} members`,
+      `${events.length} item${events.length === 1 ? '' : 's'}`,
+      `${String(trip.status || 'active').toUpperCase()}`,
+    ];
+    const createdDate = trip.created_at ? _P.dt(trip.created_at) : '';
+    if (createdDate && createdDate !== '-') subtitleParts.unshift(createdDate);
+
+    const doc = _P.init(true);
+    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  ·  '));
+    y = _P.cards(doc, y, [
+      { label: 'Trip Total', value: _P.cur(trip.total_amount || 0), color: '' },
+      { label: 'My Share', value: _P.cur(trip.my_share_amount || 0), color: 'amber' },
+      { label: 'Expenses', value: String(Number(trip.expense_count || events.length || 0)), color: '' },
+      { label: 'Members', value: String(members.length || memberSummary.length || 0), color: '' },
+    ]);
+    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  ·  ')}`);
+
+    if (memberSummary.length) {
+      y = _P.section(doc, y, 'Member Summary');
+      y = _P.table(
+        doc,
+        y,
+        [['Member', 'Paid', 'Share', 'Net']],
+        memberSummary.map((member) => {
+          const net = r2(member.paid - member.share);
+          return [
+            member.name || '-',
+            _P.cur(member.paid || 0),
+            _P.cur(member.share || 0),
+            `${net > 0.005 ? '+' : net < -0.005 ? '-' : ''}${_P.cur(Math.abs(net))}`,
+          ];
+        }),
+        { 0: { cellWidth: 52 }, 1: { cellWidth: 34 }, 2: { cellWidth: 34 }, 3: { cellWidth: 34 } },
+        true
+      );
+    }
+
+    y = _P.section(doc, y, 'Item Splits');
+    y = _P.table(
+      doc,
+      y,
+      [['Date', 'Item', 'Paid By', 'Amount', 'Each Split']],
+      events.map((event) => {
+        const splitText = Array.isArray(event?.participants) && event.participants.length
+          ? event.participants
+            .filter((p) => String(p?.name || '').trim())
+            .map((p) => {
+              const share = _P.cur(r2(p?.share));
+              if (p?.contextOnly) return `${p.name}: ${share} in split`;
+              return `${p.name}: ${p?.paid ? `paid ${share}` : `owes ${share}`}`;
+            })
+            .join('\n')
+          : '-';
+        return [
+          _P.dt(event?.date),
+          event?.details || '-',
+          event?.payer || '-',
+          _P.cur(event?.total || 0),
+          splitText,
+        ];
+      }),
+      {
+        0: { cellWidth: 24 },
+        1: { cellWidth: 68 },
+        2: { cellWidth: 34 },
+        3: { cellWidth: 26 },
+        4: { cellWidth: 'auto' },
+      },
+      true
+    );
+
+    _P.save(doc, String(trip.name || 'Live_Split_Trip').replace(/[^\w\s-]/g, '_').trim() || 'Live_Split_Trip');
+  }
+
+  async function toggleTripSplitView(tripId) {
+    const tid = Number(tripId || 0);
+    if (!(tid > 0)) return;
+    if (!state.tripDetailShowSplits || typeof state.tripDetailShowSplits !== 'object') state.tripDetailShowSplits = {};
+    state.tripDetailShowSplits[tid] = !state.tripDetailShowSplits[tid];
+    await openTripDetails(tid);
   }
 
   function renderRows() {
@@ -3404,6 +3757,9 @@
       form.scan_files = [];
       form.scan_items = [];
       form.scan_merchant = '';
+      form.scan_total_amount = 0;
+      form.scan_tax_override = '';
+      form.scan_debug = null;
       renderTripCreateModal();
       return;
     }
@@ -3419,12 +3775,16 @@
         assignment: item?.assignment,
         selected: item?.selected,
         item_name: item?.item_name,
+        participant_keys: item?.participant_keys,
+        split_mode: item?.split_mode,
+        split_values: item?.split_values,
       }]).filter(([key]) => !!key)
     );
     const normalized = normalizeTripReceiptScanDraft(payload?.draft || {}, {
       fallbackDate: form.start_date || todayLocalIso(),
       defaultAssignment: selectedFriends.length ? 'shared' : 'self',
       pageIndex: nextFiles.length,
+      selectedFriendIds: selectedFriends.map((friend) => Number(friend.id)),
     });
     normalized.items = normalized.items.map((item) => {
       const previous = previousSelectionMap.get(buildTripScanMatchKey(item));
@@ -3434,12 +3794,19 @@
         assignment: previous.assignment || item.assignment,
         selected: previous.selected !== undefined ? previous.selected : item.selected,
         item_name: previous.item_name || item.item_name,
+        participant_keys: Array.isArray(previous.participant_keys) ? previous.participant_keys : item.participant_keys,
+        split_mode: previous.split_mode || item.split_mode,
+        split_values: previous.split_values || item.split_values,
       };
     });
 
     form.scan_files = nextFiles;
     form.scan_merchant = normalized.merchant || '';
+    form.scan_total_amount = Number(normalized.total_amount || 0) || 0;
+    form.scan_tax_override = '';
+    form.scan_debug = payload?.debug || null;
     form.scan_items = normalized.items;
+    form.scan_items = form.scan_items.map((item) => normalizeTripScanRowSplitState(item, form));
     if (!String(nextTripName || form.name || '').trim() && normalized.merchant && normalized.merchant !== 'Scanned bill') {
       form.name = `${normalized.merchant} Trip`;
     }
@@ -3486,11 +3853,98 @@
     }
   }
 
+  function captureTripCreateModalUiState() {
+    if (typeof document === 'undefined') return null;
+    const overlay = document.getElementById('modalOverlay');
+    const active = document.activeElement;
+    const focus = {};
+    if (active && active.closest && active.closest('#modalContent')) {
+      const dataset = active.dataset || {};
+      if (dataset.tripScanKey && dataset.tripScanField) {
+        focus.kind = 'trip-scan-field';
+        focus.key = String(dataset.tripScanKey);
+        focus.field = String(dataset.tripScanField);
+      } else if (dataset.tripScanKey && dataset.tripScanSplitPerson) {
+        focus.kind = 'trip-scan-split';
+        focus.key = String(dataset.tripScanKey);
+        focus.person = String(dataset.tripScanSplitPerson);
+      } else if (dataset.tripManualKey && dataset.tripManualField) {
+        focus.kind = 'trip-manual-field';
+        focus.key = String(dataset.tripManualKey);
+        focus.field = String(dataset.tripManualField);
+      } else if (dataset.tripManualKey && dataset.tripManualSplitPerson) {
+        focus.kind = 'trip-manual-split';
+        focus.key = String(dataset.tripManualKey);
+        focus.person = String(dataset.tripManualSplitPerson);
+      } else if (active.id) {
+        focus.kind = 'id';
+        focus.id = active.id;
+      }
+      if (typeof active.selectionStart === 'number') focus.selectionStart = active.selectionStart;
+      if (typeof active.selectionEnd === 'number') focus.selectionEnd = active.selectionEnd;
+    }
+    return {
+      overlayScrollTop: overlay ? overlay.scrollTop : 0,
+      focus,
+    };
+  }
+
+  function restoreTripCreateModalUiState(snapshot) {
+    if (!snapshot || typeof document === 'undefined') return;
+    const overlay = document.getElementById('modalOverlay');
+    if (overlay) overlay.scrollTop = Number(snapshot.overlayScrollTop || 0);
+    const focus = snapshot.focus || {};
+    let target = null;
+    if (focus.kind === 'trip-scan-field' && focus.key && focus.field) {
+      target = [...document.querySelectorAll('#modalContent [data-trip-scan-key][data-trip-scan-field]')].find((node) => (
+        String(node.getAttribute('data-trip-scan-key') || '') === String(focus.key)
+        && String(node.getAttribute('data-trip-scan-field') || '') === String(focus.field)
+      )) || null;
+    } else if (focus.kind === 'trip-scan-split' && focus.key && focus.person) {
+      target = [...document.querySelectorAll('#modalContent [data-trip-scan-key][data-trip-scan-split-person]')].find((node) => (
+        String(node.getAttribute('data-trip-scan-key') || '') === String(focus.key)
+        && String(node.getAttribute('data-trip-scan-split-person') || '') === String(focus.person)
+      )) || null;
+    } else if (focus.kind === 'trip-manual-field' && focus.key && focus.field) {
+      target = [...document.querySelectorAll('#modalContent [data-trip-manual-key][data-trip-manual-field]')].find((node) => (
+        String(node.getAttribute('data-trip-manual-key') || '') === String(focus.key)
+        && String(node.getAttribute('data-trip-manual-field') || '') === String(focus.field)
+      )) || null;
+    } else if (focus.kind === 'trip-manual-split' && focus.key && focus.person) {
+      target = [...document.querySelectorAll('#modalContent [data-trip-manual-key][data-trip-manual-split-person]')].find((node) => (
+        String(node.getAttribute('data-trip-manual-key') || '') === String(focus.key)
+        && String(node.getAttribute('data-trip-manual-split-person') || '') === String(focus.person)
+      )) || null;
+    } else if (focus.kind === 'id' && focus.id) {
+      target = document.getElementById(focus.id);
+    }
+    if (!target || typeof target.focus !== 'function') return;
+    try {
+      target.focus({ preventScroll: true });
+    } catch (_err) {
+      target.focus();
+    }
+    if (typeof focus.selectionStart === 'number' && typeof target.setSelectionRange === 'function') {
+      try {
+        target.setSelectionRange(focus.selectionStart, typeof focus.selectionEnd === 'number' ? focus.selectionEnd : focus.selectionStart);
+      } catch (_err) {}
+    }
+  }
+
+  function rerenderTripCreateModalPreservingUi() {
+    const snapshot = captureTripCreateModalUiState();
+    renderTripCreateModal();
+    restoreTripCreateModalUiState(snapshot);
+  }
+
   function updateTripScanItemWeb(itemKey, patch = {}) {
     const form = state.tripCreate;
     if (!form) return;
-    form.scan_items = (form.scan_items || []).map((item) => (String(item.key) === String(itemKey) ? { ...item, ...patch } : item));
-    renderTripCreateModal();
+    form.scan_items = (form.scan_items || []).map((item) => {
+      if (String(item.key) !== String(itemKey)) return item;
+      return normalizeTripScanRowSplitState({ ...item, ...patch }, form);
+    });
+    rerenderTripCreateModalPreservingUi();
   }
 
   function deleteTripScanItemWeb(itemKey) {
@@ -3523,6 +3977,16 @@
       ));
     }
 
+    document.querySelectorAll('[data-trip-scan-key][data-trip-scan-selected]').forEach((node) => {
+      const key = String(node.getAttribute('data-trip-scan-key') || '');
+      if (!key) return;
+      form.scan_items = (form.scan_items || []).map((item) => (
+        String(item.key || '') === key
+          ? { ...item, selected: !!node.checked }
+          : item
+      ));
+    });
+
     const manualPatches = new Map();
     document.querySelectorAll('[data-trip-manual-key][data-trip-manual-field]').forEach((node) => {
       const key = String(node.getAttribute('data-trip-manual-key') || '');
@@ -3535,6 +3999,22 @@
       form.manual_items = (form.manual_items || []).map((item) => (
         manualPatches.has(String(item.key || ''))
           ? { ...item, ...manualPatches.get(String(item.key || '')) }
+          : item
+      ));
+    }
+
+    const manualSplitPatches = new Map();
+    document.querySelectorAll('[data-trip-manual-key][data-trip-manual-split-person]').forEach((node) => {
+      const key = String(node.getAttribute('data-trip-manual-key') || '');
+      const person = String(node.getAttribute('data-trip-manual-split-person') || '');
+      if (!key || !person) return;
+      if (!manualSplitPatches.has(key)) manualSplitPatches.set(key, {});
+      manualSplitPatches.get(key)[person] = String(node.value || '');
+    });
+    if (manualSplitPatches.size) {
+      form.manual_items = (form.manual_items || []).map((item) => (
+        manualSplitPatches.has(String(item.key || ''))
+          ? { ...item, split_values: { ...(item.split_values || {}), ...manualSplitPatches.get(String(item.key || '')) } }
           : item
       ));
     }
@@ -3554,6 +4034,9 @@
     form.scan_files = [];
     form.scan_items = [];
     form.scan_merchant = '';
+    form.scan_total_amount = 0;
+    form.scan_tax_override = '';
+    form.scan_debug = null;
     renderTripCreateModal();
   }
 
@@ -3561,22 +4044,27 @@
     const form = state.tripCreate;
     if (!form) return;
     syncTripCreateDraftFromDom();
-    form.manual_items = [...(form.manual_items || []), createTripManualEntry((form.manual_items || []).length)];
+    form.manual_items = [...(form.manual_items || []), createTripManualEntry((form.manual_items || []).length, 'self', form)].map((item) => normalizeTripManualRowSplitState(item, form));
     renderTripCreateModal();
   }
 
   function updateTripManualItemWeb(itemKey, patch = {}) {
     const form = state.tripCreate;
     if (!form) return;
-    form.manual_items = (form.manual_items || []).map((item) => (String(item.key) === String(itemKey) ? { ...item, ...patch } : item));
-    renderTripCreateModal();
+    syncTripCreateDraftFromDom();
+    form.manual_items = (form.manual_items || []).map((item) => (
+      String(item.key) === String(itemKey)
+        ? normalizeTripManualRowSplitState({ ...item, ...patch }, form)
+        : item
+    ));
+    rerenderTripCreateModalPreservingUi();
   }
 
   function deleteTripManualItemWeb(itemKey) {
     const form = state.tripCreate;
     if (!form) return;
     const nextItems = (form.manual_items || []).filter((item) => String(item.key) !== String(itemKey));
-    form.manual_items = nextItems.length ? nextItems : [createTripManualEntry(0)];
+    form.manual_items = nextItems.length ? nextItems : [createTripManualEntry(0, 'self', form)];
     renderTripCreateModal();
   }
 
@@ -3588,13 +4076,19 @@
     const selectedFriends = tripCreateSelectedFriends(form);
     const selectedFriendCount = selectedFriends.length;
     const scanSelectedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
-    const scanSelectedTotal = r2(scanSelectedRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const scanSelectedTotal = r2(scanSelectedRows.reduce((sum, item) => sum + getTripScanRowEffectiveAmount(form, item), 0));
     const scanSelectedMyShare = r2(scanSelectedRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
-    const manualRows = (form.manual_items || []);
+    const scanDetectedDate = form.scan_items?.length
+      ? toLocalIsoDate((form.scan_items.find((item) => String(item?.purchase_date || '').trim())?.purchase_date) || form.start_date, todayLocalIso())
+      : '';
+    const scanSubtotalAll = getTripScanSubtotalAll(form);
+    const scanTaxTotal = getTripScanReceiptTax(form);
+    const scanTaxPct = getTripScanReceiptTaxPct(form);
+    const scanSelectedTax = r2(scanSelectedRows.reduce((sum, item) => sum + getTripScanRowTaxShare(form, item), 0));
+    const manualRows = (form.manual_items || []).map((item) => normalizeTripManualRowSplitState({ ...item }, form));
     const manualActiveRows = manualRows.filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0);
     const manualTotal = r2(manualActiveRows.reduce((sum, item) => sum + n(item?.amount), 0));
     const manualMyShare = r2(manualActiveRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
-    const assignmentOptions = getTripAssignmentOptions(form);
     openModal('Live Split Trip - New', `
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
@@ -3615,7 +4109,7 @@
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
       <div class="fg">
         <label class="fl full">Trip Name
-          <input class="fi" data-trip-field="name" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." oninput="liveSplitTripField('name', this.value)">
+          <input class="fi" data-trip-field="name" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." onchange="liveSplitTripField('name', this.value)">
         </label>
         <label class="fl">Start Date
           <input class="fi" type="date" value="${escHtml(form.start_date || todayLocalIso())}" onchange="liveSplitTripField('start_date', this.value)">
@@ -3649,7 +4143,7 @@
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
             <div style="font-size:14px;font-weight:800;color:var(--em)">Scan Bill To Trip</div>
-            <div style="font-size:12px;color:var(--t2);margin-top:3px">Upload images or click a receipt photo, auto-merge pages, and remove duplicate rows before saving them into this trip.</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">Upload images or click a receipt photo. AI reads the receipt, merges pages, and prepares editable rows before saving them into this trip.</div>
             ${(form.scan_files || []).length ? `<div style="margin-top:6px;font-size:12px;color:var(--t2);font-weight:700">${Number(form.scan_files.length)} page${Number(form.scan_files.length) === 1 ? '' : 's'} added</div>` : ''}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -3661,14 +4155,77 @@
         </div>
         ${state.tripSaveBusy ? `<div style="margin-top:10px;font-size:12px;color:var(--t3)">${liveSplitBusyLabel('Processing receipt images...')}</div>` : ''}
         ${(form.scan_items || []).length ? `
-          <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-            <div style="font-size:12px;color:var(--t2);font-weight:700">${escHtml(form.scan_merchant || 'Scanned bill')} | ${scanSelectedRows.length}/${form.scan_items.length} selected</div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              <div style="font-size:12px;color:var(--t2);font-weight:700">Trip total: ${fmtCur(scanSelectedTotal)}</div>
-              <div style="font-size:13px;color:var(--t1);font-weight:800">My share: ${fmtCur(scanSelectedMyShare)}</div>
+          <div style="margin-top:10px;display:grid;gap:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#e8f5ed;color:var(--green);font-size:12px;font-weight:800">
+                <span>AI parsed receipt</span>
+              </div>
+              <div style="font-size:12px;color:var(--t3)">Review and edit before creating the trip</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px">
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Merchant</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${escHtml(form.scan_merchant || 'Scanned bill')}</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Detected Date</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${escHtml(scanDetectedDate || 'Not found')}</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">AI Total</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${Number(form.scan_total_amount || 0) > 0 ? fmtCur(form.scan_total_amount) : 'Not found'}</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Receipt Tax</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(scanTaxTotal)}</div>
+                <div style="font-size:11px;color:var(--t3);margin-top:4px">${scanTaxPct > 0 ? `${(scanTaxPct * 100).toFixed(2)}% of subtotal added to split` : 'No tax detected'}</div>
+                <input class="fi" type="number" step="0.01" min="0" value="${escHtml(String(form.scan_tax_override !== '' ? form.scan_tax_override : scanTaxTotal))}" placeholder="0" style="margin-top:8px;width:100%;text-align:right" onchange="liveSplitTripScanTax(this.value)">
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Rows</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${scanSelectedRows.length}/${form.scan_items.length}</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Total Incl Tax</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(scanSelectedTotal)}</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">My Share</div>
+                <div style="font-size:16px;font-weight:900;color:var(--green);margin-top:6px">${fmtCur(scanSelectedMyShare)}</div>
+              </div>
             </div>
           </div>
-          <div style="margin-top:4px;font-size:12px;color:var(--t3)">Date for all scanned rows: ${escHtml(toLocalIsoDate(form.start_date, todayLocalIso()))}</div>
+          <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} • Receipt tax ${fmtCur(scanTaxTotal)} • Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
+          ${form.scan_debug ? `
+            <details style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fcfdfc;padding:10px">
+              <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--t1)">Scan Debug View</summary>
+              <div style="display:grid;gap:12px;margin-top:10px">
+                <div>
+                  <div style="font-size:11px;color:var(--t3);font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Final Rows Used</div>
+                  ${renderTripScanDebugRows(form.scan_debug?.final_rows || [])}
+                </div>
+                ${Array.isArray(form.scan_debug?.pages) ? form.scan_debug.pages.map((page) => `
+                  <div style="padding:10px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                    <div style="font-size:12px;font-weight:800;color:var(--t1);margin-bottom:8px">Page ${Number(page?.page || 0) || 1}</div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+                      <div>
+                        <div style="font-size:11px;color:var(--t3);font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">OCR Rows</div>
+                        ${renderTripScanDebugRows(page?.ocr_rows || [])}
+                      </div>
+                      <div>
+                        <div style="font-size:11px;color:var(--t3);font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">AI Rows</div>
+                        ${renderTripScanDebugRows(page?.ai_rows || [])}
+                      </div>
+                      <div>
+                        <div style="font-size:11px;color:var(--t3);font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Corrected Rows</div>
+                        ${renderTripScanDebugRows(page?.final_rows || [])}
+                      </div>
+                    </div>
+                  </div>
+                `).join('') : ''}
+              </div>
+            </details>
+          ` : ''}
           <div style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 2px 10px 2px;border-bottom:1px solid var(--border);flex-wrap:wrap">
               <label class="fc" style="margin:0;font-size:12px;font-weight:700;color:var(--t2)">
@@ -3680,35 +4237,79 @@
             <div style="display:grid;gap:10px;margin-top:10px">
             ${(form.scan_items || []).map((item) => {
               const rowKey = String(item.key || '');
-              const scanFriends = tripCreateSelectedFriends(form);
-              const assignmentOptions = [
-                { key: 'self', label: 'Mine' },
-                ...(scanFriends.length ? [{ key: 'shared', label: 'Split' }] : []),
-                ...scanFriends.map((friend) => ({ key: `friend:${Number(friend.id)}`, label: String(friend.name || 'Friend').trim() || 'Friend' })),
-              ];
+              const participantOptions = getTripScanParticipantOptions(form);
+              const friendParticipantOptions = participantOptions.filter((person) => String(person.key) !== 'self');
+              const normalizedItem = normalizeTripScanRowSplitState({ ...item }, form);
+              const participantKeys = normalizedItem.participant_keys || [];
+              const splitMode = String(normalizedItem.split_mode || 'equal');
+              const splitPreview = computeTripScanRowSplit(normalizedItem, form);
+              const splitHints = { percent: '(must total 100)', fraction: '(must total 1.0)', amount: '(sum must match amount)', parts: '(ratio parts)' };
               return `
                 <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:${item.selected !== false ? '#fff' : '#fafafa'}">
                   <div style="display:flex;align-items:flex-start;gap:10px">
                     <label class="fc" style="margin:0;padding-top:2px">
-                      <input type="checkbox" ${item.selected !== false ? 'checked' : ''} onchange="liveSplitTripScanItem(${toJsArg(rowKey)},'selected', this.checked ? '1' : '0')">
+                      <input type="checkbox" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-selected="1" ${item.selected !== false ? 'checked' : ''} onchange="liveSplitTripScanItem(${toJsArg(rowKey)},'selected', this.checked ? '1' : '0')">
                     </label>
                     <div style="flex:1;min-width:0">
-                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="item_name" style="font-size:15px;font-weight:800;min-width:0;width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput="liveSplitTripScanItem(${toJsArg(rowKey)},'item_name', this.value)">
-                      ${item.category ? `<div style="margin-top:5px;font-size:11px;color:var(--t3)">${escHtml(item.category)}</div>` : ''}
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                          <span style="font-size:11px;color:var(--t3);font-weight:800;letter-spacing:.08em;text-transform:uppercase">Item ${Number((form.scan_items || []).indexOf(item)) + 1}</span>
+                          <span style="font-size:11px;color:var(--t3)">${escHtml(item.purchase_date || scanDetectedDate || form.start_date || todayLocalIso())}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                          ${item.category ? `<span class="badge" style="background:#f4f6f4;color:var(--t2)">${escHtml(item.category)}</span>` : ''}
+                          <span class="badge" style="background:#ecfdf3;color:var(--green)">Tax ${fmtCur(getTripScanRowTaxShare(form, normalizedItem))}</span>
+                          <span class="badge" style="background:#f3f6ff;color:#4268b2">${fmtCur(getTripScanRowEffectiveAmount(form, normalizedItem))}</span>
+                        </div>
+                      </div>
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="item_name" style="font-size:15px;font-weight:800;min-width:0;width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "item_name", this.value)'>
                     </div>
-                    <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripScanDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
+                    <button type="button" class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick='liveSplitTripScanDelete(${toJsArg(rowKey)})' title="Delete row">&times;</button>
                   </div>
                   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:10px">
                     <label style="display:block;min-width:0">
-                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Amount</div>
-                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput="liveSplitTripScanItem(${toJsArg(rowKey)},'amount', this.value)">
+                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Amount After Discount</div>
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "amount", this.value)'>
                     </label>
-                    <label style="display:block;min-width:0">
-                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Assign</div>
-                      <select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="assignment" style="width:100%;padding-right:24px" onchange="liveSplitTripScanItem(${toJsArg(rowKey)},'assignment', this.value)">
-                        ${assignmentOptions.map((option) => `<option value="${escHtml(option.key)}" ${String(item.assignment || 'self') === option.key ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('')}
-                      </select>
-                    </label>
+                    <div style="display:block;min-width:0">
+                      <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
+                        ${friendParticipantOptions.length
+                          ? friendParticipantOptions.map((person) => `<button type="button" class="chip ${participantKeys.includes(String(person.key)) ? 'active' : ''}" onclick='liveSplitTripScanToggleParticipant(${toJsArg(rowKey)}, ${toJsArg(person.key)})'>${escHtml(person.name)}</button>`).join('')
+                          : `<div style="font-size:12px;color:var(--t3)">Select trip members above to enable participants.</div>`}
+                      </div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px">
+                    <label class="fc" style="margin:0;font-size:12px;color:var(--t2)"><input type="checkbox" ${participantKeys.includes('self') ? 'checked' : ''} onchange='liveSplitTripScanToggleSelf(${toJsArg(rowKey)}, this.checked)'><span>Include me in this item</span></label>
+                    <div style="font-size:12px;color:var(--t3)">${participantKeys.length} participant${participantKeys.length === 1 ? '' : 's'}</div>
+                  </div>
+                  <div style="margin-top:10px">
+                    <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Mode</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      ${[
+                        ['equal', 'Equal'],
+                        ['percent', '%'],
+                        ['fraction', 'Fraction'],
+                        ['amount', 'Direct'],
+                        ['parts', 'Parts'],
+                      ].map(([modeKey, label]) => `<button type="button" class="chip ${splitMode === modeKey ? 'active' : ''}" onclick='liveSplitTripScanSplitMode(${toJsArg(rowKey)}, ${toJsArg(modeKey)})'>${label}</button>`).join('')}
+                    </div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:6px">${splitHints[splitMode] || ''}</div>
+                  </div>
+                  ${splitMode !== 'equal'
+                    ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px">
+                        ${getTripScanRowPeople(normalizedItem, form).map((person) => `<label style="display:block;min-width:0">
+                          <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">${escHtml(person.name)}</div>
+                          <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-split-person="${escHtml(String(person.key || ''))}" type="number" step="${splitMode === 'fraction' ? '0.0001' : '0.01'}" min="0" value="${escHtml(String((normalizedItem.split_values || {})[person.key] ?? ''))}" onchange='liveSplitTripScanSplitValue(${toJsArg(rowKey)}, ${toJsArg(person.key)}, this.value)'>
+                        </label>`).join('')}
+                      </div>`
+                    : ''}
+                  <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
+                    <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
+                    ${splitPreview?.valid
+                      ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} • ${fmtCur(share.share)}</span>`).join('')}</div>`
+                      : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                   </div>
                 </div>
               `;
@@ -3721,7 +4322,7 @@
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
             <div style="font-size:14px;font-weight:800;color:var(--t1)">Manual Trip Entries</div>
-            <div style="font-size:12px;color:var(--t2);margin-top:3px">Add multiple trip rows manually with item, amount, assignment, and delete.</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">Add multiple trip rows manually with item, amount, participants, split type, and delete.</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div style="font-size:12px;color:var(--t2);font-weight:700">Trip total: ${fmtCur(manualTotal)}</div>
@@ -3729,31 +4330,72 @@
             <button class="btn btn-s btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripManualAdd()">Add Row</button>
           </div>
         </div>
-        <div style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fff;overflow:hidden">
-          <div style="display:grid;grid-template-columns:minmax(0,2.4fr) minmax(110px,.8fr) minmax(130px,1fr) 44px;gap:0;background:#f4f7fb;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;color:var(--t2)">
-            <div style="padding:10px 12px">Item</div>
-            <div style="padding:10px 12px">Amount</div>
-            <div style="padding:10px 12px">Assign</div>
-            <div style="padding:10px 12px;text-align:center">Del</div>
-          </div>
-          ${(manualRows || []).map((item) => `
-            <div style="display:grid;grid-template-columns:minmax(0,2.4fr) minmax(110px,.8fr) minmax(130px,1fr) 44px;gap:0;border-bottom:1px solid var(--border)">
-              <div style="padding:8px">
-                <input class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="item_name" style="width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'item_name', this.value)">
+        <div style="margin-top:10px;display:grid;gap:10px">
+          ${(manualRows || []).map((item, index) => {
+            const rowKey = String(item.key || '');
+            const participantOptions = getTripScanParticipantOptions(form);
+            const friendParticipantOptions = participantOptions.filter((person) => String(person.key) !== 'self');
+            const participantKeys = item.participant_keys || [];
+            const splitMode = String(item.split_mode || 'equal');
+            const splitPreview = computeTripManualRowSplit(item, form);
+            const splitHints = { percent: '(must total 100)', fraction: '(must total 1.0)', amount: '(sum must match amount)', parts: '(ratio parts)' };
+            return `
+              <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff">
+                <div style="display:flex;align-items:flex-start;gap:10px">
+                  <div style="flex:1;min-width:0">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+                      <span style="font-size:11px;color:var(--t3);font-weight:800;letter-spacing:.08em;text-transform:uppercase">Manual Item ${index + 1}</span>
+                      <span class="badge" style="background:#f3f6ff;color:#4268b2">${fmtCur(n(item.amount))}</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(120px,.8fr);gap:8px">
+                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="item_name" style="width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" onchange="liveSplitTripManualItem(${toJsArg(rowKey)}, 'item_name', this.value)">
+                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="amount" style="width:100%;text-align:right" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" onchange="liveSplitTripManualItem(${toJsArg(rowKey)}, 'amount', this.value)">
+                    </div>
+                  </div>
+                  <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripManualDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
+                </div>
+                <div style="display:block;min-width:0;margin-top:10px">
+                  <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
+                    ${friendParticipantOptions.length
+                      ? friendParticipantOptions.map((person) => `<button type="button" class="chip ${participantKeys.includes(String(person.key)) ? 'active' : ''}" onclick='liveSplitTripManualToggleParticipant(${toJsArg(rowKey)}, ${toJsArg(person.key)})'>${escHtml(person.name)}</button>`).join('')
+                      : `<div style="font-size:12px;color:var(--t3)">Select trip members above to enable participants.</div>`}
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px">
+                  <label class="fc" style="margin:0;font-size:12px;color:var(--t2)"><input type="checkbox" ${participantKeys.includes('self') ? 'checked' : ''} onchange='liveSplitTripManualToggleSelf(${toJsArg(rowKey)}, this.checked)'><span>Include me in this item</span></label>
+                  <div style="font-size:12px;color:var(--t3)">${participantKeys.length} participant${participantKeys.length === 1 ? '' : 's'}</div>
+                </div>
+                <div style="margin-top:10px">
+                  <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Mode</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px">
+                    ${[
+                      ['equal', 'Equal'],
+                      ['percent', '%'],
+                      ['fraction', 'Fraction'],
+                      ['amount', 'Direct'],
+                      ['parts', 'Parts'],
+                    ].map(([modeKey, label]) => `<button type="button" class="chip ${splitMode === modeKey ? 'active' : ''}" onclick='liveSplitTripManualSplitMode(${toJsArg(rowKey)}, ${toJsArg(modeKey)})'>${label}</button>`).join('')}
+                  </div>
+                  <div style="font-size:11px;color:var(--t3);margin-top:6px">${splitHints[splitMode] || ''}</div>
+                </div>
+                ${splitMode !== 'equal'
+                  ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px">
+                      ${getTripManualRowPeople(item, form).map((person) => `<label style="display:block;min-width:0">
+                        <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">${escHtml(person.name)}</div>
+                        <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-split-person="${escHtml(String(person.key || ''))}" type="number" step="${splitMode === 'fraction' ? '0.0001' : '0.01'}" min="0" value="${escHtml(String((item.split_values || {})[person.key] ?? ''))}" onchange='liveSplitTripManualSplitValue(${toJsArg(rowKey)}, ${toJsArg(person.key)}, this.value)'>
+                      </label>`).join('')}
+                    </div>`
+                  : ''}
+                <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
+                  <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
+                  ${splitPreview?.valid
+                    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} • ${fmtCur(share.share)}</span>`).join('')}</div>`
+                    : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
+                </div>
               </div>
-              <div style="padding:8px">
-                <input class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="amount" style="width:100%;text-align:right" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'amount', this.value)">
-              </div>
-              <div style="padding:8px">
-                <select class="fi" data-trip-manual-key="${escHtml(String(item.key || ''))}" data-trip-manual-field="assignment" style="width:100%;padding-right:24px" onchange="liveSplitTripManualItem(${toJsArg(String(item.key || ''))}, 'assignment', this.value)">
-                  ${assignmentOptions.map((option) => `<option value="${escHtml(option.key)}" ${String(item.assignment || 'self') === option.key ? 'selected' : ''}>${escHtml(option.label)}</option>`).join('')}
-                </select>
-              </div>
-              <div style="padding:8px;display:flex;align-items:center;justify-content:center">
-                <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px" onclick="liveSplitTripManualDelete(${toJsArg(String(item.key || ''))})" title="Delete row">&times;</button>
-              </div>
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
       </div>
       <div class="fa" style="margin-top:14px">
@@ -3821,14 +4463,17 @@
     const selectedScannedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
     const manualRowsToSave = (form.manual_items || [])
       .filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0)
-      .map((item) => ({
+      .map((item) => normalizeTripManualRowSplitState({
         key: String(item?.key || ''),
         item_name: String(item?.item_name || '').trim(),
         amount: item?.amount,
         assignment: String(item?.assignment || 'self'),
         category: '',
         is_extra: false,
-      }));
+        participant_keys: Array.isArray(item?.participant_keys) ? item.participant_keys : [],
+        split_mode: item?.split_mode,
+        split_values: item?.split_values || {},
+      }, form));
     const members = [...(form.selected || new Set())]
       .map((id) => state.friends.find((friend) => String(friend.id) === String(id)))
       .filter(Boolean)
@@ -3843,6 +4488,11 @@
         toast('Each selected scanned row needs a valid amount', 'warning');
         return;
       }
+      const splitResult = computeTripScanRowSplit(row, form);
+      if (!splitResult?.valid) {
+        toast(`${String(row?.item_name || 'Scanned item')}: ${splitResult?.error || 'Invalid split'}`, 'warning');
+        return;
+      }
     }
     for (const row of manualRowsToSave) {
       if (!String(row?.item_name || '').trim()) {
@@ -3852,6 +4502,11 @@
       const amountValue = Number(row?.amount || 0);
       if (!(amountValue > 0)) {
         toast('Each manual entry needs a valid amount', 'warning');
+        return;
+      }
+      const splitResult = computeTripManualRowSplit(row, form);
+      if (!splitResult?.valid) {
+        toast(`${String(row?.item_name || 'Manual item')}: ${splitResult?.error || 'Invalid split'}`, 'warning');
         return;
       }
     }
@@ -3877,42 +4532,31 @@
         ...manualRowsToSave.map((row) => ({ ...row, _source: 'manual' })),
       ];
       if (createdTripId > 0 && rowsToPersist.length) {
-        const selectedFriends = tripCreateSelectedFriends(form);
         for (const row of rowsToPersist) {
-          const amountValue = r2(row?.amount);
-          const assignment = String(row?.assignment || 'self');
-          const sharedParticipants = [
-            { key: 'self', name: 'You', share_value: 0 },
-            ...selectedFriends.map((friend) => ({
-              key: String(friend.id),
-              name: String(friend.name || 'Friend').trim() || 'Friend',
-              share_value: 0,
-            })),
-          ];
+          const isScannedRow = String(row?._source || '') === 'scan';
+          const amountValue = isScannedRow ? getTripScanRowEffectiveAmount(form, row) : r2(row?.amount);
           let participants = [{ key: 'self', name: 'You', share_value: amountValue }];
           let splitModeValue = 'amount';
-
-          if (assignment === 'shared' && sharedParticipants.length > 1) {
-            const perHead = r2(amountValue / sharedParticipants.length);
-            let remaining = amountValue;
-            participants = sharedParticipants.map((person, index) => {
-              const shareValue = index === sharedParticipants.length - 1 ? r2(remaining) : perHead;
-              remaining = r2(remaining - shareValue);
-              return { ...person, share_value: shareValue };
-            });
-            splitModeValue = 'equal';
-          } else if (assignment.startsWith('friend:')) {
-            const friendId = Number(assignment.split(':')[1] || 0);
-            const friend = selectedFriends.find((item) => Number(item.id) === friendId);
-            if (!friend) throw new Error('One scanned bill row points to a friend who is no longer selected in this trip.');
-            participants = [
-              { key: 'self', name: 'You', share_value: 0 },
-              { key: String(friend.id), name: String(friend.name || 'Friend').trim() || 'Friend', share_value: amountValue },
-            ];
+          if (isScannedRow) {
+            const splitResult = computeTripScanRowSplit(row, form);
+            participants = (splitResult.shares || []).map((share) => ({
+              key: String(share.key),
+              name: String(share.name || 'Participant').trim() || 'Participant',
+              share_value: r2(share.share),
+            }));
+            splitModeValue = String(row?.split_mode || 'equal');
+          } else {
+            const splitResult = computeTripManualRowSplit(row, form);
+            participants = (splitResult.shares || []).map((share) => ({
+              key: String(share.key),
+              name: String(share.name || 'Participant').trim() || 'Participant',
+              share_value: r2(share.share),
+            }));
+            splitModeValue = String(row?.split_mode || 'equal');
           }
 
           await persistLiveSplitEntry({
-            divide_date: toLocalIsoDate(form.start_date, todayLocalIso()),
+            divide_date: toLocalIsoDate(row?.purchase_date || form.start_date, todayLocalIso()),
             details: String(row?.item_name || '').trim(),
             paid_by: 'You',
             paid_by_key: 'self',
@@ -5078,7 +5722,9 @@
     else state.tripCreate.selected.add(key);
     const selectedIds = new Set(tripCreateSelectedFriends(state.tripCreate).map((friend) => Number(friend.id)));
     state.tripCreate.scan_items = normalizeTripAssignmentsForSelectedFriends(state.tripCreate.scan_items, selectedIds);
+    state.tripCreate.scan_items = (state.tripCreate.scan_items || []).map((item) => normalizeTripScanRowSplitState(item, state.tripCreate));
     state.tripCreate.manual_items = normalizeTripAssignmentsForSelectedFriends(state.tripCreate.manual_items, selectedIds);
+    state.tripCreate.manual_items = (state.tripCreate.manual_items || []).map((item) => normalizeTripManualRowSplitState(item, state.tripCreate));
     renderTripCreateModal();
   };
   window.liveSplitTripScanPick = liveSplitTriggerTripScanPick;
@@ -5094,15 +5740,86 @@
     }
     updateTripScanItemWeb(itemKey, { [field]: value });
   };
+  window.liveSplitTripScanToggleParticipant = function liveSplitTripScanToggleParticipant(itemKey, participantKey) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.scan_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextKeys = new Set((Array.isArray(item.participant_keys) ? item.participant_keys : []).map((key) => String(key)));
+    const key = String(participantKey || '');
+    if (!key) return;
+    if (nextKeys.has(key)) nextKeys.delete(key);
+    else nextKeys.add(key);
+    updateTripScanItemWeb(itemKey, { participant_keys: [...nextKeys] });
+  };
+  window.liveSplitTripScanToggleSelf = function liveSplitTripScanToggleSelf(itemKey, checked) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.scan_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextKeys = new Set((Array.isArray(item.participant_keys) ? item.participant_keys : []).map((key) => String(key)));
+    if (checked) nextKeys.add('self');
+    else nextKeys.delete('self');
+    updateTripScanItemWeb(itemKey, { participant_keys: [...nextKeys] });
+  };
+  window.liveSplitTripScanSplitMode = function liveSplitTripScanSplitMode(itemKey, mode) {
+    if (!state.tripCreate) return;
+    updateTripScanItemWeb(itemKey, { split_mode: String(mode || 'equal').toLowerCase(), split_values: {} });
+  };
+  window.liveSplitTripScanSplitValue = function liveSplitTripScanSplitValue(itemKey, key, value) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.scan_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextValues = { ...(item.split_values || {}) };
+    nextValues[String(key)] = value === '' ? '' : Number(value);
+    updateTripScanItemWeb(itemKey, { split_values: nextValues });
+  };
+  window.liveSplitTripScanTax = function liveSplitTripScanTax(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.scan_tax_override = value === '' ? '' : Math.max(0, r2(Number(value || 0)));
+    rerenderTripCreateModalPreservingUi();
+  };
   window.liveSplitTripManualAdd = addTripManualItemWeb;
   window.liveSplitTripManualDelete = deleteTripManualItemWeb;
   window.liveSplitTripManualItem = function liveSplitTripManualItem(itemKey, field, value) {
     if (!state.tripCreate) return;
     updateTripManualItemWeb(itemKey, { [field]: value });
   };
+  window.liveSplitTripManualToggleParticipant = function liveSplitTripManualToggleParticipant(itemKey, participantKey) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.manual_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextKeys = new Set((Array.isArray(item.participant_keys) ? item.participant_keys : []).map((key) => String(key)));
+    const key = String(participantKey || '');
+    if (!key) return;
+    if (nextKeys.has(key)) nextKeys.delete(key);
+    else nextKeys.add(key);
+    updateTripManualItemWeb(itemKey, { participant_keys: [...nextKeys] });
+  };
+  window.liveSplitTripManualToggleSelf = function liveSplitTripManualToggleSelf(itemKey, checked) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.manual_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextKeys = new Set((Array.isArray(item.participant_keys) ? item.participant_keys : []).map((key) => String(key)));
+    if (checked) nextKeys.add('self');
+    else nextKeys.delete('self');
+    updateTripManualItemWeb(itemKey, { participant_keys: [...nextKeys] });
+  };
+  window.liveSplitTripManualSplitMode = function liveSplitTripManualSplitMode(itemKey, mode) {
+    if (!state.tripCreate) return;
+    updateTripManualItemWeb(itemKey, { split_mode: String(mode || 'equal').toLowerCase(), split_values: {} });
+  };
+  window.liveSplitTripManualSplitValue = function liveSplitTripManualSplitValue(itemKey, key, value) {
+    if (!state.tripCreate) return;
+    const item = (state.tripCreate.manual_items || []).find((row) => String(row.key) === String(itemKey));
+    if (!item) return;
+    const nextValues = { ...(item.split_values || {}) };
+    nextValues[String(key)] = value === '' ? '' : Number(value);
+    updateTripManualItemWeb(itemKey, { split_values: nextValues });
+  };
   window.liveSplitTripSave = saveLiveSplitTrip;
   window.liveSplitOpenTripDetails = openTripDetails;
   window.liveSplitOpenTripEvent = openTripEventDetails;
+  window.liveSplitToggleTripSplitView = toggleTripSplitView;
+  window.liveSplitDownloadTripPdf = liveSplitDownloadTripPdf;
   window.liveSplitUseTrip = openCreateFromTrip;
   window.liveSplitOpenVoiceFromTrip = openVoiceSplitFromTrip;
   window.liveSplitToggleTripStatus = updateLiveSplitTripStatus;

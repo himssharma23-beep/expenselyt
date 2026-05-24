@@ -1210,6 +1210,373 @@ async function addTrackerMonthToExpense(userId, trackerId, year, month, options 
   ));
 }
 
+function normalizeExpenseBucketFrequency(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['none', 'daily', 'monthly'].includes(normalized) ? normalized : 'none';
+}
+
+function normalizeExpenseBucketDay(value, fallback = 1) {
+  const parsed = Number(value);
+  const safe = Number.isInteger(parsed) && parsed >= 1 && parsed <= 28 ? parsed : Number(fallback || 1);
+  return Math.max(1, Math.min(28, safe));
+}
+
+function bucketEntryDateInRange(dateStr, bucket = {}) {
+  if (!dateStr) return false;
+  if (bucket.start_date && dateStr < String(bucket.start_date)) return false;
+  if (bucket.end_date && dateStr > String(bucket.end_date)) return false;
+  return true;
+}
+
+function bucketMonthKey(dateStr) {
+  return String(dateStr || '').slice(0, 7);
+}
+
+function bucketNextMonth(monthKey) {
+  const [year, month] = String(monthKey || '').split('-').map(Number);
+  if (!year || !month) return null;
+  const next = new Date(year, month, 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function getExpenseBucketById(userId, bucketId) {
+  const safeId = Number(bucketId);
+  if (!Number.isFinite(safeId) || safeId <= 0) throw validationError('Invalid bucket id');
+  const result = await query(
+    `SELECT *
+     FROM expense_buckets
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [safeId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function ensureExpenseBucketGeneratedEntryUniqueIndex() {
+  await query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uniq_expense_bucket_generated_entry
+      ON expense_bucket_entries(source_template_id, entry_date)
+      WHERE source_template_id IS NOT NULL AND is_template = FALSE`
+  );
+}
+
+async function applyExpenseBucketTemplates(userId, bucketId = null) {
+  const today = localIsoToday();
+  const params = [userId];
+  let bucketFilter = '';
+  if (bucketId != null) {
+    params.push(Number(bucketId));
+    bucketFilter = ' AND b.id = $2';
+  }
+  const templateR = await query(
+    `SELECT
+       e.*,
+       b.start_date AS bucket_start_date,
+       b.end_date AS bucket_end_date,
+       b.is_active AS bucket_is_active
+     FROM expense_bucket_entries e
+     JOIN expense_buckets b ON b.id = e.bucket_id
+     WHERE e.user_id = $1
+       AND e.is_template = TRUE
+       AND e.auto_add_enabled = TRUE
+       AND b.is_active = TRUE${bucketFilter}
+     ORDER BY e.bucket_id ASC, e.id ASC`,
+    params
+  );
+  let created = 0;
+  for (const template of (templateR.rows || [])) {
+    const frequency = normalizeExpenseBucketFrequency(template.auto_add_frequency);
+    if (frequency === 'none') continue;
+    const bucket = {
+      start_date: dbDateToYmd(template.bucket_start_date),
+      end_date: dbDateToYmd(template.bucket_end_date),
+    };
+    const anchorDate = dbDateToYmd(template.entry_date) || bucket.start_date || today;
+    if (!anchorDate || anchorDate > today) continue;
+    if (frequency === 'daily') {
+      let cursor = bucket.start_date && bucket.start_date > anchorDate ? bucket.start_date : anchorDate;
+      while (cursor && cursor <= today) {
+        if (bucketEntryDateInRange(cursor, bucket)) {
+          await query(
+            `INSERT INTO expense_bucket_entries (
+               bucket_id, user_id, name, entry_type, entry_date, amount,
+               is_template, is_auto_generated, auto_add_enabled, auto_add_frequency, auto_add_day,
+               reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent,
+               source_template_id, created_by, updated_by
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             ON CONFLICT DO NOTHING`,
+            [template.bucket_id, userId, template.name, template.entry_type || null, cursor, num(template.amount), template.id]
+          );
+          created += 1;
+        }
+        const next = new Date(`${cursor}T00:00:00`);
+        next.setDate(next.getDate() + 1);
+        cursor = _localDate(next);
+      }
+    } else if (frequency === 'monthly') {
+      const day = normalizeExpenseBucketDay(template.auto_add_day, String(anchorDate).slice(8, 10));
+      let monthCursor = bucket.start_date && bucketMonthKey(bucket.start_date) > bucketMonthKey(anchorDate)
+        ? bucketMonthKey(bucket.start_date)
+        : bucketMonthKey(anchorDate);
+      const todayMonth = bucketMonthKey(today);
+      while (monthCursor && monthCursor <= todayMonth) {
+        const candidate = recurringDueDateForMonth(monthCursor, day);
+        if (candidate && candidate >= anchorDate && candidate <= today && bucketEntryDateInRange(candidate, bucket)) {
+          await query(
+            `INSERT INTO expense_bucket_entries (
+               bucket_id, user_id, name, entry_type, entry_date, amount,
+               is_template, is_auto_generated, auto_add_enabled, auto_add_frequency, auto_add_day,
+               reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent,
+               source_template_id, created_by, updated_by
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             ON CONFLICT DO NOTHING`,
+            [template.bucket_id, userId, template.name, template.entry_type || null, candidate, num(template.amount), template.id]
+          );
+          created += 1;
+        }
+        monthCursor = bucketNextMonth(monthCursor);
+      }
+    }
+  }
+  return created;
+}
+
+async function cleanupExpenseBucketGeneratedDuplicates(userId, bucketId = null) {
+  const params = [userId];
+  let bucketFilter = '';
+  if (bucketId != null) {
+    params.push(Number(bucketId));
+    bucketFilter = ' AND bucket_id = $2';
+  }
+  await query(
+    `DELETE FROM expense_bucket_entries e
+     WHERE e.user_id = $1${bucketFilter}
+       AND e.is_template = FALSE
+       AND e.source_template_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM expense_bucket_entries newer
+         WHERE newer.user_id = e.user_id
+           AND newer.bucket_id = e.bucket_id
+           AND newer.source_template_id = e.source_template_id
+           AND newer.entry_date = e.entry_date
+           AND newer.id > e.id
+       )`,
+    params
+  );
+}
+
+async function getExpenseBuckets(userId) {
+  await cleanupExpenseBucketGeneratedDuplicates(userId);
+  await ensureExpenseBucketGeneratedEntryUniqueIndex();
+  await applyExpenseBucketTemplates(userId);
+  await cleanupExpenseBucketGeneratedDuplicates(userId);
+  await ensureExpenseBucketGeneratedEntryUniqueIndex();
+  const result = await query(
+    `SELECT
+       b.*,
+       COALESCE(SUM(CASE WHEN e.is_template = FALSE THEN e.amount ELSE 0 END), 0) AS total_amount,
+       COUNT(CASE WHEN e.is_template = FALSE THEN 1 END) AS expense_count,
+       COUNT(CASE WHEN e.is_template = TRUE THEN 1 END) AS template_count
+     FROM expense_buckets b
+     LEFT JOIN expense_bucket_entries e
+       ON e.bucket_id = b.id
+      AND e.user_id = b.user_id
+     WHERE b.user_id = $1
+     GROUP BY b.id
+     ORDER BY COALESCE(b.start_date, CURRENT_DATE) DESC, lower(b.name) ASC, b.id DESC`,
+    [userId]
+  );
+  return (result.rows || []).map((row) => ({
+    ...row,
+    start_date: dbDateToYmd(row.start_date),
+    end_date: dbDateToYmd(row.end_date),
+    total_amount: num(row.total_amount),
+    expense_count: Number(row.expense_count || 0),
+    template_count: Number(row.template_count || 0),
+    is_tax_saver: !!row.is_tax_saver,
+    is_active: !!row.is_active,
+  }));
+}
+
+async function addExpenseBucket(userId, data = {}) {
+  const name = normalizeText(data.name, 'Bucket name', 100);
+  const startDate = normalizeDateValue(data.start_date, 'Start date');
+  const endDate = normalizeDateValue(data.end_date, 'End date');
+  if (startDate && endDate && endDate < startDate) throw validationError('End date cannot be before start date');
+  const result = await query(
+    `INSERT INTO expense_buckets (user_id, name, start_date, end_date, is_tax_saver, is_active, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $1, $1)
+     RETURNING id`,
+    [userId, name, startDate, endDate, !!data.is_tax_saver, data.is_active != null ? !!data.is_active : true]
+  );
+  return Number(result.rows[0]?.id || 0);
+}
+
+async function updateExpenseBucket(userId, bucketId, data = {}) {
+  const bucket = await getExpenseBucketById(userId, bucketId);
+  if (!bucket) throw validationError('Bucket not found');
+  const name = normalizeText(data.name, 'Bucket name', 100);
+  const startDate = normalizeDateValue(data.start_date, 'Start date');
+  const endDate = normalizeDateValue(data.end_date, 'End date');
+  if (startDate && endDate && endDate < startDate) throw validationError('End date cannot be before start date');
+  await query(
+    `UPDATE expense_buckets
+     SET name = $1,
+         start_date = $2,
+         end_date = $3,
+         is_tax_saver = $4,
+         is_active = $5,
+         updated_at = NOW(),
+         updated_by = $7
+     WHERE id = $6
+       AND user_id = $7`,
+    [name, startDate, endDate, !!data.is_tax_saver, data.is_active != null ? !!data.is_active : true, Number(bucketId), userId]
+  );
+}
+
+async function deleteExpenseBucket(userId, bucketId) {
+  await query('DELETE FROM expense_buckets WHERE id = $1 AND user_id = $2', [bucketId, userId]);
+}
+
+function mapExpenseBucketEntryRow(row) {
+  return {
+    ...row,
+    entry_date: dbDateToYmd(row.entry_date),
+    amount: num(row.amount),
+    is_template: !!row.is_template,
+    is_auto_generated: !!row.is_auto_generated,
+    auto_add_enabled: !!row.auto_add_enabled,
+    reminder_enabled: !!row.reminder_enabled,
+    reminder_days_before: normalizeReminderDaysBefore(row.reminder_days_before),
+    reminder_frequency: normalizeReminderFrequency(row.reminder_frequency),
+    reminder_silent: !!row.reminder_silent,
+  };
+}
+
+async function getExpenseBucketEntries(userId, bucketId) {
+  const bucket = await getExpenseBucketById(userId, bucketId);
+  if (!bucket) throw validationError('Bucket not found');
+  await cleanupExpenseBucketGeneratedDuplicates(userId, bucketId);
+  await ensureExpenseBucketGeneratedEntryUniqueIndex();
+  await applyExpenseBucketTemplates(userId, bucketId);
+  await cleanupExpenseBucketGeneratedDuplicates(userId, bucketId);
+  await ensureExpenseBucketGeneratedEntryUniqueIndex();
+  const result = await query(
+    `SELECT *
+     FROM expense_bucket_entries
+     WHERE bucket_id = $1
+       AND user_id = $2
+     ORDER BY is_template DESC, entry_date DESC, id DESC`,
+    [bucketId, userId]
+  );
+  return (result.rows || []).map(mapExpenseBucketEntryRow);
+}
+
+async function addExpenseBucketEntry(userId, bucketId, data = {}) {
+  const bucket = await getExpenseBucketById(userId, bucketId);
+  if (!bucket) throw validationError('Bucket not found');
+  const name = normalizeText(data.name, 'Entry name', 120);
+  const entryType = normalizeOptionalText(data.entry_type, 60);
+  const entryDate = normalizeDateValue(data.entry_date, 'Entry date');
+  const amount = normalizePositiveAmount(data.amount, 'Amount');
+  const autoAddEnabled = !!data.auto_add_enabled;
+  const autoAddFrequency = autoAddEnabled ? normalizeExpenseBucketFrequency(data.auto_add_frequency) : 'none';
+  const autoAddDay = autoAddFrequency === 'monthly' ? normalizeExpenseBucketDay(data.auto_add_day, String(entryDate).slice(8, 10)) : null;
+  const reminderEnabled = !!data.reminder_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
+  const isTemplate = autoAddEnabled && autoAddFrequency !== 'none';
+  const result = await query(
+    `INSERT INTO expense_bucket_entries (
+       bucket_id, user_id, name, entry_type, entry_date, amount, is_template, is_auto_generated,
+       auto_add_enabled, auto_add_frequency, auto_add_day,
+       reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent,
+       created_by, updated_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, $10, $11, $12, $13, $14, $2, $2)
+     RETURNING id`,
+    [bucketId, userId, name, entryType, entryDate, amount, isTemplate, autoAddEnabled, autoAddFrequency, autoAddDay, reminderEnabled, reminderDaysBefore, reminderFrequency, reminderSilent]
+  );
+  if (isTemplate) await applyExpenseBucketTemplates(userId, bucketId);
+  return Number(result.rows[0]?.id || 0);
+}
+
+async function updateExpenseBucketEntry(userId, bucketId, entryId, data = {}) {
+  const bucket = await getExpenseBucketById(userId, bucketId);
+  if (!bucket) throw validationError('Bucket not found');
+  const currentR = await query(
+    `SELECT *
+     FROM expense_bucket_entries
+     WHERE id = $1 AND bucket_id = $2 AND user_id = $3
+     LIMIT 1`,
+    [entryId, bucketId, userId]
+  );
+  const current = currentR.rows[0];
+  if (!current) throw validationError('Entry not found');
+  const name = normalizeText(data.name, 'Entry name', 120);
+  const entryType = normalizeOptionalText(data.entry_type, 60);
+  const entryDate = normalizeDateValue(data.entry_date, 'Entry date');
+  const amount = normalizePositiveAmount(data.amount, 'Amount');
+  const autoAddEnabled = !!data.auto_add_enabled;
+  const autoAddFrequency = autoAddEnabled ? normalizeExpenseBucketFrequency(data.auto_add_frequency) : 'none';
+  const autoAddDay = autoAddFrequency === 'monthly' ? normalizeExpenseBucketDay(data.auto_add_day, String(entryDate).slice(8, 10)) : null;
+  const reminderEnabled = !!data.reminder_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
+  const isTemplate = autoAddEnabled && autoAddFrequency !== 'none';
+  await query(
+    `UPDATE expense_bucket_entries
+     SET name = $1,
+         entry_type = $2,
+         entry_date = $3,
+         amount = $4,
+         is_template = $5,
+         auto_add_enabled = $6,
+         auto_add_frequency = $7,
+         auto_add_day = $8,
+         reminder_enabled = $9,
+         reminder_days_before = $10,
+         reminder_frequency = $11,
+         reminder_silent = $12,
+         updated_at = NOW(),
+         updated_by = $14
+     WHERE id = $13
+       AND bucket_id = $15
+       AND user_id = $14`,
+    [name, entryType, entryDate, amount, isTemplate, autoAddEnabled, autoAddFrequency, autoAddDay, reminderEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, entryId, userId, bucketId]
+  );
+  if (current.is_template || isTemplate) {
+    await query(
+      `DELETE FROM expense_bucket_entries
+       WHERE source_template_id = $1
+         AND user_id = $2`,
+      [entryId, userId]
+    );
+    if (isTemplate) await applyExpenseBucketTemplates(userId, bucketId);
+  }
+}
+
+async function deleteExpenseBucketEntry(userId, bucketId, entryId) {
+  const currentR = await query(
+    `SELECT id, is_template
+     FROM expense_bucket_entries
+     WHERE id = $1 AND bucket_id = $2 AND user_id = $3
+     LIMIT 1`,
+    [entryId, bucketId, userId]
+  );
+  const current = currentR.rows[0];
+  if (!current) throw validationError('Entry not found');
+  if (current.is_template) {
+    await query('DELETE FROM expense_bucket_entries WHERE source_template_id = $1 AND user_id = $2', [entryId, userId]);
+  }
+  await query('DELETE FROM expense_bucket_entries WHERE id = $1 AND bucket_id = $2 AND user_id = $3', [entryId, bucketId, userId]);
+}
+
 function normalizeHabitBinaryValue(value, label = 'Value') {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || ![0, 1].includes(parsed)) throw validationError(`${label} must be 0 or 1`);
@@ -1799,6 +2166,14 @@ module.exports = {
   autoFillDailyEntries,
   getDailyMonthSummary,
   addTrackerMonthToExpense,
+  getExpenseBuckets,
+  addExpenseBucket,
+  updateExpenseBucket,
+  deleteExpenseBucket,
+  getExpenseBucketEntries,
+  addExpenseBucketEntry,
+  updateExpenseBucketEntry,
+  deleteExpenseBucketEntry,
   getHabitTrackers,
   addHabitTracker,
   updateHabitTracker,

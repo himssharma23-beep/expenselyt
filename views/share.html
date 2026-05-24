@@ -34,6 +34,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);min-height:100vh;colo
 .page-header{margin-bottom:24px}
 .page-header h1{font-size:22px;font-weight:700;color:var(--t1);margin-bottom:4px}
 .page-header p{font-size:14px;color:var(--t3)}
+.trip-countdown-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#E1F4EA;color:#267453;font-size:12px;font-weight:700;line-height:1}
 .badge-exp{display:inline-block;background:#FEF2F2;color:var(--red);border:1px solid #FECACA;border-radius:6px;font-size:11px;font-weight:600;padding:2px 8px;margin-left:8px}
 .friend-card{background:var(--white);border-radius:14px;border:1px solid var(--border);margin-bottom:20px;overflow:hidden}
 .friend-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer;user-select:none}
@@ -92,7 +93,8 @@ const token = location.pathname.split('/s/')[1]?.split('/')[0];
 
 function fmtShareDate(value) {
   if (!value) return '-';
-  const parsed = new Date(value);
+  const normalized = normalizeShareDateInput(value);
+  const parsed = normalized ? new Date(`${normalized}T00:00:00`) : new Date(value);
   if (Number.isNaN(parsed.getTime())) return esc(String(value));
   return parsed.toLocaleDateString('en-IN', {
     day: '2-digit',
@@ -101,16 +103,50 @@ function fmtShareDate(value) {
   });
 }
 
-function tripStartsInLabel(startDate) {
-  const raw = String(startDate || '').trim();
+function normalizeShareDateInput(value) {
+  const raw = String(value || '').trim();
   if (!raw) return '';
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoDate) return isoDate[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+}
+
+function shareTodayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function tripStartsInLabel(startDate) {
+  const raw = normalizeShareDateInput(startDate);
+  if (!raw) return '';
+  const todayRaw = normalizeShareDateInput(shareTodayStr());
+  const today = new Date(`${todayRaw}T00:00:00`);
   const start = new Date(`${raw}T00:00:00`);
   if (Number.isNaN(start.getTime())) return '';
   const diff = Math.round((start.getTime() - today.getTime()) / 86400000);
-  if (diff <= 0) return '';
-  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+  if (diff < 0) return '';
+  const inclusiveDays = diff + 1;
+  if (inclusiveDays <= 0) return '';
+  return inclusiveDays === 1 ? 'Starts in 1 day' : `Starts in ${inclusiveDays} days`;
+}
+
+function tripCountdownLabel(startDate, endDate) {
+  const startRaw = normalizeShareDateInput(startDate);
+  const endRaw = normalizeShareDateInput(endDate);
+  const todayRaw = normalizeShareDateInput(shareTodayStr());
+  const today = new Date(`${todayRaw}T00:00:00`);
+  const start = startRaw ? new Date(`${startRaw}T00:00:00`) : null;
+  const end = endRaw ? new Date(`${endRaw}T00:00:00`) : null;
+  if (start instanceof Date && !Number.isNaN(start.getTime()) && start > today) {
+    return tripStartsInLabel(startRaw);
+  }
+  if (end instanceof Date && !Number.isNaN(end.getTime()) && end >= today) {
+    const diff = Math.round((end.getTime() - today.getTime()) / 86400000);
+    if (diff <= 0) return 'Ends today';
+    return diff === 1 ? '1 day left' : `${diff} days left`;
+  }
+  return '';
 }
 
 function itineraryTimeLabel(item) {
@@ -244,7 +280,8 @@ function renderTrip(data) {
   });
   const subtitleParts = [];
   if (trip.start_date || trip.end_date) subtitleParts.push(`${fmtShareDate(trip.start_date)}${trip.end_date ? ` to ${fmtShareDate(trip.end_date)}` : ''}`);
-  if (tripStartsInLabel(trip.start_date)) subtitleParts.push(tripStartsInLabel(trip.start_date));
+  const countdownLabel = tripCountdownLabel(trip.start_date, trip.end_date);
+  if (countdownLabel) subtitleParts.push(`<span class="trip-countdown-chip">&#9702; ${esc(countdownLabel)}</span>`);
   if (data.expires_at) subtitleParts.push(`Expires ${fmtShareDate(data.expires_at)}`);
   const itineraryGroups = itineraryItems.reduce((acc, item) => {
     const key = String(item?.itinerary_date || '');

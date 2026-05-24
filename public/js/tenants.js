@@ -3,6 +3,7 @@ let _tenantLoading = false;
 let _selectedTenantBuildingId = null;
 let _selectedTenantRecordId = null;
 let _tenantPageTab = 'overview';
+let _tenantEditorTab = 'details';
 let _tenantModalFiles = { address_proof: null, photo_attachment: null, proof_attachments: [] };
 let _tenantReportFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', room_id: 'all' };
 let _tenantInvoiceFilters = { year: 'all', month_from: '', month_to: '', tenant_id: 'all', activity: 'active' };
@@ -477,9 +478,10 @@ function bindTenantsPageInteractions(main) {
   });
 }
 
-async function loadTenantsPage() {
+async function loadTenantsPage(options = {}) {
+  const { skipLoadingRender = false } = options || {};
   _tenantLoading = true;
-  renderTenantsPage();
+  if (!skipLoadingRender) renderTenantsPage();
   try {
     const overview = await api('/api/tenants/overview');
     if (overview?.error) {
@@ -1202,6 +1204,7 @@ function renderTenantRecordsTab(building) {
                   <td>${escHtml(contractLabel)}</td>
                   <td class="tenant-ledger-actions-cell">
                     <div class="tenant-ledger-front-actions">
+                      <button class="trip-icon-btn" title="View Details" onclick="event.stopPropagation();showTenantRecordDetailsModal(${Number(tenant.id)})">${tenantActionIcon('view')}</button>
                       <button class="trip-icon-btn" title="Generate Invoice" onclick="event.stopPropagation();showTenantInvoiceModal(${Number(tenant.id)})">${tenantActionIcon('invoice')}</button>
                       <button class="trip-icon-btn" title="Import Invoices" onclick="event.stopPropagation();showTenantInvoiceImportModal(${Number(tenant.id)})">${tenantActionIcon('import')}</button>
                       <button class="trip-icon-btn" title="Edit Tenant" onclick="event.stopPropagation();showTenantRecordModal(${Number(tenant.id)})">${tenantActionIcon('edit')}</button>
@@ -1698,21 +1701,126 @@ async function deleteTenantRoom(roomId) {
   await loadTenantsPage();
 }
 
+function tenantEditorTabIcon(tab) {
+  const icons = {
+    details: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path>
+        <path d="M5 20a7 7 0 0 1 14 0"></path>
+      </svg>`,
+    charges: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 7.5h12"></path>
+        <path d="M8 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"></path>
+        <path d="M12 10v6"></path>
+        <path d="M9.5 13H14.5"></path>
+      </svg>`,
+    assets: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 15.5V11a2 2 0 0 1 2-2h10"></path>
+        <path d="M7 15.5h6"></path>
+        <path d="M15 9l2-3h3l1 3"></path>
+        <path d="M14 11h7v5a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2z"></path>
+        <path d="M5 18h3"></path>
+      </svg>`,
+    documents: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3h7l4 4v14H7z"></path>
+        <path d="M14 3v5h5"></path>
+        <path d="M9.5 13h5"></path>
+        <path d="M9.5 17h5"></path>
+      </svg>`,
+  };
+  return icons[tab] || icons.details;
+}
+
+function tenantEditorSection(title, note = '') {
+  return `<div class="tenant-editor-divider">${escHtml(title)}${note ? ` <small>${escHtml(note)}</small>` : ''}</div>`;
+}
+
 function tenantModalVehicleRows(rows = []) {
-  return (rows.length ? rows : [{ vehicle_type: '', vehicle_number: '', notes: '' }]).map((row, index) => `
-    <div class="fg tenant-vehicle-row" data-index="${index}" style="margin-bottom:8px">
-      <label class="fl">Type<input class="fi tenant-vehicle-type" value="${escHtml(row.vehicle_type || '')}" placeholder="2 wheeler / 4 wheeler"></label>
-      <label class="fl">Vehicle Number<input class="fi tenant-vehicle-number" value="${escHtml(row.vehicle_number || '')}" placeholder="PB10AB1234"></label>
-      <label class="fl">Notes<input class="fi tenant-vehicle-notes" value="${escHtml(row.notes || '')}" placeholder="Optional"></label>
+  return (Array.isArray(rows) ? rows : []).map((row, index) => `
+    <div class="tenant-editor-surface tenant-vehicle-row" data-index="${index}">
+      <div class="tenant-editor-row-head">
+        <div class="tenant-editor-row-title">Vehicle ${index + 1}</div>
+        <button class="tenant-editor-row-remove" type="button" onclick="removeTenantVehicleRow(this)">Remove</button>
+      </div>
+      <div class="fg tenant-editor-inline-grid">
+        <label class="fl">
+          <span class="tenant-editor-label">Type</span>
+          <input class="fi tenant-vehicle-type" value="${escHtml(row.vehicle_type || '')}" placeholder="2 wheeler / 4 wheeler">
+        </label>
+        <label class="fl">
+          <span class="tenant-editor-label">Vehicle Number</span>
+          <input class="fi tenant-vehicle-number" value="${escHtml(row.vehicle_number || '')}" placeholder="PB10AB1234">
+        </label>
+        <label class="fl full">
+          <span class="tenant-editor-label">Notes</span>
+          <input class="fi tenant-vehicle-notes" value="${escHtml(row.notes || '')}" placeholder="Optional">
+        </label>
+      </div>
     </div>`).join('');
 }
 
 function tenantModalItemRows(rows = []) {
-  return (rows.length ? rows : [{ item_name: '', quantity: '', notes: '' }]).map((row, index) => `
-    <div class="fg tenant-item-row" data-index="${index}" style="margin-bottom:8px">
-      <label class="fl">Item<input class="fi tenant-item-name" value="${escHtml(row.item_name || '')}" placeholder="Cooler / Cylinder"></label>
-      <label class="fl">Quantity<input class="fi tenant-item-quantity" type="number" min="0" step="1" value="${escHtml(row.quantity === '' || row.quantity == null ? '' : String(row.quantity))}" placeholder="Optional"></label>
-      <label class="fl">Notes<input class="fi tenant-item-notes" value="${escHtml(row.notes || '')}" placeholder="Optional"></label>
+  return (Array.isArray(rows) ? rows : []).map((row, index) => `
+    <div class="tenant-editor-surface tenant-item-row" data-index="${index}">
+      <div class="tenant-editor-row-head">
+        <div class="tenant-editor-row-title">Item ${index + 1}</div>
+        <button class="tenant-editor-row-remove" type="button" onclick="removeTenantItemRow(this)">Remove</button>
+      </div>
+      <div class="fg tenant-editor-inline-grid">
+        <label class="fl">
+          <span class="tenant-editor-label">Item Name</span>
+          <input class="fi tenant-item-name" value="${escHtml(row.item_name || '')}" placeholder="Cooler / Cylinder / Fan">
+        </label>
+        <label class="fl">
+          <span class="tenant-editor-label">Quantity</span>
+          <input class="fi tenant-item-quantity" type="number" min="0" step="1" value="${escHtml(row.quantity === '' || row.quantity == null ? '' : String(row.quantity))}" placeholder="e.g. 2">
+        </label>
+        <label class="fl full">
+          <span class="tenant-editor-label">Notes</span>
+          <input class="fi tenant-item-notes" value="${escHtml(row.notes || '')}" placeholder="Optional">
+        </label>
+      </div>
+    </div>`).join('');
+}
+
+function tenantRecurringChargeRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => `
+    <div class="tenant-editor-surface tenant-recurring-charge-row" data-index="${index}">
+      <div class="fg tenant-editor-inline-grid tenant-editor-inline-grid-charges" style="align-items:end">
+        <label class="fl">
+          <span class="tenant-editor-label">Description</span>
+          <input class="fi tenant-recurring-charge-detail" value="${escHtml(row.detail || '')}" placeholder="Maintenance / Parking / Internet">
+        </label>
+        <label class="fl">
+          <span class="tenant-editor-label">Amount (INR)</span>
+          <input class="fi tenant-recurring-charge-amount" type="number" min="0" step="0.01" value="${escHtml(row.amount === '' || row.amount == null ? '' : String(row.amount))}" placeholder="500">
+        </label>
+        <div class="tenant-editor-inline-action">
+          <button class="tenant-editor-row-remove" type="button" onclick="removeTenantRecurringChargeRow(this)">Remove</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function tenantNextInvoiceChargeRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => `
+    <div class="tenant-editor-surface tenant-next-invoice-charge-row" data-index="${index}">
+      <div class="fg tenant-editor-inline-grid tenant-editor-inline-grid-charges" style="align-items:end">
+        <label class="fl">
+          <span class="tenant-editor-label">Description</span>
+          <input class="fi tenant-next-invoice-charge-detail" value="${escHtml(row.detail || '')}" placeholder="Repair / Cylinder / Adjustment">
+        </label>
+        <label class="fl">
+          <span class="tenant-editor-label">Amount (INR)</span>
+          <input class="fi tenant-next-invoice-charge-amount" type="number" min="0" step="0.01" value="${escHtml(row.amount === '' || row.amount == null ? '' : String(row.amount))}" placeholder="500">
+        </label>
+        <div class="tenant-editor-inline-action">
+          <button class="tenant-editor-row-remove" type="button" onclick="removeTenantNextInvoiceChargeRow(this)">Remove</button>
+        </div>
+      </div>
     </div>`).join('');
 }
 
@@ -1781,8 +1889,182 @@ function addTenantItemRow() {
   wrap.insertAdjacentHTML('beforeend', tenantModalItemRows([{ item_name: '', quantity: '', notes: '' }]));
 }
 
+function addTenantRecurringChargeRow() {
+  const wrap = document.getElementById('tenantRecurringChargeRows');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantRecurringChargeRows([{ detail: '', amount: '' }]));
+}
+
+function addTenantNextInvoiceChargeRow() {
+  const wrap = document.getElementById('tenantNextInvoiceChargeRows');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', tenantNextInvoiceChargeRows([{ detail: '', amount: '' }]));
+}
+
+function removeTenantVehicleRow(button) {
+  button?.closest('.tenant-vehicle-row')?.remove();
+}
+
+function removeTenantItemRow(button) {
+  button?.closest('.tenant-item-row')?.remove();
+}
+
+function removeTenantRecurringChargeRow(button) {
+  button?.closest('.tenant-recurring-charge-row')?.remove();
+}
+
+function removeTenantNextInvoiceChargeRow(button) {
+  button?.closest('.tenant-next-invoice-charge-row')?.remove();
+}
+
 function collectTenantModalRows(selector, mapper) {
   return [...document.querySelectorAll(selector)].map((row) => mapper(row)).filter(Boolean);
+}
+
+function setTenantEditorTab(tab = 'details') {
+  _tenantEditorTab = String(tab || 'details');
+  document.querySelectorAll('.tenant-editor-tab').forEach((button) => {
+    button.classList.toggle('active', button.dataset.tab === _tenantEditorTab);
+  });
+  document.querySelectorAll('.tenant-editor-panel').forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== _tenantEditorTab;
+  });
+}
+
+function tenantInfoRow(label, value) {
+  return `
+    <div style="display:grid;grid-template-columns:minmax(110px,140px) 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--br)">
+      <div style="font-size:12px;color:var(--t3);font-weight:700">${escHtml(label || '')}</div>
+      <div style="font-size:13px;color:var(--t1)">${value || '<span style="color:var(--t3)">-</span>'}</div>
+    </div>`;
+}
+
+function tenantDetailFileLink(file, emptyLabel = 'Not uploaded') {
+  if (!file?.path) return `<span style="color:var(--t3)">${escHtml(emptyLabel)}</span>`;
+  return `<a href="${escHtml(file.path)}" target="_blank" rel="noopener">${escHtml(file.name || file.path || 'Attachment')}</a>`;
+}
+
+function tenantChargeItemsList(items = [], emptyLabel = 'No additional charges saved') {
+  const list = (Array.isArray(items) ? items : []).filter((item) => (item?.detail || '').trim() || tenantNum(item?.amount || 0) !== 0);
+  if (!list.length) return `<div style="font-size:12px;color:var(--t3)">${escHtml(emptyLabel)}</div>`;
+  return `
+    <div style="display:grid;gap:8px">
+      ${list.map((item) => `
+        <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border:1px solid var(--br);border-radius:10px;background:#fff">
+          <span style="font-size:12px;color:var(--t1)">${escHtml(item.detail || 'Charge')}</span>
+          <strong style="font-size:12px;color:var(--t1)">${fmtCur(item.amount || 0)}</strong>
+        </div>`).join('')}
+    </div>`;
+}
+
+function tenantDetailSimpleList(items = [], renderer, emptyLabel) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return `<div style="font-size:12px;color:var(--t3)">${escHtml(emptyLabel)}</div>`;
+  return `<div style="display:grid;gap:10px">${list.map(renderer).join('')}</div>`;
+}
+
+function tenantDetailInvoiceHistory(tenant) {
+  const invoices = [...(Array.isArray(tenant?.invoices) ? tenant.invoices : [])]
+    .sort((a, b) => String(b.invoice_month || '').localeCompare(String(a.invoice_month || '')) || Number(b.id) - Number(a.id));
+  if (!invoices.length) return '<div style="font-size:12px;color:var(--t3)">No invoices created for this tenant yet.</div>';
+  return `
+    <div style="display:grid;gap:10px">
+      ${invoices.map((invoice) => `
+        <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:12px;border:1px solid var(--br);border-radius:12px;background:#fff">
+          <div style="display:grid;gap:5px">
+            <div style="font-size:13px;font-weight:800;color:var(--t1)">${escHtml(tenantMonthLabel(invoice.invoice_month))} <span style="font-weight:600;color:var(--t3)">• ${escHtml(invoice.room_label_snapshot || '-')}</span></div>
+            <div style="font-size:12px;color:var(--t2)">Total ${fmtCur(invoice.total_amount || 0)} • ${escHtml(tenantInvoiceStatusLabel(invoice.payment_status))}</div>
+            <div style="font-size:11px;color:var(--t3)">Due ${escHtml(tenantDateLabel(invoice.due_date))} • Meter ${Number(invoice.previous_electricity_units || 0)} to ${Number(invoice.current_electricity_units || 0)}</div>
+          </div>
+          <button class="btn btn-s btn-sm" onclick="showTenantInvoiceViewModal(${Number(invoice.id)})">View Invoice</button>
+        </div>`).join('')}
+    </div>`;
+}
+
+function showTenantRecordDetailsModal(recordId) {
+  const tenant = tenantFindRecord(recordId);
+  if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  const room = tenantFindRoom(tenant.room_id);
+  const building = tenantFindBuilding(tenant.building_id);
+  const activeChargeProfile = tenantCurrentChargeProfile(tenant, tenantDefaultStartDate()) || tenant;
+  const totalRecurringExtras = tenantNum((tenant.monthly_additional_charges || []).reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
+  const totalPendingInvoiceExtras = tenantNum((tenant.next_invoice_charge_items || []).reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
+  openModal(`Tenant Details - ${escHtml(tenant.tenant_name || 'Tenant')}`, `
+    <div style="display:grid;gap:14px">
+      <div class="card" style="padding:16px">
+        <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <div style="font-size:22px;font-weight:900;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:6px">${escHtml(building?.name || 'Building')} • ${escHtml(room?.room_label || 'Room')} • ${tenant.is_active ? 'Active' : 'Inactive'}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            ${tenantChip(tenant.is_active ? 'Active Tenant' : 'Inactive Tenant', tenant.is_active ? 'green' : 'amber')}
+            ${tenant.end_date ? tenantChip(`End ${tenantDateLabel(tenant.end_date)}`, 'neutral') : ''}
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Tenant Profile</div>
+        ${tenantInfoRow('Building', escHtml(building?.name || '-'))}
+        ${tenantInfoRow('Room', escHtml(room?.room_label || '-'))}
+        ${tenantInfoRow('Floor / Type', escHtml([room?.floor_label, room?.room_type].filter(Boolean).join(' • ') || '-'))}
+        ${tenantInfoRow('Contact', escHtml(tenant.contact_number || '-'))}
+        ${tenantInfoRow('Address', escHtml(tenant.tenant_address || '-'))}
+        ${tenantInfoRow('Start Date', escHtml(tenantDateLabel(tenant.start_date)))}
+        ${tenantInfoRow('End Date', escHtml(tenantDateLabel(tenant.end_date)))}
+        ${tenantInfoRow('Contract', escHtml(tenant.contract_months ? `${Number(tenant.contract_months)} months` : '-'))}
+        ${tenantInfoRow('Security Deposit', fmtCur(tenant.security_deposit || 0))}
+        ${tenantInfoRow('Notes', escHtml(tenant.notes || '-'))}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Current Charges</div>
+        ${tenantInfoRow('Rent / Month', fmtCur(activeChargeProfile.rent_amount || tenant.rent_amount || 0))}
+        ${tenantInfoRow('Electricity / Unit', fmtCur(activeChargeProfile.electricity_unit_price || tenant.electricity_unit_price || 0))}
+        ${tenantInfoRow('Opening Meter', escHtml(String(activeChargeProfile.opening_electricity_units ?? tenant.opening_electricity_units ?? 0)))}
+        ${tenantInfoRow('Sewerage', fmtCur(activeChargeProfile.sewerage_charge || tenant.sewerage_charge || 0))}
+        ${tenantInfoRow('Water', fmtCur(activeChargeProfile.water_charge || tenant.water_charge || 0))}
+        ${tenantInfoRow('Cleaning', fmtCur(activeChargeProfile.cleaning_charge || tenant.cleaning_charge || 0))}
+        ${tenantInfoRow('Recurring Extras', `${fmtCur(totalRecurringExtras)}<div style="margin-top:8px">${tenantChargeItemsList(tenant.monthly_additional_charges, 'No recurring extra charges saved')}</div>`)}
+        ${tenantInfoRow('Next Invoice Extras', `${fmtCur(totalPendingInvoiceExtras)}<div style="margin-top:8px">${tenantChargeItemsList(tenant.next_invoice_charge_items, 'No one-time next invoice charges saved')}</div>`)}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Attachments</div>
+        ${tenantInfoRow('Address Proof', tenantDetailFileLink(tenant.address_proof, 'No address proof uploaded'))}
+        ${tenantInfoRow('Photo', tenantDetailFileLink(tenant.photo_attachment, 'No photo uploaded'))}
+        ${tenantInfoRow('Supporting Proofs', tenantDetailSimpleList(tenant.proof_attachments, (file) => `<div>${tenantDetailFileLink(file, 'Attachment')}</div>`, 'No supporting proofs uploaded'))}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Vehicles</div>
+        ${tenantDetailSimpleList(tenant.vehicles, (vehicle) => `
+          <div style="padding:12px;border:1px solid var(--br);border-radius:12px;background:#fff">
+            <div style="font-size:13px;font-weight:800;color:var(--t1)">${escHtml(vehicle.vehicle_type || 'Vehicle')}</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:4px">${escHtml(vehicle.vehicle_number || '-')}</div>
+            ${vehicle.notes ? `<div style="font-size:11px;color:var(--t3);margin-top:6px">${escHtml(vehicle.notes)}</div>` : ''}
+          </div>`, 'No vehicle details saved')}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Items Provided</div>
+        ${tenantDetailSimpleList(tenant.provided_items, (item) => `
+          <div style="padding:12px;border:1px solid var(--br);border-radius:12px;background:#fff">
+            <div style="font-size:13px;font-weight:800;color:var(--t1)">${escHtml(item.item_name || 'Item')} ${item.quantity ? `<span style="font-size:12px;color:var(--t3)">• Qty ${Number(item.quantity)}</span>` : ''}</div>
+            ${item.notes ? `<div style="font-size:11px;color:var(--t3);margin-top:6px">${escHtml(item.notes)}</div>` : ''}
+          </div>`, 'No provided items saved')}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Charge History</div>
+        <div style="font-size:12px;color:var(--t3);margin-bottom:10px">Saved rate changes and effective periods for this tenant.</div>
+        ${tenantChargeHistoryHtml(tenant.charge_history || [])}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Invoice History</div>
+        ${tenantDetailInvoiceHistory(tenant)}
+      </div>
+      <div class="fa">
+        <button class="btn btn-p" onclick="showTenantRecordModal(${Number(tenant.id)})">Edit Tenant</button>
+        <button class="btn btn-s" onclick="showTenantInvoiceModal(${Number(tenant.id)})">Generate Invoice</button>
+        <button class="btn btn-s" onclick="closeModal()">Close</button>
+      </div>
+    </div>`);
 }
 
 function showTenantRecordModal(recordId = null) {
@@ -1791,6 +2073,12 @@ function showTenantRecordModal(recordId = null) {
   if (!(selectedBuilding.rooms || []).length) { toast('Add a room before adding a tenant.', 'warning'); return; }
   const record = recordId ? tenantFindRecord(recordId) : null;
   const activeChargeProfile = tenantCurrentChargeProfile(record, tenantDefaultStartDate());
+  const recurringCharges = Array.isArray(activeChargeProfile?.monthly_additional_charges)
+    ? activeChargeProfile.monthly_additional_charges
+    : (record?.monthly_additional_charges || []);
+  const nextInvoiceCharges = Array.isArray(record?.next_invoice_charge_items)
+    ? record.next_invoice_charge_items
+    : [];
   const rooms = (selectedBuilding.rooms || []).filter((room) => {
     const occupiedByAnother = room.active_tenant && String(room.active_tenant.id) !== String(record?.id || '');
     return !occupiedByAnother;
@@ -1804,78 +2092,197 @@ function showTenantRecordModal(recordId = null) {
     photo_attachment: record?.photo_attachment || null,
     proof_attachments: [...(record?.proof_attachments || [])],
   };
-  openModal(record ? 'Edit Tenant' : 'Add Tenant', `
-    <div class="fg">
-      <label class="fl">Tenant Name<input class="fi" id="tenantRecordName" value="${escHtml(record?.tenant_name || '')}" placeholder="Optional"></label>
-      <label class="fl">Room<select class="fi" id="tenantRecordRoom">${rooms.map((room) => `<option value="${Number(room.id)}" ${String(room.id) === String(record?.room_id || '') ? 'selected' : ''}>${escHtml(room.room_label || 'Room')}</option>`).join('')}</select></label>
-      <label class="fl">Start From<input class="fi" type="date" id="tenantRecordStartDate" value="${escHtml(tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}"></label>
-      <label class="fl">End Date<input class="fi" type="date" id="tenantRecordEndDate" value="${escHtml(tenantInputDateValue(record?.end_date, ''))}"></label>
-      <label class="fl">Charge Effective From<input class="fi" type="date" id="tenantChargeEffectiveFrom" value="${escHtml(record ? tenantDefaultStartDate() : tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}"></label>
-      <label class="fl">Contract Period (months)<input class="fi" type="number" min="0" step="1" id="tenantRecordContractMonths" value="${escHtml(String(record?.contract_months ?? ''))}"></label>
-      <label class="fl">Contact Number<input class="fi" id="tenantRecordContact" value="${escHtml(record?.contact_number || '')}"></label>
-      <label class="fl">Security Deposited<input class="fi" type="number" min="0" step="0.01" id="tenantRecordSecurity" value="${escHtml(String(record?.security_deposit || 0))}"></label>
-      <label class="fl">Rent / Month<input class="fi" type="number" min="0" step="0.01" id="tenantRecordRent" value="${escHtml(String((activeChargeProfile?.rent_amount ?? record?.rent_amount) || 0))}"></label>
-      <label class="fl">Electricity / Unit<input class="fi" type="number" min="0" step="0.01" id="tenantRecordUnitPrice" value="${escHtml(String((activeChargeProfile?.electricity_unit_price ?? record?.electricity_unit_price) || 0))}"></label>
-      <label class="fl">Opening Meter Units<input class="fi" type="number" min="0" step="1" id="tenantRecordOpeningUnits" value="${escHtml(String((activeChargeProfile?.opening_electricity_units ?? record?.opening_electricity_units) || 0))}"></label>
-      <label class="fl">Sewerage Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordSewerage" value="${escHtml(String((activeChargeProfile?.sewerage_charge ?? record?.sewerage_charge) || 0))}"></label>
-      <label class="fl">Water Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordWater" value="${escHtml(String((activeChargeProfile?.water_charge ?? record?.water_charge) || 0))}"></label>
-      <label class="fl">Cleaning Charge<input class="fi" type="number" min="0" step="0.01" id="tenantRecordCleaning" value="${escHtml(String((activeChargeProfile?.cleaning_charge ?? record?.cleaning_charge) || 0))}"></label>
-      <label class="fl full">Tenant Address<textarea class="fi" id="tenantRecordAddress" rows="3">${escHtml(record?.tenant_address || '')}</textarea></label>
-      <label class="fl full">Notes<textarea class="fi" id="tenantRecordNotes" rows="3">${escHtml(record?.notes || '')}</textarea></label>
-    </div>
-    <div class="card" style="padding:14px;margin-top:14px">
-      <div style="font-size:15px;font-weight:800;color:var(--t1)">Charge History</div>
-      <div style="font-size:12px;color:var(--t3);margin-top:4px">Every rate change is saved with its own effective period.</div>
-      <div style="margin-top:10px">${tenantChargeHistoryHtml(record?.charge_history || [])}</div>
-    </div>
-    <div class="card" style="padding:14px;margin-top:14px">
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
-        <div style="font-size:15px;font-weight:800;color:var(--t1)">Address Proof & Attachments</div>
-      </div>
-      <div style="margin-top:10px;display:grid;gap:12px">
-        <div>
-          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Address Proof</div>
-          <div id="tenantAddressProofWrap"></div>
-          <input type="file" id="tenantAddressProofInput" style="display:none" onchange="uploadTenantModalFile('tenantAddressProofInput','address_proof')">
-          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantAddressProofInput').click()">Upload Address Proof</button>
+  _tenantEditorTab = 'details';
+  window.__modalClassName = 'tenant-editor-modal-shell';
+  showModal(`
+    <div class="tenant-editor-modal">
+      <div class="tenant-editor-hero">
+        <div class="tenant-editor-hero-main">
+          <div class="tenant-editor-avatar">${escHtml(tenantInitials(record?.tenant_name || 'Tenant'))}</div>
+          <div>
+            <div class="tenant-editor-title">${escHtml(record ? 'Edit Tenant' : 'Add Tenant')}</div>
+            <div class="tenant-editor-subtitle">${escHtml([record ? (tenantFindRoom(record.room_id)?.room_label || 'Room') : (rooms[0]?.room_label || 'Room'), selectedBuilding?.name || 'Building'].filter(Boolean).join(' • '))}</div>
+          </div>
         </div>
-        <div>
-          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Tenant Photo</div>
-          <div id="tenantPhotoWrap"></div>
-          <input type="file" id="tenantPhotoInput" accept="image/*" style="display:none" onchange="uploadTenantModalFile('tenantPhotoInput','photo_attachment')">
-          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantPhotoInput').click()">Upload Photo</button>
+        <button class="tenant-editor-close" type="button" onclick="closeModal()">x</button>
+      </div>
+      <div class="tenant-editor-tabs">
+        <button class="tenant-editor-tab active" type="button" data-tab="details" onclick="setTenantEditorTab('details')"><span class="tenant-editor-tab-icon">${tenantEditorTabIcon('details')}</span>Details</button>
+        <button class="tenant-editor-tab" type="button" data-tab="charges" onclick="setTenantEditorTab('charges')"><span class="tenant-editor-tab-icon">${tenantEditorTabIcon('charges')}</span>Charges</button>
+        <button class="tenant-editor-tab" type="button" data-tab="assets" onclick="setTenantEditorTab('assets')"><span class="tenant-editor-tab-icon">${tenantEditorTabIcon('assets')}</span>Vehicles & Items</button>
+        <button class="tenant-editor-tab" type="button" data-tab="documents" onclick="setTenantEditorTab('documents')"><span class="tenant-editor-tab-icon">${tenantEditorTabIcon('documents')}</span>Documents</button>
+      </div>
+      <div class="tenant-editor-content">
+        <div class="tenant-editor-panel" data-panel="details">
+          ${tenantEditorSection('Tenant Details')}
+          <div class="fg">
+            <label class="fl">
+              <span class="tenant-editor-label">Tenant Name</span>
+              <input class="fi" id="tenantRecordName" value="${escHtml(record?.tenant_name || '')}" placeholder="Tenant name">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Room</span>
+              <select class="fi" id="tenantRecordRoom">${rooms.map((room) => `<option value="${Number(room.id)}" ${String(room.id) === String(record?.room_id || '') ? 'selected' : ''}>${escHtml(room.room_label || 'Room')}</option>`).join('')}</select>
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Contact Number</span>
+              <input class="fi" id="tenantRecordContact" value="${escHtml(record?.contact_number || '')}" placeholder="98XXXXXXXX">
+            </label>
+            <label class="fl tenant-editor-input-suffix">
+              <span class="tenant-editor-label">Contract Period</span>
+              <input class="fi" type="number" min="0" step="1" id="tenantRecordContractMonths" value="${escHtml(String(record?.contract_months ?? ''))}" placeholder="12">
+              <span>months</span>
+            </label>
+          </div>
+          ${tenantEditorSection('Dates')}
+          <div class="fg">
+            <label class="fl">
+              <span class="tenant-editor-label">Start From</span>
+              <input class="fi" type="date" id="tenantRecordStartDate" value="${escHtml(tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">End Date</span>
+              <input class="fi" type="date" id="tenantRecordEndDate" value="${escHtml(tenantInputDateValue(record?.end_date, ''))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Charge Effective From</span>
+              <input class="fi" type="date" id="tenantChargeEffectiveFrom" value="${escHtml(record ? tenantDefaultStartDate() : tenantInputDateValue(record?.start_date, tenantDefaultStartDate()))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Security Deposited</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordSecurity" value="${escHtml(String(record?.security_deposit || 0))}" placeholder="12000">
+            </label>
+          </div>
+          ${tenantEditorSection('Address & Notes')}
+          <div class="fg">
+            <label class="fl full">
+              <span class="tenant-editor-label">Tenant Address</span>
+              <textarea class="fi" id="tenantRecordAddress" rows="4" placeholder="House no., street, area, city...">${escHtml(record?.tenant_address || '')}</textarea>
+            </label>
+            <label class="fl full">
+              <span class="tenant-editor-label">Notes</span>
+              <textarea class="fi" id="tenantRecordNotes" rows="3" placeholder="Optional notes">${escHtml(record?.notes || '')}</textarea>
+            </label>
+          </div>
         </div>
-        <div>
-          <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Supporting Proof Attachments</div>
-          <div id="tenantProofListWrap"></div>
-          <input type="file" id="tenantProofInput" style="display:none" onchange="uploadTenantModalFile('tenantProofInput','proof_attachments')">
-          <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="document.getElementById('tenantProofInput').click()">Upload Supporting Proof</button>
+        <div class="tenant-editor-panel" data-panel="charges" hidden>
+          ${tenantEditorSection('Monthly Charges')}
+          <div class="fg tenant-editor-grid-3">
+            <label class="fl">
+              <span class="tenant-editor-label">Rent / Month</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordRent" value="${escHtml(String((activeChargeProfile?.rent_amount ?? record?.rent_amount) || 0))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Electricity / Unit</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordUnitPrice" value="${escHtml(String((activeChargeProfile?.electricity_unit_price ?? record?.electricity_unit_price) || 0))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Opening Meter Units</span>
+              <input class="fi" type="number" min="0" step="1" id="tenantRecordOpeningUnits" value="${escHtml(String((activeChargeProfile?.opening_electricity_units ?? record?.opening_electricity_units) || 0))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Sewerage Charge</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordSewerage" value="${escHtml(String((activeChargeProfile?.sewerage_charge ?? record?.sewerage_charge) || 0))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Water Charge</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordWater" value="${escHtml(String((activeChargeProfile?.water_charge ?? record?.water_charge) || 0))}">
+            </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Cleaning Charge</span>
+              <input class="fi" type="number" min="0" step="0.01" id="tenantRecordCleaning" value="${escHtml(String((activeChargeProfile?.cleaning_charge ?? record?.cleaning_charge) || 0))}">
+            </label>
+          </div>
+          ${tenantEditorSection('Monthly Additional Charges', 'Auto-applied on every invoice')}
+          <div id="tenantRecurringChargeRows" style="display:grid;gap:10px">${tenantRecurringChargeRows(recurringCharges)}</div>
+          <button class="tenant-editor-add-line" type="button" style="margin-top:10px" onclick="addTenantRecurringChargeRow()">+ Add Monthly Charge</button>
+          ${tenantEditorSection('Next Invoice Only Charges', 'Saved now, included only in the next generated invoice')}
+          <div id="tenantNextInvoiceChargeRows" style="display:grid;gap:10px">${tenantNextInvoiceChargeRows(nextInvoiceCharges)}</div>
+          <button class="tenant-editor-add-line" type="button" style="margin-top:10px" onclick="addTenantNextInvoiceChargeRow()">+ Add Next Invoice Charge</button>
+          ${tenantEditorSection('Charge History')}
+          <div class="tenant-editor-surface tenant-editor-history-wrap">
+            <div style="font-size:12px;color:var(--t3);margin-bottom:10px">Every rate change is saved with its own effective period.</div>
+            <div>${tenantChargeHistoryHtml(record?.charge_history || [])}</div>
+          </div>
+        </div>
+        <div class="tenant-editor-panel" data-panel="assets" hidden>
+          ${tenantEditorSection('Vehicle Details')}
+          <div id="tenantVehicleRows" style="display:grid;gap:10px">${tenantModalVehicleRows(record?.vehicles || [])}</div>
+          <button class="tenant-editor-add-line" type="button" style="margin-top:10px" onclick="addTenantVehicleRow()">+ Add Vehicle</button>
+          ${tenantEditorSection('Items Provided')}
+          <div id="tenantItemRows" style="display:grid;gap:10px">${tenantModalItemRows(record?.provided_items || [])}</div>
+          <button class="tenant-editor-add-line" type="button" style="margin-top:10px" onclick="addTenantItemRow()">+ Add Item</button>
+        </div>
+        <div class="tenant-editor-panel" data-panel="documents" hidden>
+          ${tenantEditorSection('Address Proof & Attachments')}
+          <div class="tenant-editor-upload-stack">
+            <div class="tenant-editor-upload-card">
+              <div class="tenant-editor-upload-copy">
+                <div class="tenant-editor-upload-icon tone-blue">ID</div>
+                <div>
+                  <div class="tenant-editor-upload-title">Address Proof</div>
+                  <div id="tenantAddressProofWrap"></div>
+                </div>
+              </div>
+              <div>
+                <input type="file" id="tenantAddressProofInput" style="display:none" onchange="uploadTenantModalFile('tenantAddressProofInput','address_proof')">
+                <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('tenantAddressProofInput').click()">Upload</button>
+              </div>
+            </div>
+            <div class="tenant-editor-upload-card">
+              <div class="tenant-editor-upload-copy">
+                <div class="tenant-editor-upload-icon tone-amber">PH</div>
+                <div>
+                  <div class="tenant-editor-upload-title">Tenant Photo</div>
+                  <div id="tenantPhotoWrap"></div>
+                </div>
+              </div>
+              <div>
+                <input type="file" id="tenantPhotoInput" accept="image/*" style="display:none" onchange="uploadTenantModalFile('tenantPhotoInput','photo_attachment')">
+                <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('tenantPhotoInput').click()">Upload</button>
+              </div>
+            </div>
+            <div class="tenant-editor-upload-card">
+              <div class="tenant-editor-upload-copy">
+                <div class="tenant-editor-upload-icon tone-green">AT</div>
+                <div>
+                  <div class="tenant-editor-upload-title">Supporting Proof Attachments</div>
+                  <div id="tenantProofListWrap"></div>
+                </div>
+              </div>
+              <div>
+                <input type="file" id="tenantProofInput" style="display:none" onchange="uploadTenantModalFile('tenantProofInput','proof_attachments')">
+                <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('tenantProofInput').click()">Upload</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="card" style="padding:14px;margin-top:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <div style="font-size:15px;font-weight:800;color:var(--t1)">Vehicle Details</div>
-        <button class="btn btn-s btn-sm" onclick="addTenantVehicleRow()">+ Add Vehicle</button>
+      <div class="tenant-editor-footer">
+        <button class="btn btn-p" type="button" onclick="saveTenantRecord(${recordId || 'null'})">${record ? 'Update Tenant' : 'Add Tenant'}</button>
+        ${record ? `<button class="btn btn-g" type="button" style="color:var(--red)" onclick="deleteTenantRecord(${Number(record.id)})">Delete</button>` : ''}
+        <button class="btn btn-s" type="button" onclick="closeModal()">Cancel</button>
       </div>
-      <div id="tenantVehicleRows" style="margin-top:10px">${tenantModalVehicleRows(record?.vehicles || [])}</div>
-    </div>
-    <div class="card" style="padding:14px;margin-top:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <div style="font-size:15px;font-weight:800;color:var(--t1)">Items Provided</div>
-        <button class="btn btn-s btn-sm" onclick="addTenantItemRow()">+ Add Item</button>
-      </div>
-      <div id="tenantItemRows" style="margin-top:10px">${tenantModalItemRows(record?.provided_items || [])}</div>
-    </div>
-    <div class="fa" style="margin-top:16px">
-      <button class="btn btn-p" onclick="saveTenantRecord(${recordId || 'null'})">${record ? 'Update Tenant' : 'Add Tenant'}</button>
-      ${record ? `<button class="btn btn-g" style="color:var(--red)" onclick="deleteTenantRecord(${Number(record.id)})">Delete</button>` : ''}
-      <button class="btn btn-s" onclick="closeModal()">Cancel</button>
     </div>`);
+  setTenantEditorTab('details');
   renderTenantModalAttachments();
 }
 
 async function saveTenantRecord(recordId = null) {
+  const monthly_additional_charges = collectTenantModalRows('.tenant-recurring-charge-row', (row) => {
+    const detail = row.querySelector('.tenant-recurring-charge-detail')?.value?.trim() || '';
+    const amountValue = row.querySelector('.tenant-recurring-charge-amount')?.value || '';
+    const amount = amountValue === '' ? 0 : Number(amountValue);
+    if (!detail && !amount) return null;
+    return { detail, amount };
+  });
+  const next_invoice_charge_items = collectTenantModalRows('.tenant-next-invoice-charge-row', (row) => {
+    const detail = row.querySelector('.tenant-next-invoice-charge-detail')?.value?.trim() || '';
+    const amountValue = row.querySelector('.tenant-next-invoice-charge-amount')?.value || '';
+    const amount = amountValue === '' ? 0 : Number(amountValue);
+    if (!detail && !amount) return null;
+    return { detail, amount };
+  });
   const vehicles = collectTenantModalRows('.tenant-vehicle-row', (row) => {
     const vehicle_type = row.querySelector('.tenant-vehicle-type')?.value?.trim() || '';
     const vehicle_number = row.querySelector('.tenant-vehicle-number')?.value?.trim() || '';
@@ -1908,6 +2315,8 @@ async function saveTenantRecord(recordId = null) {
     sewerage_charge: Number(document.getElementById('tenantRecordSewerage')?.value || 0),
     water_charge: Number(document.getElementById('tenantRecordWater')?.value || 0),
     cleaning_charge: Number(document.getElementById('tenantRecordCleaning')?.value || 0),
+    monthly_additional_charges,
+    next_invoice_charge_items,
     notes: document.getElementById('tenantRecordNotes')?.value?.trim() || '',
     address_proof: _tenantModalFiles.address_proof,
     photo_attachment: _tenantModalFiles.photo_attachment,
@@ -2192,7 +2601,7 @@ async function updateTenantInvoiceStatusInline(invoiceId, nextStatus) {
   });
   if (!result?.success) { toast(result?.error || 'Could not update invoice status.', 'error'); return; }
   toast('Invoice status updated', 'success');
-  await loadTenantsPage();
+  await loadTenantsPage({ skipLoadingRender: true });
   tenantRestoreViewportPosition(scrollTop);
 }
 
@@ -2236,7 +2645,7 @@ async function saveTenantPartialStatus(invoiceId) {
   if (!result?.success) { toast(result?.error || 'Could not save partial payment.', 'error'); return; }
   closeModal();
   toast('Invoice status updated', 'success');
-  await loadTenantsPage();
+  await loadTenantsPage({ skipLoadingRender: true });
   tenantRestoreViewportPosition(scrollTop);
 }
 
@@ -2475,6 +2884,16 @@ window.resetTenantInvoiceFilters = resetTenantInvoiceFilters;
 window.setTenantReportFilter = setTenantReportFilter;
 window.setTenantReportPage = setTenantReportPage;
 window.resetTenantReportFilters = resetTenantReportFilters;
+window.setTenantEditorTab = setTenantEditorTab;
+window.showTenantRecordDetailsModal = showTenantRecordDetailsModal;
+window.addTenantVehicleRow = addTenantVehicleRow;
+window.addTenantItemRow = addTenantItemRow;
+window.addTenantRecurringChargeRow = addTenantRecurringChargeRow;
+window.addTenantNextInvoiceChargeRow = addTenantNextInvoiceChargeRow;
+window.removeTenantRecurringChargeRow = removeTenantRecurringChargeRow;
+window.removeTenantNextInvoiceChargeRow = removeTenantNextInvoiceChargeRow;
+window.removeTenantVehicleRow = removeTenantVehicleRow;
+window.removeTenantItemRow = removeTenantItemRow;
 window.addTenantInvoiceOtherChargeRow = addTenantInvoiceOtherChargeRow;
 window.toggleTenantInvoicePaidAmount = toggleTenantInvoicePaidAmount;
 window.changeTenantInvoiceModalTenant = changeTenantInvoiceModalTenant;

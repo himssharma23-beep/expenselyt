@@ -745,6 +745,50 @@ CREATE TABLE IF NOT EXISTS recurring_entries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS expense_buckets (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  start_date DATE,
+  end_date DATE,
+  is_tax_saver BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_buckets_user ON expense_buckets(user_id, is_active, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS expense_bucket_entries (
+  id BIGSERIAL PRIMARY KEY,
+  bucket_id BIGINT NOT NULL REFERENCES expense_buckets(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  entry_type TEXT,
+  entry_date DATE NOT NULL,
+  amount NUMERIC(14,2) NOT NULL,
+  is_template BOOLEAN NOT NULL DEFAULT FALSE,
+  is_auto_generated BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_add_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_add_frequency TEXT NOT NULL DEFAULT 'none',
+  auto_add_day INTEGER,
+  reminder_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  reminder_days_before INTEGER NOT NULL DEFAULT 0,
+  reminder_frequency TEXT NOT NULL DEFAULT 'once',
+  reminder_silent BOOLEAN NOT NULL DEFAULT FALSE,
+  source_template_id BIGINT REFERENCES expense_bucket_entries(id) ON DELETE CASCADE,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_bucket_entries_bucket ON expense_bucket_entries(bucket_id, entry_date DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_expense_bucket_entries_template ON expense_bucket_entries(bucket_id, is_template, auto_add_enabled);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_expense_bucket_generated_entry
+  ON expense_bucket_entries(source_template_id, entry_date)
+  WHERE source_template_id IS NOT NULL AND is_template = FALSE;
+
 CREATE TABLE IF NOT EXISTS trip_invites (
   id BIGSERIAL PRIMARY KEY,
   trip_id BIGINT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,

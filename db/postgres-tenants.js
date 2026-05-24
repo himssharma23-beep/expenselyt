@@ -208,6 +208,13 @@ function sumOtherChargeItems(items = []) {
   return Math.round((items || []).reduce((sum, item) => sum + normalizeAmount(item.amount, 'Other charge amount', { allowZero: true, allowNegative: true }), 0) * 100) / 100;
 }
 
+function recurringChargeItemsEqual(left = [], right = []) {
+  const a = normalizeOtherChargeItems(left);
+  const b = normalizeOtherChargeItems(right);
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => item.detail === b[index]?.detail && num(item.amount) === num(b[index]?.amount));
+}
+
 function tenantFileJson(value) {
   if (!value || typeof value !== 'object') return null;
   const path = String(value.path || '').trim();
@@ -273,6 +280,8 @@ async function ensureTenantTables() {
       sewerage_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
       water_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
       cleaning_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
+      monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb,
+      next_invoice_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb,
       opening_electricity_units INTEGER NOT NULL DEFAULT 0,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       notes TEXT,
@@ -280,6 +289,8 @@ async function ensureTenantTables() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS end_date DATE`);
+  await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS next_invoice_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await query(`
     CREATE TABLE IF NOT EXISTS tenant_charge_history (
       id BIGSERIAL PRIMARY KEY,
@@ -291,10 +302,12 @@ async function ensureTenantTables() {
       sewerage_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
       water_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
       cleaning_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
+      monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb,
       opening_electricity_units INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await query(`ALTER TABLE tenant_charge_history ADD COLUMN IF NOT EXISTS monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await query(`
     CREATE TABLE IF NOT EXISTS tenant_vehicles (
       id BIGSERIAL PRIMARY KEY,
@@ -489,6 +502,8 @@ function mapTenantRow(row) {
     sewerage_charge: num(row.sewerage_charge),
     water_charge: num(row.water_charge),
     cleaning_charge: num(row.cleaning_charge),
+    monthly_additional_charges: normalizeOtherChargeItems(row.monthly_additional_charges),
+    next_invoice_charge_items: normalizeOtherChargeItems(row.next_invoice_charge_items),
     opening_electricity_units: Number(row.opening_electricity_units || 0),
     is_active: row.is_active !== false,
     notes: row.notes || '',
@@ -508,6 +523,7 @@ function mapChargeHistoryRow(row) {
     sewerage_charge: num(row.sewerage_charge),
     water_charge: num(row.water_charge),
     cleaning_charge: num(row.cleaning_charge),
+    monthly_additional_charges: normalizeOtherChargeItems(row.monthly_additional_charges),
     opening_electricity_units: Number(row.opening_electricity_units || 0),
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -519,10 +535,10 @@ async function createTenantChargeHistory(clientOrQuery, tenantId, data = {}) {
   const result = await runner.query(
     `INSERT INTO tenant_charge_history (
       tenant_id, effective_from, effective_to, rent_amount, electricity_unit_price,
-      sewerage_charge, water_charge, cleaning_charge, opening_electricity_units, updated_at
+      sewerage_charge, water_charge, cleaning_charge, monthly_additional_charges, opening_electricity_units, updated_at
     ) VALUES (
       $1, $2, $3, $4, $5,
-      $6, $7, $8, $9, NOW()
+      $6, $7, $8, $9::jsonb, $10, NOW()
     )
     RETURNING *`,
     [
@@ -534,6 +550,7 @@ async function createTenantChargeHistory(clientOrQuery, tenantId, data = {}) {
       normalizeAmount(data.sewerage_charge, 'Sewerage charge'),
       normalizeAmount(data.water_charge, 'Water charge'),
       normalizeAmount(data.cleaning_charge, 'Cleaning charge'),
+      JSON.stringify(normalizeOtherChargeItems(data.monthly_additional_charges)),
       normalizeInteger(data.opening_electricity_units, 'Opening electricity units', { min: 0, max: 100000000 }),
     ]
   );
@@ -555,6 +572,7 @@ async function ensureTenantHasChargeHistory(clientOrQuery, tenantRow) {
     sewerage_charge: mapped.sewerage_charge || 0,
     water_charge: mapped.water_charge || 0,
     cleaning_charge: mapped.cleaning_charge || 0,
+    monthly_additional_charges: mapped.monthly_additional_charges || [],
     opening_electricity_units: mapped.opening_electricity_units || 0,
   });
 }
@@ -587,7 +605,7 @@ function pickChargeProfileForDate(chargeHistory = [], dateValue = '') {
 }
 
 function didChargeProfileChange(previous = {}, next = {}) {
-  return [
+  const changedCore = [
     'rent_amount',
     'electricity_unit_price',
     'sewerage_charge',
@@ -595,6 +613,7 @@ function didChargeProfileChange(previous = {}, next = {}) {
     'cleaning_charge',
     'opening_electricity_units',
   ].some((key) => Number(previous[key] || 0) !== Number(next[key] || 0));
+  return changedCore || !recurringChargeItemsEqual(previous.monthly_additional_charges, next.monthly_additional_charges);
 }
 
 function mapInvoiceRow(row) {
@@ -963,17 +982,19 @@ async function createTenantRecord(userId, data = {}) {
   }
   const vehicles = normalizeVehicleRows(data.vehicles);
   const items = normalizeItemRows(data.provided_items);
+  const monthlyAdditionalCharges = normalizeOtherChargeItems(data.monthly_additional_charges);
+  const nextInvoiceChargeItems = normalizeOtherChargeItems(data.next_invoice_charge_items);
   const result = await query(
     `INSERT INTO tenant_records (
       user_id, building_id, room_id, tenant_name, start_date, end_date, contract_months, tenant_address, address_proof,
       contact_number, security_deposit, rent_amount, proof_attachments, photo_attachment,
-      electricity_unit_price, sewerage_charge, water_charge, cleaning_charge, opening_electricity_units,
+      electricity_unit_price, sewerage_charge, water_charge, cleaning_charge, monthly_additional_charges, next_invoice_charge_items, opening_electricity_units,
       is_active, notes, updated_at
      ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
       $10, $11, $12, $13::jsonb, $14::jsonb,
-      $15, $16, $17, $18, $19,
-      $20, $21, NOW()
+      $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21,
+      $22, $23, NOW()
      )
      RETURNING *`,
     [
@@ -995,6 +1016,8 @@ async function createTenantRecord(userId, data = {}) {
       normalizeAmount(data.sewerage_charge, 'Sewerage charge'),
       normalizeAmount(data.water_charge, 'Water charge'),
       normalizeAmount(data.cleaning_charge, 'Cleaning charge'),
+      JSON.stringify(monthlyAdditionalCharges),
+      JSON.stringify(nextInvoiceChargeItems),
       normalizeInteger(data.opening_electricity_units, 'Opening electricity units', { min: 0, max: 100000000 }),
       nextIsActive,
       normalizeOptionalText(data.notes, 1000),
@@ -1009,6 +1032,7 @@ async function createTenantRecord(userId, data = {}) {
     sewerage_charge: normalizeAmount(data.sewerage_charge, 'Sewerage charge'),
     water_charge: normalizeAmount(data.water_charge, 'Water charge'),
     cleaning_charge: normalizeAmount(data.cleaning_charge, 'Cleaning charge'),
+    monthly_additional_charges: monthlyAdditionalCharges,
     opening_electricity_units: normalizeInteger(data.opening_electricity_units, 'Opening electricity units', { min: 0, max: 100000000 }),
   });
   await syncTenantVehiclesAndItems(tenant.id, vehicles, items);
@@ -1037,12 +1061,15 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
   const vehicles = data.vehicles !== undefined ? normalizeVehicleRows(data.vehicles) : null;
   const items = data.provided_items !== undefined ? normalizeItemRows(data.provided_items) : null;
   const currentProofAttachments = Array.isArray(current.proof_attachments) ? current.proof_attachments : [];
+  const currentMonthlyAdditionalCharges = normalizeOtherChargeItems(current.monthly_additional_charges);
+  const currentNextInvoiceChargeItems = normalizeOtherChargeItems(current.next_invoice_charge_items);
   const nextChargeProfile = {
     rent_amount: data.rent_amount !== undefined ? normalizeAmount(data.rent_amount, 'Rent amount per month') : num(current.rent_amount),
     electricity_unit_price: data.electricity_unit_price !== undefined ? normalizeAmount(data.electricity_unit_price, 'Electricity per unit price') : num(current.electricity_unit_price),
     sewerage_charge: data.sewerage_charge !== undefined ? normalizeAmount(data.sewerage_charge, 'Sewerage charge') : num(current.sewerage_charge),
     water_charge: data.water_charge !== undefined ? normalizeAmount(data.water_charge, 'Water charge') : num(current.water_charge),
     cleaning_charge: data.cleaning_charge !== undefined ? normalizeAmount(data.cleaning_charge, 'Cleaning charge') : num(current.cleaning_charge),
+    monthly_additional_charges: data.monthly_additional_charges !== undefined ? normalizeOtherChargeItems(data.monthly_additional_charges) : currentMonthlyAdditionalCharges,
     opening_electricity_units: data.opening_electricity_units !== undefined ? normalizeInteger(data.opening_electricity_units, 'Opening electricity units', { min: 0, max: 100000000 }) : Number(current.opening_electricity_units || 0),
   };
   const chargeEffectiveFrom = normalizeDateValue(data.charge_effective_from || currentDateValue(), 'Charge effective from');
@@ -1055,6 +1082,7 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
       sewerage_charge: num(current.sewerage_charge),
       water_charge: num(current.water_charge),
       cleaning_charge: num(current.cleaning_charge),
+      monthly_additional_charges: currentMonthlyAdditionalCharges,
       opening_electricity_units: Number(current.opening_electricity_units || 0),
       effective_from: mapTenantRow(current).start_date || currentDateValue(),
       effective_to: mapTenantRow(current).end_date || null,
@@ -1110,11 +1138,13 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
            sewerage_charge = $15,
            water_charge = $16,
            cleaning_charge = $17,
-           opening_electricity_units = $18,
-           is_active = $19,
-           notes = $20,
+           monthly_additional_charges = $18::jsonb,
+           next_invoice_charge_items = $19::jsonb,
+           opening_electricity_units = $20,
+           is_active = $21,
+           notes = $22,
            updated_at = NOW()
-       WHERE id = $21 AND user_id = $22
+       WHERE id = $23 AND user_id = $24
        RETURNING *`,
       [
         Number(building.id),
@@ -1139,6 +1169,12 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
         nextChargeProfile.sewerage_charge,
         nextChargeProfile.water_charge,
         nextChargeProfile.cleaning_charge,
+        JSON.stringify(nextChargeProfile.monthly_additional_charges),
+        JSON.stringify(
+          data.next_invoice_charge_items !== undefined
+            ? normalizeOtherChargeItems(data.next_invoice_charge_items)
+            : currentNextInvoiceChargeItems
+        ),
         nextChargeProfile.opening_electricity_units,
         nextIsActive,
         data.notes !== undefined ? normalizeOptionalText(data.notes, 1000) : current.notes,
@@ -1179,11 +1215,12 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   const invoiceReferenceDate = `${invoiceMonth}-01`;
   const chargeProfile = pickChargeProfileForDate(await listTenantChargeHistory({ query }, [tenantId]), invoiceReferenceDate);
   const currentUnits = normalizeInteger(data.current_electricity_units, 'Current electricity units', { min: 0, max: 100000000 });
-  const otherChargeItems = normalizeOtherChargeItems(data.other_charge_items);
+  const recurringChargeItems = normalizeOtherChargeItems(chargeProfile?.monthly_additional_charges ?? tenant.monthly_additional_charges);
+  const nextInvoiceChargeItems = normalizeOtherChargeItems(tenant.next_invoice_charge_items);
+  const manualOtherChargeItems = normalizeOtherChargeItems(data.other_charge_items);
   const legacyOtherCharges = data.other_charge_items !== undefined
     ? 0
     : normalizeAmount(data.other_charges, 'Other charges', { allowZero: true, allowNegative: true });
-  const otherCharges = data.other_charge_items !== undefined ? sumOtherChargeItems(otherChargeItems) : legacyOtherCharges;
   const dueDate = normalizeOptionalDateValue(data.due_date, 'Due date');
 
   const existingR = await query(
@@ -1194,6 +1231,13 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
     [tenantId, invoiceMonth]
   );
   const existing = existingR.rows[0] || null;
+  const autoChargeItems = [...recurringChargeItems, ...(!existing ? nextInvoiceChargeItems : [])];
+  const otherChargeItems = data.other_charge_items !== undefined
+    ? (existing ? manualOtherChargeItems : [...autoChargeItems, ...manualOtherChargeItems])
+    : (existing ? normalizeOtherChargeItems(existing.other_charge_items) : autoChargeItems);
+  const otherCharges = data.other_charge_items !== undefined || !existing
+    ? sumOtherChargeItems(otherChargeItems)
+    : num(existing.other_charges_snapshot);
 
   let previousUnits = Number((chargeProfile?.opening_electricity_units ?? tenant.opening_electricity_units) || 0);
   if (existing) previousUnits = Number(existing.previous_electricity_units || 0);
@@ -1281,6 +1325,15 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
       normalizeOptionalText(data.notes, 500),
     ]
   );
+  if (!existing && nextInvoiceChargeItems.length) {
+    await query(
+      `UPDATE tenant_records
+       SET next_invoice_charge_items = '[]'::jsonb,
+           updated_at = NOW()
+       WHERE id = $1 AND user_id = $2`,
+      [tenantId, userId]
+    );
+  }
   return mapInvoiceRow(result.rows[0]);
 }
 

@@ -38,6 +38,7 @@ let _notificationPreferences = { push_enabled: true };
 let _notificationLoading = false;
 let _notificationPrefsLoading = false;
 let _appUpdateStatus = null;
+let _tenantsScriptPromise = null;
 
 function cleanMojibakeText(value) {
   const raw = String(value ?? '');
@@ -986,6 +987,30 @@ async function switchTab(tab) {
   loadTab();
 }
 
+function ensureTenantsScript() {
+  if (typeof loadTenantsPage === 'function') return Promise.resolve();
+  if (_tenantsScriptPromise) return _tenantsScriptPromise;
+  _tenantsScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-app-script="tenants"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('Could not load tenants script.')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = '/js/tenants.js?v=20260520b';
+    script.async = false;
+    script.dataset.appScript = 'tenants';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load tenants script.'));
+    document.body.appendChild(script);
+  }).catch((error) => {
+    _tenantsScriptPromise = null;
+    throw error;
+  });
+  return _tenantsScriptPromise;
+}
+
 window.addEventListener('resize', () => {
   if (window.innerWidth > 768) {
     const sidebar = document.getElementById('sidebar');
@@ -1030,8 +1055,15 @@ function loadTab() {
   else if (currentTab === 'planner') loadPlanner();
   else if (currentTab === 'societies') loadSocieties();
   else if (currentTab === 'tenants') {
-    if (typeof loadTenantsPage === 'function') loadTenantsPage();
-    else toast('Tenants page is not loaded. Please refresh.', 'error');
+    ensureTenantsScript()
+      .then(() => {
+        if (typeof loadTenantsPage === 'function') loadTenantsPage();
+        else toast('Tenants page is not loaded. Please refresh.', 'error');
+      })
+      .catch((error) => {
+        console.error('[tenants] script load failed', error);
+        toast('Tenants page could not be loaded. Please refresh.', 'error');
+      });
   }
   else if (currentTab === 'schoolkids') loadSchoolKids();
   else if (currentTab === 'tracker') loadTracker();
@@ -1814,17 +1846,10 @@ function renderExpenseScanReviewModal() {
           <div><b style="color:var(--t1)">Merchant:</b> ${escHtml(draft.merchant || 'Scanned receipt')}</div>
           <div><b style="color:var(--t1)">Date:</b> ${escHtml(draft.purchase_date || 'Not found')}</div>
           <div><b style="color:var(--t1)">Total:</b> ${draft.total_amount ? fmtCur(draft.total_amount) : 'Not found'}</div>
-          <div><b style="color:var(--t1)">Confidence:</b> ${Math.round(Number(draft.confidence || 0))}%</div>
         </div>
-        ${draft.ai_used
-          ? `<div style="display:inline-flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border-radius:999px;background:var(--green-light);color:var(--green);font-size:12px;font-weight:800">
-               <span>AI enhanced</span>
-             </div>`
-          : draft.ai_error
-            ? `<div style="display:inline-flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border-radius:999px;background:var(--red-light);color:var(--red);font-size:12px;font-weight:700">
-                 <span>AI fallback used</span>
-               </div>`
-            : ''}
+        <div style="display:inline-flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border-radius:999px;background:var(--green-light);color:var(--green);font-size:12px;font-weight:800">
+          <span>AI parsed bill</span>
+        </div>
         <div class="fg">
           <label class="fl">Overall Date
             <input class="fi" type="date" id="expenseScanCommonDate" value="${escHtml(commonDate)}" oninput="expenseScanSetCommonDate(this.value)">
@@ -1857,11 +1882,13 @@ function renderExpenseScanReviewModal() {
           <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--white)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
               <label class="fc" style="margin:0"><input type="checkbox" ${row.selected !== false ? 'checked' : ''} onchange="expenseScanToggleRow(${index}, this.checked)"><span>Save this row</span></label>
-              <div style="font-size:12px;color:var(--t3)">${fmtCur(row.amount || 0)}</div>
+              <div style="text-align:right">
+                <div style="font-size:12px;color:var(--t3)">${fmtCur(row.amount || 0)}</div>
+              </div>
             </div>
             <div class="fg">
               <label class="fl">Item Name<input class="fi" value="${escHtml(row.item_name || '')}" oninput="expenseScanSetField(${index}, 'item_name', this.value)"></label>
-              <label class="fl">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(row.amount || ''))}" oninput="expenseScanSetField(${index}, 'amount', this.value)"></label>
+              <label class="fl">Amount After Discount<input class="fi" type="number" step="0.01" value="${escHtml(String(row.amount || ''))}" oninput="expenseScanSetField(${index}, 'amount', this.value)"></label>
               <label class="fl">Category<input class="fi" list="expenseCategoryList" value="${escHtml(row.category || '')}" maxlength="80" placeholder="Type category" oninput="expenseScanSetField(${index}, 'category', this.value)"></label>
               <label class="fl">Date<input class="fi" type="date" value="${escHtml(expenseScanEffectiveDate(row))}" oninput="expenseScanSetField(${index}, 'purchase_date', this.value)"></label>
               <label class="fl full">Deduct From Bank
@@ -6680,8 +6707,17 @@ function tripMemberOptions(rows = []) {
   return names;
 }
 
+function tripNonSettlementTotal(trip) {
+  if (Array.isArray(trip?.expenses)) {
+    return Math.round(trip.expenses
+      .filter((expense) => !isTripSettlementExpense(expense))
+      .reduce((sum, expense) => sum + Number(expense?.amount || 0), 0) * 100) / 100;
+  }
+  return Number(trip?.total_expenditure || 0);
+}
+
 function tripDisplayAmount(trip, selectedMember = 'all') {
-  if (!trip || selectedMember === 'all') return Number(trip?.total_expenditure || 0);
+  if (!trip || selectedMember === 'all') return tripNonSettlementTotal(trip);
   const match = (trip.member_share_totals || []).find((member) => String(member?.member_name || '').trim().toLowerCase() === String(selectedMember || '').trim().toLowerCase());
   return Number(match?.share_total || 0);
 }
@@ -7133,14 +7169,19 @@ function syncTripListRowFromDetail(trip) {
   });
   _trips = _trips.map((row) => {
     if (String(row?.id) !== String(trip.id)) return row;
+    const spendingExpenses = Array.isArray(trip.expenses)
+      ? trip.expenses.filter((expense) => !isTripSettlementExpense(expense))
+      : null;
     return {
       ...row,
       ...trip,
       name: trip.name || row.name,
       destination: trip.destination || trip.name || row.destination || row.name,
-      total_expenditure: Number(trip.grand_total ?? trip.total_expenditure ?? row.total_expenditure ?? 0),
+      total_expenditure: spendingExpenses
+        ? Math.round(spendingExpenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0) * 100) / 100
+        : Number(trip.total_expenditure ?? trip.grand_total ?? row.total_expenditure ?? 0),
       grand_total: Number(trip.grand_total ?? trip.total_expenditure ?? row.grand_total ?? 0),
-      expense_count: Array.isArray(trip.expenses) ? trip.expenses.length : Number(trip.expense_count ?? row.expense_count ?? 0),
+      expense_count: spendingExpenses ? spendingExpenses.length : Number(trip.expense_count ?? row.expense_count ?? 0),
       members,
       itinerary_items: Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [],
       member_share_totals: memberShareTotals,
@@ -14594,6 +14635,10 @@ function setAiLookupMode(mode) {
 let _trackers = [];
 let _selectedTrackerId = null;
 let _trackerYear = new Date().getFullYear();
+let _trackerViewMode = 'daily';
+let _expenseBuckets = [];
+let _selectedExpenseBucketId = null;
+let _expenseBucketImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
 let _habitTrackers = [];
 let _selectedHabitTrackerId = null;
 let _habitYear = new Date().getFullYear();
@@ -15701,7 +15746,203 @@ function getTrackerMonthSequence(count = 6) {
   return months;
 }
 
+function expenseBucketEntryReminderLabel(entry) {
+  if (!entry?.reminder_enabled) return 'Reminder off';
+  return `${Number(entry.reminder_days_before || 0)}d before · ${String(entry.reminder_frequency || 'once')}`;
+}
+
+function expenseBucketEntryRepeatLabel(entry) {
+  if (!entry?.auto_add_enabled || !entry?.is_template) return 'Manual';
+  if (String(entry.auto_add_frequency || '') === 'daily') return 'Auto daily';
+  if (String(entry.auto_add_frequency || '') === 'monthly') return `Monthly · day ${Number(entry.auto_add_day || 1)}`;
+  return 'Manual';
+}
+
+function toggleExpenseBucketAutoFields() {
+  const enabled = !!document.getElementById('ebEntryAutoAdd')?.checked;
+  const wrap = document.getElementById('ebEntryAutoFields');
+  if (wrap) wrap.style.display = enabled ? '' : 'none';
+  const dayWrap = document.getElementById('ebEntryAutoDayWrap');
+  if (dayWrap) dayWrap.style.display = enabled && (document.getElementById('ebEntryAutoFrequency')?.value === 'monthly') ? '' : 'none';
+}
+
+function toggleExpenseBucketReminderFields() {
+  const enabled = !!document.getElementById('ebReminderEnabled')?.checked;
+  const wrap = document.getElementById('ebReminderFields');
+  if (wrap) wrap.style.display = enabled ? '' : 'none';
+}
+
+function renderTrackerToolbar(extraActions = '') {
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">Tracker Workspace</div>
+        <div style="font-size:12px;color:var(--t3)">Daily trackers for quantity tracking, or expense buckets for SIPs, fees, subscriptions, and other focused spending.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ${_trackerViewMode === 'daily' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='daily';_selectedExpenseBucketId=null;renderTrackerGrid()">Daily Trackers</button>
+        <button class="btn ${_trackerViewMode === 'bucket' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='bucket';_selectedTrackerId=null;renderTrackerGrid()">Expense Buckets</button>
+        ${extraActions}
+      </div>
+    </div>`;
+}
+
+async function renderExpenseBucketGrid() {
+  const totalAmount = _expenseBuckets.reduce((sum, bucket) => sum + Number(bucket.total_amount || 0), 0);
+  const cards = _expenseBuckets.length ? _expenseBuckets.map((bucket) => {
+    const dateLabel =             `${bucket.start_date ? escHtml(bucket.start_date) : 'No start date'}${bucket.end_date ? ` ? ${escHtml(bucket.end_date)}` : ''}`;
+    return `
+    <div class="cc-tile tracker-tile" data-bucket-id="${bucket.id}" onclick="openExpenseBucketDetail(${bucket.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openExpenseBucketDetail(${bucket.id}); }">
+      <div class="cc-tile-header">
+        <div>
+          <div class="cc-tile-name">${escHtml(bucket.name)}</div>
+          <div class="cc-tile-bank">${dateLabel}</div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.75)">${bucket.is_tax_saver ? 'Tax Saver' : (bucket.is_active ? 'Active' : 'Inactive')}</div>
+      </div>
+      <div class="cc-tile-amount">${fmtCur(bucket.total_amount || 0)}</div>
+      <div class="cc-tile-label">${Number(bucket.expense_count || 0)} entries ? ${Number(bucket.template_count || 0)} templates</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.82);margin-top:10px">Open this bucket to add entries, recurring templates, and reminders.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:8px" onclick="stopEvent(event)">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="cc-action-btn" onclick="openExpenseBucketDetail(${bucket.id})">Open</button>
+          <button class="cc-action-btn" onclick="showExpenseBucketEntryModal(${bucket.id})">+ Add Expense</button>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="cc-action-btn" onclick="showExpenseBucketModal(${bucket.id})">Edit</button>
+          <button class="cc-action-btn cc-action-del" onclick="deleteExpenseBucket(${bucket.id})">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('') : `
+      <div style="color:var(--t3);text-align:center;padding:48px 20px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+        <div style="font-size:36px;margin-bottom:12px">?</div>
+        <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No expense buckets yet</div>
+        <div style="font-size:13px">Create one tile per SIP, insurance, class fees, or focused expense stream, then add manual or auto-generated rows underneath it.</div>
+      </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      ${renderTrackerToolbar(`<button class="btn btn-p btn-sm" onclick="showExpenseBucketModal()">+ Add Expense Bucket</button>`)}
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">EXPENSE BUCKETS</div>
+            <div class="summary-amount">${fmtCur(totalAmount)}</div>
+            <div class="summary-words">${_expenseBuckets.length} buckets ? recurring and manual expense rows</div>
+          </div>
+          <div class="count-box"><div class="num">${_expenseBuckets.filter((bucket) => bucket.is_tax_saver).length}</div><div class="lbl">tax saver</div></div>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function renderExpenseBucketDetail() {
+  const bucket = _expenseBuckets.find((item) => String(item.id) === String(_selectedExpenseBucketId));
+  if (!bucket) {
+    _selectedExpenseBucketId = null;
+    return renderTrackerGrid();
+  }
+  const data = await api(`/api/expense-buckets/${bucket.id}/entries`);
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  const actualEntries = entries.filter((entry) => !entry.is_template);
+  const templateEntries = entries.filter((entry) => entry.is_template);
+  const totalAmount = actualEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  const templateCards = templateEntries.length ? templateEntries.map((entry) => `
+    <div class="card" style="padding:14px;border-radius:16px;border:1px solid var(--line);background:var(--white);box-shadow:var(--sh-sm)">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="min-width:0;flex:1">
+          <div style="font-weight:600;color:var(--t1)">${escHtml(entry.name || 'Template')}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:4px">${escHtml(entry.entry_type || '-')} · ${escHtml(entry.entry_date || '-')}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">${escHtml(expenseBucketEntryRepeatLabel(entry))} · ${escHtml(expenseBucketEntryReminderLabel(entry))}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-weight:700;color:var(--t1)">${fmtCur(entry.amount || 0)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:4px">Template</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:12px">
+        <button class="btn-d" onclick="showExpenseBucketEntryModal(${bucket.id}, ${entry.id})">Edit</button>
+        <button class="btn-d" style="color:var(--em)" onclick="deleteExpenseBucketEntry(${bucket.id}, ${entry.id})">Delete</button>
+      </div>
+    </div>`).join('') : '<div style="color:var(--t3);font-size:13px">No recurring templates yet.</div>';
+  const rows = actualEntries.length ? actualEntries.map((entry) => `
+    <tr>
+      <td>
+        <div style="font-weight:600;color:var(--t1)">${escHtml(entry.name || 'Entry')}</div>
+        <div style="font-size:11px;color:var(--t3)">${entry.is_auto_generated ? 'Auto added' : 'Manual'}</div>
+      </td>
+      <td>${escHtml(entry.entry_type || '-')}</td>
+      <td>${escHtml(entry.entry_date || '-')}</td>
+      <td style="text-align:right;font-weight:600">${fmtCur(entry.amount || 0)}</td>
+      <td>${entry.is_auto_generated ? 'Generated from recurring template' : 'Manual'}</td>
+      <td>${escHtml(expenseBucketEntryReminderLabel(entry))}</td>
+      <td style="display:flex;gap:6px;justify-content:flex-end">
+        <button class="btn-d" onclick="showExpenseBucketEntryModal(${bucket.id}, ${entry.id})">Edit</button>
+        <button class="btn-d" style="color:var(--em)" onclick="deleteExpenseBucketEntry(${bucket.id}, ${entry.id})">Delete</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="7" style="color:var(--t3);text-align:center;padding:18px">No bucket expenses yet.</td></tr>';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      ${renderTrackerToolbar(`
+        <button class="btn btn-s btn-sm" onclick="showExpenseBucketEntryModal(${bucket.id})">+ Add Expense</button>
+        <button class="btn btn-s btn-sm" onclick="showExpenseBucketImportModal(${bucket.id})">Import Excel</button>
+        <button class="btn btn-g btn-sm" onclick="showExpenseBucketModal(${bucket.id})">Edit Bucket</button>
+      `)}
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn btn-g btn-sm" onclick="_selectedExpenseBucketId=null;renderTrackerGrid()">← Back</button>
+        <div>
+          <div style="font-size:20px;font-weight:700;color:var(--t1)">${escHtml(bucket.name)}</div>
+          <div style="font-size:12px;color:var(--t3)">${bucket.start_date ? escHtml(bucket.start_date) : 'No start date'}${bucket.end_date ? ` · ${escHtml(bucket.end_date)}` : ''}${bucket.is_tax_saver ? ' · Tax saver' : ''}</div>
+        </div>
+      </div>
+      <div class="summary-card" style="margin-bottom:18px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">BUCKET TOTAL</div>
+            <div class="summary-amount">${fmtCur(totalAmount)}</div>
+            <div class="summary-words">${actualEntries.length} actual expenses · ${templateEntries.length} recurring templates</div>
+          </div>
+          <div class="count-box"><div class="num">${bucket.is_tax_saver ? 'YES' : 'NO'}</div><div class="lbl">tax saver</div></div>
+        </div>
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+          <div style="font-size:15px;font-weight:700;color:var(--t1)">Recurring Templates</div>
+          <button class="btn btn-s btn-sm" onclick="showExpenseBucketEntryModal(${bucket.id})">+ Add Recurring Template</button>
+        </div>
+        <div style="display:grid;gap:10px">${templateCards}</div>
+      </div>
+      <div class="table-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 0 10px;flex-wrap:wrap">
+          <div style="font-size:15px;font-weight:700;color:var(--t1)">Expense Items</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-g btn-sm" onclick="showExpenseBucketImportModal(${bucket.id})">Import Excel</button>
+            <button class="btn btn-s btn-sm" onclick="showExpenseBucketEntryModal(${bucket.id})">+ Add Expense</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Date</th>
+            <th style="text-align:right">Amount</th>
+            <th>Source</th>
+            <th>Reminder</th>
+            <th style="text-align:right">Action</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
 async function renderTrackerGrid() {
+  if (_trackerViewMode === 'bucket') return renderExpenseBucketGrid();
   const cards = _trackers.length ? _trackers.map((t) => `
     <div class="cc-tile" onclick="openTrackerDetail(${t.id})" style="cursor:pointer">
       <div class="cc-tile-header">
@@ -15729,6 +15970,10 @@ async function renderTrackerGrid() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
+      ${renderTrackerToolbar(`
+        <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
+        <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
+      `)}
       <div class="summary-card" style="margin-bottom:20px">
         <div class="summary-top">
           <div>
@@ -15737,13 +15982,6 @@ async function renderTrackerGrid() {
             <div class="summary-words">Track daily recurring items month by month</div>
           </div>
           <div class="count-box"><div class="num">${_trackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
-        </div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
-          <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
         </div>
       </div>
       <div class="cc-card-grid">${cards}</div>
@@ -15952,6 +16190,288 @@ async function saveTracker(id) {
     toast(id ? 'Tracker updated' : 'Tracker added', 'success');
     await loadTracker();
   } else toast(r?.error || 'Failed', 'error');
+}
+
+async function showExpenseBucketModal(id) {
+  const bucket = id ? _expenseBuckets.find((item) => String(item.id) === String(id)) : null;
+  openModal(id ? 'Edit Expense Bucket' : 'Add Expense Bucket', `
+    <div class="fg">
+      <label class="fl full">Name *<input class="fi" id="ebName" value="${escHtml(bucket?.name || '')}" placeholder="e.g. Axis ELSS SIP, School Fees, Term Insurance" maxlength="100"></label>
+      <label class="fl">Start Date<input class="fi" type="date" id="ebStartDate" value="${escHtml(bucket?.start_date || '')}"></label>
+      <label class="fl">End Date<input class="fi" type="date" id="ebEndDate" value="${escHtml(bucket?.end_date || '')}"></label>
+      <label class="fl full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="ebTaxSaver" ${bucket?.is_tax_saver ? 'checked' : ''}>
+        <span>Tax saver bucket</span>
+      </label>
+      <label class="fl full" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="ebIsActive" ${(bucket?.is_active ?? true) ? 'checked' : ''}>
+        <span>Active bucket</span>
+      </label>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveExpenseBucket(${id || 'null'})">${id ? 'Update' : 'Add Bucket'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveExpenseBucket(id || null));
+}
+
+async function saveExpenseBucket(id) {
+  const name = document.getElementById('ebName')?.value.trim() || '';
+  const start_date = document.getElementById('ebStartDate')?.value || null;
+  const end_date = document.getElementById('ebEndDate')?.value || null;
+  if (!name) { toast('Bucket name is required', 'warning'); return; }
+  const body = {
+    name,
+    start_date,
+    end_date,
+    is_tax_saver: document.getElementById('ebTaxSaver')?.checked ? 1 : 0,
+    is_active: document.getElementById('ebIsActive')?.checked ? 1 : 0,
+  };
+  const result = id
+    ? await api(`/api/expense-buckets/${id}`, { method: 'PUT', body })
+    : await api('/api/expense-buckets', { method: 'POST', body });
+  if (result?.success || result?.id) {
+    closeModal();
+    toast(id ? 'Bucket updated' : 'Bucket added', 'success');
+    _trackerViewMode = 'bucket';
+    await loadTracker();
+  } else {
+    toast(result?.error || 'Could not save bucket', 'error');
+  }
+}
+
+async function deleteExpenseBucket(id) {
+  if (!await confirmDialog('Delete this expense bucket and all its entries?')) return;
+  const result = await api(`/api/expense-buckets/${id}`, { method: 'DELETE' });
+  if (result?.success) {
+    toast('Bucket deleted', 'success');
+    if (String(_selectedExpenseBucketId) === String(id)) _selectedExpenseBucketId = null;
+    await loadTracker();
+  } else {
+    toast(result?.error || 'Could not delete bucket', 'error');
+  }
+}
+
+async function showExpenseBucketEntryModal(bucketId, entryId = null) {
+  const bucket = _expenseBuckets.find((item) => String(item.id) === String(bucketId));
+  if (!bucket) { toast('Bucket not found', 'error'); return; }
+  let entry = null;
+  if (entryId != null) {
+    const entriesData = await api(`/api/expense-buckets/${bucketId}/entries`);
+    entry = (entriesData?.entries || []).find((item) => String(item.id) === String(entryId)) || null;
+  }
+  const autoAddEnabled = !!entry?.auto_add_enabled;
+  const autoFrequency = String(entry?.auto_add_frequency || 'monthly');
+  openModal(entryId ? 'Edit Bucket Expense' : 'Add Bucket Expense', `
+    <div class="fg">
+      <label class="fl full">Expense Name *<input class="fi" id="ebEntryName" value="${escHtml(entry?.name || '')}" placeholder="e.g. SIP instalment, premium, fee, contribution" maxlength="120"></label>
+      <label class="fl">Type<input class="fi" id="ebEntryType" value="${escHtml(entry?.entry_type || '')}" placeholder="Investment, Fee, Insurance..."></label>
+      <label class="fl">Date<input class="fi" type="date" id="ebEntryDate" value="${escHtml(entry?.entry_date || bucket?.start_date || todayStr())}"></label>
+      <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="ebEntryAmount" value="${entry?.amount || ''}" placeholder="0.00"></label>
+    </div>
+    <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="ebEntryAutoAdd" ${autoAddEnabled ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleExpenseBucketAutoFields()">
+        Enable auto add
+      </label>
+      <div id="ebEntryAutoFields" style="${autoAddEnabled ? '' : 'display:none'}">
+        <div class="fg">
+          <label class="fl">Frequency<select class="fi" id="ebEntryAutoFrequency" onchange="toggleExpenseBucketAutoFields()">
+            <option value="daily" ${autoFrequency === 'daily' ? 'selected' : ''}>Every day</option>
+            <option value="monthly" ${autoFrequency !== 'daily' ? 'selected' : ''}>Every month</option>
+          </select></label>
+          <label class="fl" id="ebEntryAutoDayWrap" style="${autoFrequency === 'monthly' ? '' : 'display:none'}">Monthly Date (1-28)<input class="fi" type="number" id="ebEntryAutoDay" min="1" max="28" value="${entry?.auto_add_day || 1}"></label>
+        </div>
+      </div>
+    </div>
+    <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="ebReminderEnabled" ${entry?.reminder_enabled ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleExpenseBucketReminderFields()">
+        Enable payment reminder
+      </label>
+      <div id="ebReminderFields" style="${entry?.reminder_enabled ? '' : 'display:none'}">
+        <div class="fg">
+          <label class="fl">Start Before (days)<input class="fi" type="number" id="ebReminderDaysBefore" min="0" max="31" value="${entry?.reminder_days_before || 0}"></label>
+          <label class="fl">Frequency<select class="fi" id="ebReminderFrequency">
+            <option value="once" ${String(entry?.reminder_frequency || 'once') === 'once' ? 'selected' : ''}>Once</option>
+            <option value="daily" ${String(entry?.reminder_frequency || '') === 'daily' ? 'selected' : ''}>Daily</option>
+            <option value="weekly" ${String(entry?.reminder_frequency || '') === 'weekly' ? 'selected' : ''}>Weekly</option>
+          </select></label>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="ebReminderSilent" ${entry?.reminder_silent ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+          Silent reminder only
+        </label>
+      </div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveExpenseBucketEntry(${bucketId}, ${entryId == null ? 'null' : entryId})">${entryId ? 'Update' : 'Add Expense'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveExpenseBucketEntry(bucketId, entryId));
+}
+
+async function saveExpenseBucketEntry(bucketId, entryId = null) {
+  const name = document.getElementById('ebEntryName')?.value.trim() || '';
+  const amount = parseFloat(document.getElementById('ebEntryAmount')?.value || '');
+  const entry_date = document.getElementById('ebEntryDate')?.value || todayStr();
+  if (!name) { toast('Expense name is required', 'warning'); return; }
+  if (!Number.isFinite(amount) || amount <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
+  const auto_add_enabled = document.getElementById('ebEntryAutoAdd')?.checked ? 1 : 0;
+  const auto_add_frequency = auto_add_enabled ? (document.getElementById('ebEntryAutoFrequency')?.value || 'monthly') : 'none';
+  const body = {
+    name,
+    entry_type: document.getElementById('ebEntryType')?.value.trim() || null,
+    entry_date,
+    amount,
+    auto_add_enabled,
+    auto_add_frequency,
+    auto_add_day: auto_add_enabled && auto_add_frequency === 'monthly' ? (parseInt(document.getElementById('ebEntryAutoDay')?.value, 10) || 1) : null,
+    reminder_enabled: document.getElementById('ebReminderEnabled')?.checked ? 1 : 0,
+    reminder_days_before: parseInt(document.getElementById('ebReminderDaysBefore')?.value, 10) || 0,
+    reminder_frequency: document.getElementById('ebReminderFrequency')?.value || 'once',
+    reminder_silent: document.getElementById('ebReminderSilent')?.checked ? 1 : 0,
+  };
+  const result = entryId != null
+    ? await api(`/api/expense-buckets/${bucketId}/entries/${entryId}`, { method: 'PUT', body })
+    : await api(`/api/expense-buckets/${bucketId}/entries`, { method: 'POST', body });
+  if (result?.success || result?.id) {
+    closeModal();
+    toast(entryId != null ? 'Bucket expense updated' : 'Bucket expense added', 'success');
+    _trackerViewMode = 'bucket';
+    _selectedExpenseBucketId = String(bucketId);
+    await loadTracker();
+  } else {
+    toast(result?.error || 'Could not save bucket expense', 'error');
+  }
+}
+
+async function deleteExpenseBucketEntry(bucketId, entryId) {
+  if (!await confirmDialog('Delete this bucket expense?')) return;
+  const result = await api(`/api/expense-buckets/${bucketId}/entries/${entryId}`, { method: 'DELETE' });
+  if (result?.success) {
+    toast('Bucket expense deleted', 'success');
+    _trackerViewMode = 'bucket';
+    _selectedExpenseBucketId = String(bucketId);
+    await loadTracker();
+  } else {
+    toast(result?.error || 'Could not delete bucket expense', 'error');
+  }
+}
+
+async function expenseBucketImportApi(url, formData) {
+  try {
+    const res = await fetch(url, { method: 'POST', body: formData });
+    if (res.status === 401) { window.location.href = '/login'; return { success: false, error: 'Unauthorized' }; }
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+      const text = await res.text();
+      return { success: false, error: text?.trim() || `Request failed with status ${res.status}` };
+    }
+    const data = await res.json();
+    if (res.ok) return data;
+    return { success: false, ...data };
+  } catch (err) {
+    return { success: false, error: err?.message || 'Network request failed' };
+  }
+}
+
+function buildExpenseBucketImportFormData(bucketId) {
+  const fileInput = document.getElementById('ebImportFile');
+  const file = fileInput?.files?.[0] || _expenseBucketImportState.file;
+  if (!file) {
+    toast('Choose an Excel file first', 'warning');
+    return null;
+  }
+  const bucket = _expenseBuckets.find((item) => String(item.id) === String(bucketId));
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('name', document.getElementById('ebImportName')?.value?.trim() || bucket?.name || 'Imported expense');
+  formData.append('entry_type', document.getElementById('ebImportType')?.value?.trim() || '');
+  return formData;
+}
+
+function showExpenseBucketImportModal(bucketId) {
+  const bucket = _expenseBuckets.find((item) => String(item.id) === String(bucketId));
+  if (!bucket) { toast('Bucket not found', 'error'); return; }
+  const previewRows = Array.isArray(_expenseBucketImportState.preview) ? _expenseBucketImportState.preview : [];
+  const previewHtml = previewRows.length
+    ? `
+      <div style="margin-top:14px;border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--card2)">
+        <div style="font-size:13px;font-weight:600;color:var(--t1);margin-bottom:8px">
+          Preview: ${_expenseBucketImportState.count} importable rows${_expenseBucketImportState.skipped ? `, ${_expenseBucketImportState.skipped} skipped` : ''}
+        </div>
+        <div style="max-height:220px;overflow:auto">
+          <table>
+            <thead><tr><th>Name</th><th>Date</th><th style="text-align:right">Amount</th></tr></thead>
+            <tbody>
+              ${previewRows.map((row) => `
+                <tr>
+                  <td>${escHtml(row.name || '-')}</td>
+                  <td>${escHtml(row.entry_date || '-')}</td>
+                  <td style="text-align:right">${fmtCur(row.amount || 0)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`
+    : '';
+  openModal(`Import Bucket Entries${bucket?.name ? ` - ${escHtml(bucket.name)}` : ''}`, `
+    <div class="fg">
+      <label class="fl full">Excel File
+        <input class="fi" type="file" id="ebImportFile" accept=".xlsx,.xls,.ods">
+      </label>
+      ${_expenseBucketImportState.fileName ? `<div style="font-size:12px;color:var(--t3)">Selected file: ${escHtml(_expenseBucketImportState.fileName)}</div>` : ''}
+      <label class="fl">Entry Name
+        <input class="fi" id="ebImportName" value="${escHtml(bucket.name || '')}" placeholder="Imported expense name">
+      </label>
+      <label class="fl">Type
+        <input class="fi" id="ebImportType" placeholder="Investment, Fee, Insurance..." value="">
+      </label>
+      <div style="font-size:12px;color:var(--t3)">
+        Imports date + amount rows from your sheet, and skips any row with a zero amount.
+      </div>
+    </div>
+    ${previewHtml}
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="previewExpenseBucketImport(${bucketId})">Preview Import</button>
+      <button class="btn btn-p" onclick="importExpenseBucketEntries(${bucketId})">Import Entries</button>
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+async function previewExpenseBucketImport(bucketId) {
+  const formData = buildExpenseBucketImportFormData(bucketId);
+  if (!formData) return;
+  const result = await expenseBucketImportApi(`/api/expense-buckets/${bucketId}/import-excel/preview`, formData);
+  if (!result?.success && !Array.isArray(result?.preview)) {
+    toast(result?.error || 'Could not preview import', 'error');
+    return;
+  }
+  _expenseBucketImportState = {
+    preview: Array.isArray(result?.preview) ? result.preview : [],
+    count: Number(result?.count || 0),
+    skipped: Number(result?.skipped || 0),
+    fileName: document.getElementById('ebImportFile')?.files?.[0]?.name || _expenseBucketImportState.fileName || '',
+    file: document.getElementById('ebImportFile')?.files?.[0] || _expenseBucketImportState.file || null,
+  };
+  showExpenseBucketImportModal(bucketId);
+}
+
+async function importExpenseBucketEntries(bucketId) {
+  const formData = buildExpenseBucketImportFormData(bucketId);
+  if (!formData) return;
+  const result = await expenseBucketImportApi(`/api/expense-buckets/${bucketId}/import-excel`, formData);
+  if (result?.success) {
+    _expenseBucketImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
+    closeModal();
+    toast(`Imported ${Number(result.imported || 0)} bucket entries${Number(result.skipped || 0) ? `, skipped ${Number(result.skipped || 0)}` : ''}`, 'success');
+    _trackerViewMode = 'bucket';
+    _selectedExpenseBucketId = String(bucketId);
+    await loadTracker();
+  } else {
+    toast(result?.error || 'Could not import bucket entries', 'error');
+  }
 }
 
 function showCcPayModal(cycleId, netPayable) {
@@ -17698,13 +18218,17 @@ function renderSchoolKidsPage() {
   const kidCards = orderedKids.map((kid) => {
     const active = String(kid.id) === String(_selectedSchoolKidId);
     const classCount = Number(kid.class_count || 0);
-    return `<button class="card" type="button" onclick="openSchoolKid(${Number(kid.id)})" style="padding:14px 15px;text-align:left;border:${active ? '1.5px solid rgba(255,255,255,.42)' : '1px solid rgba(255,255,255,.16)'};background:${active ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.08)'};box-shadow:none;border-radius:18px;color:#fff;min-height:132px;display:grid;align-content:space-between;gap:10px">
+    const kidId = Number(kid.id);
+    return `<div class="card" role="button" tabindex="0" onclick="openSchoolKid(${kidId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSchoolKid(${kidId});}" style="padding:14px 15px;text-align:left;border:${active ? '1.5px solid rgba(255,255,255,.42)' : '1px solid rgba(255,255,255,.16)'};background:${active ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.08)'};box-shadow:none;border-radius:18px;color:#fff;min-height:132px;display:grid;align-content:space-between;gap:10px;cursor:pointer">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-        <div style="min-width:0">
+        <div style="min-width:0;flex:1">
           <div style="font-size:15px;font-weight:900;color:#fff;line-height:1.18">${escHtml(kid.kid_name)}</div>
           <div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:7px">${escHtml(formatSchoolKidAgeLabel(kid))}</div><div style="font-size:11px;color:rgba(255,255,255,.64);margin-top:4px">${escHtml(formatSchoolKidDobLabel(kid))}</div>
         </div>
-        <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
+        <div style="display:grid;justify-items:end;gap:8px;flex-shrink:0">
+          <button type="button" aria-label="Delete kid" title="Delete kid" onclick="event.stopPropagation(); deleteSchoolKid(${kidId})" style="width:32px;height:32px;border-radius:10px;border:1px solid rgba(255,120,120,.38);background:rgba(255,90,90,.14);color:#ffd0d0;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">🗑</button>
+          <div style="font-size:15px;font-weight:900;color:#d9ffe6;text-align:right;white-space:nowrap;${moneyStyle}">${fmtCur(kid.total_expense || 0)}</div>
+        </div>
       </div>
       <div style="display:grid;gap:7px">
         <div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;color:rgba(255,255,255,.72)">
@@ -17713,7 +18237,7 @@ function renderSchoolKidsPage() {
         </div>
         ${kid.details ? `<div style="font-size:11px;color:rgba(255,255,255,.72);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(kid.details)}</div>` : '<div style="font-size:11px;color:rgba(255,255,255,.56)">School expense tracker</div>'}
       </div>
-    </button>`;
+    </div>`;
   }).join('');
   const overviewYearMap = new Map();
   orderedKids.forEach((kid) => {
@@ -18588,6 +19112,7 @@ async function doHabitImport(trackerId) {
 }
 
 async function renderTrackerGrid() {
+  if (_trackerViewMode === 'bucket') return renderExpenseBucketGrid();
   const cards = _trackers.length ? _trackers.map((t) => `
     <div class="cc-tile tracker-tile" data-tracker-id="${t.id}" onclick="openTrackerDetail(${t.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openTrackerDetail(${t.id}); }">
       <div class="cc-tile-header">
@@ -18615,6 +19140,10 @@ async function renderTrackerGrid() {
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
+      ${renderTrackerToolbar(`
+        <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
+        <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
+      `)}
       <div class="summary-card" style="margin-bottom:20px">
         <div class="summary-top">
           <div>
@@ -18625,35 +19154,44 @@ async function renderTrackerGrid() {
           <div class="count-box"><div class="num">${_trackers.filter((t) => t.is_active).length}</div><div class="lbl">active</div></div>
         </div>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <div style="font-size:16px;font-weight:700;color:var(--t1)">My Trackers</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s btn-sm" onclick="downloadTrackersOverviewPdf(new Date().getFullYear(),new Date().getMonth()+1)">PDF Overview</button>
-          <button class="btn btn-p btn-sm" onclick="showTrackerModal()">+ Add Tracker</button>
-        </div>
-      </div>
       <div class="cc-card-grid">${cards}</div>
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
 }
 
 async function loadTracker() {
-  const data = await api('/api/trackers');
+  const [data, bucketData] = await Promise.all([
+    api('/api/trackers'),
+    api('/api/expense-buckets'),
+  ]);
   _trackers = data?.trackers || [];
-  if (_selectedTrackerId && _trackers.find((t) => String(t.id) === String(_selectedTrackerId))) {
+  _expenseBuckets = bucketData?.buckets || [];
+  if (_trackerViewMode === 'bucket' && _selectedExpenseBucketId && _expenseBuckets.find((bucket) => String(bucket.id) === String(_selectedExpenseBucketId))) {
+    await renderExpenseBucketDetail();
+  } else if (_selectedTrackerId && _trackers.find((t) => String(t.id) === String(_selectedTrackerId))) {
     await renderTrackerDetail();
   } else {
     _selectedTrackerId = null;
+    _selectedExpenseBucketId = null;
     renderTrackerGrid();
   }
 }
 
 async function openTrackerDetail(id) {
+  _trackerViewMode = 'daily';
+  _selectedExpenseBucketId = null;
   _selectedTrackerId = String(id);
   _trackerYear = new Date().getFullYear();
   _trackerMonth = new Date().getMonth() + 1;
   await api(`/api/trackers/${id}/autofill`, { method: 'POST', body: { year: _trackerYear, month: _trackerMonth } });
   await renderTrackerDetail();
+}
+
+async function openExpenseBucketDetail(id) {
+  _trackerViewMode = 'bucket';
+  _selectedTrackerId = null;
+  _selectedExpenseBucketId = String(id);
+  await renderExpenseBucketDetail();
 }
 
 async function renderTrackerDetail() {
