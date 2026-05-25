@@ -1260,7 +1260,26 @@ async function ensureExpenseBucketGeneratedEntryUniqueIndex() {
   );
 }
 
+async function ensureExpenseBucketEntrySkipsTable() {
+  await query(
+    `CREATE TABLE IF NOT EXISTS expense_bucket_entry_skips (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bucket_id BIGINT NOT NULL REFERENCES expense_buckets(id) ON DELETE CASCADE,
+      source_template_id BIGINT NOT NULL REFERENCES expense_bucket_entries(id) ON DELETE CASCADE,
+      entry_date DATE NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (source_template_id, entry_date)
+    )`
+  );
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_expense_bucket_entry_skips_template
+      ON expense_bucket_entry_skips(source_template_id, entry_date)`
+  );
+}
+
 async function applyExpenseBucketTemplates(userId, bucketId = null) {
+  await ensureExpenseBucketEntrySkipsTable();
   const today = localIsoToday();
   const params = [userId];
   let bucketFilter = '';
@@ -1305,6 +1324,14 @@ async function applyExpenseBucketTemplates(userId, bucketId = null) {
                source_template_id, created_by, updated_by
              )
              VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             WHERE NOT EXISTS (
+               SELECT 1
+               FROM expense_bucket_entry_skips s
+               WHERE s.user_id = $2
+                 AND s.bucket_id = $1
+                 AND s.source_template_id = $7
+                 AND s.entry_date = $5
+             )
              ON CONFLICT DO NOTHING`,
             [template.bucket_id, userId, template.name, template.entry_type || null, cursor, num(template.amount), template.id]
           );
@@ -1331,6 +1358,14 @@ async function applyExpenseBucketTemplates(userId, bucketId = null) {
                source_template_id, created_by, updated_by
              )
              VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             WHERE NOT EXISTS (
+               SELECT 1
+               FROM expense_bucket_entry_skips s
+               WHERE s.user_id = $2
+                 AND s.bucket_id = $1
+                 AND s.source_template_id = $7
+                 AND s.entry_date = $5
+             )
              ON CONFLICT DO NOTHING`,
             [template.bucket_id, userId, template.name, template.entry_type || null, candidate, num(template.amount), template.id]
           );
@@ -1369,6 +1404,7 @@ async function cleanupExpenseBucketGeneratedDuplicates(userId, bucketId = null) 
 }
 
 async function getExpenseBuckets(userId) {
+  await ensureExpenseBucketEntrySkipsTable();
   await cleanupExpenseBucketGeneratedDuplicates(userId);
   await ensureExpenseBucketGeneratedEntryUniqueIndex();
   await applyExpenseBucketTemplates(userId);
@@ -1459,6 +1495,7 @@ function mapExpenseBucketEntryRow(row) {
 async function getExpenseBucketEntries(userId, bucketId) {
   const bucket = await getExpenseBucketById(userId, bucketId);
   if (!bucket) throw validationError('Bucket not found');
+  await ensureExpenseBucketEntrySkipsTable();
   await cleanupExpenseBucketGeneratedDuplicates(userId, bucketId);
   await ensureExpenseBucketGeneratedEntryUniqueIndex();
   await applyExpenseBucketTemplates(userId, bucketId);
@@ -1550,20 +1587,14 @@ async function updateExpenseBucketEntry(userId, bucketId, entryId, data = {}) {
        AND user_id = $14`,
     [name, entryType, entryDate, amount, isTemplate, autoAddEnabled, autoAddFrequency, autoAddDay, reminderEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, entryId, userId, bucketId]
   );
-  if (current.is_template || isTemplate) {
-    await query(
-      `DELETE FROM expense_bucket_entries
-       WHERE source_template_id = $1
-         AND user_id = $2`,
-      [entryId, userId]
-    );
-    if (isTemplate) await applyExpenseBucketTemplates(userId, bucketId);
+  if (isTemplate) {
+    await applyExpenseBucketTemplates(userId, bucketId);
   }
 }
 
 async function deleteExpenseBucketEntry(userId, bucketId, entryId) {
   const currentR = await query(
-    `SELECT id, is_template
+    `SELECT id, is_template, is_auto_generated, source_template_id, entry_date
      FROM expense_bucket_entries
      WHERE id = $1 AND bucket_id = $2 AND user_id = $3
      LIMIT 1`,
@@ -1571,10 +1602,152 @@ async function deleteExpenseBucketEntry(userId, bucketId, entryId) {
   );
   const current = currentR.rows[0];
   if (!current) throw validationError('Entry not found');
+  await ensureExpenseBucketEntrySkipsTable();
   if (current.is_template) {
     await query('DELETE FROM expense_bucket_entries WHERE source_template_id = $1 AND user_id = $2', [entryId, userId]);
+    await query('DELETE FROM expense_bucket_entry_skips WHERE source_template_id = $1 AND user_id = $2', [entryId, userId]);
+  } else if (current.is_auto_generated && current.source_template_id) {
+    await query(
+      `INSERT INTO expense_bucket_entry_skips (user_id, bucket_id, source_template_id, entry_date)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (source_template_id, entry_date) DO NOTHING`,
+      [userId, bucketId, current.source_template_id, current.entry_date]
+    );
   }
   await query('DELETE FROM expense_bucket_entries WHERE id = $1 AND bucket_id = $2 AND user_id = $3', [entryId, bucketId, userId]);
+}
+
+function mapFixedDepositRow(row) {
+  const today = localIsoToday();
+  const maturityDate = dbDateToYmd(row.maturity_date);
+  return {
+    ...row,
+    deposit_date: dbDateToYmd(row.deposit_date),
+    maturity_date: maturityDate,
+    amount_deposited: num(row.amount_deposited),
+    maturity_amount: num(row.maturity_amount),
+    interest_amount: num(row.interest_amount),
+    interest_rate: num(row.interest_rate),
+    tenure_months: row.tenure_months != null ? Number(row.tenure_months) : null,
+    notify_enabled: !!row.notify_enabled,
+    email_enabled: !!row.email_enabled,
+    reminder_days_before: normalizeReminderDaysBefore(row.reminder_days_before),
+    reminder_frequency: normalizeReminderFrequency(row.reminder_frequency),
+    reminder_silent: !!row.reminder_silent,
+    is_active: !!row.is_active,
+    status: maturityDate && maturityDate < today ? 'expired' : 'ongoing',
+  };
+}
+
+async function getFixedDeposits(userId, filters = {}) {
+  const params = [userId];
+  const clauses = ['user_id = $1'];
+  const personName = String(filters.person_name || '').trim();
+  if (personName && personName.toLowerCase() !== 'all') {
+    params.push(personName);
+    clauses.push(`person_name = $${params.length}`);
+  }
+  const status = String(filters.status || '').trim().toLowerCase();
+  const today = localIsoToday();
+  if (status === 'ongoing') {
+    params.push(today);
+    clauses.push(`maturity_date >= $${params.length}`);
+  } else if (status === 'expired') {
+    params.push(today);
+    clauses.push(`maturity_date < $${params.length}`);
+  }
+  const result = await query(
+    `SELECT *
+     FROM fixed_deposits
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY maturity_date ASC, lower(person_name) ASC, lower(bank_name) ASC, id DESC`,
+    params
+  );
+  return (result.rows || []).map(mapFixedDepositRow);
+}
+
+async function addFixedDeposit(userId, data = {}) {
+  const personName = normalizeText(data.person_name, 'Person name', 100);
+  const bankName = normalizeText(data.bank_name, 'Bank name', 100);
+  const fdNumber = normalizeText(data.fd_number, 'FD number', 120);
+  const interestRate = normalizeNonNegativeAmount(data.interest_rate || 0, 'Interest rate');
+  const tenureMonths = data.tenure_months == null || data.tenure_months === '' ? null : Math.max(1, parseInt(data.tenure_months, 10) || 0);
+  const depositDate = normalizeDateValue(data.deposit_date, 'Deposit date');
+  const maturityDate = normalizeDateValue(data.maturity_date, 'Maturity date');
+  if (!depositDate || !maturityDate) throw validationError('Deposit date and maturity date are required');
+  if (maturityDate < depositDate) throw validationError('Maturity date cannot be before deposit date');
+  const amountDeposited = normalizePositiveAmount(data.amount_deposited, 'Amount deposited');
+  const maturityAmount = normalizeNonNegativeAmount(data.maturity_amount || 0, 'Amount matured');
+  const interestAmount = normalizeNonNegativeAmount(data.interest_amount || 0, 'Interest amount');
+  const notifyEnabled = !!data.notify_enabled;
+  const emailEnabled = !!data.email_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
+  const isActive = data.is_active != null ? !!data.is_active : true;
+  const result = await query(
+    `INSERT INTO fixed_deposits (
+      user_id, person_name, bank_name, fd_number, interest_rate, tenure_months,
+      deposit_date, maturity_date, amount_deposited, maturity_amount, interest_amount,
+      notify_enabled, email_enabled, reminder_days_before, reminder_frequency, reminder_silent,
+      is_active, created_by, updated_by
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$1,$1)
+    RETURNING id`,
+    [userId, personName, bankName, fdNumber, interestRate, tenureMonths, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive]
+  );
+  return Number(result.rows[0]?.id || 0);
+}
+
+async function updateFixedDeposit(userId, id, data = {}) {
+  const currentR = await query('SELECT id FROM fixed_deposits WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
+  if (!currentR.rows[0]) throw validationError('FD not found');
+  const personName = normalizeText(data.person_name, 'Person name', 100);
+  const bankName = normalizeText(data.bank_name, 'Bank name', 100);
+  const fdNumber = normalizeText(data.fd_number, 'FD number', 120);
+  const interestRate = normalizeNonNegativeAmount(data.interest_rate || 0, 'Interest rate');
+  const tenureMonths = data.tenure_months == null || data.tenure_months === '' ? null : Math.max(1, parseInt(data.tenure_months, 10) || 0);
+  const depositDate = normalizeDateValue(data.deposit_date, 'Deposit date');
+  const maturityDate = normalizeDateValue(data.maturity_date, 'Maturity date');
+  if (!depositDate || !maturityDate) throw validationError('Deposit date and maturity date are required');
+  if (maturityDate < depositDate) throw validationError('Maturity date cannot be before deposit date');
+  const amountDeposited = normalizePositiveAmount(data.amount_deposited, 'Amount deposited');
+  const maturityAmount = normalizeNonNegativeAmount(data.maturity_amount || 0, 'Amount matured');
+  const interestAmount = normalizeNonNegativeAmount(data.interest_amount || 0, 'Interest amount');
+  const notifyEnabled = !!data.notify_enabled;
+  const emailEnabled = !!data.email_enabled;
+  const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
+  const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
+  const reminderSilent = !!data.reminder_silent;
+  const isActive = data.is_active != null ? !!data.is_active : true;
+  await query(
+    `UPDATE fixed_deposits
+     SET person_name = $1,
+         bank_name = $2,
+         fd_number = $3,
+         interest_rate = $4,
+         tenure_months = $5,
+         deposit_date = $6,
+         maturity_date = $7,
+         amount_deposited = $8,
+         maturity_amount = $9,
+         interest_amount = $10,
+         notify_enabled = $11,
+         email_enabled = $12,
+         reminder_days_before = $13,
+         reminder_frequency = $14,
+         reminder_silent = $15,
+         is_active = $16,
+         updated_at = NOW(),
+         updated_by = $18
+     WHERE id = $17
+       AND user_id = $18`,
+    [personName, bankName, fdNumber, interestRate, tenureMonths, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive, id, userId]
+  );
+}
+
+async function deleteFixedDeposit(userId, id) {
+  await query('DELETE FROM fixed_deposits WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
 function normalizeHabitBinaryValue(value, label = 'Value') {
@@ -2174,6 +2347,10 @@ module.exports = {
   addExpenseBucketEntry,
   updateExpenseBucketEntry,
   deleteExpenseBucketEntry,
+  getFixedDeposits,
+  addFixedDeposit,
+  updateFixedDeposit,
+  deleteFixedDeposit,
   getHabitTrackers,
   addHabitTracker,
   updateHabitTracker,

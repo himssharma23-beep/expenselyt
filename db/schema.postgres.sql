@@ -789,6 +789,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_expense_bucket_generated_entry
   ON expense_bucket_entries(source_template_id, entry_date)
   WHERE source_template_id IS NOT NULL AND is_template = FALSE;
 
+CREATE TABLE IF NOT EXISTS expense_bucket_entry_skips (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bucket_id BIGINT NOT NULL REFERENCES expense_buckets(id) ON DELETE CASCADE,
+  source_template_id BIGINT NOT NULL REFERENCES expense_bucket_entries(id) ON DELETE CASCADE,
+  entry_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_template_id, entry_date)
+);
+CREATE INDEX IF NOT EXISTS idx_expense_bucket_entry_skips_template
+  ON expense_bucket_entry_skips(source_template_id, entry_date);
+
+CREATE TABLE IF NOT EXISTS fixed_deposits (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  person_name TEXT NOT NULL,
+  bank_name TEXT NOT NULL,
+  fd_number TEXT NOT NULL,
+  interest_rate NUMERIC(8,2) NOT NULL DEFAULT 0,
+  tenure_months INTEGER,
+  deposit_date DATE NOT NULL,
+  maturity_date DATE NOT NULL,
+  amount_deposited NUMERIC(14,2) NOT NULL DEFAULT 0,
+  maturity_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  interest_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  notify_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  reminder_days_before INTEGER NOT NULL DEFAULT 0,
+  reminder_frequency TEXT NOT NULL DEFAULT 'once',
+  reminder_silent BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fixed_deposits_user ON fixed_deposits(user_id, maturity_date ASC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fixed_deposits_person ON fixed_deposits(user_id, person_name, maturity_date ASC);
+
 CREATE TABLE IF NOT EXISTS trip_invites (
   id BIGSERIAL PRIMARY KEY,
   trip_id BIGINT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,

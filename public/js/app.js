@@ -13404,9 +13404,24 @@ function _findRecurringEntryById(id) {
 
 async function loadBankAccounts() {
   document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--t3);padding:40px;text-align:center">Loadingâ€¦</div></div>';
-  const data = await api('/api/banks');
-  _bankAccounts = data?.accounts || [];
-  renderBankAccounts();
+  try {
+    const [data, fixedDepositData] = await Promise.all([
+      api('/api/banks'),
+      api('/api/fixed-deposits').catch(() => ({ fixed_deposits: [], people: [], totals: { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 } })),
+    ]);
+    _bankAccounts = data?.accounts || [];
+    _fixedDeposits = fixedDepositData?.fixed_deposits || [];
+    _fixedDepositPeople = fixedDepositData?.people || [];
+    _fixedDepositTotals = fixedDepositData?.totals || { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+    renderBankAccounts();
+  } catch (error) {
+    console.error('loadBankAccounts failed', error);
+    _bankAccounts = [];
+    _fixedDeposits = [];
+    _fixedDepositPeople = [];
+    _fixedDepositTotals = { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+    document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--em);padding:40px;text-align:center">Could not load bank accounts.</div></div>';
+  }
 }
 
 function renderBankAccounts() {
@@ -14639,6 +14654,14 @@ let _trackerViewMode = 'daily';
 let _expenseBuckets = [];
 let _selectedExpenseBucketId = null;
 let _expenseBucketImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
+let _fixedDeposits = [];
+let _fixedDepositPeople = [];
+let _fixedDepositTotals = { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+let _fixedDepositPersonFilter = 'all';
+let _fixedDepositStatusFilter = 'all';
+let _selectedBankFixedDepositId = null;
+let _showBankFixedDepositsPanel = false;
+let _fixedDepositImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
 let _habitTrackers = [];
 let _selectedHabitTrackerId = null;
 let _habitYear = new Date().getFullYear();
@@ -15347,6 +15370,136 @@ function renderBankAccounts() {
         <div style="font-size:13px">Click "Add Account" to track your balances</div>
       </div>`;
 
+  const fdRows = fixedDepositFilteredRows();
+  const fdTotals = fdRows.reduce((acc, item) => {
+    acc.amount_deposited += Number(item.amount_deposited || 0);
+    acc.maturity_amount += Number(item.maturity_amount || 0);
+    acc.interest_amount += Number(item.interest_amount || 0);
+    acc.count += 1;
+    if (String(item.status || '').toLowerCase() === 'expired') acc.expired += 1;
+    else acc.ongoing += 1;
+    return acc;
+  }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+  const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
+    .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
+    .join('');
+  const selectedFd = fdRows.find((item) => String(item.id) === String(_selectedBankFixedDepositId || '')) || null;
+  const fdCards = fdRows.length ? fdRows.map((item) => {
+    const expired = String(item.status || '').toLowerCase() === 'expired';
+    const selected = String(item.id) === String(_selectedBankFixedDepositId || '');
+    return `
+      <div class="bank-card${selected ? ' bank-card-default' : ''}" style="${expired ? 'background:#fff8f8;border-color:#f0c9c9;' : ''};cursor:pointer" onclick="selectBankFixedDeposit(${item.id})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="min-width:0;flex:1">
+            <div class="bank-card-name">${escHtml(item.person_name || 'Fixed Deposit')}</div>
+            <div class="bank-card-type">${escHtml(item.bank_name || '-')} · ${escHtml(item.fd_number || '-')}</div>
+          </div>
+          ${fixedDepositStatusChip(item.status)}
+        </div>
+        <div class="bank-card-balance" style="font-size:18px;margin-top:16px">${fmtCur(item.maturity_amount || 0)}</div>
+        <div class="bank-card-spendable" style="margin-top:8px">Deposited: ${fmtCur(item.amount_deposited || 0)}</div>
+        <div class="bank-card-minbal">Interest: ${fmtCur(item.interest_amount || 0)}</div>
+        <div class="bank-card-minbal">${escHtml(item.deposit_date || '-')} to ${escHtml(item.maturity_date || '-')}</div>
+        <div class="bank-card-actions" style="gap:6px" onclick="stopEvent(event)">
+          <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${item.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+          <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${item.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+          <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${item.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+        </div>
+      </div>`;
+  }).join('') : `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">No fixed deposits match these filters yet.</div>`;
+  const selectedFdTable = selectedFd ? `
+    <div class="card" style="padding:14px;margin-top:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--t1)">${escHtml(selectedFd.person_name || 'Fixed Deposit')}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(selectedFd.bank_name || '-')} · ${escHtml(selectedFd.fd_number || '-')}</div>
+        </div>
+        <button class="btn btn-s btn-sm" onclick="selectBankFixedDeposit('')">Close</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="width:94px">Action</th>
+            <th style="width:102px">Status</th>
+            <th>Person</th>
+            <th>Bank</th>
+            <th>FD No.</th>
+            <th style="text-align:right">Rate</th>
+            <th>Deposit</th>
+            <th>Maturity</th>
+            <th style="text-align:right">Deposited</th>
+            <th style="text-align:right">Matured</th>
+            <th style="text-align:right">Interest</th>
+            <th>Reminder</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td style="padding:6px 8px;width:94px">
+                <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
+                  <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${selectedFd.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+                  <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${selectedFd.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+                  <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${selectedFd.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+                </div>
+              </td>
+              <td style="padding:6px 8px;width:102px">${fixedDepositStatusChip(selectedFd.status)}</td>
+              <td style="padding:8px 10px">${escHtml(selectedFd.person_name || '-')}</td>
+              <td style="padding:8px 10px">${escHtml(selectedFd.bank_name || '-')}</td>
+              <td style="padding:8px 10px;font-family:var(--mono)">${escHtml(selectedFd.fd_number || '-')}</td>
+              <td style="padding:8px 10px;text-align:right">${Number(selectedFd.interest_rate || 0).toFixed(2)}%</td>
+              <td style="padding:8px 10px">${escHtml(selectedFd.deposit_date || '-')}</td>
+              <td style="padding:8px 10px">${escHtml(selectedFd.maturity_date || '-')}</td>
+              <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(selectedFd.amount_deposited || 0)}</td>
+              <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(selectedFd.maturity_amount || 0)}</td>
+              <td style="padding:8px 10px;text-align:right">${fmtCur(selectedFd.interest_amount || 0)}</td>
+              <td style="padding:8px 10px;font-size:12px">${selectedFd.notify_enabled || selectedFd.email_enabled ? `${Number(selectedFd.reminder_days_before || 0)}d before · ${escHtml(String(selectedFd.reminder_frequency || 'once'))}` : 'Off'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>` : `
+      <div class="card" style="padding:18px;margin-top:16px;text-align:center;color:var(--t3)">
+        Select an FD tile to view its detail table.
+      </div>`;
+  const fdLegacySection = `
+    <div class="summary-card" style="margin:24px 0 18px">
+      <div class="summary-top">
+        <div>
+          <div class="summary-label">FIXED DEPOSITS</div>
+          <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+          <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+          <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+            <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+            <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">Fixed Deposits</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+          <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+          <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fl" style="min-width:220px">Person
+          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+        </div>
+      </div>
+    </div>
+    <div class="bank-grid">${fdCards}</div>
+    ${selectedFdTable}`;
+
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div class="summary-card" style="margin-bottom:20px">
@@ -15774,17 +15927,17 @@ function toggleExpenseBucketReminderFields() {
 
 function renderTrackerToolbar(extraActions = '') {
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-      <div>
-        <div style="font-size:16px;font-weight:700;color:var(--t1)">Tracker Workspace</div>
-        <div style="font-size:12px;color:var(--t3)">Daily trackers for quantity tracking, or expense buckets for SIPs, fees, subscriptions, and other focused spending.</div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ${_trackerViewMode === 'daily' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='daily';_selectedExpenseBucketId=null;renderTrackerGrid()">Daily Trackers</button>
-        <button class="btn ${_trackerViewMode === 'bucket' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='bucket';_selectedTrackerId=null;renderTrackerGrid()">Expense Buckets</button>
-        ${extraActions}
-      </div>
-    </div>`;
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--t1)">Tracker Workspace</div>
+          <div style="font-size:12px;color:var(--t3)">Daily trackers for quantity tracking, or expense buckets for SIPs, fees, subscriptions, and other focused spending.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ${_trackerViewMode === 'daily' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='daily';_selectedExpenseBucketId=null;renderTrackerGrid()">Daily Trackers</button>
+          <button class="btn ${_trackerViewMode === 'bucket' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='bucket';_selectedTrackerId=null;renderTrackerGrid()">Expense Buckets</button>
+          ${extraActions}
+        </div>
+      </div>`;
 }
 
 async function renderExpenseBucketGrid() {
@@ -15820,6 +15973,228 @@ async function renderExpenseBucketGrid() {
         <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No expense buckets yet</div>
         <div style="font-size:13px">Create one tile per SIP, insurance, class fees, or focused expense stream, then add manual or auto-generated rows underneath it.</div>
       </div>`;
+
+  const fdRows = fixedDepositFilteredRows();
+  const fdTotals = fdRows.reduce((acc, item) => {
+    acc.amount_deposited += Number(item.amount_deposited || 0);
+    acc.maturity_amount += Number(item.maturity_amount || 0);
+    acc.interest_amount += Number(item.interest_amount || 0);
+    acc.count += 1;
+    if (String(item.status || '').toLowerCase() === 'expired') acc.expired += 1;
+    else acc.ongoing += 1;
+    return acc;
+  }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+  const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
+    .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
+    .join('');
+  const fdTableRows = fdRows.length ? fdRows.map((item) => `
+      <tr>
+        <td style="padding:6px 8px;width:94px">
+          <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
+            <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${item.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+            <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${item.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+            <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${item.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+          </div>
+        </td>
+        <td style="padding:6px 8px;width:102px">${fixedDepositStatusChip(item.status)}</td>
+        <td style="padding:8px 10px">${escHtml(item.person_name || '-')}</td>
+        <td style="padding:8px 10px">${escHtml(item.bank_name || '-')}</td>
+        <td style="padding:8px 10px;font-family:var(--mono)">${escHtml(item.fd_number || '-')}</td>
+        <td style="padding:8px 10px;text-align:right">${Number(item.interest_rate || 0).toFixed(2)}%</td>
+        <td style="padding:8px 10px">${escHtml(item.deposit_date || '-')}</td>
+        <td style="padding:8px 10px">${escHtml(item.maturity_date || '-')}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.amount_deposited || 0)}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.maturity_amount || 0)}</td>
+        <td style="padding:8px 10px;text-align:right">${fmtCur(item.interest_amount || 0)}</td>
+        <td style="padding:8px 10px;font-size:12px">${item.notify_enabled || item.email_enabled ? `${Number(item.reminder_days_before || 0)}d before · ${escHtml(String(item.reminder_frequency || 'once'))}` : 'Off'}</td>
+      </tr>`).join('') : '<tr><td colspan="12" style="text-align:center;color:var(--t3);padding:18px">No fixed deposits match these filters yet.</td></tr>';
+  const fdLegacySection2 = `
+    <div class="summary-card" style="margin:24px 0 18px">
+      <div class="summary-top">
+        <div>
+          <div class="summary-label">FIXED DEPOSITS</div>
+          <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+          <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+          <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+            <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+            <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">Fixed Deposits</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+          <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+          <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fl" style="min-width:220px">Person
+          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:94px">Action</th>
+          <th style="width:102px">Status</th>
+          <th>Person</th>
+          <th>Bank</th>
+          <th>FD No.</th>
+          <th style="text-align:right">Rate</th>
+          <th>Deposit</th>
+          <th>Maturity</th>
+          <th style="text-align:right">Deposited</th>
+          <th style="text-align:right">Matured</th>
+          <th style="text-align:right">Interest</th>
+          <th>Reminder</th>
+        </tr></thead>
+        <tbody>${fdTableRows}</tbody>
+      </table>
+    </div>`;
+  if (_showBankFixedDepositsPanel) {
+    document.getElementById('main').innerHTML = `
+      <div class="tab-content">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(false)">← Back</button>
+            <div>
+              <div style="font-size:20px;font-weight:800;color:var(--t1)">Fixed Deposits</div>
+              <div style="font-size:13px;color:var(--t3)">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+            <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+          </div>
+        </div>
+        <div class="summary-card" style="margin-bottom:18px">
+          <div class="summary-top">
+            <div>
+              <div class="summary-label">FIXED DEPOSITS</div>
+              <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+              <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+              <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+                <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+                <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;margin-bottom:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+            <label class="fl" style="min-width:220px">Person
+              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+            </label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:94px">Action</th>
+              <th style="width:102px">Status</th>
+              <th>Person</th>
+              <th>Bank</th>
+              <th>FD No.</th>
+              <th style="text-align:right">Rate</th>
+              <th>Deposit</th>
+              <th>Maturity</th>
+              <th style="text-align:right">Deposited</th>
+              <th style="text-align:right">Matured</th>
+              <th style="text-align:right">Interest</th>
+              <th>Reminder</th>
+            </tr></thead>
+            <tbody>${fdTableRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    repairMojibakeInNode(document.getElementById('main'));
+    return;
+  }
+
+  const fdTile = `
+    <div class="bank-card" style="cursor:pointer" onclick="toggleBankFixedDepositsPanel(true)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <div class="bank-card-name">Fixed Deposits</div>
+          <div class="bank-card-type">${fdTotals.count} FDs</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <span style="padding:6px 10px;border-radius:999px;background:#eef9f1;color:#1f7a45;border:1px solid #c7e8d2;font-size:12px;font-weight:700">${fdTotals.ongoing} ongoing</span>
+          <span style="padding:6px 10px;border-radius:999px;background:#fff1f1;color:#c72626;border:1px solid #f0b8b8;font-size:12px;font-weight:700">${fdTotals.expired} expired</span>
+        </div>
+      </div>
+      <div class="bank-card-balance" style="margin-top:20px">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+      <div class="bank-card-spendable">Deposited: ${fmtCur(fdTotals.amount_deposited || 0)}</div>
+      <div class="bank-card-minbal">Interest: ${fmtCur(fdTotals.interest_amount || 0)}</div>
+      <div class="bank-card-actions" onclick="stopEvent(event)">
+        <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(${_showBankFixedDepositsPanel ? 'false' : 'true'})">${_showBankFixedDepositsPanel ? 'Hide Details' : 'Open Details'}</button>
+        <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+      </div>
+    </div>`;
+  const fdPanel = _showBankFixedDepositsPanel ? `
+    <div class="card" style="padding:14px;margin:18px 0 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">Fixed Deposits</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+          <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+          <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(false)">Close</button>
+          <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fl" style="min-width:220px">Person
+          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:94px">Action</th>
+          <th style="width:102px">Status</th>
+          <th>Person</th>
+          <th>Bank</th>
+          <th>FD No.</th>
+          <th style="text-align:right">Rate</th>
+          <th>Deposit</th>
+          <th>Maturity</th>
+          <th style="text-align:right">Deposited</th>
+          <th style="text-align:right">Matured</th>
+          <th style="text-align:right">Interest</th>
+          <th>Reminder</th>
+        </tr></thead>
+        <tbody>${fdTableRows}</tbody>
+      </table>
+    </div>` : '';
+  const fdPanelSection = `<div class="bank-grid" style="margin-top:18px">${fdTile}</div>${fdPanel}`;
 
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
@@ -16282,6 +16657,7 @@ async function showExpenseBucketEntryModal(bucketId, entryId = null) {
           </select></label>
           <label class="fl" id="ebEntryAutoDayWrap" style="${autoFrequency === 'monthly' ? '' : 'display:none'}">Monthly Date (1-28)<input class="fi" type="number" id="ebEntryAutoDay" min="1" max="28" value="${entry?.auto_add_day || 1}"></label>
         </div>
+        <div style="font-size:12px;color:var(--t3);margin-top:8px">Editing a recurring template updates only future auto-added entries. Existing past rows keep their old amount.</div>
       </div>
     </div>
     <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
@@ -16474,6 +16850,455 @@ async function importExpenseBucketEntries(bucketId) {
   }
 }
 
+function fixedDepositFilteredRows() {
+  return (_fixedDeposits || []).filter((item) => {
+    if (_fixedDepositPersonFilter !== 'all' && String(item.person_name || '') !== String(_fixedDepositPersonFilter || '')) return false;
+    if (_fixedDepositStatusFilter !== 'all' && String(item.status || '') !== String(_fixedDepositStatusFilter || '')) return false;
+    return true;
+  }).sort((a, b) => {
+    const aDate = String(a?.maturity_date || '');
+    const bDate = String(b?.maturity_date || '');
+    if (aDate && bDate && aDate !== bDate) return aDate.localeCompare(bDate);
+    if (aDate && !bDate) return -1;
+    if (!aDate && bDate) return 1;
+    return String(a?.fd_number || '').localeCompare(String(b?.fd_number || ''));
+  });
+}
+
+function fixedDepositStatusChip(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'expired') {
+    return `<span class="badge" style="background:#fff0f0;color:#ba2d2d;border:1px solid #f0c9c9">Expired</span>`;
+  }
+  return `<span class="badge" style="background:#ebf8f0;color:#1f7a46;border:1px solid #c9e7d4">Ongoing</span>`;
+}
+
+function fixedDepositActionIcon(kind) {
+  const icons = {
+    renew: '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    edit: '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 9.5-9.5a2.1 2.1 0 0 0-3-3L5.2 16 4 20Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m13.5 7.5 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    delete: '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 11v6M14 11v6M8 7l1-2h6l1 2M8 7l.6 11a2 2 0 0 0 2 1.9h2.8a2 2 0 0 0 2-1.9L16 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  };
+  return icons[kind] || '';
+}
+
+function fixedDepositAddMonths(dateValue, months) {
+  const raw = String(dateValue || '').trim();
+  const totalMonths = Number(months || 0);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || !(totalMonths > 0)) return '';
+  const [year, month, day] = raw.split('-').map(Number);
+  const base = new Date(year, month - 1, day);
+  if (Number.isNaN(base.getTime())) return '';
+  const next = new Date(base);
+  next.setMonth(next.getMonth() + totalMonths);
+  if (next.getDate() !== day) next.setDate(0);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
+function fixedDepositMonthDiff(startDate, endDate) {
+  const start = String(startDate || '').trim();
+  const end = String(endDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return '';
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  let months = ((ey - sy) * 12) + (em - sm);
+  if (ed < sd) months -= 1;
+  return months > 0 ? String(months) : '';
+}
+
+function fixedDepositAddDays(dateValue, days) {
+  const raw = String(dateValue || '').trim();
+  const totalDays = Number(days || 0);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return '';
+  const [year, month, day] = raw.split('-').map(Number);
+  const base = new Date(year, month - 1, day);
+  if (Number.isNaN(base.getTime())) return '';
+  base.setDate(base.getDate() + totalDays);
+  return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
+}
+
+function fixedDepositCompoundedValues() {
+  const principal = Number(document.getElementById('fdAmountDeposited')?.value || 0);
+  const rate = Number(document.getElementById('fdInterestRate')?.value || 0);
+  const tenureMonths = Number(document.getElementById('fdTenureMonths')?.value || 0);
+  if (!(principal > 0) || !(rate >= 0) || !(tenureMonths > 0)) {
+    return { interest: 0, maturity: principal > 0 ? principal : 0 };
+  }
+  const years = tenureMonths / 12;
+  const maturity = principal * Math.pow(1 + (rate / 400), 4 * years);
+  const roundedMaturity = Math.round(maturity * 100) / 100;
+  const roundedInterest = Math.round((roundedMaturity - principal) * 100) / 100;
+  return { interest: roundedInterest, maturity: roundedMaturity };
+}
+
+function recalculateFixedDepositFields(source = 'general') {
+  const depositDateEl = document.getElementById('fdDepositDate');
+  const maturityDateEl = document.getElementById('fdMaturityDate');
+  const tenureEl = document.getElementById('fdTenureMonths');
+  const principal = Number(document.getElementById('fdAmountDeposited')?.value || 0);
+  const interestEl = document.getElementById('fdInterestAmount');
+  const maturityAmountEl = document.getElementById('fdMaturityAmount');
+  if (source === 'tenure' || source === 'deposit') {
+    const nextMaturity = fixedDepositAddMonths(depositDateEl?.value || '', tenureEl?.value || 0);
+    if (nextMaturity && maturityDateEl) maturityDateEl.value = nextMaturity;
+  } else if (source === 'maturity') {
+    const diff = fixedDepositMonthDiff(depositDateEl?.value || '', maturityDateEl?.value || '');
+    if (diff && tenureEl) tenureEl.value = diff;
+  }
+  if (source === 'maturityAmount') {
+    const maturityValue = Number(maturityAmountEl?.value || 0);
+    const interest = Math.round((Math.max(0, maturityValue - principal)) * 100) / 100;
+    if (interestEl) interestEl.value = interest.toFixed(2);
+    return;
+  }
+  const values = fixedDepositCompoundedValues();
+  if (interestEl) interestEl.value = values.interest ? values.interest.toFixed(2) : '0.00';
+  if (maturityAmountEl) maturityAmountEl.value = values.maturity ? values.maturity.toFixed(2) : '0.00';
+}
+
+function setFixedDepositPersonFilter(value) {
+  _fixedDepositPersonFilter = String(value || 'all');
+  if (currentTab === 'banks') renderBankAccounts();
+  else renderTrackerGrid();
+}
+
+function setFixedDepositStatusFilter(value) {
+  _fixedDepositStatusFilter = String(value || 'all');
+  if (currentTab === 'banks') renderBankAccounts();
+  else renderTrackerGrid();
+}
+
+function selectBankFixedDeposit(id = '') {
+  _selectedBankFixedDepositId = id ? String(id) : null;
+  _showBankFixedDepositsPanel = true;
+  renderBankAccounts();
+}
+
+function toggleBankFixedDepositsPanel(force = null) {
+  if (force === null) _showBankFixedDepositsPanel = !_showBankFixedDepositsPanel;
+  else _showBankFixedDepositsPanel = !!force;
+  if (!_showBankFixedDepositsPanel) _selectedBankFixedDepositId = null;
+  renderBankAccounts();
+}
+
+function renderFixedDepositsGrid() {
+  const rows = fixedDepositFilteredRows();
+  const totals = rows.reduce((acc, item) => {
+    acc.amount_deposited += Number(item.amount_deposited || 0);
+    acc.maturity_amount += Number(item.maturity_amount || 0);
+    acc.interest_amount += Number(item.interest_amount || 0);
+    acc.count += 1;
+    if (String(item.status || '').toLowerCase() === 'expired') acc.expired += 1;
+    else acc.ongoing += 1;
+    return acc;
+  }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+  const peopleOptions = ['all', ...(_fixedDepositPeople || [])]
+    .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
+    .join('');
+  const tableRows = rows.length ? rows.map((item) => `
+    <tr>
+      <td style="padding:6px 8px;width:94px">
+        <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
+          <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${item.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+          <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${item.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+          <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${item.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+        </div>
+      </td>
+      <td style="width:102px">${fixedDepositStatusChip(item.status)}</td>
+      <td>${escHtml(item.person_name || '-')}</td>
+      <td>${escHtml(item.bank_name || '-')}</td>
+      <td style="font-family:var(--mono)">${escHtml(item.fd_number || '-')}</td>
+      <td style="text-align:right">${Number(item.interest_rate || 0).toFixed(2)}%</td>
+      <td>${escHtml(item.deposit_date || '-')}</td>
+      <td>${escHtml(item.maturity_date || '-')}</td>
+      <td style="text-align:right;font-weight:600">${fmtCur(item.amount_deposited || 0)}</td>
+      <td style="text-align:right;font-weight:600">${fmtCur(item.maturity_amount || 0)}</td>
+      <td style="text-align:right">${fmtCur(item.interest_amount || 0)}</td>
+      <td style="font-size:12px">${item.notify_enabled || item.email_enabled ? `${Number(item.reminder_days_before || 0)}d before · ${escHtml(String(item.reminder_frequency || 'once'))}` : 'Off'}</td>
+    </tr>`).join('') : '<tr><td colspan="12" style="text-align:center;color:var(--t3);padding:18px">No FDs match these filters yet.</td></tr>';
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      ${renderTrackerToolbar(`
+        <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+        <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+        <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+      `)}
+      <div class="summary-card" style="margin-bottom:18px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">FIXED DEPOSITS</div>
+            <div class="summary-amount">${fmtCur(totals.maturity_amount || 0)}</div>
+            <div class="summary-words">${totals.count} FDs · Deposited ${fmtCur(totals.amount_deposited || 0)} · Interest ${fmtCur(totals.interest_amount || 0)}</div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="count-box"><div class="num">${totals.ongoing}</div><div class="lbl">ongoing</div></div>
+            <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+              <div class="num" style="color:#c72626">${totals.expired}</div>
+              <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:14px;margin-bottom:16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <label class="fl" style="min-width:220px">Person
+            <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${peopleOptions}</select>
+          </label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+            <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+            <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+            <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="text-align:right">Action</th>
+            <th>Status</th>
+            <th>Person</th>
+            <th>Bank</th>
+            <th>FD No.</th>
+            <th style="text-align:right">Rate</th>
+            <th>Deposit</th>
+            <th>Maturity</th>
+            <th style="text-align:right">Deposited</th>
+            <th style="text-align:right">Matured</th>
+            <th style="text-align:right">Interest</th>
+            <th>Reminder</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
+async function showFixedDepositModal(id = null, seed = null) {
+  const fd = id ? (_fixedDeposits || []).find((item) => String(item.id) === String(id)) : null;
+  const source = seed || fd || null;
+  window.__modalClassName = 'modal-wide fixed-deposit-modal-shell';
+  openModal(fd ? 'Edit Fixed Deposit' : 'Add Fixed Deposit', `
+    <div class="fd-modal-shell">
+      <div class="fd-modal-scroll">
+        <div class="fd-modal-section fd-modal-section-hero">
+          <div class="fd-modal-section-title">Account Details</div>
+          <div class="fd-modal-grid">
+            <label class="fl">Person Name *<input class="fi" id="fdPersonName" value="${escHtml(source?.person_name || '')}" placeholder="e.g. Rahul Sharma"></label>
+            <label class="fl">Bank Name *<input class="fi" id="fdBankName" value="${escHtml(source?.bank_name || '')}" placeholder="e.g. SBI, HDFC"></label>
+            <label class="fl">FD Number *<input class="fi" id="fdNumber" value="${escHtml(source?.fd_number || '')}" placeholder="FD000XXXX"></label>
+            <label class="fl">Interest Rate %<input class="fi" type="number" step="0.01" id="fdInterestRate" value="${escHtml(source?.interest_rate ?? '')}" oninput="recalculateFixedDepositFields()"></label>
+          </div>
+        </div>
+        <div class="fd-modal-section">
+          <div class="fd-modal-section-title">Timeline</div>
+          <div class="fd-modal-grid fd-modal-grid-tight">
+            <label class="fl">Time Period (months) *<input class="fi" type="number" min="1" id="fdTenureMonths" value="${escHtml(source?.tenure_months ?? '')}" oninput="recalculateFixedDepositFields('tenure')"></label>
+            <label class="fl">Date of Deposit *<input class="fi" type="date" id="fdDepositDate" value="${escHtml(source?.deposit_date || todayStr())}" oninput="recalculateFixedDepositFields('deposit')"></label>
+            <label class="fl full">Date of Maturity *<input class="fi" type="date" id="fdMaturityDate" value="${escHtml(source?.maturity_date || '')}" oninput="recalculateFixedDepositFields('maturity')"></label>
+          </div>
+        </div>
+        <div class="fd-modal-section">
+          <div class="fd-modal-section-title">Amounts</div>
+          <div class="fd-modal-grid fd-modal-grid-tight">
+            <label class="fl">Amount Deposited *<input class="fi" type="number" step="0.01" id="fdAmountDeposited" value="${escHtml(source?.amount_deposited ?? '')}" oninput="recalculateFixedDepositFields()"></label>
+            <label class="fl">Interest Amount<input class="fi fd-calculated" type="number" step="0.01" id="fdInterestAmount" value="${escHtml(source?.interest_amount ?? '')}" readonly></label>
+            <label class="fl full">Amount Matured<input class="fi" type="number" step="0.01" id="fdMaturityAmount" value="${escHtml(source?.maturity_amount ?? '')}" oninput="recalculateFixedDepositFields('maturityAmount')"></label>
+          </div>
+          <div class="fd-modal-help">Auto-calculated using quarterly compounding from deposited amount, annual interest rate, and time period.</div>
+        </div>
+        <div class="fd-modal-section">
+          <div class="fd-modal-section-title">Settings</div>
+          <div class="fd-setting-list">
+            <label class="fd-setting-row">
+              <span class="fd-setting-copy"><strong>Active FD</strong><small>Mark this deposit as currently active</small></span>
+              <input type="checkbox" id="fdActive" ${source?.is_active !== false ? 'checked' : ''}>
+            </label>
+            <label class="fd-setting-row">
+              <span class="fd-setting-copy"><strong>App notifications</strong><small>Send an in-app reminder before maturity</small></span>
+              <input type="checkbox" id="fdNotifyEnabled" ${source?.notify_enabled ? 'checked' : ''} onchange="toggleFixedDepositReminderFields()">
+            </label>
+            <label class="fd-setting-row">
+              <span class="fd-setting-copy"><strong>Email reminders</strong><small>Send reminder emails for maturity</small></span>
+              <input type="checkbox" id="fdEmailEnabled" ${source?.email_enabled ? 'checked' : ''} onchange="toggleFixedDepositReminderFields()">
+            </label>
+          </div>
+          <div id="fdReminderFields" class="fd-reminder-wrap" style="${source?.notify_enabled || source?.email_enabled ? '' : 'display:none'}">
+            <div class="fd-modal-grid fd-modal-grid-tight">
+              <label class="fl">Notify Before (days)<input class="fi" type="number" min="0" max="60" id="fdReminderDaysBefore" value="${escHtml(source?.reminder_days_before ?? 0)}" placeholder="days before"></label>
+              <label class="fl">Frequency<select class="fi" id="fdReminderFrequency">
+                <option value="once" ${String(source?.reminder_frequency || 'once') === 'once' ? 'selected' : ''}>Once only</option>
+                <option value="daily" ${String(source?.reminder_frequency || '') === 'daily' ? 'selected' : ''}>Daily till expire</option>
+              </select></label>
+              <label class="fd-checkbox-row"><input type="checkbox" id="fdReminderSilent" ${source?.reminder_silent ? 'checked' : ''}> <span>Silent app reminder only</span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fd-modal-footer">
+        <button class="btn btn-p" onclick="saveFixedDeposit(${fd?.id || 'null'})">${fd ? 'Update FD' : 'Add FD'}</button>
+        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+      </div>
+  </div>`);
+    requestAnimationFrame(() => {
+    const hasSavedMaturityAmount = source && String(source.maturity_amount ?? '').trim() !== '';
+    recalculateFixedDepositFields(hasSavedMaturityAmount ? 'maturityAmount' : 'general');
+    });
+  }
+
+function renewFixedDeposit(id) {
+  const fd = (_fixedDeposits || []).find((item) => String(item.id) === String(id));
+  if (!fd) return;
+  const nextDepositDate = fixedDepositAddDays(fd.maturity_date || '', 1) || todayStr();
+  const tenureMonths = Number(fd.tenure_months || 0);
+  const nextMaturityDate = fixedDepositAddMonths(nextDepositDate, tenureMonths || 0);
+  showFixedDepositModal(null, {
+    person_name: fd.person_name || '',
+    bank_name: fd.bank_name || '',
+    fd_number: '',
+    interest_rate: fd.interest_rate,
+    tenure_months: tenureMonths > 0 ? String(tenureMonths) : '',
+    deposit_date: nextDepositDate,
+    maturity_date: nextMaturityDate || '',
+    amount_deposited: Number(fd.maturity_amount || 0) > 0 ? String(fd.maturity_amount) : '',
+    maturity_amount: '',
+    interest_amount: '',
+    notify_enabled: !!fd.notify_enabled,
+    email_enabled: !!fd.email_enabled,
+    reminder_days_before: fd.reminder_days_before != null ? String(fd.reminder_days_before) : '0',
+    reminder_frequency: fd.reminder_frequency || 'once',
+    reminder_silent: !!fd.reminder_silent,
+    is_active: true,
+  });
+}
+
+function toggleFixedDepositReminderFields() {
+  const enabled = !!document.getElementById('fdNotifyEnabled')?.checked || !!document.getElementById('fdEmailEnabled')?.checked;
+  const wrap = document.getElementById('fdReminderFields');
+  if (wrap) wrap.style.display = enabled ? '' : 'none';
+}
+
+async function saveFixedDeposit(id) {
+  const body = {
+    person_name: document.getElementById('fdPersonName')?.value?.trim() || '',
+    bank_name: document.getElementById('fdBankName')?.value?.trim() || '',
+    fd_number: document.getElementById('fdNumber')?.value?.trim() || '',
+    interest_rate: document.getElementById('fdInterestRate')?.value || 0,
+    tenure_months: document.getElementById('fdTenureMonths')?.value || null,
+    deposit_date: document.getElementById('fdDepositDate')?.value || '',
+    maturity_date: document.getElementById('fdMaturityDate')?.value || '',
+    amount_deposited: document.getElementById('fdAmountDeposited')?.value || 0,
+    maturity_amount: document.getElementById('fdMaturityAmount')?.value || 0,
+    interest_amount: document.getElementById('fdInterestAmount')?.value || 0,
+    notify_enabled: document.getElementById('fdNotifyEnabled')?.checked ? 1 : 0,
+    email_enabled: document.getElementById('fdEmailEnabled')?.checked ? 1 : 0,
+    reminder_days_before: document.getElementById('fdReminderDaysBefore')?.value || 0,
+    reminder_frequency: document.getElementById('fdReminderFrequency')?.value || 'once',
+    reminder_silent: document.getElementById('fdReminderSilent')?.checked ? 1 : 0,
+    is_active: document.getElementById('fdActive')?.checked ? 1 : 0,
+  };
+  const result = id
+    ? await api(`/api/fixed-deposits/${id}`, { method: 'PUT', body })
+    : await api('/api/fixed-deposits', { method: 'POST', body });
+  if (result?.success || result?.id) {
+    closeModal();
+    toast(id ? 'FD updated' : 'FD added', 'success');
+    await loadBankAccounts();
+  } else {
+    toast(result?.error || 'Could not save FD', 'error');
+  }
+}
+
+async function deleteFixedDeposit(id) {
+  if (!await confirmDialog('Delete this fixed deposit?')) return;
+  const result = await api(`/api/fixed-deposits/${id}`, { method: 'DELETE' });
+  if (result?.success) {
+    toast('FD deleted', 'success');
+    await loadBankAccounts();
+  } else {
+    toast(result?.error || 'Could not delete FD', 'error');
+  }
+}
+
+function buildFixedDepositImportFormData() {
+  const fileInput = document.getElementById('fdImportFile');
+  const file = fileInput?.files?.[0] || _fixedDepositImportState.file;
+  const personName = document.getElementById('fdImportPersonName')?.value?.trim() || '';
+  if (!file) {
+    toast('Choose an Excel file first', 'warning');
+    return null;
+  }
+  if (!personName) {
+    toast('Person name is required for FD import', 'warning');
+    return null;
+  }
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('person_name', personName);
+  return formData;
+}
+
+function showFixedDepositImportModal() {
+  const previewRows = Array.isArray(_fixedDepositImportState.preview) ? _fixedDepositImportState.preview : [];
+  const importPersonValue = _fixedDepositImportState.person_name || (_fixedDepositPersonFilter !== 'all' ? _fixedDepositPersonFilter : '');
+  const previewHtml = previewRows.length ? `
+    <div style="margin-top:14px;border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--card2)">
+      <div style="font-size:13px;font-weight:600;color:var(--t1);margin-bottom:8px">Preview: ${_fixedDepositImportState.count} importable rows${_fixedDepositImportState.skipped ? `, ${_fixedDepositImportState.skipped} skipped` : ''}</div>
+      <div style="max-height:220px;overflow:auto">
+        <table>
+          <thead><tr><th>Bank</th><th>FD No.</th><th>Deposit</th><th>Maturity</th><th style="text-align:right">Deposited</th></tr></thead>
+          <tbody>${previewRows.map((row) => `<tr><td>${escHtml(row.bank_name || '-')}</td><td>${escHtml(row.fd_number || '-')}</td><td>${escHtml(row.deposit_date || '-')}</td><td>${escHtml(row.maturity_date || '-')}</td><td style="text-align:right">${fmtCur(row.amount_deposited || 0)}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>` : '';
+  openModal('Import Fixed Deposits', `
+    <div class="fg">
+      <label class="fl full">Excel File<input class="fi" type="file" id="fdImportFile" accept=".xlsx,.xls,.ods"></label>
+      <label class="fl">Person Name *<input class="fi" id="fdImportPersonName" value="${escHtml(importPersonValue)}" placeholder="Whose FD is this?"></label>
+      <div style="font-size:12px;color:var(--t3)">Reads only these columns from your sheet: Bank name, FD no., interest, time period, date of deposit, date of maturity, amount deposited, amount matured, interest. Zero deposited rows are skipped.</div>
+    </div>
+    ${previewHtml}
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="previewFixedDepositImport()">Preview Import</button>
+      <button class="btn btn-p" onclick="importFixedDeposits()">Import FDs</button>
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+async function previewFixedDepositImport() {
+  const formData = buildFixedDepositImportFormData();
+  if (!formData) return;
+  const result = await expenseBucketImportApi('/api/fixed-deposits/import-excel/preview', formData);
+  if (!result?.success && !Array.isArray(result?.preview)) {
+    toast(result?.error || 'Could not preview FD import', 'error');
+    return;
+  }
+  _fixedDepositImportState = {
+    preview: Array.isArray(result?.preview) ? result.preview : [],
+    count: Number(result?.count || 0),
+    skipped: Number(result?.skipped || 0),
+    fileName: document.getElementById('fdImportFile')?.files?.[0]?.name || _fixedDepositImportState.fileName || '',
+    file: document.getElementById('fdImportFile')?.files?.[0] || _fixedDepositImportState.file || null,
+    person_name: document.getElementById('fdImportPersonName')?.value?.trim() || '',
+  };
+  showFixedDepositImportModal();
+}
+
+async function importFixedDeposits() {
+  const formData = buildFixedDepositImportFormData();
+  if (!formData) return;
+  const result = await expenseBucketImportApi('/api/fixed-deposits/import-excel', formData);
+  if (result?.success) {
+    _fixedDepositImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null, person_name: '' };
+    closeModal();
+    toast(`Imported ${Number(result.imported || 0)} FDs${Number(result.skipped || 0) ? `, skipped ${Number(result.skipped || 0)}` : ''}`, 'success');
+    await loadBankAccounts();
+  } else {
+    toast(result?.error || 'Could not import FDs', 'error');
+  }
+}
+
 function showCcPayModal(cycleId, netPayable) {
   const defaultBank = _bankAccounts.find((a) => a.is_default);
   const bankOptions = `<option value="">${defaultBank ? `Default: ${escHtml(defaultBank.bank_name)}` : '-- No default bank --'}</option>${_bankDropdownOptions(null)}`;
@@ -16555,6 +17380,187 @@ function renderBankAccounts() {
         <div style="font-size:13px">Click "Add Account" to track your balances</div>
       </div>`;
 
+  const fdRows = fixedDepositFilteredRows();
+  const fdTotals = fdRows.reduce((acc, item) => {
+    acc.amount_deposited += Number(item.amount_deposited || 0);
+    acc.maturity_amount += Number(item.maturity_amount || 0);
+    acc.interest_amount += Number(item.interest_amount || 0);
+    acc.count += 1;
+    if (String(item.status || '').toLowerCase() === 'expired') acc.expired += 1;
+    else acc.ongoing += 1;
+    return acc;
+  }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+  const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
+    .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
+    .join('');
+  const fdTableRows = fdRows.length ? fdRows.map((item) => `
+      <tr>
+        <td style="padding:6px 8px;width:94px">
+          <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
+            <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${item.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+            <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${item.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+            <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${item.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+          </div>
+        </td>
+        <td style="padding:6px 8px;width:102px">${fixedDepositStatusChip(item.status)}</td>
+        <td style="padding:8px 10px">${escHtml(item.person_name || '-')}</td>
+        <td style="padding:8px 10px">${escHtml(item.bank_name || '-')}</td>
+        <td style="padding:8px 10px;font-family:var(--mono)">${escHtml(item.fd_number || '-')}</td>
+        <td style="padding:8px 10px;text-align:right">${Number(item.interest_rate || 0).toFixed(2)}%</td>
+        <td style="padding:8px 10px">${escHtml(item.deposit_date || '-')}</td>
+        <td style="padding:8px 10px">${escHtml(item.maturity_date || '-')}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.amount_deposited || 0)}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.maturity_amount || 0)}</td>
+        <td style="padding:8px 10px;text-align:right">${fmtCur(item.interest_amount || 0)}</td>
+        <td style="padding:8px 10px;font-size:12px">${item.notify_enabled || item.email_enabled ? `${Number(item.reminder_days_before || 0)}d before · ${escHtml(String(item.reminder_frequency || 'once'))}` : 'Off'}</td>
+      </tr>`).join('') : '<tr><td colspan="12" style="text-align:center;color:var(--t3);padding:18px">No fixed deposits match these filters yet.</td></tr>';
+  if (_showBankFixedDepositsPanel) {
+    document.getElementById('main').innerHTML = `
+      <div class="tab-content">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(false)">← Back</button>
+            <div>
+              <div style="font-size:20px;font-weight:800;color:var(--t1)">Fixed Deposits</div>
+              <div style="font-size:13px;color:var(--t3)">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+            <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+          </div>
+        </div>
+        <div class="summary-card" style="margin-bottom:18px">
+          <div class="summary-top">
+            <div>
+              <div class="summary-label">FIXED DEPOSITS</div>
+              <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+              <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+              <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+                <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+                <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;margin-bottom:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+            <label class="fl" style="min-width:220px">Person
+              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+            </label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:94px">Action</th>
+              <th style="width:102px">Status</th>
+              <th>Person</th>
+              <th>Bank</th>
+              <th>FD No.</th>
+              <th style="text-align:right">Rate</th>
+              <th>Deposit</th>
+              <th>Maturity</th>
+              <th style="text-align:right">Deposited</th>
+              <th style="text-align:right">Matured</th>
+              <th style="text-align:right">Interest</th>
+              <th>Reminder</th>
+            </tr></thead>
+            <tbody>${fdTableRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    repairMojibakeInNode(document.getElementById('main'));
+    return;
+  }
+
+  const fdLegacySectionFinal = `
+    <div class="summary-card" style="margin:24px 0 18px">
+      <div class="summary-top">
+        <div>
+          <div class="summary-label">FIXED DEPOSITS</div>
+          <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+          <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+          <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+            <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+            <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="font-size:16px;font-weight:700;color:var(--t1)">Fixed Deposits</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+          <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+          <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fl" style="min-width:220px">Person
+          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:94px">Action</th>
+          <th style="width:102px">Status</th>
+          <th>Person</th>
+          <th>Bank</th>
+          <th>FD No.</th>
+          <th style="text-align:right">Rate</th>
+          <th>Deposit</th>
+          <th>Maturity</th>
+          <th style="text-align:right">Deposited</th>
+          <th style="text-align:right">Matured</th>
+          <th style="text-align:right">Interest</th>
+          <th>Reminder</th>
+        </tr></thead>
+        <tbody>${fdTableRows}</tbody>
+      </table>
+    </div>`;
+  const fdTile = `
+    <div class="bank-card" style="cursor:pointer" onclick="toggleBankFixedDepositsPanel(true)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <div class="bank-card-name">Fixed Deposits</div>
+          <div class="bank-card-type">${fdTotals.count} FDs</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <span style="padding:6px 10px;border-radius:999px;background:#eef9f1;color:#1f7a45;border:1px solid #c7e8d2;font-size:12px;font-weight:700">${fdTotals.ongoing} ongoing</span>
+          <span style="padding:6px 10px;border-radius:999px;background:#fff1f1;color:#c72626;border:1px solid #f0b8b8;font-size:12px;font-weight:700">${fdTotals.expired} expired</span>
+        </div>
+      </div>
+      <div class="bank-card-balance" style="margin-top:20px">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+      <div class="bank-card-spendable">Deposited: ${fmtCur(fdTotals.amount_deposited || 0)}</div>
+      <div class="bank-card-minbal">Interest: ${fmtCur(fdTotals.interest_amount || 0)}</div>
+      <div class="bank-card-actions" onclick="stopEvent(event)">
+        <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(true)">Open FDs</button>
+        <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+      </div>
+    </div>`;
+  const fdSection = `<div class="bank-grid" style="margin-top:18px">${fdTile}</div>`;
+
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div class="summary-card" style="margin-bottom:20px">
@@ -16573,6 +17579,7 @@ function renderBankAccounts() {
         <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
       </div>
       <div class="bank-grid">${grid}</div>
+      ${fdSection}
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
 }
@@ -19160,12 +20167,16 @@ async function renderTrackerGrid() {
 }
 
 async function loadTracker() {
-  const [data, bucketData] = await Promise.all([
+  const [data, bucketData, fixedDepositData] = await Promise.all([
     api('/api/trackers'),
     api('/api/expense-buckets'),
+    api('/api/fixed-deposits'),
   ]);
   _trackers = data?.trackers || [];
   _expenseBuckets = bucketData?.buckets || [];
+  _fixedDeposits = fixedDepositData?.fixed_deposits || [];
+  _fixedDepositPeople = fixedDepositData?.people || [];
+  _fixedDepositTotals = fixedDepositData?.totals || { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
   if (_trackerViewMode === 'bucket' && _selectedExpenseBucketId && _expenseBuckets.find((bucket) => String(bucket.id) === String(_selectedExpenseBucketId))) {
     await renderExpenseBucketDetail();
   } else if (_selectedTrackerId && _trackers.find((t) => String(t.id) === String(_selectedTrackerId))) {

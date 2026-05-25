@@ -4807,6 +4807,63 @@ function parseExpenseBucketImportWorkbook(buffer, options = {}) {
   return { rows, skipped, sheet_names: targetSheets };
 }
 
+function parseFixedDepositImportWorkbook(buffer, options = {}) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const requestedSheet = String(options?.sheet_name || '').trim();
+  const targetSheets = requestedSheet && workbook.Sheets[requestedSheet]
+    ? [requestedSheet]
+    : workbook.SheetNames;
+  const personName = String(options?.person_name || '').trim();
+  if (!personName) {
+    const error = new Error('Person name is required for FD import');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const rows = [];
+  let skipped = 0;
+  for (const sheetName of targetSheets) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    for (const row of matrix) {
+      if (!Array.isArray(row) || !row.length) continue;
+      const bankName = String(row[0] || '').trim();
+      const fdNumber = String(row[1] || '').trim();
+      const interestRate = parseExpenseBucketImportAmount(row[2]);
+      const tenureMonths = Number.parseInt(String(row[3] || '').trim(), 10) || null;
+      const depositDate = parseExcelDate(row[4]);
+      const maturityDate = parseExcelDate(row[5]);
+      const amountDeposited = parseExpenseBucketImportAmount(row[6]);
+      const maturityAmount = parseExpenseBucketImportAmount(row[7]);
+      const interestAmount = parseExpenseBucketImportAmount(row[8]);
+
+      const looksLikeData = bankName || fdNumber || depositDate || maturityDate || amountDeposited || maturityAmount || interestAmount;
+      if (!looksLikeData) continue;
+      if (!bankName || !fdNumber || !depositDate || !maturityDate || !(amountDeposited > 0)) {
+        skipped += 1;
+        continue;
+      }
+      rows.push({
+        person_name: personName,
+        bank_name: bankName,
+        fd_number: fdNumber,
+        interest_rate: interestRate,
+        tenure_months: tenureMonths,
+        deposit_date: depositDate,
+        maturity_date: maturityDate,
+        amount_deposited: amountDeposited,
+        maturity_amount: maturityAmount,
+        interest_amount: interestAmount,
+        source_sheet: sheetName,
+      });
+    }
+  }
+
+  rows.sort((a, b) => String(a.maturity_date || '').localeCompare(String(b.maturity_date || '')) || String(a.deposit_date || '').localeCompare(String(b.deposit_date || '')));
+  return { rows, skipped, sheet_names: targetSheets };
+}
+
 function parseImportDate(str) {
   if (!str) return null;
   // DD-MM-YYYY or DD/MM/YYYY
@@ -9657,6 +9714,93 @@ router.post('/expense-buckets/:id/import-excel', upload.single('file'), async (r
         reminder_frequency: 'once',
         reminder_silent: 0,
       }));
+      imported += 1;
+    }
+    res.json({ success: true, imported, skipped: parsed.skipped });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.get('/fixed-deposits', async (req, res) => {
+  try {
+    const fixedDeposits = await Promise.resolve(getOpsDb().getFixedDeposits(req.session.userId, {
+      person_name: req.query?.person_name || '',
+      status: req.query?.status || '',
+    }));
+    const people = [...new Set(fixedDeposits.map((item) => String(item.person_name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const totals = fixedDeposits.reduce((acc, item) => {
+      const status = String(item.status || '').toLowerCase();
+      acc.amount_deposited += Number(item.amount_deposited || 0);
+      acc.maturity_amount += Number(item.maturity_amount || 0);
+      acc.interest_amount += Number(item.interest_amount || 0);
+      acc.count += 1;
+      if (status === 'expired') acc.expired += 1;
+      else acc.ongoing += 1;
+      return acc;
+    }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+    res.json({ fixed_deposits: fixedDeposits, people, totals });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/fixed-deposits', async (req, res) => {
+  try {
+    const id = await Promise.resolve(getOpsDb().addFixedDeposit(req.session.userId, req.body || {}));
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/fixed-deposits/:id', async (req, res) => {
+  try {
+    await Promise.resolve(getOpsDb().updateFixedDeposit(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/fixed-deposits/:id', async (req, res) => {
+  try {
+    await Promise.resolve(getOpsDb().deleteFixedDeposit(req.session.userId, req.params.id));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/fixed-deposits/import-excel/preview', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = parseFixedDepositImportWorkbook(req.file.buffer, {
+      sheet_name: req.body?.sheet_name || '',
+      person_name: req.body?.person_name || '',
+    });
+    res.json({
+      success: true,
+      count: parsed.rows.length,
+      skipped: parsed.skipped,
+      sheet_names: parsed.sheet_names,
+      preview: parsed.rows.slice(0, 50),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/fixed-deposits/import-excel', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const parsed = parseFixedDepositImportWorkbook(req.file.buffer, {
+      sheet_name: req.body?.sheet_name || '',
+      person_name: req.body?.person_name || '',
+    });
+    let imported = 0;
+    for (const row of parsed.rows) {
+      await Promise.resolve(getOpsDb().addFixedDeposit(req.session.userId, row));
       imported += 1;
     }
     res.json({ success: true, imported, skipped: parsed.skipped });

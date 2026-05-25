@@ -1144,6 +1144,55 @@ async function downloadTrackersOverviewPdf(year, month) {
   _P.save(doc, `Trackers_Overview_${label}`);
 }
 
+async function downloadFixedDepositsPdf() {
+  const deposits = typeof fixedDepositFilteredRows === 'function' ? fixedDepositFilteredRows() : [];
+  const personLabel = (typeof _fixedDepositPersonFilter !== 'undefined' && _fixedDepositPersonFilter && _fixedDepositPersonFilter !== 'all')
+    ? _fixedDepositPersonFilter
+    : 'All People';
+  const statusLabel = (typeof _fixedDepositStatusFilter !== 'undefined' && _fixedDepositStatusFilter && _fixedDepositStatusFilter !== 'all')
+    ? _fixedDepositStatusFilter
+    : 'All Statuses';
+  const totals = deposits.reduce((acc, item) => {
+    acc.deposit += Number(item.amount_deposited || 0);
+    acc.maturity += Number(item.maturity_amount || 0);
+    acc.interest += Number(item.interest_amount || 0);
+    return acc;
+  }, { deposit: 0, maturity: 0, interest: 0 });
+
+  const doc = _P.init(true);
+  let y = _P.header(doc, 'Fixed Deposits', `${personLabel} · ${statusLabel}`);
+  y = _P.cards(doc, y, [
+    { label: 'FD Count', value: deposits.length, color: '' },
+    { label: 'Deposited', value: _P.cur(totals.deposit), color: '' },
+    { label: 'Matured', value: _P.cur(totals.maturity), color: 'green' },
+    { label: 'Interest', value: _P.cur(totals.interest), color: '' },
+  ]);
+  _P.table(doc, y,
+    [['Person', 'Bank', 'FD No.', 'Rate', 'Deposit', 'Maturity', 'Deposited', 'Matured', 'Interest', 'Status']],
+    deposits.map((item) => [
+      item.person_name || '-',
+      item.bank_name || '-',
+      item.fd_number || '-',
+      `${Number(item.interest_rate || 0).toFixed(2)}%`,
+      item.deposit_date || '-',
+      item.maturity_date || '-',
+      _P.cur(item.amount_deposited || 0),
+      _P.cur(item.maturity_amount || 0),
+      _P.cur(item.interest_amount || 0),
+      String(item.status || 'ongoing').toUpperCase(),
+    ]),
+    {
+      3: { halign: 'right' },
+      6: { halign: 'right' },
+      7: { halign: 'right' },
+      8: { halign: 'right' },
+      9: { halign: 'center' },
+    },
+    true
+  );
+  _P.save(doc, `Fixed_Deposits_${personLabel}_${statusLabel}`);
+}
+
 // —— Habit Tracker — Monthly Overview ————————————————————————————————
 async function downloadHabitTrackersOverviewPdf(year, month) {
   const label = `${_P.MONTHS[month - 1]} ${year}`;
