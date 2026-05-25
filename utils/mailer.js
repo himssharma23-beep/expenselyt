@@ -621,6 +621,51 @@ async function sendLiveSplitMonthlySummaryEmail({ to, name, month, oweToMe = 0, 
   });
 }
 
+async function sendFixedDepositReminderEmail({
+  to,
+  name,
+  personName,
+  bankName,
+  fdNumber,
+  maturityDate,
+  amountDeposited = 0,
+  maturityAmount = 0,
+  interestAmount = 0,
+  daysUntilMaturity = 0,
+  currencyCode = 'INR',
+  localeCode = 'en-IN',
+}) {
+  const titleText = daysUntilMaturity > 1
+    ? `matures in ${daysUntilMaturity} days`
+    : daysUntilMaturity === 1
+      ? 'matures tomorrow'
+      : 'matures today';
+  return sendMail({
+    to,
+    subject: `${bankName || 'FD'} maturity reminder`,
+    html: renderEmailLayout({
+      preheader: `Your fixed deposit ${fdNumber || ''} ${titleText}.`,
+      eyebrow: 'Fixed Deposit',
+      title: 'Fixed deposit maturity reminder',
+      intro: `Hi ${name || 'there'}, this fixed deposit for ${personName || 'you'} ${titleText}.`,
+      bodyHtml: `
+        ${renderSummaryTable([
+          { label: 'Person', value: escapeHtml(personName || '-') },
+          { label: 'Bank', value: escapeHtml(bankName || '-') },
+          { label: 'FD Number', value: escapeHtml(fdNumber || '-') },
+          { label: 'Maturity Date', value: escapeHtml(maturityDate || '-') },
+          { label: 'Amount Deposited', value: escapeHtml(formatCurrency(amountDeposited, currencyCode, localeCode)) },
+          { label: 'Maturity Amount', value: escapeHtml(formatCurrency(maturityAmount, currencyCode, localeCode)) },
+          { label: 'Interest', value: escapeHtml(formatCurrency(interestAmount, currencyCode, localeCode)) },
+        ])}
+      `,
+      actionLabel: 'Open Tracker Workspace',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Fixed Deposit Tracking', 'Maturity Alerts', 'Amount Summary'],
+    }),
+  });
+}
+
 module.exports = {
   ADMIN_EMAIL,
   isEmailEnabled,
@@ -638,6 +683,7 @@ module.exports = {
   sendTrackerMonthSummaryEmail,
   sendRecurringAppliedEmail,
   sendTrackerExpenseAppliedEmail,
+  sendFixedDepositReminderEmail,
   sendLiveSplitInviteEmail,
   sendLiveSplitTripCreatedEmail,
   sendLiveSplitMonthlySummaryEmail,

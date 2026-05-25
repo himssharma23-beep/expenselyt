@@ -205,7 +205,59 @@ async function notifyMonthlyLiveSplitSummary(user, month) {
   return { skipped: false };
 }
 
+async function notifyLiveSplitInviteReceived(inviterUserId, targetUserId, inviteId, options = {}) {
+  const inviter = await pgAuth.findUserById(inviterUserId);
+  const target = await pgAuth.findUserById(targetUserId);
+  if (!inviter || !target) return { notified: false };
+  const inviterName = String(inviter.display_name || inviter.username || 'A friend').trim();
+  const resent = !!options.resent;
+  const title = resent ? 'Live Split invite sent again' : 'New Live Split friend request';
+  const body = resent
+    ? `${inviterName} sent the Live Split request again.`
+    : `${inviterName} wants to add you in Live Split.`;
+  const created = await createAndSendUserNotification(target, {
+    type: 'live_split_invite_received',
+    dedupe_key: `${Number(inviteId || 0)}:${Date.now()}:${resent ? 'resent' : 'new'}`,
+    title,
+    body,
+    target_screen: 'LiveSplit',
+    target_params: {},
+    data: {
+      invite_id: Number(inviteId || 0) || null,
+      inviter_user_id: Number(inviterUserId || 0) || null,
+      resent,
+    },
+  });
+  return { notified: !!created };
+}
+
+async function notifyLiveSplitInviteResponded(inviterUserId, responderUserId, inviteId, decision = 'accepted') {
+  const inviter = await pgAuth.findUserById(inviterUserId);
+  const responder = await pgAuth.findUserById(responderUserId);
+  if (!inviter || !responder) return { notified: false };
+  const responderName = String(responder.display_name || responder.username || 'Your friend').trim();
+  const accepted = String(decision || '').trim().toLowerCase() === 'accepted';
+  const created = await createAndSendUserNotification(inviter, {
+    type: 'live_split_invite_responded',
+    dedupe_key: `${Number(inviteId || 0)}:${accepted ? 'accepted' : 'rejected'}`,
+    title: accepted ? 'Live Split request accepted' : 'Live Split request declined',
+    body: accepted
+      ? `${responderName} accepted your Live Split request.`
+      : `${responderName} declined your Live Split request.`,
+    target_screen: 'LiveSplit',
+    target_params: {},
+    data: {
+      invite_id: Number(inviteId || 0) || null,
+      responder_user_id: Number(responderUserId || 0) || null,
+      decision: accepted ? 'accepted' : 'rejected',
+    },
+  });
+  return { notified: !!created };
+}
+
 module.exports = {
+  notifyLiveSplitInviteReceived,
+  notifyLiveSplitInviteResponded,
   notifyLiveSplitTripCreated,
   notifyLiveSplitSessionShared,
   notifyMonthlyLiveSplitSummary,

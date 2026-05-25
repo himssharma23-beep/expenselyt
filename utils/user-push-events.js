@@ -5,6 +5,7 @@ const pgBilling = require('../db/postgres-billing');
 const { query } = require('../db/postgres');
 const { sendExpoPushNotifications } = require('./push-notifications');
 const { notifyMonthlyLiveSplitSummary } = require('./live-split-notifications');
+const { isEmailEnabled, sendFixedDepositReminderEmail } = require('./mailer');
 
 function num(value) {
   return Number(value || 0);
@@ -331,6 +332,75 @@ async function notifyRecurringPaymentRemindersForUser(user, today) {
   }
 }
 
+async function notifyFixedDepositRemindersForUser(user, today) {
+  const todayKey = localDate(today);
+  const deposits = await pgOps.getFixedDeposits(user.id);
+  for (const fd of deposits || []) {
+    if (!fd?.is_active) continue;
+    if (!fd?.notify_enabled && !fd?.email_enabled) continue;
+    const maturityDate = dateOnly(fd.maturity_date);
+    if (!maturityDate) continue;
+    const startDate = addDays(maturityDate, -Math.max(0, Number(fd.reminder_days_before || 0)));
+    const diffFromStart = daysBetween(todayKey, localDate(startDate));
+    const daysUntilMaturity = daysBetween(localDate(maturityDate), todayKey);
+    if (diffFromStart < 0 || daysUntilMaturity < 0) continue;
+
+    const frequency = String(fd.reminder_frequency || 'once').toLowerCase();
+    let shouldNotify = false;
+    let cadenceKey = todayKey;
+    if (frequency === 'daily') {
+      shouldNotify = true;
+    } else if (frequency === 'weekly') {
+      shouldNotify = diffFromStart % 7 === 0;
+      cadenceKey = `${localDate(startDate)}:${Math.floor(diffFromStart / 7)}`;
+    } else {
+      shouldNotify = diffFromStart === 0;
+      cadenceKey = localDate(startDate);
+    }
+    if (!shouldNotify) continue;
+
+    const timingText = daysUntilMaturity > 1
+      ? `matures in ${daysUntilMaturity} days`
+      : daysUntilMaturity === 1
+        ? 'matures tomorrow'
+        : 'matures today';
+    const dedupeKey = `${fd.id}:${cadenceKey}`;
+
+    if (fd.notify_enabled) {
+      await createAndSendUserNotification(user, {
+        type: 'fixed_deposit_reminder',
+        dedupe_key: dedupeKey,
+        title: `${fd.bank_name} FD reminder`,
+        body: `${fd.person_name}'s FD ${fd.fd_number} ${timingText} on ${fd.maturity_date}. Maturity amount ${formatCurrency(fd.maturity_amount || 0, user.currency_code, user.locale_code)}.`,
+        target_screen: 'Tracker',
+        data: { fixed_deposit_id: Number(fd.id), maturity_date: fd.maturity_date },
+        silent: !!fd.reminder_silent,
+      });
+    }
+
+    if (fd.email_enabled && user?.email && isEmailEnabled()) {
+      const emailLogKey = `fd-reminder:${dedupeKey}`;
+      const alreadySent = await pgAuth.hasEmailNotificationBeenSent(user.id, emailLogKey, todayKey);
+      if (alreadySent) continue;
+      await sendFixedDepositReminderEmail({
+        to: user.email,
+        name: user.display_name,
+        personName: fd.person_name,
+        bankName: fd.bank_name,
+        fdNumber: fd.fd_number,
+        maturityDate: fd.maturity_date,
+        amountDeposited: fd.amount_deposited,
+        maturityAmount: fd.maturity_amount,
+        interestAmount: fd.interest_amount,
+        daysUntilMaturity,
+        currencyCode: user.currency_code,
+        localeCode: user.locale_code,
+      }).catch(() => {});
+      await pgAuth.markEmailNotificationSent(user.id, emailLogKey, todayKey, { fixed_deposit_id: fd.id, maturity_date: fd.maturity_date });
+    }
+  }
+}
+
 async function notifyCreditCardCycleEventsForUser(user, today, reminderDate) {
   const todayKey = localDate(today);
   const reminderKey = localDate(reminderDate);
@@ -414,6 +484,7 @@ async function runPushNotificationCycle() {
       }
       await notifyUpcomingEmiRemindersForUser(user, dueReminderDate);
       await notifyRecurringPaymentRemindersForUser(user, now);
+      await notifyFixedDepositRemindersForUser(user, now);
       await notifyCreditCardCycleEventsForUser(user, now, dueReminderDate);
     } catch (err) {
       console.error(`[push] notification cycle failed for user ${user.id}:`, err?.message || err);
