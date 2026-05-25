@@ -1323,7 +1323,7 @@ async function applyExpenseBucketTemplates(userId, bucketId = null) {
                reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent,
                source_template_id, created_by, updated_by
              )
-             VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             SELECT $1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2
              WHERE NOT EXISTS (
                SELECT 1
                FROM expense_bucket_entry_skips s
@@ -1357,7 +1357,7 @@ async function applyExpenseBucketTemplates(userId, bucketId = null) {
                reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent,
                source_template_id, created_by, updated_by
              )
-             VALUES ($1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2)
+             SELECT $1, $2, $3, $4, $5, $6, FALSE, TRUE, FALSE, 'none', NULL, FALSE, 0, 'once', FALSE, $7, $2, $2
              WHERE NOT EXISTS (
                SELECT 1
                FROM expense_bucket_entry_skips s
