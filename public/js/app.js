@@ -7204,8 +7204,10 @@ function tripStartsInLabel(startDate) {
   const current = new Date(`${today}T00:00:00`);
   if (Number.isNaN(start.getTime()) || Number.isNaN(current.getTime())) return '';
   const diff = Math.round((start.getTime() - current.getTime()) / 86400000);
-  if (diff <= 0) return '';
-  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+  if (diff < 0) return '';
+  const inclusiveDays = diff + 1;
+  if (inclusiveDays <= 0) return '';
+  return inclusiveDays === 1 ? 'Starts in 1 day' : `Starts in ${inclusiveDays} days`;
 }
 
 function canEditTripExpensesByStatus(status) {
