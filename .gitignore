@@ -4,3 +4,8 @@ node_modules
 videos/
 tools/ffmpeg/
 data/video-subtitles-cache/
+data/video-alt-stream-cache/
+data/video-audio-cache/
+data/video-hls-cache/
+data/video-mobile-cache/
+data/alt-audio-test*.m4a
