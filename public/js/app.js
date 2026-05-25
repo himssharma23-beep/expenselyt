@@ -16140,7 +16140,7 @@ function renderTrackerToolbar(extraActions = '') {
 async function renderExpenseBucketGrid() {
   const totalAmount = _expenseBuckets.reduce((sum, bucket) => sum + Number(bucket.total_amount || 0), 0);
   const cards = _expenseBuckets.length ? _expenseBuckets.map((bucket) => {
-    const dateLabel =             `${bucket.start_date ? escHtml(bucket.start_date) : 'No start date'}${bucket.end_date ? ` ? ${escHtml(bucket.end_date)}` : ''}`;
+    const dateLabel = `${bucket.start_date ? escHtml(bucket.start_date) : 'No start date'}${bucket.end_date ? ` - ${escHtml(bucket.end_date)}` : ''}`;
     return `
     <div class="cc-tile tracker-tile" data-bucket-id="${bucket.id}" onclick="openExpenseBucketDetail(${bucket.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openExpenseBucketDetail(${bucket.id}); }">
       <div class="cc-tile-header">
@@ -16151,7 +16151,7 @@ async function renderExpenseBucketGrid() {
         <div style="font-size:11px;color:rgba(255,255,255,0.75)">${bucket.is_tax_saver ? 'Tax Saver' : (bucket.is_active ? 'Active' : 'Inactive')}</div>
       </div>
       <div class="cc-tile-amount">${fmtCur(bucket.total_amount || 0)}</div>
-      <div class="cc-tile-label">${Number(bucket.expense_count || 0)} entries ? ${Number(bucket.template_count || 0)} templates</div>
+      <div class="cc-tile-label">${Number(bucket.expense_count || 0)} entries - ${Number(bucket.template_count || 0)} templates</div>
       <div style="font-size:11px;color:rgba(255,255,255,0.82);margin-top:10px">Open this bucket to add entries, recurring templates, and reminders.</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:8px" onclick="stopEvent(event)">
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -16170,6 +16170,24 @@ async function renderExpenseBucketGrid() {
         <div style="font-weight:600;margin-bottom:6px;color:var(--t1)">No expense buckets yet</div>
         <div style="font-size:13px">Create one tile per SIP, insurance, class fees, or focused expense stream, then add manual or auto-generated rows underneath it.</div>
       </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      ${renderTrackerToolbar(`<button class="btn btn-p btn-sm" onclick="showExpenseBucketModal()">+ Add Expense Bucket</button>`)}
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">EXPENSE BUCKETS</div>
+            <div class="summary-amount">${fmtCur(totalAmount)}</div>
+            <div class="summary-words">${_expenseBuckets.length} buckets · recurring and manual expense rows</div>
+          </div>
+          <div class="count-box"><div class="num">${_expenseBuckets.filter((bucket) => bucket.is_tax_saver).length}</div><div class="lbl">tax saver</div></div>
+        </div>
+      </div>
+      <div class="cc-card-grid">${cards}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+  return;
 
   const fdRows = fixedDepositFilteredRows();
   const fdTotals = fdRows.reduce((acc, item) => {
@@ -20364,6 +20382,8 @@ async function renderTrackerGrid() {
 }
 
 async function loadTracker() {
+  _showBankFixedDepositsPanel = false;
+  _selectedBankFixedDepositId = null;
   const [data, bucketData, fixedDepositData] = await Promise.all([
     api('/api/trackers'),
     api('/api/expense-buckets'),
