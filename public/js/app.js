@@ -13491,6 +13491,200 @@ function renderBankAccounts() {
     </div>`;
 }
 
+function renderBankAccountsPageView() {
+  const accounts = _bankAccounts;
+  const totalBal = accounts.reduce((s, a) => s + a.balance, 0);
+  const totalMin = accounts.reduce((s, a) => s + a.min_balance, 0);
+  const spendable = totalBal - totalMin;
+
+  const statBar = `
+    <div class="bank-summary-bar">
+      <div class="bank-stat"><div class="lbl">Total Balance</div><div class="val">${fmtCur(totalBal)}</div></div>
+      <div class="bank-stat"><div class="lbl">Locked (Min Balance)</div><div class="val red">${fmtCur(totalMin)}</div></div>
+      <div class="bank-stat"><div class="lbl">Spendable</div><div class="val green">${fmtCur(spendable)}</div></div>
+      <div class="bank-stat"><div class="lbl">Accounts</div><div class="val">${accounts.length}</div></div>
+    </div>`;
+
+  const grid = accounts.length
+    ? accounts.map((a) => {
+        const spnd = a.balance - a.min_balance;
+        const typeLabel = { savings: 'Savings', current: 'Current', salary: 'Salary' }[a.account_type] || a.account_type;
+        return `<div class="bank-card${a.is_default ? ' bank-card-default' : ''}" id="bankCard_${a.id}" onclick="showBankModal(${a.id})" style="cursor:pointer">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <div class="bank-card-name">${escHtml(a.bank_name)}${a.account_name ? ' - ' + escHtml(a.account_name) : ''}
+                ${a.is_default ? '<span class="bank-default-badge">Default</span>' : ''}
+              </div>
+              <div class="bank-card-type">${typeLabel}</div>
+            </div>
+          </div>
+          <div class="bank-card-balance-wrap" id="bankBalWrap_${a.id}" onclick="stopEvent(event);startBalanceEdit(${a.id}, ${a.balance})" title="Click to edit balance">
+            <div class="bank-card-balance bank-bal-display" id="bankBalDisplay_${a.id}">${fmtCur(a.balance)}</div>
+            <span class="bank-bal-edit-hint">Edit</span>
+          </div>
+          <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
+          <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
+          <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
+            <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div style="color:var(--t3);text-align:center;padding:40px;background:var(--white);border-radius:16px;border:2px dashed var(--border);grid-column:1/-1">
+        <div style="font-size:32px;margin-bottom:12px">Bank</div>
+        <div style="font-weight:600;margin-bottom:6px">No bank accounts added yet</div>
+        <div style="font-size:13px">Click "Add Account" to track your balances</div>
+      </div>`;
+
+  const fdRows = fixedDepositFilteredRows();
+  const fdTotals = fdRows.reduce((acc, item) => {
+    acc.amount_deposited += Number(item.amount_deposited || 0);
+    acc.maturity_amount += Number(item.maturity_amount || 0);
+    acc.interest_amount += Number(item.interest_amount || 0);
+    acc.count += 1;
+    if (String(item.status || '').toLowerCase() === 'expired') acc.expired += 1;
+    else acc.ongoing += 1;
+    return acc;
+  }, { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 });
+  const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
+    .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
+    .join('');
+  const fdTableRows = fdRows.length ? fdRows.map((item) => `
+    <tr>
+      <td style="padding:6px 8px;width:94px">
+        <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
+          <button class="btn-d" style="color:var(--green);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="renewFixedDeposit(${item.id})" title="Renew FD" aria-label="Renew FD">${fixedDepositActionIcon('renew')}</button>
+          <button class="btn-d" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="showFixedDepositModal(${item.id})" title="Edit FD" aria-label="Edit FD">${fixedDepositActionIcon('edit')}</button>
+          <button class="btn-d" style="color:var(--em);display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0" onclick="deleteFixedDeposit(${item.id})" title="Delete FD" aria-label="Delete FD">${fixedDepositActionIcon('delete')}</button>
+        </div>
+      </td>
+      <td style="padding:6px 8px;width:102px">${fixedDepositStatusChip(item.status)}</td>
+      <td style="padding:8px 10px">${escHtml(item.person_name || '-')}</td>
+      <td style="padding:8px 10px">${escHtml(item.bank_name || '-')}</td>
+      <td style="padding:8px 10px;font-family:var(--mono)">${escHtml(item.fd_number || '-')}</td>
+      <td style="padding:8px 10px;text-align:right">${Number(item.interest_rate || 0).toFixed(2)}%</td>
+      <td style="padding:8px 10px">${escHtml(item.deposit_date || '-')}</td>
+      <td style="padding:8px 10px">${escHtml(item.maturity_date || '-')}</td>
+      <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.amount_deposited || 0)}</td>
+      <td style="padding:8px 10px;text-align:right;font-weight:600">${fmtCur(item.maturity_amount || 0)}</td>
+      <td style="padding:8px 10px;text-align:right">${fmtCur(item.interest_amount || 0)}</td>
+      <td style="padding:8px 10px;font-size:12px">${item.notify_enabled || item.email_enabled ? `${Number(item.reminder_days_before || 0)}d before · ${escHtml(String(item.reminder_frequency || 'once'))}` : 'Off'}</td>
+    </tr>`).join('') : '<tr><td colspan="12" style="text-align:center;color:var(--t3);padding:18px">No fixed deposits match these filters yet.</td></tr>';
+
+  if (_showBankFixedDepositsPanel) {
+    document.getElementById('main').innerHTML = `
+      <div class="tab-content">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(false)">← Back</button>
+            <div>
+              <div style="font-size:20px;font-weight:800;color:var(--t1)">Fixed Deposits</div>
+              <div style="font-size:13px;color:var(--t3)">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-s btn-sm" onclick="downloadFixedDepositsPdf()">PDF</button>
+            <button class="btn btn-s btn-sm" onclick="showFixedDepositImportModal()">Import Excel</button>
+            <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+          </div>
+        </div>
+        <div class="summary-card" style="margin-bottom:18px">
+          <div class="summary-top">
+            <div>
+              <div class="summary-label">FIXED DEPOSITS</div>
+              <div class="summary-amount">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+              <div class="summary-words">${fdTotals.count} FDs · Deposited ${fmtCur(fdTotals.amount_deposited || 0)} · Interest ${fmtCur(fdTotals.interest_amount || 0)}</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <div class="count-box"><div class="num">${fdTotals.ongoing}</div><div class="lbl">ongoing</div></div>
+              <div class="count-box" style="background:#fff1f1;border:1px solid #f0b8b8;box-shadow:none">
+                <div class="num" style="color:#c72626">${fdTotals.expired}</div>
+                <div class="lbl" style="color:#a61b1b;opacity:1">expired</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;margin-bottom:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+            <label class="fl" style="min-width:220px">Person
+              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
+            </label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:94px">Action</th>
+              <th style="width:102px">Status</th>
+              <th>Person</th>
+              <th>Bank</th>
+              <th>FD No.</th>
+              <th style="text-align:right">Rate</th>
+              <th>Deposit</th>
+              <th>Maturity</th>
+              <th style="text-align:right">Deposited</th>
+              <th style="text-align:right">Matured</th>
+              <th style="text-align:right">Interest</th>
+              <th>Reminder</th>
+            </tr></thead>
+            <tbody>${fdTableRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    repairMojibakeInNode(document.getElementById('main'));
+    return;
+  }
+
+  const fdTile = `
+    <div class="bank-card" style="cursor:pointer" onclick="toggleBankFixedDepositsPanel(true)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <div class="bank-card-name">Fixed Deposits</div>
+          <div class="bank-card-type">${fdTotals.count} FDs</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <span style="padding:6px 10px;border-radius:999px;background:#eef9f1;color:#1f7a45;border:1px solid #c7e8d2;font-size:12px;font-weight:700">${fdTotals.ongoing} ongoing</span>
+          <span style="padding:6px 10px;border-radius:999px;background:#fff1f1;color:#c72626;border:1px solid #f0b8b8;font-size:12px;font-weight:700">${fdTotals.expired} expired</span>
+        </div>
+      </div>
+      <div class="bank-card-balance" style="margin-top:20px">${fmtCur(fdTotals.maturity_amount || 0)}</div>
+      <div class="bank-card-spendable">Deposited: ${fmtCur(fdTotals.amount_deposited || 0)}</div>
+      <div class="bank-card-minbal">Interest: ${fmtCur(fdTotals.interest_amount || 0)}</div>
+      <div class="bank-card-actions" onclick="stopEvent(event)">
+        <button class="btn btn-s btn-sm" onclick="toggleBankFixedDepositsPanel(true)">Open FDs</button>
+        <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
+      </div>
+    </div>`;
+
+  document.getElementById('main').innerHTML = `
+    <div class="tab-content">
+      <div class="summary-card" style="margin-bottom:20px">
+        <div class="summary-top">
+          <div>
+            <div class="summary-label">TOTAL SPENDABLE BALANCE</div>
+            <div class="summary-amount">${fmtCur(spendable)}</div>
+            <div class="summary-words">${amountWords(spendable)}</div>
+          </div>
+          <div class="count-box"><div class="num">${accounts.length}</div><div class="lbl">accounts</div></div>
+        </div>
+      </div>
+      ${statBar}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
+        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+      </div>
+      <div class="bank-grid">${grid}</div>
+      <div class="bank-grid" style="margin-top:18px">${fdTile}</div>
+    </div>`;
+  repairMojibakeInNode(document.getElementById('main'));
+}
+
 function showBankModal(id) {
   const a = id ? (_findBankAccountById(id) || { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' }) : { bank_name: '', account_name: '', account_type: 'savings', balance: '', min_balance: '' };
   openModal(id ? 'Edit Bank Account' : 'Add Bank Account', `
@@ -15325,6 +15519,7 @@ async function loadFriendsOld() {
 }
 
 function renderBankAccounts() {
+  return renderBankAccountsPageView();
   const accounts = _bankAccounts;
   const totalBal = accounts.reduce((s, a) => s + a.balance, 0);
   const totalMin = accounts.reduce((s, a) => s + a.min_balance, 0);
