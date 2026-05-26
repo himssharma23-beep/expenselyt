@@ -6488,7 +6488,7 @@ async function tripGenerateInvite(memberId) {
 }
 
 // Personal trips override: simple own-trip CRUD with grouped expense details.
-let tripsFilters = { status: 'all', category: 'all', transport: 'all', search: '', member: 'all' };
+let tripsFilters = { search: '', user: 'all', status: 'all', category: 'all', transport: 'all', member: 'all' };
 const TRIP_STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'upcoming', label: 'Upcoming' },
@@ -6707,6 +6707,21 @@ function tripMemberOptions(rows = []) {
   return names;
 }
 
+function tripOwnerDisplayName(trip) {
+  if (!trip) return '';
+  const explicitOwner = String(trip.owner_name || '').trim();
+  if (explicitOwner) return explicitOwner;
+  if (trip.is_owner === false || trip.isOwner === false) return '';
+  return String(_currentUser?.display_name || _currentUser?.username || 'My Trips').trim();
+}
+
+function tripOwnerOptions(rows = []) {
+  return [...new Set((rows || [])
+    .map((trip) => tripOwnerDisplayName(trip))
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function tripNonSettlementTotal(trip) {
   if (Array.isArray(trip?.expenses)) {
     return Math.round(trip.expenses
@@ -6746,6 +6761,11 @@ function tripExpenseTypeDatalist(selected = '') {
 
 function tripFilteredRows() {
   return (_trips || []).filter((trip) => {
+    if (tripsFilters.user !== 'all') {
+      const selectedOwner = String(tripsFilters.user || '').trim().toLowerCase();
+      const ownerName = tripOwnerDisplayName(trip).toLowerCase();
+      if (ownerName !== selectedOwner) return false;
+    }
     if (tripsFilters.status !== 'all' && String(trip.status || '').toLowerCase() !== tripsFilters.status) return false;
     if (tripsFilters.category !== 'all' && String(trip.category || '').toLowerCase() !== String(tripsFilters.category).toLowerCase()) return false;
     if (tripsFilters.transport !== 'all' && String(trip.transport_mode || '').toLowerCase() !== String(tripsFilters.transport).toLowerCase()) return false;
@@ -6926,6 +6946,7 @@ function renderTripList() {
       }
     : null;
   const memberOptions = tripMemberOptions(_trips || []);
+  const ownerOptions = tripOwnerOptions(_trips || []);
   const filtered = tripFilteredRows().sort((a, b) => {
     const aTime = a?.start_date ? new Date(normalizeInputDate(a.start_date)).getTime() : 0;
     const bTime = b?.start_date ? new Date(normalizeInputDate(b.start_date)).getTime() : 0;
@@ -7050,6 +7071,9 @@ function renderTripList() {
           <label class="fl" style="margin:0;font-size:12px">Search
             <input id="tripsSearchInput" class="fi trip-ledger-filter-input" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
           </label>
+          <label class="fl" style="margin:0;font-size:12px">User
+            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('user', this.value)">${tripOptionsHtml(ownerOptions, tripsFilters.user, true, 'All users')}</select>
+          </label>
           <label class="fl" style="margin:0;font-size:12px">Status
             <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
           </label>
@@ -7059,7 +7083,13 @@ function renderTripList() {
           <label class="fl" style="margin:0;font-size:12px">Transport
             <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
           </label>
-          <button class="btn btn-g trip-ledger-clear-btn" onclick="tripsFilters={search:'',status:'all',category:'all',transport:'all',member:'all'};tripsPage=1;renderTripList()">&#9711; Clear</button>
+          <button
+            class="btn btn-g trip-ledger-clear-btn trip-ledger-clear-icon-btn"
+            type="button"
+            title="Clear filters"
+            aria-label="Clear filters"
+            onclick="tripsFilters={search:'',user:'all',status:'all',category:'all',transport:'all',member:'all'};tripsPage=1;renderTripList()"
+          >&#10227;</button>
         </div>
       </div>
 

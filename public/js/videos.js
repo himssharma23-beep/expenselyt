@@ -32,6 +32,8 @@ let _videoAudioSwitchRequestId = 0;
 let _videoAudioSwitchAbortController = null;
 let _videoJsAssetsPromise = null;
 let _videoJsPlayer = null;
+let _videoPlaybackUiAnchorSeconds = 0;
+let _videoPlaybackUiAnchorStartedAtMs = 0;
 const VIDEO_AUDIO_PREFS_STORAGE_KEY = 'videoLibraryAudioTrackPrefs';
 
 function videoControlIcon(kind) {
@@ -375,17 +377,53 @@ function buildVideoAltAudioUrl(video, audioTrackId = '', startSeconds = 0) {
   return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${params.join('&')}`;
 }
 
+function setVideoPlaybackUiAnchor(seconds = 0) {
+  _videoPlaybackUiAnchorSeconds = Math.max(0, Number(seconds || 0));
+  _videoPlaybackUiAnchorStartedAtMs = _videoPlaybackUiAnchorSeconds > 0 ? Date.now() : 0;
+}
+
+function videoPlaybackUiAnchorCurrent(player = getVideoLibraryPlayer()) {
+  const base = Math.max(0, Number(_videoPlaybackUiAnchorSeconds || 0));
+  if (!(base > 0)) return 0;
+  if (_videoPlaybackUiAnchorStartedAtMs > 0 && !videoPlayerIsPaused(player)) {
+    return base + ((Date.now() - _videoPlaybackUiAnchorStartedAtMs) / 1000);
+  }
+  return base;
+}
+
+function freezeVideoPlaybackUiAnchor(player = getVideoLibraryPlayer()) {
+  _videoPlaybackUiAnchorSeconds = videoPlaybackUiAnchorCurrent(player);
+  _videoPlaybackUiAnchorStartedAtMs = 0;
+}
+
+function resumeVideoPlaybackUiAnchor(player = getVideoLibraryPlayer()) {
+  if (Number(_videoPlaybackUiAnchorSeconds || 0) > 0) {
+    _videoPlaybackUiAnchorStartedAtMs = Date.now();
+  }
+}
+
 function videoPlayerIsAltAudioActive() {
   const altAudio = getVideoLibraryAltAudioPlayer();
   return !!(altAudio && String(altAudio.getAttribute('src') || '').trim());
 }
 
-function videoPlayerCurrentSeconds(player = getVideoLibraryPlayer(), _video = videoLibrarySelectedVideo()) {
+function videoPlayerCurrentSeconds(player = getVideoLibraryPlayer(), video = videoLibrarySelectedVideo()) {
+  const nativeCurrentTime = Number(player?.currentTime || 0);
+  if (Number.isFinite(nativeCurrentTime) && nativeCurrentTime > 0) {
+    return Math.max(0, nativeCurrentTime);
+  }
   const instance = getVideoLibraryPlayerInstance();
   if (instance && typeof instance.currentTime === 'function') {
-    return Math.max(0, Number(instance.currentTime() || 0));
+    const liveCurrentTime = Number(instance.currentTime() || 0);
+    if (Number.isFinite(liveCurrentTime) && liveCurrentTime > 0) {
+      return Math.max(0, liveCurrentTime);
+    }
   }
-  return Math.max(0, Number(player?.currentTime || 0));
+  if (videoUsesHlsPlayback(video, _selectedVideoAudioTrackId)) {
+    const anchored = videoPlaybackUiAnchorCurrent(player);
+    if (anchored > 0) return anchored;
+  }
+  return Math.max(0, Number(nativeCurrentTime || 0));
 }
 
 function getVideoLibraryAltAudioPlayer() {
@@ -492,12 +530,16 @@ function setVideoPlayerCurrentTime(value) {
   const instance = getVideoLibraryPlayerInstance();
   if (instance && typeof instance.currentTime === 'function') {
     try { instance.currentTime(time); } catch (_err) {}
+    const activeVideo = videoLibrarySelectedVideo();
+    if (videoUsesHlsPlayback(activeVideo, _selectedVideoAudioTrackId)) setVideoPlaybackUiAnchor(time);
     return;
   }
   const player = getVideoLibraryPlayer();
   if (player) {
     try { player.currentTime = time; } catch (_err) {}
   }
+  const activeVideo = videoLibrarySelectedVideo();
+  if (videoUsesHlsPlayback(activeVideo, _selectedVideoAudioTrackId)) setVideoPlaybackUiAnchor(time);
 }
 
 function videoPlayerPlay() {
@@ -541,6 +583,14 @@ function setVideoLibraryPlayerSource(video, audioTrackId = '') {
     const pendingSnapshot = {
       ..._videoPendingSourceState,
     };
+    let restoreAttempts = 0;
+    let restoreTimer = null;
+    const clearRestoreTimer = () => {
+      if (restoreTimer) {
+        clearInterval(restoreTimer);
+        restoreTimer = null;
+      }
+    };
     const restorePlaybackState = () => {
       const activeVideo = videoLibrarySelectedVideo();
       const activePlayer = getVideoLibraryPlayer();
@@ -549,18 +599,43 @@ function setVideoLibraryPlayerSource(video, audioTrackId = '') {
       if (Number.isFinite(Number(pendingSnapshot.playbackRate || 0)) && Number(pendingSnapshot.playbackRate || 0) > 0) {
         setVideoPlayerPlaybackRate(Number(pendingSnapshot.playbackRate || 1));
       }
-      if (Number(pendingSnapshot.currentTime || 0) > 0) {
-        setVideoPlayerCurrentTime(Number(pendingSnapshot.currentTime || 0));
+      const resumeAt = Math.max(0, Number(pendingSnapshot.currentTime || 0));
+      const expectedDuration = Math.max(
+        Number(pendingSnapshot.expectedDuration || 0),
+        Number(videoPlayerExpectedDuration(activePlayer, activeVideo) || 0)
+      );
+      const canSeekToResumePoint = resumeAt <= 0 || expectedDuration > Math.min(resumeAt + 1, 5);
+      if (resumeAt > 0 && canSeekToResumePoint) {
+        setVideoPlayerCurrentTime(resumeAt);
+      }
+      const currentTime = videoPlayerCurrentSeconds(activePlayer, activeVideo);
+      const seekSettled = resumeAt <= 0 || Math.abs(currentTime - resumeAt) <= 2;
+      if (!seekSettled && restoreAttempts < 20) {
+        restoreAttempts += 1;
+        return;
       }
       if (pendingSnapshot.wasPlaying) {
         videoPlayerPlay().catch(() => {});
       }
+      clearRestoreTimer();
       _videoPendingSourceState = null;
       updateVideoControlsUI();
     };
+    clearRestoreTimer();
+    restoreTimer = setInterval(() => {
+      if (!_videoPendingSourceState || _videoPendingSourceState.reason !== 'audio-switch') {
+        clearRestoreTimer();
+        return;
+      }
+      restorePlaybackState();
+    }, 250);
     if (playerInstance && typeof playerInstance.one === 'function') {
+      playerInstance.one('loadedmetadata', restorePlaybackState);
+      playerInstance.one('durationchange', restorePlaybackState);
       playerInstance.one('canplay', restorePlaybackState);
     } else {
+      playerEl.addEventListener('loadedmetadata', restorePlaybackState, { once: true });
+      playerEl.addEventListener('durationchange', restorePlaybackState, { once: true });
       playerEl.addEventListener('canplay', restorePlaybackState, { once: true });
     }
   }
@@ -843,15 +918,43 @@ function queueVideoPlaybackProgressSave() {
   }, 1200);
 }
 
+function videoPlayerSeekableDuration(player = getVideoLibraryPlayer()) {
+  const instance = getVideoLibraryPlayerInstance();
+  const instanceSeekable = instance && typeof instance.seekable === 'function'
+    ? instance.seekable()
+    : null;
+  if (instanceSeekable && typeof instanceSeekable.length === 'number' && instanceSeekable.length > 0 && typeof instanceSeekable.end === 'function') {
+    try {
+      const end = Number(instanceSeekable.end(instanceSeekable.length - 1) || 0);
+      if (Number.isFinite(end) && end > 0) return end;
+    } catch (_err) {}
+  }
+  const nativeSeekable = player?.seekable;
+  if (nativeSeekable && typeof nativeSeekable.length === 'number' && nativeSeekable.length > 0 && typeof nativeSeekable.end === 'function') {
+    try {
+      const end = Number(nativeSeekable.end(nativeSeekable.length - 1) || 0);
+      if (Number.isFinite(end) && end > 0) return end;
+    } catch (_err) {}
+  }
+  return 0;
+}
+
 function videoPlayerExpectedDuration(player, video) {
   const instance = getVideoLibraryPlayerInstance();
-  const liveDuration = instance && typeof instance.duration === 'function'
+  const nativeDuration = Number(player?.duration || 0);
+  const instanceDuration = instance && typeof instance.duration === 'function'
     ? Number(instance.duration() || 0)
-    : Number(player?.duration || 0);
+    : 0;
+  const liveDuration = [nativeDuration, instanceDuration]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0) || 0;
+  const seekableDuration = videoPlayerSeekableDuration(player);
   const savedDuration = Number(video?.progress?.duration_seconds || 0);
-  const fallback = Math.max(savedDuration, 0);
+  const runtimeDuration = Math.max(0, Number(video?.runtime_minutes || 0) * 60);
+  const fallback = Math.max(savedDuration, runtimeDuration, 0);
   if (liveDuration > 0 && liveDuration + 30 >= fallback) return liveDuration;
-  return fallback > 0 ? fallback : liveDuration;
+  if (seekableDuration > 0 && seekableDuration + 30 >= fallback) return seekableDuration;
+  return fallback > 0 ? fallback : Math.max(liveDuration, seekableDuration, 0);
 }
 
 function applyPendingVideoSourceState(player, video) {
@@ -884,7 +987,21 @@ function setupVideoPlayerProgress() {
   if (_videoProgressBoundVideoId === String(video.id) && player.dataset.progressBound === '1') return;
   _videoProgressBoundVideoId = String(video.id);
   player.dataset.progressBound = '1';
+  player.dataset.resumeApplied = '0';
   clearVideoProgressTimer();
+
+  const applyStoredResumeIfReady = () => {
+    const progress = video.progress || null;
+    const resumeAt = Number(progress?.current_seconds || 0);
+    const isCompleted = !!progress?.is_completed;
+    if (player.dataset.resumeApplied === '1') return;
+    if (_videoPendingSourceState) return;
+    if (isCompleted || !(resumeAt > 0)) return;
+    const expectedDuration = Number(videoPlayerExpectedDuration(player, video) || 0);
+    if (!(expectedDuration > Math.min(resumeAt + 1, 5))) return;
+    setVideoPlayerCurrentTime(resumeAt);
+    player.dataset.resumeApplied = '1';
+  };
 
   player.onloadedmetadata = () => {
     const progress = video.progress || null;
@@ -899,6 +1016,7 @@ function setupVideoPlayerProgress() {
     const expectedDuration = Number(videoPlayerExpectedDuration(player, video) || 0);
     if (!_videoPendingSourceState && !shouldDeferHlsResume && !isCompleted && resumeAt > 0 && expectedDuration > Math.min(resumeAt + 1, 5)) {
       setVideoPlayerCurrentTime(resumeAt);
+      player.dataset.resumeApplied = '1';
     }
     if (!_videoPendingSourceState && !shouldDeferHlsResume) setVideoSubtitle(_selectedVideoSubtitleId);
     if (_videoPendingSourceState) applyPendingVideoSourceState(player, video);
@@ -906,17 +1024,26 @@ function setupVideoPlayerProgress() {
   };
   player.ondurationchange = () => {
     if (_videoPendingSourceState) applyPendingVideoSourceState(player, video);
+    applyStoredResumeIfReady();
+    updateVideoControlsUI();
+  };
+  player.oncanplay = () => {
+    if (_videoPendingSourceState) applyPendingVideoSourceState(player, video);
+    applyStoredResumeIfReady();
     updateVideoControlsUI();
   };
   player.ontimeupdate = () => {
     if (player.seeking) return;
     queueVideoPlaybackProgressSave();
     if (_videoPendingSourceState) applyPendingVideoSourceState(player, video);
+    updateVideoControlsUI();
   };
   player.onplay = () => {
+    resumeVideoPlaybackUiAnchor(player);
     updateVideoControlsUI();
   };
   player.onpause = () => {
+    freezeVideoPlaybackUiAnchor(player);
     queueVideoPlaybackProgressSave();
     updateVideoControlsUI();
   };
@@ -925,6 +1052,7 @@ function setupVideoPlayerProgress() {
     updateVideoControlsUI();
   };
   player.onended = () => {
+    freezeVideoPlaybackUiAnchor(player);
     clearVideoProgressTimer();
     const duration = Number(player.duration || 0);
     if (duration > 0) {
