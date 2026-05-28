@@ -18,6 +18,7 @@
     noticeType: '',
     invoiceFilter: 'all',
     detailTab: 'overview',
+    portalSection: 'details',
   };
 
   const moneyFmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
@@ -724,6 +725,48 @@
     const balanceDue = toNumber(summary.balance_due || 0);
     const outstandingStatus = balanceDue > 0 ? 'danger' : '';
     const helpHref = managerWhatsappHref(manager);
+    const sectionTabsHtml = `
+      <div class="tenant-portal-section-tabs">
+        <button class="tenant-portal-section-tab ${state.portalSection === 'details' ? 'active' : ''}" type="button" data-portal-section="details">My Details</button>
+        <button class="tenant-portal-section-tab ${state.portalSection === 'invoices' ? 'active' : ''}" type="button" data-portal-section="invoices">My Invoices</button>
+      </div>`;
+    const detailsSectionHtml = `
+      <section>
+        <div class="tenant-portal-section-head">
+          <div>
+            <div class="tenant-portal-section-title">My Details</div>
+            <div class="tenant-portal-section-sub">Your registered information</div>
+          </div>
+        </div>
+        <div class="tenant-portal-surface">
+          <div class="tenant-portal-detail-pills">
+            <div class="tenant-portal-detail-pill green">${fmtMoney(profile.rent_amount || summary.monthly_rent)} / month</div>
+            <div class="tenant-portal-detail-pill blue">${fmtMoney(profile.electricity_unit_price || 0, true)} / unit</div>
+            <div class="tenant-portal-detail-pill amber">${fmtMoney(profile.cleaning_charge || 0)} cleaning</div>
+            <div class="tenant-portal-detail-pill">${fmtMoney(tenant.security_deposit || 0)} deposit</div>
+          </div>
+          ${renderDetailTabs(dashboard)}
+          ${renderDetailPanel(dashboard)}
+        </div>
+      </section>`;
+    const invoicesSectionHtml = `
+      <section class="tenant-portal-invoice-section">
+        <div class="tenant-portal-section-head">
+          <div>
+            <div class="tenant-portal-section-title">My Invoices</div>
+            <div class="tenant-portal-section-sub">Monthly rent snapshots</div>
+          </div>
+          <div class="tenant-portal-filter-row">
+            <button class="tenant-portal-filter-btn ${state.invoiceFilter === 'all' ? 'active' : ''}" data-filter="all">All</button>
+            <button class="tenant-portal-filter-btn ${state.invoiceFilter === 'overdue' ? 'active' : ''}" data-filter="overdue">Overdue</button>
+            <button class="tenant-portal-filter-btn ${state.invoiceFilter === 'approval_pending' ? 'active' : ''}" data-filter="approval_pending">Pending approval</button>
+            <button class="tenant-portal-filter-btn ${state.invoiceFilter === 'paid' ? 'active' : ''}" data-filter="paid">Paid</button>
+          </div>
+        </div>
+        <div class="tenant-portal-surface tenant-portal-invoices">
+          ${invoices.length ? invoices.map(invoiceCardHtml).join('') : `<div class="tenant-portal-empty-state">No invoices available for this view.</div>`}
+        </div>
+      </section>`;
     app.innerHTML = `
       <div class="tenant-portal-dashboard">
         <div class="tenant-portal-hero">
@@ -754,42 +797,8 @@
 
         <div class="tenant-portal-main">
           <div class="tenant-portal-main-inner">
-            <section>
-              <div class="tenant-portal-section-head">
-                <div>
-                  <div class="tenant-portal-section-title">My Details</div>
-                  <div class="tenant-portal-section-sub">Your registered information</div>
-                </div>
-              </div>
-              <div class="tenant-portal-surface">
-                <div class="tenant-portal-detail-pills">
-                  <div class="tenant-portal-detail-pill green">${fmtMoney(profile.rent_amount || summary.monthly_rent)} / month</div>
-                  <div class="tenant-portal-detail-pill blue">${fmtMoney(profile.electricity_unit_price || 0, true)} / unit</div>
-                  <div class="tenant-portal-detail-pill amber">${fmtMoney(profile.cleaning_charge || 0)} cleaning</div>
-                  <div class="tenant-portal-detail-pill">${fmtMoney(tenant.security_deposit || 0)} deposit</div>
-                </div>
-                ${renderDetailTabs(dashboard)}
-                ${renderDetailPanel(dashboard)}
-              </div>
-            </section>
-
-            <section style="margin-top:36px">
-              <div class="tenant-portal-section-head">
-                <div>
-                  <div class="tenant-portal-section-title">My Invoices</div>
-                  <div class="tenant-portal-section-sub">Monthly rent snapshots</div>
-                </div>
-                <div style="display:flex;gap:10px;flex-wrap:wrap">
-                  <button class="tenant-portal-filter-btn" data-filter="all">All</button>
-                  <button class="tenant-portal-filter-btn" data-filter="overdue">Overdue</button>
-                  <button class="tenant-portal-filter-btn" data-filter="approval_pending">Pending approval</button>
-                  <button class="tenant-portal-filter-btn" data-filter="paid">Paid</button>
-                </div>
-              </div>
-              <div class="tenant-portal-surface tenant-portal-invoices">
-                ${invoices.length ? invoices.map(invoiceCardHtml).join('') : `<div style="padding:38px;color:#7f8881;font-size:18px">No invoices available for this view.</div>`}
-              </div>
-            </section>
+            ${sectionTabsHtml}
+            ${state.portalSection === 'details' ? detailsSectionHtml : invoicesSectionHtml}
           </div>
         </div>
       </div>`;
@@ -805,15 +814,22 @@
       button.addEventListener('click', () => markInvoicePaid(Number(button.getAttribute('data-mark-paid'))));
     });
     [...app.querySelectorAll('[data-filter]')].forEach((button) => {
-      if (button.getAttribute('data-filter') === state.invoiceFilter) button.style.fontWeight = '800';
       button.addEventListener('click', () => {
         state.invoiceFilter = button.getAttribute('data-filter') || 'all';
+        state.portalSection = 'invoices';
         renderDashboard();
       });
     });
     [...app.querySelectorAll('[data-detail-tab]')].forEach((button) => {
       button.addEventListener('click', () => {
         state.detailTab = button.getAttribute('data-detail-tab') || 'overview';
+        state.portalSection = 'details';
+        renderDashboard();
+      });
+    });
+    [...app.querySelectorAll('[data-portal-section]')].forEach((button) => {
+      button.addEventListener('click', () => {
+        state.portalSection = button.getAttribute('data-portal-section') || 'details';
         renderDashboard();
       });
     });

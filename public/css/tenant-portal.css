@@ -143,7 +143,7 @@ body{min-height:100vh}
 .tenant-portal-alert-success{background:rgba(92,161,111,.14);color:#d8ffdf;border:1px solid rgba(185,247,199,.22)}
 
 .tenant-portal-dashboard{
-  zoom:.8;
+  zoom:1;
   min-height:100vh;background:#f3f6f4;color:var(--tp-dark)
 }
 .tenant-portal-hero{
@@ -204,6 +204,32 @@ body{min-height:100vh}
   width:var(--tp-page-width);
   margin:0 auto;
 }
+.tenant-portal-section-tabs{
+  display:flex;
+  gap:0;
+  margin-bottom:18px;
+}
+.tenant-portal-section-tab{
+  flex:1 1 0;
+  min-height:54px;
+  border:1px solid #dbe3dd;
+  background:#fff;
+  color:#1e2220;
+  font:inherit;
+  font-size:16px;
+  font-weight:700;
+  cursor:pointer;
+}
+.tenant-portal-section-tab:first-child{
+  border-radius:18px 0 0 18px;
+}
+.tenant-portal-section-tab:last-child{
+  border-radius:0 18px 18px 0;
+  border-left-width:0;
+}
+.tenant-portal-section-tab.active{
+  box-shadow:inset 0 0 0 2px #1b1f1c;
+}
 .tenant-portal-section-head{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;margin-bottom:8px}
 .tenant-portal-section-title{font-size:16px;font-weight:800;letter-spacing:-.03em}
 .tenant-portal-section-sub{margin-top:2px;font-size:12px;color:#879286}
@@ -255,7 +281,31 @@ body{min-height:100vh}
 .tenant-portal-detail-list-value{font-size:13px;font-weight:800;color:#2f7b52;white-space:nowrap}
 .tenant-portal-detail-list-notes{font-size:12px;font-weight:600;color:#5d665f;max-width:40%;text-align:right}
 
-.tenant-portal-filter-btn{background:none;border:none;color:#4f8f5f;font:inherit;font-size:14px;font-weight:700;cursor:pointer}
+.tenant-portal-filter-row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.tenant-portal-filter-btn{
+  min-height:46px;
+  padding:0 18px;
+  border-radius:16px;
+  border:1px solid #dbe3dd;
+  background:#fff;
+  color:#2a302d;
+  font:inherit;
+  font-size:14px;
+  font-weight:700;
+  cursor:pointer
+}
+.tenant-portal-filter-btn.active{
+  box-shadow:inset 0 0 0 2px #1b1f1c;
+}
+.tenant-portal-empty-state{
+  padding:30px 20px;
+  color:#7f8881;
+  font-size:16px;
+}
 .tenant-portal-invoices{overflow:hidden}
 .tenant-portal-invoice-card{
   display:grid;
@@ -364,6 +414,7 @@ body{min-height:100vh}
   .tenant-portal-title{font-size:42px}
 }
 @media (max-width:900px){
+  .tenant-portal-dashboard{zoom:1}
   .tenant-portal-brand{gap:16px}
   .tenant-portal-brand-mark{width:68px;height:68px;font-size:26px}
   .tenant-portal-brand-text{font-size:34px}
@@ -398,6 +449,9 @@ body{min-height:100vh}
   }
 }
 @media (max-width:640px){
+  :root{
+    --tp-page-width:min(100%, calc(100vw - 20px));
+  }
   .tenant-portal-auth{padding:18px}
   .tenant-portal-brand{flex-direction:column;margin-bottom:22px}
   .tenant-portal-brand-text{font-size:28px}
@@ -410,12 +464,369 @@ body{min-height:100vh}
   .tenant-portal-primary-btn{height:68px;border-radius:20px;font-size:18px}
   .tenant-portal-otp-grid{gap:8px}
   .tenant-portal-otp-input{height:56px;border-radius:14px;font-size:22px}
-  .tenant-portal-topbar{align-items:flex-start;flex-direction:column}
-  .tenant-portal-name{font-size:38px}
-  .tenant-portal-room-badge{font-size:16px}
-  .tenant-portal-section-title{font-size:22px}
-  .tenant-portal-section-sub{font-size:16px}
+  .tenant-portal-dashboard{
+    background:#fff;
+  }
+  .tenant-portal-hero{
+    padding-top:max(16px, env(safe-area-inset-top));
+    padding-left:18px;
+    padding-right:18px;
+    padding-bottom:22px;
+    border-bottom-left-radius:0;
+    border-bottom-right-radius:0;
+  }
+  .tenant-portal-hero::after{
+    content:'';
+    position:absolute;
+    width:280px;
+    height:280px;
+    right:-120px;
+    top:-90px;
+    border-radius:999px;
+    background:rgba(255,255,255,.05);
+    pointer-events:none;
+  }
+  .tenant-portal-topbar{
+    align-items:flex-start;
+    flex-direction:row;
+    justify-content:space-between;
+    gap:12px;
+  }
+  .tenant-portal-wordmark{
+    max-width:calc(100% - 112px);
+    font-size:12px;
+    line-height:1.4;
+    color:rgba(255,255,255,.72);
+  }
+  .tenant-portal-ghost-btn{
+    min-width:96px;
+    width:auto;
+    min-height:52px;
+    justify-content:center;
+    padding:0 18px;
+    border-radius:18px;
+    font-size:15px;
+    background:rgba(255,255,255,.04);
+  }
+  .tenant-portal-greeting{
+    margin-top:20px;
+    font-size:14px;
+    color:rgba(255,255,255,.72);
+  }
+  .tenant-portal-name{font-size:46px;line-height:1.02}
+  .tenant-portal-room-badge{
+    margin-top:14px;
+    width:fit-content;
+    max-width:100%;
+    padding:10px 18px;
+    border-radius:999px;
+    font-size:12px;
+    line-height:1.35;
+    flex-wrap:wrap;
+    background:rgba(255,255,255,.12);
+  }
+  .tenant-portal-room-badge::before{
+    content:'⌂';
+    font-size:15px;
+    line-height:1;
+  }
+  .tenant-portal-summary-grid{
+    margin:18px 0 -8px;
+    grid-template-columns:repeat(3, minmax(0,1fr));
+    gap:12px;
+    border-top:none;
+  }
+  .tenant-portal-summary-card{
+    min-height:96px;
+    padding:16px 12px 14px;
+    border:none!important;
+    border-radius:18px;
+    text-align:left;
+    background:rgba(17,53,35,.46);
+    backdrop-filter:blur(10px);
+  }
+  .tenant-portal-summary-label{
+    font-size:11px;
+    letter-spacing:.16em;
+    color:rgba(255,255,255,.52);
+  }
+  .tenant-portal-summary-value{
+    margin-top:10px;
+    font-size:16px;
+    line-height:1.15;
+  }
+  .tenant-portal-main{
+    padding:0 0 18px;
+    margin-top:-2px;
+  }
+  .tenant-portal-main-inner{
+    width:100%;
+  }
+  .tenant-portal-section-tabs{
+    margin-bottom:0;
+  }
+  .tenant-portal-section-tab{
+    min-height:52px;
+    font-size:15px;
+    background:#fff;
+  }
+  .tenant-portal-section-tab:first-child{
+    border-radius:18px 0 0 0;
+  }
+  .tenant-portal-section-tab:last-child{
+    border-radius:0 18px 0 0;
+  }
+  .tenant-portal-section-title{font-size:18px}
+  .tenant-portal-section-sub{font-size:13px}
   .tenant-portal-invoice-title{font-size:20px}
   .tenant-portal-invoice-sub,.tenant-portal-help-sub,.tenant-portal-help-title{font-size:16px}
   .tenant-portal-help-copy{align-items:flex-start}
+  .tenant-portal-detail-pills,
+  .tenant-portal-detail-tabs,
+  .tenant-portal-detail-panel,
+  .tenant-portal-modal-body,
+  .tenant-portal-modal-head{
+    padding-left:16px;
+    padding-right:16px;
+  }
+  .tenant-portal-detail-tabs{
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    gap:10px;
+  }
+  .tenant-portal-detail-tab{
+    flex:0 0 auto;
+    min-height:44px;
+    padding:0 18px;
+    border-radius:999px;
+    font-size:12px;
+  }
+  .tenant-portal-detail-cell{
+    padding:16px 14px;
+  }
+  .tenant-portal-surface{
+    border-radius:0 0 24px 24px;
+    box-shadow:none;
+  }
+  .tenant-portal-detail-pills{
+    gap:12px;
+    padding-top:18px;
+    padding-bottom:18px;
+  }
+  .tenant-portal-detail-pill{
+    min-height:54px;
+    padding:0 22px;
+    border-radius:999px;
+    font-size:13px;
+  }
+  .tenant-portal-detail-grid{
+    grid-template-columns:1fr;
+  }
+  .tenant-portal-detail-grid .tenant-portal-detail-cell{
+    border-right:none;
+  }
+  .tenant-portal-detail-label{
+    font-size:10px;
+    letter-spacing:.18em;
+  }
+  .tenant-portal-detail-value{
+    margin-top:8px;
+    font-size:16px;
+    line-height:1.28;
+  }
+  .tenant-portal-filter-row{
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    padding-bottom:4px;
+  }
+  .tenant-portal-filter-btn{
+    flex:0 0 auto;
+    min-width:max-content;
+  }
+  .tenant-portal-invoice-section .tenant-portal-section-head{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .tenant-portal-invoice-card{
+    padding:18px 16px;
+    margin-top:14px;
+    border:1px solid var(--tp-line);
+    border-radius:24px;
+    border-top:1px solid var(--tp-line);
+  }
+  .tenant-portal-invoice-card:first-child{
+    margin-top:0;
+  }
+  .tenant-portal-mini-btn{
+    min-width:0;
+    flex:1 1 140px;
+    text-align:center;
+    min-height:46px;
+    border-radius:16px;
+    font-size:14px;
+  }
+  .tenant-portal-help-card{
+    padding:14px;
+    border-radius:14px;
+  }
+  .tenant-portal-modal-backdrop{
+    padding:12px;
+    align-items:flex-end;
+  }
+  .tenant-portal-modal{
+    width:100%;
+    max-height:88vh;
+    border-radius:20px 20px 0 0;
+  }
+  .tenant-portal-modal-title{
+    font-size:20px;
+  }
+  .tenant-portal-modal-actions > *{
+    flex:1 1 100%;
+  }
+}
+@media (max-width:480px){
+  :root{
+    --tp-page-width:min(100%, calc(100vw - 16px));
+  }
+  .tenant-portal-auth{padding:12px}
+  .tenant-portal-card{
+    padding:22px 16px 18px;
+    border-radius:22px;
+  }
+  .tenant-portal-sub{
+    font-size:14px;
+  }
+  .tenant-portal-phone{
+    gap:12px;
+    padding:0 14px;
+    height:64px;
+  }
+  .tenant-portal-phone-prefix,.tenant-portal-phone input{
+    font-size:20px;
+  }
+  .tenant-portal-phone input::placeholder{
+    font-size:15px;
+  }
+  .tenant-portal-primary-btn{
+    height:60px;
+    font-size:17px;
+  }
+  .tenant-portal-otp-grid{
+    gap:6px;
+  }
+  .tenant-portal-otp-input{
+    height:48px;
+    font-size:18px;
+  }
+  .tenant-portal-greeting,
+  .tenant-portal-section-sub,
+  .tenant-portal-invoice-sub,
+  .tenant-portal-help-sub{
+    font-size:13px;
+  }
+  .tenant-portal-name{
+    font-size:34px;
+  }
+  .tenant-portal-wordmark{
+    font-size:11px;
+    max-width:calc(100% - 96px);
+  }
+  .tenant-portal-ghost-btn{
+    min-width:88px;
+    min-height:48px;
+    padding:0 14px;
+    font-size:14px;
+  }
+  .tenant-portal-room-badge{
+    padding:8px 14px;
+    font-size:11px;
+  }
+  .tenant-portal-summary-grid{
+    gap:10px;
+  }
+  .tenant-portal-summary-card{
+    min-height:88px;
+    padding:14px 10px 12px;
+    border-radius:16px;
+  }
+  .tenant-portal-summary-label{
+    letter-spacing:.14em;
+    font-size:10px;
+  }
+  .tenant-portal-summary-value{
+    font-size:14px;
+  }
+  .tenant-portal-section-tab{
+    min-height:48px;
+    font-size:14px;
+  }
+  .tenant-portal-detail-pills{
+    gap:10px;
+  }
+  .tenant-portal-detail-pill{
+    min-height:48px;
+    padding:0 18px;
+    font-size:12px;
+  }
+  .tenant-portal-detail-tab{
+    padding:0 16px;
+    font-size:11px;
+    text-align:center;
+  }
+  .tenant-portal-detail-list-row{
+    gap:10px;
+    padding:10px;
+  }
+  .tenant-portal-invoice-card{
+    grid-template-columns:72px 1fr;
+    gap:10px;
+    padding:16px 14px;
+    grid-template-areas:
+      "month amount"
+      "body body"
+      "status status"
+      "actions actions";
+  }
+  .tenant-portal-month-box{
+    width:58px;
+    height:58px;
+    border-radius:16px;
+    font-size:12px;
+  }
+  .tenant-portal-invoice-title{
+    font-size:17px;
+    line-height:1.2;
+  }
+  .tenant-portal-invoice-sub{
+    margin-top:8px;
+    font-size:11px;
+    line-height:1.45;
+  }
+  .tenant-portal-invoice-status-wrap,
+  .tenant-portal-invoice-amount{
+    justify-content:flex-start;
+    text-align:left;
+  }
+  .tenant-portal-invoice-money{
+    font-size:16px;
+  }
+  .tenant-portal-mini-btn{
+    padding:0 14px;
+    font-size:13px;
+  }
+  .tenant-portal-help-title{
+    font-size:15px;
+  }
+  .tenant-portal-modal-head,
+  .tenant-portal-modal-body{
+    padding-left:14px;
+    padding-right:14px;
+  }
+  .tenant-portal-breakdown-row{
+    padding:10px 12px;
+    font-size:14px;
+  }
 }
