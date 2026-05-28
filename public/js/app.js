@@ -37,6 +37,9 @@ let _notificationUnread = 0;
 let _notificationPreferences = { push_enabled: true };
 let _notificationLoading = false;
 let _notificationPrefsLoading = false;
+let _approvalBadgeCounts = { societies: 0, tenants: 0, total: 0 };
+let _approvalBadgeLoadedAt = 0;
+let _approvalBadgeLoadingPromise = null;
 let _appUpdateStatus = null;
 let _tenantsScriptPromise = null;
 
@@ -462,6 +465,8 @@ let _societyMemberFilter = 'all';
 let _societyMemberSearch = '';
 let _societyTab = 'overview';
 let _societyRange = 'month';
+let _societyRequestFilter = 'all';
+let _societyRequestSearch = '';
 let _schoolKidsOverview = null;
 let _schoolKidsList = [];
 let _selectedSchoolKidId = null;
@@ -612,6 +617,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   } else {
     updateNotificationNavBadge();
   }
+  refreshApprovalBadges().catch(() => {});
   checkAppUpdateStatus().catch(() => {});
   loadTab();
   // Auto-apply recurring entries for the current month (silent, runs in background)
@@ -985,6 +991,7 @@ async function switchTab(tab) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   if (window.innerWidth <= 768) toggleSidebar(false);
   loadTab();
+  refreshApprovalBadges();
 }
 
 function ensureTenantsScript() {
@@ -1085,6 +1092,53 @@ function updateNotificationNavBadge() {
   }
   badge.style.display = 'inline-flex';
   badge.textContent = unread > 99 ? '99+' : String(unread);
+}
+
+function updateApprovalBadgeElement(elementId, count) {
+  const badge = document.getElementById(elementId);
+  if (!badge) return;
+  const normalized = Math.max(0, Number(count || 0));
+  if (!normalized) {
+    badge.style.display = 'none';
+    badge.textContent = '';
+    return;
+  }
+  badge.style.display = 'inline-flex';
+  badge.textContent = normalized > 99 ? '99+' : String(normalized);
+}
+
+function renderApprovalBadges() {
+  updateApprovalBadgeElement('societiesApprovalBadge', _approvalBadgeCounts?.societies || 0);
+  updateApprovalBadgeElement('tenantsApprovalBadge', _approvalBadgeCounts?.tenants || 0);
+}
+
+async function refreshApprovalBadges(force = false) {
+  const cacheAgeMs = 30000;
+  if (!force && _approvalBadgeLoadedAt && (Date.now() - _approvalBadgeLoadedAt) < cacheAgeMs) {
+    renderApprovalBadges();
+    return _approvalBadgeCounts;
+  }
+  if (_approvalBadgeLoadingPromise) return _approvalBadgeLoadingPromise;
+  _approvalBadgeLoadingPromise = (async () => {
+    try {
+      const result = await api('/api/approval-badges');
+      if (!result?.error) {
+        _approvalBadgeCounts = {
+          societies: Number(result?.societies || 0),
+          tenants: Number(result?.tenants || 0),
+          total: Number(result?.total || 0),
+        };
+        _approvalBadgeLoadedAt = Date.now();
+        renderApprovalBadges();
+      }
+    } catch (err) {
+      console.error('refreshApprovalBadges failed', err);
+    } finally {
+      _approvalBadgeLoadingPromise = null;
+    }
+    return _approvalBadgeCounts;
+  })();
+  return _approvalBadgeLoadingPromise;
 }
 
 async function refreshNotificationUnreadCount() {
@@ -14578,6 +14632,109 @@ let _aiStatus = null;
 let _aiPastHistory = []; // from DB
 let _aiHistoryExpanded = false;
 let _aiLookupMode = 'offline';
+let _aiVoiceMediaRecorder = null;
+let _aiVoiceChunks = [];
+let _aiVoiceStream = null;
+let _aiVoiceBusy = false;
+
+function _cleanupAiVoiceCapture() {
+  try { if (_aiVoiceMediaRecorder && _aiVoiceMediaRecorder.state !== 'inactive') _aiVoiceMediaRecorder.stop(); } catch {}
+  _aiVoiceMediaRecorder = null;
+  _aiVoiceChunks = [];
+  if (_aiVoiceStream) {
+    try { _aiVoiceStream.getTracks().forEach((track) => track.stop()); } catch {}
+  }
+  _aiVoiceStream = null;
+}
+
+function _setAiVoiceButtonState(recording = false) {
+  const btn = document.getElementById('aiVoiceBtn');
+  const hint = document.getElementById('aiVoiceHint');
+  if (btn) {
+    btn.classList.toggle('active', !!recording);
+    btn.disabled = _aiVoiceBusy;
+    btn.innerHTML = recording ? '&#9632;' : '&#127908;';
+    btn.title = recording ? 'Stop voice recording' : 'Record voice question';
+  }
+  if (hint) {
+    hint.textContent = _aiVoiceBusy
+      ? (recording ? 'Listening...' : 'Transcribing voice note...')
+      : '';
+  }
+}
+
+function _mergeAiVoiceTranscript(transcript = '') {
+  const text = String(transcript || '').trim();
+  if (!text) return;
+  const input = document.getElementById('aiInput');
+  if (!input) return;
+  const existing = String(input.value || '').trim();
+  input.value = existing ? `${existing}${/[.?!]$/.test(existing) ? ' ' : '\n'}${text}` : text;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  input.focus();
+}
+
+async function _parseAiVoiceBlob(blob) {
+  if (!blob) return;
+  _aiVoiceBusy = true;
+  _setAiVoiceButtonState(false);
+  const fd = new FormData();
+  fd.append('file', blob, `ai-lookup-voice-${Date.now()}.webm`);
+  try {
+    const res = await fetch('/api/ai/lookup/voice', { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) throw new Error(data?.error || 'Could not transcribe this voice note.');
+    _mergeAiVoiceTranscript(data.transcript || '');
+    toast('Voice note added to AI input.', 'success');
+  } catch (err) {
+    toast(err?.message || 'Could not transcribe this voice note.', 'error');
+  } finally {
+    _aiVoiceBusy = false;
+    _setAiVoiceButtonState(false);
+  }
+}
+
+async function startAiLookupVoiceCapture() {
+  if (_aiVoiceBusy) return;
+  if (!navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    toast('Voice recording is not supported in this browser.', 'error');
+    return;
+  }
+  try {
+    _aiVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _aiVoiceChunks = [];
+    _aiVoiceMediaRecorder = new MediaRecorder(_aiVoiceStream);
+    _aiVoiceMediaRecorder.ondataavailable = (event) => {
+      if (event?.data?.size) _aiVoiceChunks.push(event.data);
+    };
+    _aiVoiceMediaRecorder.onstop = async () => {
+      const blob = _aiVoiceChunks.length ? new Blob(_aiVoiceChunks, { type: _aiVoiceMediaRecorder?.mimeType || 'audio/webm' }) : null;
+      _cleanupAiVoiceCapture();
+      if (blob) await _parseAiVoiceBlob(blob);
+    };
+    _aiVoiceMediaRecorder.start();
+    _setAiVoiceButtonState(true);
+  } catch (err) {
+    _cleanupAiVoiceCapture();
+    toast(err?.message || 'Microphone permission is required for voice input.', 'error');
+  }
+}
+
+function stopAiLookupVoiceCapture() {
+  if (!_aiVoiceMediaRecorder) return;
+  try { _aiVoiceMediaRecorder.stop(); } catch (_err) {
+    _cleanupAiVoiceCapture();
+    _aiVoiceBusy = false;
+    _setAiVoiceButtonState(false);
+  }
+}
+
+function toggleAiLookupVoiceCapture() {
+  if (_aiVoiceBusy) return;
+  if (_aiVoiceMediaRecorder && _aiVoiceMediaRecorder.state === 'recording') stopAiLookupVoiceCapture();
+  else startAiLookupVoiceCapture();
+}
 
 function _pickAllowedAiMode(preferred = 'offline') {
   if (_userRole === 'admin') return preferred === 'online' ? 'online' : 'offline';
@@ -14599,6 +14756,8 @@ function _aiRewriteQuestion(question) {
 }
 
 async function loadAiLookup() {
+  _cleanupAiVoiceCapture();
+  _aiVoiceBusy = false;
   _aiHistory = [];
   _aiHistoryExpanded = false;
   const [statusRes, histRes] = await Promise.all([
@@ -14617,19 +14776,18 @@ async function loadAiLookup() {
   if (_aiLookupMode === 'online' && !finalModes.online) _aiLookupMode = finalModes.offline ? 'offline' : 'online';
   if (_aiLookupMode === 'offline' && !finalModes.offline) _aiLookupMode = finalModes.online ? 'online' : 'offline';
   document.getElementById('main').innerHTML = `
-    <div class="tab-content" style="display:flex;flex-direction:column;height:calc(100vh - 40px);max-height:900px">
-      <div style="margin-bottom:10px">
+    <div class="tab-content" style="display:flex;flex-direction:column;height:calc(100vh - 12px);min-height:calc(100vh - 12px)">
+      <div style="margin-bottom:8px">
         <div style="font-size:22px;font-weight:700;color:var(--t1)">AI Lookup</div>
         <div style="font-size:13px;color:var(--t3);margin-top:2px">Ask anything about your expenses, loans, EMIs, credit cards, trips, and more.</div>
         ${_renderAiStatusBanner()}
-        ${_renderAiModeToggle()}
       </div>
 
       ${_renderAiHistoryPanel()}
 
       <!-- Chat messages -->
-      <div id="aiChat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 0;min-height:0">
-        <div id="aiWelcome" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:16px;padding:40px 0;color:var(--t3)">
+      <div id="aiChat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:0;min-height:0">
+        <div id="aiWelcome" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px 0 12px;color:var(--t3)">
           <div style="font-size:48px">AI</div>
           <div style="font-size:15px;font-weight:500;color:var(--t2)">Your personal finance AI assistant</div>
           <div style="font-size:13px;color:var(--t3);text-align:center;max-width:420px">Ask in plain English - totals, trends, who owes what, upcoming EMIs, CC dues, anything in your data.</div>
@@ -14655,58 +14813,77 @@ async function loadAiLookup() {
             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doAiAsk();}"
             oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
             onfocus="this.style.borderColor='var(--em)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+          <button id="aiVoiceBtn" onclick="toggleAiLookupVoiceCapture()"
+            style="width:44px;height:44px;border:1.5px solid var(--border);background:var(--white);color:var(--t2);border-radius:12px;font-size:18px;cursor:pointer;transition:all 0.15s"
+            title="Record voice question">
+            &#127908;
+          </button>
           <button id="aiSendBtn" onclick="doAiAsk()"
             style="padding:10px 18px;background:var(--em);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;height:44px;transition:opacity 0.15s">
             Ask
           </button>
         </div>
-        <div style="font-size:11px;color:var(--t3);margin-top:6px">Enter to send &middot; Shift+Enter for new line &middot; Answers are based on your live data</div>
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:6px">
+          <div style="font-size:11px;color:var(--t3)">Enter to send &middot; Shift+Enter for new line &middot; Answers are based on your live data</div>
+          <div id="aiVoiceHint" style="font-size:11px;color:var(--em);min-height:16px"></div>
+        </div>
+      </div>
+      <div id="aiRecentModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.38);z-index:1100;align-items:center;justify-content:center;padding:24px">
+        <div style="width:min(720px,100%);max-height:min(78vh,760px);background:#fff;border-radius:18px;box-shadow:0 24px 54px rgba(15,23,42,0.22);display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:18px;font-weight:700;color:var(--t1)">Recent History</div>
+              <div style="font-size:12px;color:var(--t3);margin-top:3px">Pick a recent question to load it back into the main chat.</div>
+            </div>
+            <button class="btn btn-g" style="padding:8px 12px" onclick="_aiToggleHistory(false)">Close</button>
+          </div>
+          <div style="padding:8px 18px 16px;overflow-y:auto">
+            ${_aiPastHistory.length ? _aiPastHistory.map((h, i) => {
+              const answerHtml = h.response_preview
+                ? escHtml(h.response_preview).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
+                : '<span style="color:var(--t3);font-style:italic">No preview</span>';
+              return `<button type="button" onclick="aiLoadHistoryItem(${i})" style="display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px 14px 12px;margin-top:${i ? 10 : 0}px;cursor:pointer">
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+                  <div style="font-size:13px;font-weight:700;color:var(--t1);line-height:1.5">${escHtml(h.question)}</div>
+                  <div style="font-size:11px;color:var(--t3);white-space:nowrap">${new Date(h.created_at).toLocaleDateString('en-IN', { day:'2-digit', month:'short' })}</div>
+                </div>
+                <div style="font-size:12px;color:var(--t2);line-height:1.55;margin-top:8px">${answerHtml}</div>
+              </button>`;
+            }).join('') : `<div style="padding:24px 8px;text-align:center;color:var(--t3)">No history yet.</div>`}
+          </div>
+        </div>
       </div>
     </div>`;
+  _setAiVoiceButtonState(false);
 }
 
 function _renderAiHistoryPanel() {
-  if (!_aiPastHistory.length) return '';
-  const fmtRelTime = (dateStr) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
-  };
-  const items = _aiPastHistory.map((h, i) => {
-    const answerHtml = h.response_preview
-      ? escHtml(h.response_preview).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
-      : '<span style="color:var(--t3);font-style:italic">No preview</span>';
-    return `<div style="border-bottom:1px solid var(--border);padding:8px 0;${i===_aiPastHistory.length-1?'border-bottom:none':''}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-        <div style="font-size:13px;font-weight:500;color:var(--t1);flex:1">${escHtml(h.question)}</div>
-        <span style="font-size:11px;color:var(--t3);white-space:nowrap;margin-top:2px">${fmtRelTime(h.created_at)}</span>
-      </div>
-      <div style="display:none;margin-top:6px;font-size:12px;color:var(--t2);line-height:1.5;background:var(--bg2);border-radius:8px;padding:8px 10px">${answerHtml}</div>
-    </div>`;
-  }).join('');
-
-  return `<div id="aiHistoryPanel" style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;cursor:pointer;background:var(--bg2)" onclick="_aiToggleHistory()">
-      <div style="font-size:13px;font-weight:600;color:var(--t1)">Recent History <span style="font-size:11px;color:var(--t3);font-weight:400">(${_aiPastHistory.length})</span></div>
-      <span id="aiHistoryChevron" style="font-size:12px;color:var(--t3)">${_aiHistoryExpanded ? '&#9650;' : '&#9660;'}</span>
-    </div>
-    <div id="aiHistoryList" style="display:${_aiHistoryExpanded ? 'block' : 'none'};padding:0 12px;max-height:260px;overflow-y:auto">
-      ${items}
-    </div>
-  </div>`;
+  return '';
 }
 
-function _aiToggleHistory() {
-  _aiHistoryExpanded = !_aiHistoryExpanded;
-  const list = document.getElementById('aiHistoryList');
-  const chevron = document.getElementById('aiHistoryChevron');
-  if (list) list.style.display = _aiHistoryExpanded ? 'block' : 'none';
-  if (chevron) chevron.innerHTML = _aiHistoryExpanded ? '&#9650;' : '&#9660;';
+function _aiToggleHistory(forceState = null) {
+  _aiHistoryExpanded = typeof forceState === 'boolean' ? forceState : !_aiHistoryExpanded;
+  const modal = document.getElementById('aiRecentModal');
+  if (modal) modal.style.display = _aiHistoryExpanded ? 'flex' : 'none';
+}
+
+function aiLoadHistoryItem(index) {
+  const item = Array.isArray(_aiPastHistory) ? _aiPastHistory[index] : null;
+  if (!item) return;
+  const chat = document.getElementById('aiChat');
+  const welcome = document.getElementById('aiWelcome');
+  if (welcome) welcome.style.display = 'none';
+  _aiHistory = [{ role: 'user', content: String(item.question || '') }];
+  let html = _aiUserBubble(String(item.question || ''));
+  if (item.response_preview) {
+    _aiHistory.push({ role: 'assistant', content: String(item.response_preview || '') });
+    html += _aiAssistantBubble(String(item.response_preview || ''));
+  }
+  if (chat) {
+    chat.innerHTML = html;
+    chat.scrollTop = chat.scrollHeight;
+  }
+  _aiToggleHistory(false);
 }
 
 async function aiAskSuggestion(q) {
@@ -14775,10 +14952,22 @@ function _aiUserBubble(text) {
 }
 
 function _renderAiStatusBanner() {
-  if (!_aiStatus) return '';
+  if (!_aiStatus) {
+    return `
+      <div id="aiStatusBanner" style="margin-top:12px;background:var(--orange-l,#fff3e0);border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="min-width:260px;flex:1">
+          <div style="font-weight:700;color:var(--t1)">AI Lookup</div>
+          <div style="margin-top:4px;font-size:12px;color:var(--t3)">Recent chats and answer engine controls are still available while status is loading.</div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap">
+          ${_renderAiRecentTrigger()}
+          ${_renderAiModeToggle()}
+        </div>
+      </div>`;
+  }
   const isAdmin = !!_aiStatus.isAdmin;
   const isUnlimited = isAdmin || _aiStatus.dailyFreeLimit === -1 || _aiStatus.remainingFreeQueries === -1;
-  const bgColor = isAdmin ? 'var(--orange-l,#fff3e0)' : isUnlimited ? 'var(--green-l)' : 'var(--blue-l)';
+  const bgColor = isAdmin ? 'var(--orange-l,#fff3e0)' : isUnlimited ? '#eef8f0' : 'var(--blue-l)';
   const fgColor = isAdmin ? 'var(--orange,#e65100)' : isUnlimited ? 'var(--green)' : 'var(--blue)';
   const planLabel = _aiStatus.planName ? `Plan: <b>${escHtml(_aiStatus.planName)}</b> &middot; ` : '';
   const modeLabel = _aiLookupMode === 'online'
@@ -14792,11 +14981,17 @@ function _renderAiStatusBanner() {
   const upsell = (!isAdmin && !isUnlimited)
     ? `<div style="margin-top:4px;color:var(--t2)">Upgrade your plan to unlock more AI lookups per day.</div>` : '';
   return `
-    <div id="aiStatusBanner" style="margin-top:12px;background:${bgColor};color:${fgColor};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6">
-      <div style="font-weight:700">${headline}</div>
-      <div style="margin-top:2px">${planLabel}${escHtml(_aiStatus.message || '')}</div>
-      <div style="margin-top:4px;color:var(--t2)">${modeLabel}</div>
-      ${upsell}
+    <div id="aiStatusBanner" style="margin-top:12px;background:${bgColor};color:${fgColor};border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+      <div style="min-width:260px;flex:1">
+        <div style="font-weight:700">${headline}</div>
+        <div style="margin-top:2px">${planLabel}${escHtml(_aiStatus.message || '')}</div>
+        <div style="margin-top:4px;color:var(--t2)">${modeLabel}</div>
+        ${upsell}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap">
+        ${_renderAiRecentTrigger()}
+        ${_renderAiModeToggle()}
+      </div>
     </div>`;
 }
 
@@ -14809,29 +15004,18 @@ function _refreshAiStatusBanner() {
 function _renderAiModeToggle() {
   const offlineEnabled = !!_aiStatus?.modes?.offline;
   const onlineEnabled = !!_aiStatus?.modes?.online;
-  const modeHint = !_aiStatus?.allowed_modes?.offline && !_aiStatus?.allowed_modes?.online
-    ? 'AI Lookup is not included in this user plan.'
-    : !_aiStatus?.allowed_modes?.online
-      ? 'This plan allows Offline AI only.'
-      : !_aiStatus?.allowed_modes?.offline
-        ? 'This plan allows Online AI only.'
-        : !onlineEnabled
-          ? 'Online mode is available after configuring a valid OpenAI API key on the server.'
-          : '';
   return `
-    <div id="aiModeToggle" style="margin-top:10px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--card)">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-        <div>
-          <div style="font-size:12px;font-weight:700;color:var(--t1)">Answer Engine</div>
-          <div style="font-size:12px;color:var(--t3);margin-top:2px">Switch between local offline answers and OpenAI-powered online answers.</div>
-        </div>
-        <div style="display:inline-flex;align-items:center;gap:6px;padding:4px;background:var(--bg2);border-radius:999px;border:1px solid var(--border)">
-          <button class="btn ${_aiLookupMode === 'offline' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${offlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('offline')" ${offlineEnabled ? '' : 'disabled'}>Offline</button>
-          <button class="btn ${_aiLookupMode === 'online' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${onlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('online')" ${onlineEnabled ? '' : 'disabled'}>Online</button>
-        </div>
-      </div>
-      ${modeHint ? `<div style="font-size:11px;color:var(--t3);margin-top:6px">${modeHint}</div>` : ''}
+    <div id="aiModeToggle" style="display:inline-flex;align-items:center;gap:6px;padding:4px;background:rgba(255,255,255,0.72);border-radius:999px;border:1px solid rgba(29,46,37,0.08)">
+      <button class="btn ${_aiLookupMode === 'offline' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${offlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('offline')" ${offlineEnabled ? '' : 'disabled'}>Offline</button>
+      <button class="btn ${_aiLookupMode === 'online' ? 'btn-p' : 'btn-g'}" style="min-width:88px;padding:8px 12px;border-radius:999px;${onlineEnabled ? '' : 'opacity:0.5;cursor:not-allowed'}" onclick="setAiLookupMode('online')" ${onlineEnabled ? '' : 'disabled'}>Online</button>
     </div>`;
+}
+
+function _renderAiRecentTrigger() {
+  return `<button type="button" onclick="_aiToggleHistory(true)" style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #e7c26f;background:#ffefbd;border-radius:999px;color:#8d5b00;font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer;box-shadow:0 1px 0 rgba(141,91,0,0.06)">
+    <span style="font-size:14px">&#8630;</span>
+    <span>Recent ${_aiPastHistory.length ? `<span style="font-size:11px;color:#7d5f28;font-weight:700">${_aiPastHistory.length}</span>` : ''}</span>
+  </button>`;
 }
 
 function _refreshAiModeToggle() {
@@ -14856,7 +15040,6 @@ function setAiLookupMode(mode) {
     localStorage.setItem('ai_lookup_mode', _aiLookupMode);
   } catch {}
   _refreshAiStatusBanner();
-  _refreshAiModeToggle();
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -16865,6 +17048,7 @@ async function showExpenseBucketEntryModal(bucketId, entryId = null) {
   const bucket = _expenseBuckets.find((item) => String(item.id) === String(bucketId));
   if (!bucket) { toast('Bucket not found', 'error'); return; }
   let entry = null;
+  const defaultEntryDate = todayStr();
   if (entryId != null) {
     const entriesData = await api(`/api/expense-buckets/${bucketId}/entries`);
     entry = (entriesData?.entries || []).find((item) => String(item.id) === String(entryId)) || null;
@@ -16875,7 +17059,7 @@ async function showExpenseBucketEntryModal(bucketId, entryId = null) {
     <div class="fg">
       <label class="fl full">Expense Name *<input class="fi" id="ebEntryName" value="${escHtml(entry?.name || '')}" placeholder="e.g. SIP instalment, premium, fee, contribution" maxlength="120"></label>
       <label class="fl">Type<input class="fi" id="ebEntryType" value="${escHtml(entry?.entry_type || '')}" placeholder="Investment, Fee, Insurance..."></label>
-      <label class="fl">Date<input class="fi" type="date" id="ebEntryDate" value="${escHtml(entry?.entry_date || bucket?.start_date || todayStr())}"></label>
+      <label class="fl">Date<input class="fi" type="date" id="ebEntryDate" value="${escHtml(entry?.entry_date || defaultEntryDate)}"></label>
       <label class="fl">Amount (Rs) *<input class="fi" type="number" step="0.01" id="ebEntryAmount" value="${entry?.amount || ''}" placeholder="0.00"></label>
     </div>
     <div style="margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card2)">
@@ -17840,6 +18024,16 @@ function setSocietyTab(value) {
   renderSocietiesPage();
 }
 
+function setSocietyRequestFilter(value) {
+  _societyRequestFilter = String(value || 'all');
+  renderSocietiesPage();
+}
+
+function setSocietyRequestSearch(value) {
+  _societyRequestSearch = String(value || '');
+  renderSocietiesPage();
+}
+
 function setSocietyRange(value) {
   _societyRange = String(value || 'month') === 'all' ? 'all' : 'month';
   renderSocietiesPage();
@@ -17871,6 +18065,7 @@ async function loadSocieties() {
     _societyDetail = null;
   }
   _societiesLoading = false;
+  refreshApprovalBadges(true);
   renderSocietiesPage();
 }
 
@@ -17922,8 +18117,10 @@ function renderSocietiesPage() {
       const status = String(isAllTime
         ? ((Number(member.total_contributed || 0) > 0) ? 'paid' : 'pending')
         : (member.selected_month_status || '')).toLowerCase();
-      if (_societyMemberFilter === 'paid' && status !== 'paid') return false;
-      if (_societyMemberFilter === 'pending' && status !== 'pending') return false;
+      const requestStatus = String(member.selected_month_request_status || '').toLowerCase();
+      const effectiveStatus = requestStatus === 'pending' ? 'approval_pending' : status;
+      if (_societyMemberFilter === 'paid' && effectiveStatus !== 'paid') return false;
+      if (_societyMemberFilter === 'pending' && !['pending', 'approval_pending'].includes(effectiveStatus)) return false;
       if (_societyMemberFilter === 'not_set' && status !== 'not_set') return false;
       if (!searchNeedle) return true;
       return [
@@ -17939,6 +18136,29 @@ function renderSocietiesPage() {
     const pendingMembers = isAllTime
       ? allMembers.filter((member) => Number(member.total_contributed || 0) <= 0)
       : (selected.payment_status?.pending_members || []);
+    const paymentRequests = Array.isArray(selected.payment_requests) ? selected.payment_requests : [];
+    const pendingPaymentRequests = Array.isArray(selected.pending_payment_requests) ? selected.pending_payment_requests : [];
+    const requestSearchNeedle = _societyRequestSearch.trim().toLowerCase();
+    const sortedPaymentRequests = [...paymentRequests].sort((a, b) => {
+      const timeA = new Date(a?.requested_at || a?.reviewed_at || a?.created_at || a?.requested_paid_on || 0).getTime();
+      const timeB = new Date(b?.requested_at || b?.reviewed_at || b?.created_at || b?.requested_paid_on || 0).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      return Number(b?.id || 0) - Number(a?.id || 0);
+    });
+    const filteredPaymentRequests = sortedPaymentRequests.filter((request) => {
+      const status = String(request?.status || '').toLowerCase() || 'pending';
+      if (_societyRequestFilter !== 'all' && status !== _societyRequestFilter) return false;
+      if (!requestSearchNeedle) return true;
+      const member = allMembers.find((item) => String(item.id) === String(request.member_id)) || {};
+      return [
+        member.member_name,
+        member.unit_label,
+        request.month_key,
+        societyMonthLabel(request.month_key || ''),
+        request.member_note,
+        request.review_note,
+      ].some((value) => String(value || '').toLowerCase().includes(requestSearchNeedle));
+    });
     const dueTotal = Number(isAllTime
       ? ((selected.month_summary || []).reduce((sum, row) => Math.round((sum + Number(row.due_total || 0)) * 100) / 100, 0))
       : (selected.payment_status?.due_total || 0));
@@ -17975,6 +18195,7 @@ function renderSocietiesPage() {
       ['overview', 'Overview'],
       ['members', 'Members'],
       ['matrix', 'Matrix'],
+      ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['expenses', 'Expenses'],
       ['report', 'Report'],
     ];
@@ -18049,7 +18270,8 @@ function renderSocietiesPage() {
             <div style="font-size:16px;font-weight:900;color:var(--t1)">Members</div>
             <div style="font-size:12px;color:var(--t3);margin-top:4px">${isAllTime ? 'Member contributions from start till today' : `Monthly dues for ${escHtml(monthLabel)}`}</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            ${pendingPaymentRequests.length ? `<button class="btn btn-s btn-sm" onclick="setSocietyTab('requests')">${pendingPaymentRequests.length} Pending Request${pendingPaymentRequests.length === 1 ? '' : 's'}</button>` : `<button class="btn btn-s btn-sm" onclick="setSocietyTab('requests')">Open Member Requests</button>`}
             <button class="btn btn-s btn-sm" onclick="showSocietyExcelImportModal()">Import Excel</button>
             <button class="btn btn-p btn-sm" onclick="showSocietyMemberModal()">+ Add Member</button>
           </div>
@@ -18069,6 +18291,7 @@ function renderSocietiesPage() {
             <tbody>
               ${filteredMembers.length ? filteredMembers.map((member) => {
                 const status = String(member.selected_month_status || '');
+                const requestStatus = String(member.selected_month_request_status || '').toLowerCase();
                 const paid = Number(isAllTime ? (member.total_contributed || 0) : (member.selected_month_amount || 0));
                 const due = Number(member.selected_month_due || 0);
                 const pending = Number(member.selected_month_pending || 0);
@@ -18076,6 +18299,10 @@ function renderSocietiesPage() {
                   ? (paid > 0
                     ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Paid</span>`
                     : `<span class="badge" style="background:#fff1ee;color:#d64735">&#8987; Unpaid</span>`)
+                  : requestStatus === 'pending'
+                  ? `<span class="badge" style="background:#fff6db;color:#b87807">&#9711; Approval Pending</span>`
+                  : requestStatus === 'rejected'
+                  ? `<span class="badge" style="background:#fff1ee;color:#d64735">&#10005; Rejected</span>`
                   : status === 'paid'
                   ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Paid</span>`
                   : status === 'pending'
@@ -18091,6 +18318,13 @@ function renderSocietiesPage() {
                     <td style="text-align:right;font-weight:800;color:${isAllTime ? 'var(--t1)' : (pending > 0 ? 'var(--red)' : 'var(--t1)')}">${fmtCur(due)}</td>
                     <td>${statusChip}</td>
                     <td style="white-space:nowrap">
+                      ${member.phone_number ? `<button class="trip-icon-btn" title="Open Society Portal" aria-label="Open Society Portal" onclick='openSocietyPortalForPhone(${JSON.stringify(String(member.phone_number || ''))})'>
+                        <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M14 3h7v7"></path>
+                          <path d="M10 14 21 3"></path>
+                          <path d="M21 14v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h4"></path>
+                        </svg>
+                      </button>` : ''}
                       <button class="trip-icon-btn" title="Update Month Contribution" aria-label="Update Month Contribution" onclick="showSocietyContributionModal(${Number(member.id)})"><span class="trip-icon-btn-glyph">&#8377;</span></button>
                       <button class="trip-icon-btn" title="Download Member PDF" aria-label="Download Member PDF" onclick="downloadSocietyMemberPdf(${Number(member.id)})"><span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span></button>
                       <button class="trip-icon-btn" title="Edit Member" aria-label="Edit Member" onclick="showSocietyMemberModal(${Number(member.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
@@ -18359,10 +18593,81 @@ function renderSocietiesPage() {
         </div>
       </div>`;
 
+    const requestsSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Member Payment Requests</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">All Member Payment Requests</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Review requests from all months and all members for this society.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="badge" style="background:#fff6db;color:#b87807">${pendingPaymentRequests.length} Pending</span>
+            <span class="badge" style="background:#eef9f4;color:var(--green)">${paymentRequests.filter((item) => String(item.status || '').toLowerCase() === 'approved').length} Approved</span>
+            <span class="badge" style="background:#fff1ee;color:#d64735">${paymentRequests.filter((item) => String(item.status || '').toLowerCase() === 'rejected').length} Rejected</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;padding:14px 22px;border-bottom:1px solid var(--border-l)">
+          <select class="fi" style="max-width:220px" onchange="setSocietyRequestFilter(this.value)">
+            <option value="all" ${_societyRequestFilter === 'all' ? 'selected' : ''}>All Requests</option>
+            <option value="pending" ${_societyRequestFilter === 'pending' ? 'selected' : ''}>Pending Approval</option>
+            <option value="approved" ${_societyRequestFilter === 'approved' ? 'selected' : ''}>Approved</option>
+            <option value="rejected" ${_societyRequestFilter === 'rejected' ? 'selected' : ''}>Rejected</option>
+          </select>
+          <input class="fi" style="max-width:320px" value="${escHtml(_societyRequestSearch)}" oninput="setSocietyRequestSearch(this.value)" placeholder="Search member, unit, month or note...">
+          <div style="display:flex;align-items:center;padding:0 4px;font-size:12px;color:var(--t3)">
+            Showing ${filteredPaymentRequests.length} of ${paymentRequests.length} request${paymentRequests.length === 1 ? '' : 's'}
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Month</th><th style="text-align:right">Amount</th><th>Paid On</th><th>Requested</th><th>Status</th><th>Notes</th><th class="td-m">Actions</th></tr></thead>
+            <tbody>
+              ${filteredPaymentRequests.length ? filteredPaymentRequests.map((request) => {
+                const member = allMembers.find((item) => String(item.id) === String(request.member_id)) || {};
+                const status = String(request.status || '').toLowerCase();
+                const statusChip = status === 'approved'
+                  ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Approved</span>`
+                  : status === 'rejected'
+                  ? `<span class="badge" style="background:#fff1ee;color:#d64735">&#10005; Rejected</span>`
+                  : `<span class="badge" style="background:#fff6db;color:#b87807">&#9711; Pending</span>`;
+                const requestedOn = request.requested_at || request.created_at || null;
+                return `
+                  <tr>
+                    <td>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name || 'Member')}</div>
+                      <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(member.unit_label || '-')}</div>
+                    </td>
+                    <td>${escHtml(societyMonthLabel(request.month_key || ''))}</td>
+                    <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(request.requested_amount || 0)}</td>
+                    <td>${request.requested_paid_on ? escHtml(fmtDate(request.requested_paid_on)) : '-'}</td>
+                    <td>${requestedOn ? escHtml(fmtDate(requestedOn)) : '-'}</td>
+                    <td>${statusChip}</td>
+                    <td style="max-width:260px">
+                      <div style="font-size:13px;color:var(--t2)">${escHtml(request.member_note || '—')}</div>
+                      ${request.review_note ? `<div style="font-size:12px;color:var(--t3);margin-top:4px">Review: ${escHtml(request.review_note)}</div>` : ''}
+                    </td>
+                    <td style="white-space:nowrap">
+                      ${status === 'pending'
+                        ? `
+                          <button class="trip-icon-btn" title="Approve Request" aria-label="Approve Request" onclick="reviewSocietyPaymentRequest(${Number(request.id)}, 'approved')"><span class="trip-icon-btn-glyph">&#10003;</span></button>
+                          <button class="trip-icon-btn danger" title="Reject Request" aria-label="Reject Request" onclick="reviewSocietyPaymentRequest(${Number(request.id)}, 'rejected')"><span class="trip-icon-btn-glyph">&#10005;</span></button>
+                        `
+                        : `<span style="font-size:12px;color:var(--t3)">${status === 'approved' ? 'Approved' : 'Rejected'}</span>`}
+                    </td>
+                  </tr>`;
+              }).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No member payment requests match the current filters.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
     const activeSection = _societyTab === 'members'
       ? membersSection
       : _societyTab === 'matrix'
       ? matrixSectionEnhanced
+      : _societyTab === 'requests'
+      ? requestsSection
       : _societyTab === 'expenses'
       ? expensesSectionEnhanced
       : _societyTab === 'report'
@@ -18590,7 +18895,7 @@ async function saveSociety(id = null) {
 }
 
 async function deleteSociety(id) {
-  if (!await confirmDialog('Delete this society, all members, contributions, and expenses?')) return;
+  if (!await confirmDialog('Delete this society and all related members, contributions, and expenses?')) return;
   const result = await api(`/api/societies/${Number(id)}`, { method: 'DELETE' });
   if (!result?.success) { toast(result?.error || 'Could not delete society.', 'error'); return; }
   if (String(_selectedSocietyId) === String(id)) _selectedSocietyId = null;
@@ -18647,6 +18952,32 @@ async function deleteSocietyMember(memberId) {
   toast('Member deleted', 'success');
   await loadSocieties();
 }
+
+function openSocietyPortalForPhone(phoneNumber) {
+  const digits = String(phoneNumber || '').replace(/\D+/g, '').slice(-10);
+  const url = digits ? `/society-portal?phone=${encodeURIComponent(digits)}` : '/society-portal';
+  window.open(url, '_blank', 'noopener');
+}
+
+async function reviewSocietyPaymentRequest(requestId, decision) {
+  const action = String(decision || '').toLowerCase();
+  if (!['approved', 'rejected'].includes(action)) return;
+  const confirmed = await confirmDialog(action === 'approved' ? 'Approve this payment request?' : 'Reject this payment request?');
+  if (!confirmed) return;
+  const result = await api(`/api/societies/payment-requests/${Number(requestId)}/review`, {
+    method: 'POST',
+    body: { status: action },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not review payment request.', 'error');
+    return;
+  }
+  toast(action === 'approved' ? 'Payment request approved' : 'Payment request rejected', 'success');
+  await loadSocieties();
+  await refreshApprovalBadges(true);
+}
+
+window.refreshApprovalBadges = refreshApprovalBadges;
 
 function showSocietyContributionModal(memberId, monthKey = _societyMonth) {
   const member = (_societyDetail?.members || []).find((item) => String(item.id) === String(memberId));

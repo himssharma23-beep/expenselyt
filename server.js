@@ -127,6 +127,51 @@ app.get('/tim/:token', (req, res) => {
   res.sendFile('tenant-invoice-month-share.html', { root: './views' });
 });
 
+app.get('/tenant-portal', (req, res, next) => {
+  try {
+    const templatePath = path.resolve(__dirname, 'views', 'tenant-portal.html');
+    let html = fs.readFileSync(templatePath, 'utf8');
+    const widgetConfig = {
+      enabled: false,
+      widgetId: '',
+      tokenAuth: '',
+    };
+    const tenantPortalAssetVersion = 'tenant-portal-live-v5';
+    html = html.replace(
+      '/js/tenant-portal-live.js',
+      `/js/tenant-portal-live.js?v=${encodeURIComponent(tenantPortalAssetVersion)}`
+    );
+    html = html.replace(
+      `<script src="/js/tenant-portal-live.js?v=${encodeURIComponent(tenantPortalAssetVersion)}"></script>`,
+      `  <script>window.__TENANT_PORTAL_MSG91__ = ${JSON.stringify(widgetConfig)};</script>\n  <script src="/js/tenant-portal-live.js?v=${encodeURIComponent(tenantPortalAssetVersion)}"></script>`
+    );
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.type('html').send(html);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/society-portal', (req, res, next) => {
+  try {
+    const templatePath = path.resolve(__dirname, 'views', 'society-portal.html');
+    let html = fs.readFileSync(templatePath, 'utf8');
+    const societyPortalAssetVersion = 'society-portal-v1';
+    html = html.replace(
+      '/js/society-portal.js',
+      `/js/society-portal.js?v=${encodeURIComponent(societyPortalAssetVersion)}`
+    );
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.type('html').send(html);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Public share data API — no auth required
 app.get('/health', (req, res) => {
   res.json({

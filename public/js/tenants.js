@@ -1,4 +1,4 @@
-let _tenantOverview = null;
+﻿let _tenantOverview = null;
 let _tenantLoading = false;
 let _selectedTenantBuildingId = null;
 let _selectedTenantRecordId = null;
@@ -37,11 +37,108 @@ function tenantCurrentMonthKey() {
   return new Date().toISOString().slice(0, 7);
 }
 
+function tenantSharedRoomInvoiceForMonth(tenant, invoiceMonth, { excludeTenantId = null } = {}) {
+  const roomId = Number(tenant?.room_id || 0);
+  const monthKey = String(invoiceMonth || '').trim();
+  if (!(roomId > 0) || !/^\d{4}-\d{2}$/.test(monthKey)) return null;
+  return (_tenantOverview?.invoices || [])
+    .filter((invoice) => {
+      if (excludeTenantId != null && String(invoice?.tenant_id || '') === String(excludeTenantId)) return false;
+      if (String(invoice?.invoice_month || '') !== monthKey) return false;
+      const invoiceTenant = tenantFindRecord(invoice?.tenant_id);
+      return Number(invoiceTenant?.room_id || 0) === roomId;
+    })
+    .sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0] || null;
+}
+
+function tenantInvoiceReadingDefaults(tenant, invoiceMonth = tenantCurrentMonthKey()) {
+  const monthKey = String(invoiceMonth || '').trim();
+  const ownLatestInvoice = (tenant?.invoices || [])[0] || null;
+  const roomInvoice = tenantSharedRoomInvoiceForMonth(tenant, monthKey, { excludeTenantId: tenant?.id });
+  if (roomInvoice) {
+    return {
+      previousUnits: Number(roomInvoice.previous_electricity_units || 0),
+      currentUnits: Number(roomInvoice.current_electricity_units || 0),
+      sourceLabel: `Copied from ${roomInvoice.tenant_name_snapshot || 'roommate'} invoice`,
+    };
+  }
+  return {
+    previousUnits: ownLatestInvoice ? Number(ownLatestInvoice.current_electricity_units || 0) : Number(tenant?.opening_electricity_units || 0),
+    currentUnits: '',
+    sourceLabel: '',
+  };
+}
+
 function tenantMonthLabel(monthKey) {
   const raw = String(monthKey || '').trim();
   if (!/^\d{4}-\d{2}$/.test(raw)) return raw || '-';
   const date = new Date(`${raw}-01T00:00:00`);
   return date.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+function tenantPreviousMonthKey(monthKey) {
+  const raw = String(monthKey || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return '';
+  const date = new Date(`${raw}-01T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setUTCMonth(date.getUTCMonth() - 1);
+  return date.toISOString().slice(0, 7);
+}
+
+function tenantCarryForwardPendingItems(tenant, targetMonthKey) {
+  const tenantId = Number(tenant?.id || 0);
+  const targetMonth = String(targetMonthKey || '').trim();
+  if (!(tenantId > 0) || !/^\d{4}-\d{2}$/.test(targetMonth)) return [];
+  const previousMonth = tenantPreviousMonthKey(targetMonth);
+  const invoices = (_tenantOverview?.invoices || [])
+    .filter((invoice) => Number(invoice?.tenant_id || 0) === tenantId && String(invoice?.invoice_month || '') < targetMonth)
+    .sort((a, b) => String(a?.invoice_month || '').localeCompare(String(b?.invoice_month || '')) || Number(a?.id || 0) - Number(b?.id || 0));
+  const outstandingByMonth = new Map();
+
+  invoices.forEach((invoice) => {
+    const invoiceMonth = String(invoice?.invoice_month || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(invoiceMonth)) return;
+    const carryItems = (Array.isArray(invoice?.other_charge_items) ? invoice.other_charge_items : [])
+      .filter((item) => String(item?.kind || '').trim().toLowerCase() === 'carry_forward_pending' && /^\d{4}-\d{2}$/.test(String(item?.source_invoice_month || '').trim()));
+    const carryTotal = tenantNum(carryItems.reduce((sum, item) => sum + tenantNum(item?.amount || 0), 0));
+    const baseAmount = Math.max(0, tenantNum(invoice?.total_amount || 0) - carryTotal);
+    if (baseAmount > 0) {
+      outstandingByMonth.set(invoiceMonth, tenantNum((outstandingByMonth.get(invoiceMonth) || 0) + baseAmount));
+    }
+
+    let paymentRemaining = Math.max(0, tenantNum(invoice?.paid_amount || 0));
+    carryItems
+      .map((item) => String(item.source_invoice_month || '').trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .forEach((sourceMonth) => {
+        if (paymentRemaining <= 0) return;
+        const currentOutstanding = tenantNum(outstandingByMonth.get(sourceMonth) || 0);
+        if (currentOutstanding <= 0) return;
+        const applied = Math.min(paymentRemaining, currentOutstanding);
+        outstandingByMonth.set(sourceMonth, tenantNum(currentOutstanding - applied));
+        paymentRemaining = tenantNum(paymentRemaining - applied);
+      });
+
+    if (paymentRemaining > 0) {
+      const currentOutstanding = tenantNum(outstandingByMonth.get(invoiceMonth) || 0);
+      if (currentOutstanding > 0) {
+        const applied = Math.min(paymentRemaining, currentOutstanding);
+        outstandingByMonth.set(invoiceMonth, tenantNum(currentOutstanding - applied));
+      }
+    }
+  });
+
+  return [...outstandingByMonth.entries()]
+    .map(([monthKey, amount]) => ({ monthKey, amount: tenantNum(amount || 0) }))
+    .filter((item) => item.amount > 0)
+    .sort((a, b) => String(a.monthKey).localeCompare(String(b.monthKey)))
+    .map((item) => ({
+      detail: item.monthKey === previousMonth ? 'Last month pending' : `${tenantMonthLabel(item.monthKey)} pending`,
+      amount: item.amount,
+      kind: 'carry_forward_pending',
+      source_invoice_month: item.monthKey,
+    }));
 }
 
 function tenantDateLabel(value) {
@@ -62,6 +159,29 @@ function tenantDateLabel(value) {
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return raw;
   return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function tenantElectricityUsageText(invoice = {}, {
+  currencyFormatter = (value) => String(value ?? 0),
+  includeRate = false,
+  includeAmount = false,
+  compact = false,
+} = {}) {
+  const previousUnits = Number(invoice.previous_electricity_units || 0);
+  const currentUnits = Number(invoice.current_electricity_units || 0);
+  const usedUnits = Number(invoice.electricity_units_used || 0);
+  const rateText = currencyFormatter(invoice.electricity_unit_price_snapshot || 0);
+  const amountText = currencyFormatter(invoice.electricity_amount || 0);
+  const usageText = (previousUnits === 0 && currentUnits === 0)
+    ? `${usedUnits} units`
+    : `${currentUnits} - ${previousUnits} = ${usedUnits} units`;
+  if (compact) {
+    return includeAmount ? `${usageText} • ${amountText}` : usageText;
+  }
+  if (includeRate && includeAmount) return `${usageText} @ ${rateText} = ${amountText}`;
+  if (includeRate) return `${usageText} @ ${rateText}`;
+  if (includeAmount) return `${usageText} • ${amountText}`;
+  return usageText;
 }
 
 function tenantPaginationPages(current, total) {
@@ -169,7 +289,87 @@ function tenantInitials(name) {
 }
 
 function tenantRoomTone(room) {
-  return room?.active_tenant ? 'green' : 'amber';
+  return Number(room?.active_tenant_count || (Array.isArray(room?.active_tenants) ? room.active_tenants.length : (room?.active_tenant ? 1 : 0))) > 0 ? 'green' : 'amber';
+}
+
+function tenantRoomActiveTenants(room) {
+  if (Array.isArray(room?.active_tenants)) return room.active_tenants;
+  return room?.active_tenant ? [room.active_tenant] : [];
+}
+
+function tenantRoomOccupantCount(room, excludeTenantId = null) {
+  return tenantRoomActiveTenants(room).filter((tenant) => String(tenant?.id || '') !== String(excludeTenantId || '')).length;
+}
+
+function tenantDefaultSplitConfig(shared = false) {
+  return {
+    divide_rent: !!shared,
+    divide_electricity: !!shared,
+    divide_sewerage: !!shared,
+    divide_water: !!shared,
+    divide_cleaning: !!shared,
+    divide_other: !!shared,
+  };
+}
+
+function tenantNormalizeOtherChargeItems(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      detail: String(item?.detail || '').trim(),
+      amount: tenantNum(item?.amount || 0),
+      kind: String(item?.kind || '').trim(),
+      source_invoice_month: String(item?.source_invoice_month || '').trim(),
+    }))
+    .filter((item) => item.detail || item.amount || item.kind);
+}
+
+function tenantDivideChargeAmount(amount, shouldDivide, divisor) {
+  const safeAmount = tenantNum(amount);
+  const safeDivisor = Math.max(1, Number(divisor || 1));
+  if (!shouldDivide || safeDivisor <= 1) return safeAmount;
+  return tenantNum(safeAmount / safeDivisor);
+}
+
+function tenantApplySplitToOtherChargeItems(items = [], shouldDivide, divisor) {
+  return tenantNormalizeOtherChargeItems(items).map((item) => (
+    item.kind === 'carry_forward_pending'
+      ? item
+      : { ...item, amount: tenantDivideChargeAmount(item.amount, shouldDivide, divisor) }
+  ));
+}
+
+function tenantReadSplitConfig(prefix) {
+  const key = String(prefix || '').trim();
+  return {
+    divide_rent: !!document.getElementById(`${key}SplitRent`)?.checked,
+    divide_electricity: !!document.getElementById(`${key}SplitElectricity`)?.checked,
+    divide_sewerage: !!document.getElementById(`${key}SplitSewerage`)?.checked,
+    divide_water: !!document.getElementById(`${key}SplitWater`)?.checked,
+    divide_cleaning: !!document.getElementById(`${key}SplitCleaning`)?.checked,
+    divide_other: !!document.getElementById(`${key}SplitOther`)?.checked,
+  };
+}
+
+function tenantSplitOptionsCard(prefix, roommateCount, splitConfig = tenantDefaultSplitConfig(roommateCount > 1)) {
+  if (!(roommateCount > 1)) return '';
+  const row = (id, label, checked) => `
+    <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--br);border-radius:10px;background:#fff">
+      <input type="checkbox" id="${prefix}${id}" ${checked ? 'checked' : ''} onchange="window.__tenantSplitChangeHandler && window.__tenantSplitChangeHandler(this)">
+      <span style="font-size:12px;font-weight:700;color:var(--t2)">${label}</span>
+    </label>`;
+  return `
+    <div class="card" style="padding:14px;margin-top:14px;background:#f7fbf8">
+      <div style="font-size:14px;font-weight:800;color:var(--t1)">Divide charges among ${roommateCount} tenants</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">Choose which bill parts should be split equally for this shared room.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:12px">
+        ${row('SplitRent', 'Divide Rent', splitConfig.divide_rent)}
+        ${row('SplitElectricity', 'Divide Electricity', splitConfig.divide_electricity)}
+        ${row('SplitSewerage', 'Divide Sewerage', splitConfig.divide_sewerage)}
+        ${row('SplitWater', 'Divide Water', splitConfig.divide_water)}
+        ${row('SplitCleaning', 'Divide Cleaning', splitConfig.divide_cleaning)}
+        ${row('SplitOther', 'Divide Other Charges', splitConfig.divide_other)}
+      </div>
+    </div>`;
 }
 
 function tenantBuildingTone(index) {
@@ -334,6 +534,12 @@ function tenantActionIcon(name) {
         <path d="M10 13a5 5 0 0 1 0-7l1.2-1.2a5 5 0 0 1 7 7L17 13"></path>
         <path d="M14 11a5 5 0 0 1 0 7l-1.2 1.2a5 5 0 0 1-7-7L7 11"></path>
       </svg>`,
+    portal: `
+      <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 3h7v7"></path>
+        <path d="M10 14 21 3"></path>
+        <path d="M21 14v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h4"></path>
+      </svg>`,
     edit: `
       <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="m4 20 4.2-1 9.4-9.4a1.8 1.8 0 0 0 0-2.5l-.7-.7a1.8 1.8 0 0 0-2.5 0L5 15.8 4 20z"></path>
@@ -349,6 +555,14 @@ function tenantActionIcon(name) {
       </svg>`,
   };
   return icons[name] || icons.edit;
+}
+
+function openTenantPortalForPhone(contactNumber = '') {
+  const digits = String(contactNumber || '').replace(/\D+/g, '').slice(-10);
+  const href = digits
+    ? `/tenant-portal?phone=${encodeURIComponent(digits)}`
+    : '/tenant-portal';
+  window.open(href, '_blank', 'noopener');
 }
 
 function tenantInvoiceOtherChargeRows(items = []) {
@@ -402,25 +616,51 @@ function tenantBulkInvoiceOtherItems(tenantId) {
     .filter(Boolean);
 }
 
+function tenantBulkSplitPrefix(tenantId) {
+  return `tenantBulk_${Number(tenantId)}_`;
+}
+
+function tenantBulkRoommateCount(tenant) {
+  const room = tenantFindRoom(tenant?.room_id);
+  return Math.max(1, tenantRoomActiveTenants(room).length || 1);
+}
+
 function tenantBulkInvoiceEstimate(tenant, monthKey) {
   const tenantId = Number(tenant?.id || 0);
   const profile = tenantBulkInvoiceChargeProfile(tenant, monthKey);
   const priorInvoice = tenantBulkInvoicePriorInvoice(tenant, monthKey);
+  const roommateCount = tenantBulkRoommateCount(tenant);
+  const splitConfig = tenantReadSplitConfig(tenantBulkSplitPrefix(tenantId));
   const previousUnits = priorInvoice ? Number(priorInvoice.current_electricity_units || 0) : Number(profile.opening_electricity_units || tenant?.opening_electricity_units || 0);
   const currentUnits = Number(document.getElementById(`tenantBulkCurrentUnits_${tenantId}`)?.value || previousUnits);
   const usedUnits = Math.max(0, currentUnits - previousUnits);
-  const electricityAmount = tenantNum(usedUnits * tenantNum(profile.electricity_unit_price || tenant?.electricity_unit_price || 0));
+  const electricityAmount = tenantDivideChargeAmount(
+    tenantNum(usedUnits * tenantNum(profile.electricity_unit_price || tenant?.electricity_unit_price || 0)),
+    splitConfig.divide_electricity,
+    roommateCount
+  );
+  const recurringItems = tenantApplySplitToOtherChargeItems(
+    tenantNormalizeOtherChargeItems(profile.monthly_additional_charges || tenant?.monthly_additional_charges || []),
+    splitConfig.divide_other,
+    roommateCount
+  );
+  const nextInvoiceItems = tenantApplySplitToOtherChargeItems(
+    tenantNormalizeOtherChargeItems(tenant?.next_invoice_charge_items || []),
+    splitConfig.divide_other,
+    roommateCount
+  );
+  const carryForwardItems = tenantCarryForwardPendingItems(tenant, monthKey);
   const otherItems = tenantBulkInvoiceOtherItems(tenantId);
-  const otherTotal = tenantNum(otherItems.reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
+  const otherTotal = tenantNum([...recurringItems, ...nextInvoiceItems, ...carryForwardItems, ...otherItems].reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
   const total = tenantNum(
-    tenantNum(profile.rent_amount || tenant?.rent_amount || 0)
-    + tenantNum(profile.sewerage_charge || tenant?.sewerage_charge || 0)
-    + tenantNum(profile.water_charge || tenant?.water_charge || 0)
-    + tenantNum(profile.cleaning_charge || tenant?.cleaning_charge || 0)
+    tenantDivideChargeAmount(tenantNum(profile.rent_amount || tenant?.rent_amount || 0), splitConfig.divide_rent, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.sewerage_charge || tenant?.sewerage_charge || 0), splitConfig.divide_sewerage, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.water_charge || tenant?.water_charge || 0), splitConfig.divide_water, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.cleaning_charge || tenant?.cleaning_charge || 0), splitConfig.divide_cleaning, roommateCount)
     + electricityAmount
     + otherTotal
   );
-  return { profile, previousUnits, currentUnits, usedUnits, electricityAmount, otherItems, otherTotal, total };
+  return { profile, previousUnits, currentUnits, usedUnits, electricityAmount, recurringItems, nextInvoiceItems, carryForwardItems, otherItems, otherTotal, total, splitConfig, roommateCount };
 }
 
 function updateTenantBulkInvoiceRow(tenantId) {
@@ -507,6 +747,7 @@ async function loadTenantsPage(options = {}) {
     toast('Could not load tenants.', 'error');
   } finally {
     _tenantLoading = false;
+    if (typeof window.refreshApprovalBadges === 'function') window.refreshApprovalBadges(true);
     renderTenantsPage();
   }
 }
@@ -741,7 +982,14 @@ function downloadTenantInvoicePdf(invoiceId) {
     ['Rent', pdf.cur(invoice.rent_amount_snapshot || 0)],
   ];
   if (Number(invoice.electricity_units_used || 0) !== 0 || Number(invoice.electricity_amount || 0) !== 0) {
-    body.push(['Electricity', `${Number(invoice.electricity_units_used || 0)} units * ${pdf.cur(invoice.electricity_unit_price_snapshot || 0)} = ${pdf.cur(invoice.electricity_amount || 0)}`]);
+    body.push([
+      'Electricity',
+      tenantElectricityUsageText(invoice, {
+        currencyFormatter: pdf.cur,
+        includeRate: true,
+        includeAmount: true,
+      }),
+    ]);
   }
   if (Number(invoice.sewerage_charge_snapshot || 0) !== 0) body.push(['Sewerage', pdf.cur(invoice.sewerage_charge_snapshot || 0)]);
   if (Number(invoice.water_charge_snapshot || 0) !== 0) body.push(['Water', pdf.cur(invoice.water_charge_snapshot || 0)]);
@@ -749,7 +997,9 @@ function downloadTenantInvoicePdf(invoiceId) {
   body.push(['Status', `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'pending' ? '' : ` - ${pdf.cur(invoice.paid_amount || 0)}`}`]);
   const chargeItems = Array.isArray(invoice.other_charge_items) ? invoice.other_charge_items.filter((item) => tenantNum(item.amount || 0) !== 0) : [];
   if (chargeItems.length) {
-    body.push(['Other Charges', chargeItems.map((item) => `${item.detail || 'Other charge'}: ${pdf.cur(item.amount || 0)}`).join(' | ')]);
+    chargeItems.forEach((item) => {
+      body.push([item.detail || 'Other charge', pdf.cur(item.amount || 0)]);
+    });
   } else if (Number(invoice.other_charges_snapshot || 0) !== 0) {
     body.push(['Other Charges', pdf.cur(invoice.other_charges_snapshot || 0)]);
   }
@@ -842,7 +1092,11 @@ function downloadTenantMonthInvoicesPdf(buildingId = _selectedTenantBuildingId, 
   pdf.table(doc, y, [['Tenant', 'Room', 'Electricity', 'Status', 'Due Date', 'Total']], monthInvoices.map((invoice) => [
     invoice.tenant_name_snapshot || 'Tenant',
     invoice.room_label_snapshot || '-',
-    `${Number(invoice.electricity_units_used || 0)} units • ${pdf.cur(invoice.electricity_amount || 0)}`,
+    tenantElectricityUsageText(invoice, {
+      currencyFormatter: pdf.cur,
+      includeAmount: true,
+      compact: true,
+    }),
     `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'partial_paid' ? ` • ${pdf.cur(invoice.paid_amount || 0)}` : invoice.payment_status === 'paid' ? ` • ${pdf.cur(invoice.paid_amount || invoice.total_amount || 0)}` : ''}`,
     pdf.dt(invoice.due_date),
     pdf.cur(invoice.total_amount || 0),
@@ -1191,6 +1445,7 @@ function renderTenantRecordsTab(building) {
                 tenant.contract_months ? `${Number(tenant.contract_months)} months` : '',
                 tenant.end_date ? `Till ${fmtDate(tenant.end_date)}` : '',
               ].filter(Boolean).join(' · ') || '-';
+              const portalPhone = String(tenant.contact_number || '').replace(/\D+/g, '').slice(-10);
               return `
                 <tr onclick="openTenantRecord(${Number(tenant.id)})" style="cursor:pointer;background:${String(tenant.id) === String(_selectedTenantRecordId) ? '#f5fbf7' : ''}">
                   <td>
@@ -1205,6 +1460,7 @@ function renderTenantRecordsTab(building) {
                   <td class="tenant-ledger-actions-cell">
                     <div class="tenant-ledger-front-actions">
                       <button class="trip-icon-btn" title="View Details" onclick="event.stopPropagation();showTenantRecordDetailsModal(${Number(tenant.id)})">${tenantActionIcon('view')}</button>
+                      ${portalPhone ? `<button class="trip-icon-btn" title="Open Tenant Portal" onclick="event.stopPropagation();openTenantPortalForPhone('${portalPhone}')">${tenantActionIcon('portal')}</button>` : ''}
                       <button class="trip-icon-btn" title="Generate Invoice" onclick="event.stopPropagation();showTenantInvoiceModal(${Number(tenant.id)})">${tenantActionIcon('invoice')}</button>
                       <button class="trip-icon-btn" title="Import Invoices" onclick="event.stopPropagation();showTenantInvoiceImportModal(${Number(tenant.id)})">${tenantActionIcon('import')}</button>
                       <button class="trip-icon-btn" title="Edit Tenant" onclick="event.stopPropagation();showTenantRecordModal(${Number(tenant.id)})">${tenantActionIcon('edit')}</button>
@@ -1297,12 +1553,13 @@ function renderTenantInvoicesTab(building) {
                 <td>${escHtml(tenantMonthLabel(invoice.invoice_month))}</td>
                 <td>${tenantInvoiceTenantCell(invoice)}</td>
                 <td>${escHtml(invoice.room_label_snapshot || '-')}</td>
-                <td>${Number(invoice.electricity_units_used || 0)} units • ${fmtCur(invoice.electricity_amount || 0)}</td>
+                <td>${tenantElectricityUsageText(invoice, { currencyFormatter: fmtCur, includeAmount: true, compact: true })}</td>
                 <td style="font-weight:800">${fmtCur(invoice.total_amount || 0)}</td>
                 <td>
                   <div style="display:grid;gap:6px;min-width:150px">
                     ${tenantInvoiceStatusButtons(invoice)}
                     <div>${tenantChip(`${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'partial_paid' ? ` · ${fmtCur(invoice.paid_amount || 0)}` : invoice.payment_status === 'paid' ? ` · ${fmtCur(invoice.paid_amount || invoice.total_amount || 0)}` : ''}`, tenantInvoiceStatusTone(invoice.payment_status))}</div>
+                    ${tenantInvoicePaymentRequestHtml(invoice)}
                   </div>
                 </td>
                 <td>${escHtml(tenantDateLabel(invoice.due_date))}</td>
@@ -1974,7 +2231,7 @@ function tenantDetailInvoiceHistory(tenant) {
           <div style="display:grid;gap:5px">
             <div style="font-size:13px;font-weight:800;color:var(--t1)">${escHtml(tenantMonthLabel(invoice.invoice_month))} <span style="font-weight:600;color:var(--t3)">• ${escHtml(invoice.room_label_snapshot || '-')}</span></div>
             <div style="font-size:12px;color:var(--t2)">Total ${fmtCur(invoice.total_amount || 0)} • ${escHtml(tenantInvoiceStatusLabel(invoice.payment_status))}</div>
-            <div style="font-size:11px;color:var(--t3)">Due ${escHtml(tenantDateLabel(invoice.due_date))} • Meter ${Number(invoice.previous_electricity_units || 0)} to ${Number(invoice.current_electricity_units || 0)}</div>
+            <div style="font-size:11px;color:var(--t3)">Due ${escHtml(tenantDateLabel(invoice.due_date))} • ${escHtml(tenantElectricityUsageText(invoice))}</div>
           </div>
           <button class="btn btn-s btn-sm" onclick="showTenantInvoiceViewModal(${Number(invoice.id)})">View Invoice</button>
         </div>`).join('')}
@@ -2079,12 +2336,9 @@ function showTenantRecordModal(recordId = null) {
   const nextInvoiceCharges = Array.isArray(record?.next_invoice_charge_items)
     ? record.next_invoice_charge_items
     : [];
-  const rooms = (selectedBuilding.rooms || []).filter((room) => {
-    const occupiedByAnother = room.active_tenant && String(room.active_tenant.id) !== String(record?.id || '');
-    return !occupiedByAnother;
-  });
-  if (!rooms.length && !record) {
-    toast('No vacant rooms available in this building.', 'warning');
+  const rooms = [...(selectedBuilding.rooms || [])].sort((a, b) => String(a.room_label || '').localeCompare(String(b.room_label || '')));
+  if (!rooms.length) {
+    toast('No rooms available in this building.', 'warning');
     return;
   }
   _tenantModalFiles = {
@@ -2122,7 +2376,11 @@ function showTenantRecordModal(recordId = null) {
             </label>
             <label class="fl">
               <span class="tenant-editor-label">Room</span>
-              <select class="fi" id="tenantRecordRoom">${rooms.map((room) => `<option value="${Number(room.id)}" ${String(room.id) === String(record?.room_id || '') ? 'selected' : ''}>${escHtml(room.room_label || 'Room')}</option>`).join('')}</select>
+              <select class="fi" id="tenantRecordRoom" onchange="updateTenantSharedRoomNotice(${Number(record?.id || 0)})">${rooms.map((room) => {
+                const others = tenantRoomOccupantCount(room, record?.id || 0);
+                const suffix = others > 0 ? ` (${others} active)` : '';
+                return `<option value="${Number(room.id)}" ${String(room.id) === String(record?.room_id || '') ? 'selected' : ''}>${escHtml(`${room.room_label || 'Room'}${suffix}`)}</option>`;
+              }).join('')}</select>
             </label>
             <label class="fl">
               <span class="tenant-editor-label">Contact Number</span>
@@ -2153,6 +2411,7 @@ function showTenantRecordModal(recordId = null) {
               <input class="fi" type="number" min="0" step="0.01" id="tenantRecordSecurity" value="${escHtml(String(record?.security_deposit || 0))}" placeholder="12000">
             </label>
           </div>
+          <div id="tenantSharedRoomNotice" style="margin-top:14px"></div>
           ${tenantEditorSection('Address & Notes')}
           <div class="fg">
             <label class="fl full">
@@ -2266,6 +2525,7 @@ function showTenantRecordModal(recordId = null) {
     </div>`);
   setTenantEditorTab('details');
   renderTenantModalAttachments();
+  updateTenantSharedRoomNotice(record?.id || 0);
 }
 
 async function saveTenantRecord(recordId = null) {
@@ -2323,6 +2583,7 @@ async function saveTenantRecord(recordId = null) {
     proof_attachments: _tenantModalFiles.proof_attachments,
     vehicles,
     provided_items,
+    allow_shared_room: !!document.getElementById('tenantAllowSharedRoom')?.checked,
   };
   if (!(body.room_id > 0)) {
     toast('Please select a room.', 'warning');
@@ -2348,7 +2609,7 @@ async function deleteTenantRecord(recordId) {
   await loadTenantsPage();
 }
 
-function showTenantInvoiceModal(recordId) {
+function showTenantInvoiceModal(recordId, options = {}) {
   const building = tenantFindBuilding(_selectedTenantBuildingId);
   const buildingTenants = (_tenantOverview?.tenants || [])
     .filter((tenant) => String(tenant.building_id) === String(building?.id || '') && tenant.is_active);
@@ -2359,13 +2620,19 @@ function showTenantInvoiceModal(recordId) {
   const tenant = tenantFindRecord(resolvedRecordId);
   if (!tenant) { toast('Tenant not found.', 'error'); return; }
   _selectedTenantRecordId = Number(tenant.id);
-  const latestInvoice = (tenant.invoices || [])[0] || null;
-  const previousUnits = latestInvoice ? Number(latestInvoice.current_electricity_units || 0) : Number(tenant.opening_electricity_units || 0);
+  const room = tenantFindRoom(tenant.room_id);
+  const roommateCount = Math.max(1, tenantRoomActiveTenants(room).length || 1);
+  const splitConfig = tenantDefaultSplitConfig(roommateCount > 1);
+  const invoiceMonth = String(options.invoiceMonth || tenantCurrentMonthKey()).trim() || tenantCurrentMonthKey();
+  const dueDate = String(options.dueDate || new Date().toISOString().slice(0, 10)).trim() || new Date().toISOString().slice(0, 10);
+  const readingDefaults = tenantInvoiceReadingDefaults(tenant, invoiceMonth);
+  const previousUnits = readingDefaults.previousUnits;
+  const currentUnits = readingDefaults.currentUnits;
   const tenantOptions = buildingTenants.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(tenant.id) ? 'selected' : ''}>${escHtml(item.tenant_name || 'Tenant')}</option>`).join('');
   openModal(`Invoice - ${escHtml(tenant.tenant_name)}`, `
     <div class="card" style="padding:14px;margin-bottom:14px;background:#f7faf8">
       <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
-      <div style="font-size:12px;color:var(--t3);margin-top:4px">Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${previousUnits}</div>
+      <div id="tenantInvoiceMeta" style="font-size:12px;color:var(--t3);margin-top:4px">Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${previousUnits}${readingDefaults.sourceLabel ? ` • ${escHtml(readingDefaults.sourceLabel)}` : ''}</div>
     </div>
     <div class="fg">
       <label class="fl full">Tenant
@@ -2373,10 +2640,10 @@ function showTenantInvoiceModal(recordId) {
           ${tenantOptions}
         </select>
       </label>
-      <label class="fl">Invoice Month *<input class="fi" type="month" id="tenantInvoiceMonth" value="${escHtml(tenantCurrentMonthKey())}"></label>
-      <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(new Date().toISOString().slice(0, 10))}"></label>
+      <label class="fl">Invoice Month *<input class="fi" type="month" id="tenantInvoiceMonth" value="${escHtml(invoiceMonth)}" onchange="updateTenantInvoiceModalReadings()"></label>
+      <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(dueDate)}"></label>
       <label class="fl">Previous Units<input class="fi" type="number" id="tenantInvoicePrevUnits" value="${previousUnits}" disabled></label>
-      <label class="fl">Current Units *<input class="fi" type="number" min="${previousUnits}" step="1" id="tenantInvoiceCurrentUnits" value="" placeholder="Enter current reading"></label>
+      <label class="fl">Current Units *<input class="fi" type="number" min="${previousUnits}" step="1" id="tenantInvoiceCurrentUnits" value="${escHtml(String(currentUnits))}" placeholder="Enter current reading"></label>
       <label class="fl">Payment Status
         <select class="fi" id="tenantInvoiceStatus" onchange="toggleTenantInvoicePaidAmount()">
           <option value="pending">Pending</option>
@@ -2387,6 +2654,7 @@ function showTenantInvoiceModal(recordId) {
       <label class="fl" id="tenantInvoicePaidAmountWrap" style="display:none">Paid Amount<input class="fi" type="number" min="0" step="0.01" id="tenantInvoicePaidAmount" value="0"></label>
       <label class="fl full">Notes<textarea class="fi" id="tenantInvoiceNotes" rows="3" placeholder="Optional notes for this month"></textarea></label>
     </div>
+    ${tenantSplitOptionsCard('tenantInvoice', roommateCount, splitConfig)}
     <div class="card" style="padding:14px;margin-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
         <div style="font-size:15px;font-weight:800;color:var(--t1)">Other Charges</div>
@@ -2404,7 +2672,67 @@ function showTenantInvoiceModal(recordId) {
 function changeTenantInvoiceModalTenant(value) {
   const tenantId = Number(value || 0);
   if (!tenantId) return;
-  showTenantInvoiceModal(tenantId);
+  showTenantInvoiceModal(tenantId, {
+    invoiceMonth: document.getElementById('tenantInvoiceMonth')?.value || tenantCurrentMonthKey(),
+    dueDate: document.getElementById('tenantInvoiceDueDate')?.value || new Date().toISOString().slice(0, 10),
+  });
+}
+
+function updateTenantInvoiceModalReadings() {
+  const tenantId = Number(document.getElementById('tenantInvoiceTenantId')?.value || 0);
+  const invoiceMonth = document.getElementById('tenantInvoiceMonth')?.value || tenantCurrentMonthKey();
+  const tenant = tenantFindRecord(tenantId);
+  if (!tenant) return;
+  const defaults = tenantInvoiceReadingDefaults(tenant, invoiceMonth);
+  const prevInput = document.getElementById('tenantInvoicePrevUnits');
+  const currentInput = document.getElementById('tenantInvoiceCurrentUnits');
+  const meta = document.getElementById('tenantInvoiceMeta');
+  if (prevInput) prevInput.value = String(defaults.previousUnits);
+  if (currentInput) {
+    currentInput.min = String(defaults.previousUnits);
+    currentInput.value = defaults.currentUnits === '' ? '' : String(defaults.currentUnits);
+  }
+  if (meta) {
+    meta.textContent = `Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${defaults.previousUnits}${defaults.sourceLabel ? ` • ${defaults.sourceLabel}` : ''}`;
+  }
+}
+
+function updateTenantSharedRoomNotice(recordId = 0) {
+  const roomId = Number(document.getElementById('tenantRecordRoom')?.value || 0);
+  const room = tenantFindRoom(roomId);
+  const wrap = document.getElementById('tenantSharedRoomNotice');
+  if (!wrap) return;
+  const others = tenantRoomOccupantCount(room, recordId || 0);
+  if (!(others > 0)) {
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="card" style="padding:14px;background:#fff8e8;border:1px solid #f2d58c">
+      <div style="font-size:13px;font-weight:800;color:#8b5c00">This room already has ${others} active tenant${others === 1 ? '' : 's'}.</div>
+      <div style="font-size:12px;color:#7a6440;margin-top:4px">Enable shared room to add another tenant here. Invoice divide options can then split charges among ${others + 1} tenants.</div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;font-weight:700;color:var(--t2)">
+        <input type="checkbox" id="tenantAllowSharedRoom">
+        Allow shared room occupancy
+      </label>
+    </div>`;
+}
+
+function tenantInvoicePaymentRequestHtml(invoice) {
+  const request = invoice?.pending_payment_request || null;
+  if (!request || String(request.status || '').toLowerCase() !== 'pending') return '';
+  const requestedAmount = fmtCur(request.requested_amount || invoice?.total_amount || 0);
+  const tenantNote = String(request.tenant_note || '').trim();
+  return `
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid #f2d9a4;border-radius:14px;background:#fff9ef;display:grid;gap:8px">
+      <div style="font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#a76c00">Tenant Marked Paid</div>
+      <div style="font-size:13px;font-weight:800;color:var(--t1)">Requested amount ${requestedAmount}</div>
+      ${tenantNote ? `<div style="font-size:12px;line-height:1.5;color:var(--t2)">${escHtml(tenantNote)}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-p btn-sm" onclick="reviewTenantPaymentRequest(${Number(request.id)}, 'approved')">Approve</button>
+        <button class="btn btn-s btn-sm" style="color:var(--red)" onclick="reviewTenantPaymentRequest(${Number(request.id)}, 'rejected')">Reject</button>
+      </div>
+    </div>`;
 }
 
 function showTenantBulkInvoiceModal() {
@@ -2415,6 +2743,11 @@ function showTenantBulkInvoiceModal() {
     .sort((a, b) => (a.room_id - b.room_id) || String(a.tenant_name || '').localeCompare(String(b.tenant_name || '')));
   if (!tenants.length) { toast('No active tenants available in this building.', 'warning'); return; }
   const monthKey = tenantCurrentMonthKey();
+  window.__tenantSplitChangeHandler = (input) => {
+    const id = String(input?.id || '');
+    const match = id.match(/^tenantBulk_(\d+)_/);
+    if (match) updateTenantBulkInvoiceRow(Number(match[1]));
+  };
   window.__modalClassName = 'modal-wide tenant-bulk-modal';
   openModal(`Generate Monthly Bills - ${escHtml(building.name || 'Building')}`, `
     <div class="card" style="padding:16px;margin-bottom:16px;border:1px solid #cfe0ff">
@@ -2458,6 +2791,7 @@ function showTenantBulkInvoiceModal() {
                 </div>
               </div>
             </div>
+            ${tenantSplitOptionsCard(tenantBulkSplitPrefix(tenant.id), estimate.roommateCount, tenantDefaultSplitConfig(estimate.roommateCount > 1))}
             <div class="tenant-bulk-extra">
               <div class="tenant-bulk-extra-head">
                 <div class="tenant-bulk-label">Extra Expenses</div>
@@ -2499,6 +2833,7 @@ async function saveTenantBulkInvoices() {
       current_electricity_units: Number(document.getElementById(`tenantBulkCurrentUnits_${Number(tenant.id)}`)?.value || estimate.previousUnits),
       payment_status: status,
       paid_amount: Number(document.getElementById(`tenantBulkPaidAmount_${Number(tenant.id)}`)?.value || 0),
+      split_config: tenantReadSplitConfig(tenantBulkSplitPrefix(tenant.id)),
       other_charge_items: estimate.otherItems,
       notes: '',
     };
@@ -2518,6 +2853,7 @@ function showTenantInvoiceEditModal(invoiceId) {
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
   const tenant = tenantFindRecord(invoice.tenant_id);
   if (!tenant) { toast('Tenant not found.', 'error'); return; }
+  const roommateCount = Math.max(1, Number(invoice.roommate_count_snapshot || tenantBulkRoommateCount(tenant) || 1));
   openModal(`Edit Invoice - ${escHtml(tenantMonthLabel(invoice.invoice_month))}`, `
     <div class="card" style="padding:14px;margin-bottom:14px;background:#f7faf8">
       <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
@@ -2538,6 +2874,7 @@ function showTenantInvoiceEditModal(invoiceId) {
       <label class="fl" id="tenantInvoicePaidAmountWrap" style="${invoice.payment_status === 'partial_paid' ? '' : 'display:none'}">Paid Amount<input class="fi" type="number" min="0" step="0.01" id="tenantInvoicePaidAmount" value="${escHtml(String(invoice.paid_amount || 0))}"></label>
       <label class="fl full">Notes<textarea class="fi" id="tenantInvoiceNotes" rows="3" placeholder="Optional notes for this month">${escHtml(invoice.notes || '')}</textarea></label>
     </div>
+    ${tenantSplitOptionsCard('tenantInvoice', roommateCount, invoice.split_config || tenantDefaultSplitConfig(roommateCount > 1))}
     <div class="card" style="padding:14px;margin-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
         <div style="font-size:15px;font-weight:800;color:var(--t1)">Other Charges</div>
@@ -2567,6 +2904,7 @@ async function saveTenantInvoice(recordId, invoiceId = null) {
     current_electricity_units: Number(document.getElementById('tenantInvoiceCurrentUnits')?.value || 0),
     payment_status: document.getElementById('tenantInvoiceStatus')?.value || 'pending',
     paid_amount: Number(document.getElementById('tenantInvoicePaidAmount')?.value || 0),
+    split_config: tenantReadSplitConfig('tenantInvoice'),
     other_charge_items: otherChargeItems,
     notes: document.getElementById('tenantInvoiceNotes')?.value?.trim() || '',
   };
@@ -2649,6 +2987,23 @@ async function saveTenantPartialStatus(invoiceId) {
   tenantRestoreViewportPosition(scrollTop);
 }
 
+async function reviewTenantPaymentRequest(requestId, decision) {
+  const action = String(decision || '').trim().toLowerCase();
+  if (!['approved', 'rejected'].includes(action)) return;
+  const confirmed = await confirmDialog(action === 'approved' ? 'Approve this tenant payment request?' : 'Reject this tenant payment request?');
+  if (!confirmed) return;
+  const result = await api(`/api/tenants/payment-requests/${Number(requestId)}/review`, {
+    method: 'POST',
+    body: { status: action },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not review payment request.', 'error');
+    return;
+  }
+  toast(action === 'approved' ? 'Tenant payment request approved' : 'Tenant payment request rejected', 'success');
+  await loadTenantsPage();
+}
+
 function showTenantInvoiceViewModal(invoiceId) {
   const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
@@ -2666,7 +3021,7 @@ function showTenantInvoiceViewModal(invoiceId) {
           <tbody>
             <tr><td>Invoice Month</td><td>${escHtml(tenantMonthLabel(invoice.invoice_month))}</td></tr>
             <tr><td>Rent</td><td>${fmtCur(invoice.rent_amount_snapshot || 0)}</td></tr>
-            <tr><td>Electricity</td><td>${Number(invoice.electricity_units_used || 0)} units × ${fmtCur(invoice.electricity_unit_price_snapshot || 0)} = ${fmtCur(invoice.electricity_amount || 0)}</td></tr>
+            <tr><td>Electricity</td><td>${tenantElectricityUsageText(invoice, { currencyFormatter: fmtCur, includeRate: true, includeAmount: true })}</td></tr>
             <tr><td>Sewerage</td><td>${fmtCur(invoice.sewerage_charge_snapshot || 0)}</td></tr>
             <tr><td>Water</td><td>${fmtCur(invoice.water_charge_snapshot || 0)}</td></tr>
             <tr><td>Cleaning</td><td>${fmtCur(invoice.cleaning_charge_snapshot || 0)}</td></tr>
@@ -2901,6 +3256,7 @@ window.downloadTenantInvoicePdf = downloadTenantInvoicePdf;
 window.downloadTenantMonthInvoicesPdf = downloadTenantMonthInvoicesPdf;
 window.downloadTenantReportPdf = downloadTenantReportPdf;
 window.showTenantPartialStatusModal = showTenantPartialStatusModal;
+window.reviewTenantPaymentRequest = reviewTenantPaymentRequest;
 window.saveTenantPartialStatus = saveTenantPartialStatus;
 window.showTenantBulkInvoiceModal = showTenantBulkInvoiceModal;
 window.refreshTenantBulkInvoiceModal = refreshTenantBulkInvoiceModal;

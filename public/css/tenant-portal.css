@@ -1,0 +1,421 @@
+*{box-sizing:border-box}
+:root{
+  --tp-bg:#0f2418;
+  --tp-bg-2:#173925;
+  --tp-panel:rgba(255,255,255,.08);
+  --tp-panel-border:rgba(255,255,255,.14);
+  --tp-panel-strong:rgba(255,255,255,.12);
+  --tp-green:#5ca16f;
+  --tp-green-2:#8ce3a0;
+  --tp-green-3:#dff7e4;
+  --tp-white:#fff;
+  --tp-text:#f4f8f5;
+  --tp-muted:rgba(244,248,245,.68);
+  --tp-dark:#12161f;
+  --tp-surface:#fff;
+  --tp-surface-alt:#f8faf8;
+  --tp-line:#e4ece7;
+  --tp-danger:#bf553f;
+  --tp-danger-bg:#fff2ef;
+  --tp-warn:#ce8a1d;
+  --tp-warn-bg:#fff7de;
+  --tp-ok:#2f7b52;
+  --tp-ok-bg:#ecf9f1;
+  --tp-shadow:0 24px 64px rgba(7,17,11,.22);
+  --tp-mono:'JetBrains Mono', monospace;
+  --tp-font:'DM Sans', sans-serif;
+  --tp-page-width:min(960px, calc(100vw - 32px));
+}
+html,body{margin:0;padding:0;min-height:100%;font-family:var(--tp-font);background:#f3f6f4;color:var(--tp-dark)}
+body{min-height:100vh}
+.tenant-portal-shell{min-height:100vh}
+.tenant-portal-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:#476252;font-size:18px}
+
+.tenant-portal-auth{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:
+    linear-gradient(0deg, rgba(10,24,16,.62), rgba(10,24,16,.62)),
+    linear-gradient(135deg, #102716 0%, #173924 58%, #20472e 100%);
+  position:relative;
+  overflow:hidden;
+}
+.tenant-portal-auth::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+  background-size:48px 48px;
+  opacity:.34;
+}
+.tenant-portal-auth-glow{
+  position:absolute;
+  width:420px;height:420px;border-radius:999px;
+  background:radial-gradient(circle, rgba(92,161,111,.3) 0%, rgba(92,161,111,0) 72%);
+  filter:blur(24px);left:50%;top:44%;transform:translate(-50%,-50%);
+}
+.tenant-portal-auth-inner{position:relative;z-index:1;width:min(640px,100%)}
+.tenant-portal-brand{
+  display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:16px;color:var(--tp-white);
+}
+.tenant-portal-brand-mark{
+  width:60px;height:60px;border-radius:18px;background:rgba(92,161,111,.42);
+  border:1px solid rgba(255,255,255,.08);box-shadow:0 12px 40px rgba(68,145,92,.25);
+  display:grid;place-items:center;font-size:24px;
+}
+.tenant-portal-brand-text{font-size:32px;font-weight:800;letter-spacing:-.04em}
+.tenant-portal-brand-text span{color:var(--tp-green-2)}
+.tenant-portal-card{
+  width:min(500px,100%);
+  margin:0 auto;
+  padding:26px 28px 22px;
+  border-radius:24px;
+  border:1px solid var(--tp-panel-border);
+  background:linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,.06));
+  box-shadow:var(--tp-shadow);
+  backdrop-filter:blur(18px);
+  color:var(--tp-text);
+  position:relative;
+  overflow:hidden;
+}
+.tenant-portal-card::before{
+  content:'';
+  position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+  background-size:64px 64px;
+  pointer-events:none;
+}
+.tenant-portal-card > *{position:relative;z-index:1}
+.tenant-portal-title{font-size:24px;font-weight:800;letter-spacing:-.04em;margin:0}
+.tenant-portal-sub{margin-top:8px;font-size:15px;line-height:1.55;color:var(--tp-muted);max-width:360px}
+.tenant-portal-field{margin-top:20px}
+.tenant-portal-phone{
+  display:flex;align-items:center;gap:16px;
+  padding:0 18px;height:62px;border-radius:18px;
+  border:2px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);
+}
+.tenant-portal-phone-prefix{font-size:18px;font-weight:800;color:rgba(255,255,255,.82);white-space:nowrap}
+.tenant-portal-phone-sep{width:1px;height:22px;background:rgba(255,255,255,.14)}
+.tenant-portal-phone input{
+  flex:1;border:none;outline:none;background:transparent;color:var(--tp-white);
+  font-size:18px;font-weight:700;letter-spacing:.02em;font-family:var(--tp-mono)
+}
+.tenant-portal-phone input::placeholder{color:rgba(255,255,255,.34);font-family:var(--tp-font);font-size:16px;font-weight:700}
+.tenant-portal-primary-btn{
+  width:100%;margin-top:20px;height:62px;border:none;border-radius:18px;
+  background:linear-gradient(180deg, #5a9868 0%, #4f8f5f 100%);
+  color:#fff;font-size:17px;font-weight:800;cursor:pointer;
+  box-shadow:0 18px 40px rgba(72,135,90,.24);
+}
+.tenant-portal-primary-btn:disabled{opacity:.6;cursor:not-allowed}
+.tenant-portal-note{
+  margin-top:18px;text-align:center;color:rgba(255,255,255,.34);font-size:13px;line-height:1.6
+}
+.tenant-portal-otp-line{margin-top:16px;color:var(--tp-muted);font-size:13px;display:flex;align-items:center;gap:10px}
+.tenant-portal-otp-grid{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:8px;
+  margin-top:18px
+}
+.tenant-portal-otp-input{
+  width:100%;
+  min-width:0;
+  height:58px;border-radius:14px;border:2px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);color:#fff;text-align:center;
+  font-size:22px;font-weight:800;font-family:var(--tp-mono);outline:none;
+  padding:0
+}
+.tenant-portal-otp-input:focus{border-color:rgba(140,227,160,.58);box-shadow:0 0 0 4px rgba(140,227,160,.12)}
+.tenant-portal-resend{text-align:center;margin-top:14px;font-size:13px;color:var(--tp-muted)}
+.tenant-portal-link-btn{background:none;border:none;color:var(--tp-green-2);font:inherit;font-weight:800;cursor:pointer}
+.tenant-portal-alert{
+  margin-top:16px;padding:12px 14px;border-radius:14px;font-size:13px;line-height:1.5
+}
+.tenant-portal-alert-error{background:rgba(191,85,63,.14);color:#ffd8cf;border:1px solid rgba(255,190,175,.22)}
+.tenant-portal-alert-success{background:rgba(92,161,111,.14);color:#d8ffdf;border:1px solid rgba(185,247,199,.22)}
+
+.tenant-portal-dashboard{
+  zoom:.8;
+  min-height:100vh;background:#f3f6f4;color:var(--tp-dark)
+}
+.tenant-portal-hero{
+  position:relative;
+  padding:12px 18px 14px;
+  background:
+    linear-gradient(180deg, rgba(33,92,58,.88), rgba(92,161,111,.88)),
+    linear-gradient(135deg,#1c472e,#4d895d);
+  color:#fff;
+  overflow:hidden;
+}
+.tenant-portal-hero::before{
+  content:'';position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px);
+  background-size:38px 38px;opacity:.24;pointer-events:none;
+}
+.tenant-portal-hero > *{position:relative;z-index:1}
+.tenant-portal-hero-inner{
+  width:var(--tp-page-width);
+  margin:0 auto;
+}
+.tenant-portal-topbar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.tenant-portal-wordmark{font-size:15px;font-weight:800;letter-spacing:-.03em}
+.tenant-portal-wordmark span{color:#d8ffd9}
+.tenant-portal-ghost-btn{
+  display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:16px;
+  border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#fff;
+  font-size:14px;font-weight:700;cursor:pointer
+}
+.tenant-portal-greeting{margin-top:14px;color:rgba(255,255,255,.82);font-size:13px}
+.tenant-portal-name{font-size:28px;font-weight:800;line-height:1;letter-spacing:-.05em}
+.tenant-portal-room-badge{
+  display:inline-flex;align-items:center;gap:8px;margin-top:8px;padding:6px 12px;
+  border-radius:999px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);
+  color:#eaffec;font-size:12px;font-weight:600
+}
+.tenant-portal-summary-grid{
+  margin:14px 0 -14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  border-top:1px solid rgba(255,255,255,.16)
+}
+.tenant-portal-summary-card{
+  padding:10px 10px;text-align:center;border-left:1px solid rgba(255,255,255,.16)
+}
+.tenant-portal-summary-card:first-child{border-left:none}
+.tenant-portal-summary-label{
+  font-size:11px;font-weight:800;letter-spacing:.24em;text-transform:uppercase;color:rgba(255,255,255,.62)
+}
+.tenant-portal-summary-value{
+  margin-top:4px;font-size:15px;font-weight:800;font-family:var(--tp-mono)
+}
+.tenant-portal-summary-value.warn{color:#ffde6a}
+.tenant-portal-summary-value.danger{color:#ffb3ab}
+
+.tenant-portal-main{padding:14px 18px 22px}
+.tenant-portal-main-inner{
+  width:var(--tp-page-width);
+  margin:0 auto;
+}
+.tenant-portal-section-head{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;margin-bottom:8px}
+.tenant-portal-section-title{font-size:16px;font-weight:800;letter-spacing:-.03em}
+.tenant-portal-section-sub{margin-top:2px;font-size:12px;color:#879286}
+.tenant-portal-surface{
+  background:#fff;border:1px solid var(--tp-line);border-radius:14px;
+  box-shadow:0 10px 24px rgba(17,24,39,.05);overflow:hidden
+}
+.tenant-portal-detail-pills{
+  display:flex;flex-wrap:wrap;gap:6px;padding:12px 14px;border-bottom:1px solid var(--tp-line)
+}
+.tenant-portal-detail-pill{
+  display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:12px;
+  border:1px solid var(--tp-line);background:#fff;font-size:12px;font-weight:700;color:#304536
+}
+.tenant-portal-detail-pill.green{background:#edf8f1;color:#325745;border-color:#dcefe3}
+.tenant-portal-detail-pill.blue{background:#eef2ff;color:#5062a7;border-color:#e0e6ff}
+.tenant-portal-detail-pill.amber{background:#fff5d9;color:#b37216;border-color:#f6e6b5}
+.tenant-portal-detail-tabs{
+  display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px;border-bottom:1px solid var(--tp-line)
+}
+.tenant-portal-detail-tab{
+  padding:8px 12px;border-radius:10px;border:1px solid #dbe7df;background:#fff;color:#6f7672;
+  font-size:12px;font-weight:700;cursor:pointer
+}
+.tenant-portal-detail-tab.active{
+  background:#edf8f1;border-color:#d8e9df;color:#2f7b52
+}
+.tenant-portal-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.tenant-portal-detail-cell{
+  padding:12px 14px;border-right:1px solid var(--tp-line);border-bottom:1px solid var(--tp-line)
+}
+.tenant-portal-detail-grid .tenant-portal-detail-cell:nth-child(3n){border-right:none}
+.tenant-portal-detail-label{font-size:11px;font-weight:800;letter-spacing:.24em;text-transform:uppercase;color:#acb5ad}
+.tenant-portal-detail-value{margin-top:6px;font-size:13px;font-weight:800;letter-spacing:-.02em}
+.tenant-portal-detail-value.muted{font-weight:600;color:#747d74}
+.tenant-portal-detail-value.green{color:#4a7a57}
+.tenant-portal-detail-panel{padding:12px 14px}
+.tenant-portal-detail-empty{
+  padding:22px 0;text-align:center;color:#7f8881;font-size:13px;font-weight:600
+}
+.tenant-portal-detail-list{display:grid;gap:10px}
+.tenant-portal-detail-list-row{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+  padding:10px 12px;border:1px solid var(--tp-line);border-radius:12px;background:#fbfcfb
+}
+.tenant-portal-detail-list-main{min-width:0;flex:1}
+.tenant-portal-detail-list-title{font-size:13px;font-weight:800;letter-spacing:-.02em;color:#26322a}
+.tenant-portal-detail-list-sub{margin-top:3px;font-size:12px;color:#7f8881}
+.tenant-portal-detail-list-value{font-size:13px;font-weight:800;color:#2f7b52;white-space:nowrap}
+.tenant-portal-detail-list-notes{font-size:12px;font-weight:600;color:#5d665f;max-width:40%;text-align:right}
+
+.tenant-portal-filter-btn{background:none;border:none;color:#4f8f5f;font:inherit;font-size:14px;font-weight:700;cursor:pointer}
+.tenant-portal-invoices{overflow:hidden}
+.tenant-portal-invoice-card{
+  display:grid;
+  grid-template-columns:64px minmax(220px,1fr) auto auto auto;
+  grid-template-areas:"month body status actions amount";
+  gap:14px 16px;
+  align-items:center;
+  padding:14px 16px;
+  border-top:1px solid var(--tp-line)
+}
+.tenant-portal-invoice-card:first-child{border-top:none}
+.tenant-portal-invoice-card.overdue{background:linear-gradient(180deg,#fff8f6,#fffdfa);border-left:5px solid #bc523f}
+.tenant-portal-invoice-card.pending{background:linear-gradient(180deg,#fffdf5,#fffef8);border-left:5px solid #d9a94c}
+.tenant-portal-invoice-card.rejected{background:linear-gradient(180deg,#fff8f8,#fffdfd);border-left:5px solid #c94f45}
+.tenant-portal-month-box{
+  grid-area:month;
+  width:48px;height:48px;border-radius:12px;background:#eef7f0;color:#35644b;
+  display:grid;place-items:center;font-family:var(--tp-mono);font-size:11px;font-weight:800;line-height:1.1;text-align:center
+}
+.tenant-portal-month-box.paid{background:#eef8f0;color:#35644b}
+.tenant-portal-month-box.overdue{background:#f9ebe7;color:#b6533d}
+.tenant-portal-month-box.pending{background:#fff5df;color:#bb7e1f}
+.tenant-portal-month-box.rejected{background:#fbe8e6;color:#bf473d}
+.tenant-portal-invoice-body{grid-area:body}
+.tenant-portal-invoice-title{font-size:14px;font-weight:800;letter-spacing:-.03em}
+.tenant-portal-invoice-sub{margin-top:2px;font-size:12px;color:#7f8881}
+.tenant-portal-invoice-status-wrap{
+  grid-area:status;
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+}
+.tenant-portal-invoice-amount{
+  grid-area:amount;
+  text-align:right;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  white-space:nowrap;
+}
+.tenant-portal-invoice-money{font-size:14px;font-weight:800;font-family:var(--tp-mono)}
+.tenant-portal-status-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;
+  font-size:12px;font-weight:700;background:none;border:none
+}
+.tenant-portal-status-chip::before{content:'';width:9px;height:9px;border-radius:999px;background:currentColor}
+.tenant-portal-status-chip.paid{color:var(--tp-ok)}
+.tenant-portal-status-chip.overdue{color:#d28415}
+.tenant-portal-status-chip.pending{color:#cb8a17}
+.tenant-portal-status-chip.rejected{color:#c94f45}
+.tenant-portal-invoice-actions{
+  grid-area:actions;
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  align-items:center;
+  white-space:nowrap;
+}
+.tenant-portal-mini-btn{
+  min-width:74px;padding:7px 12px;border-radius:10px;border:1px solid #dbe7df;background:#fff;
+  color:#6f7672;font-size:13px;font-weight:700;cursor:pointer
+}
+.tenant-portal-mini-btn.primary{background:#edf8f1;color:#2f7b52;border-color:#d8e9df}
+.tenant-portal-mini-btn.warn{background:#fff7df;color:#b47719;border-color:#f0dfab}
+
+.tenant-portal-help-card{
+  margin-top:16px;padding:14px 16px;border-radius:16px;
+  background:linear-gradient(135deg,#1c5636 0%,#255f3f 100%);
+  color:#fff;display:flex;align-items:center;justify-content:space-between;gap:18px
+}
+.tenant-portal-help-copy{display:flex;align-items:center;gap:16px}
+.tenant-portal-help-mark{
+  width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.08);display:grid;place-items:center;font-size:18px
+}
+.tenant-portal-help-title{font-size:16px;font-weight:800}
+.tenant-portal-help-sub{margin-top:4px;font-size:13px;color:rgba(255,255,255,.74)}
+
+.tenant-portal-modal-backdrop{
+  position:fixed;inset:0;background:rgba(11,17,14,.56);backdrop-filter:blur(8px);
+  display:flex;align-items:center;justify-content:center;padding:26px;z-index:9999
+}
+.tenant-portal-modal{
+  width:min(740px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:22px;
+  box-shadow:0 24px 80px rgba(7,17,11,.32);border:1px solid rgba(9,26,17,.06)
+}
+.tenant-portal-modal-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px 14px;border-bottom:1px solid var(--tp-line)}
+.tenant-portal-modal-title{font-size:24px;font-weight:800}
+.tenant-portal-modal-close{border:none;background:none;font-size:24px;cursor:pointer;color:#8b928d}
+.tenant-portal-modal-body{padding:18px 22px 24px}
+.tenant-portal-breakdown{display:grid;gap:12px}
+.tenant-portal-breakdown-row{display:flex;justify-content:space-between;gap:16px;padding:12px 14px;border-radius:14px;background:#f8faf8;border:1px solid var(--tp-line);font-size:15px}
+.tenant-portal-breakdown-row.total{background:#eff8f1;font-weight:800}
+.tenant-portal-modal-note{margin-top:14px;font-size:14px;color:#6e7870;line-height:1.6}
+.tenant-portal-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;flex-wrap:wrap}
+
+.tenant-portal-input,.tenant-portal-textarea,.tenant-portal-select{
+  width:100%;padding:13px 15px;border-radius:14px;border:1px solid #d8e4db;background:#fff;
+  font:inherit;font-size:15px;color:var(--tp-dark);outline:none
+}
+.tenant-portal-input:focus,.tenant-portal-textarea:focus,.tenant-portal-select:focus{border-color:#7ac08e;box-shadow:0 0 0 4px rgba(92,161,111,.12)}
+.tenant-portal-textarea{min-height:108px;resize:vertical}
+
+@media (max-width:1200px){
+  .tenant-portal-brand-text{font-size:48px}
+  .tenant-portal-title{font-size:42px}
+}
+@media (max-width:900px){
+  .tenant-portal-brand{gap:16px}
+  .tenant-portal-brand-mark{width:68px;height:68px;font-size:26px}
+  .tenant-portal-brand-text{font-size:34px}
+  .tenant-portal-card{padding:34px 28px 28px}
+  .tenant-portal-title{font-size:28px}
+  .tenant-portal-sub{font-size:17px}
+  .tenant-portal-phone{height:74px}
+  .tenant-portal-phone-prefix,.tenant-portal-phone input{font-size:22px}
+  .tenant-portal-primary-btn{height:74px;font-size:20px}
+  .tenant-portal-summary-grid,.tenant-portal-detail-grid{grid-template-columns:1fr}
+  .tenant-portal-summary-card,.tenant-portal-detail-cell{border-left:none!important;border-right:none}
+  .tenant-portal-detail-list-row{flex-direction:column}
+  .tenant-portal-detail-list-notes{max-width:none;text-align:left}
+  .tenant-portal-main,.tenant-portal-hero{padding-left:16px;padding-right:16px}
+  .tenant-portal-summary-grid{margin-bottom:-20px}
+  .tenant-portal-help-card{flex-direction:column;align-items:flex-start}
+  .tenant-portal-invoice-card{
+    grid-template-columns:56px 1fr;
+    grid-template-areas:
+      "month amount"
+      "body body"
+      "status status"
+      "actions actions";
+    gap:12px;
+  }
+  .tenant-portal-invoice-status-wrap{justify-content:flex-start}
+  .tenant-portal-invoice-amount{text-align:left}
+  .tenant-portal-invoice-actions{
+    justify-content:flex-start;
+    align-items:center;
+    flex-wrap:wrap;
+  }
+}
+@media (max-width:640px){
+  .tenant-portal-auth{padding:18px}
+  .tenant-portal-brand{flex-direction:column;margin-bottom:22px}
+  .tenant-portal-brand-text{font-size:28px}
+  .tenant-portal-card{border-radius:28px}
+  .tenant-portal-title{font-size:24px}
+  .tenant-portal-sub{font-size:16px}
+  .tenant-portal-phone{padding:0 18px;height:74px;border-radius:22px}
+  .tenant-portal-phone-prefix,.tenant-portal-phone input{font-size:24px}
+  .tenant-portal-phone input::placeholder{font-size:18px}
+  .tenant-portal-primary-btn{height:68px;border-radius:20px;font-size:18px}
+  .tenant-portal-otp-grid{gap:8px}
+  .tenant-portal-otp-input{height:56px;border-radius:14px;font-size:22px}
+  .tenant-portal-topbar{align-items:flex-start;flex-direction:column}
+  .tenant-portal-name{font-size:38px}
+  .tenant-portal-room-badge{font-size:16px}
+  .tenant-portal-section-title{font-size:22px}
+  .tenant-portal-section-sub{font-size:16px}
+  .tenant-portal-invoice-title{font-size:20px}
+  .tenant-portal-invoice-sub,.tenant-portal-help-sub,.tenant-portal-help-title{font-size:16px}
+  .tenant-portal-help-copy{align-items:flex-start}
+}

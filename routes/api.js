@@ -32,8 +32,19 @@ const {
   AI_CANONICAL_QUESTIONS,
   AI_INTENT_RULES,
 } = require('../utils/ai-lookup-config');
-const { sendLiveSplitInviteEmail } = require('../utils/mailer');
+const { sendLiveSplitInviteEmail, sendTenantPaymentRequestEmail, sendSocietyPaymentRequestEmail } = require('../utils/mailer');
 const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
+const {
+  isMsg91FlowSmsEnabled,
+  isMsg91OtpEnabled,
+  isMsg91WidgetSdkEnabled,
+  normalizeIndianMobile,
+  maskIndianMobile,
+  sendMsg91FlowSms,
+  sendMsg91Otp,
+  verifyMsg91Otp,
+  verifyMsg91AccessToken,
+} = require('../utils/msg91');
 const {
   notifyLiveSplitInviteReceived,
   notifyLiveSplitInviteResponded,
@@ -745,6 +756,91 @@ async function sendStoredNotificationToUser(userId, payload = {}) {
     unread,
     delivery,
   };
+}
+
+async function notifyAdminAboutTenantPaymentRequest(context = {}) {
+  const ownerUserId = Number(context?.owner_user_id || 0);
+  if (!ownerUserId) return { notified: false };
+  const tenantName = String(context?.tenant_name || 'Tenant').trim() || 'Tenant';
+  const buildingName = String(context?.building_name || 'Building').trim() || 'Building';
+  const invoiceMonth = String(context?.invoice_month || '').trim();
+  const amountText = formatNotificationCurrency(context?.requested_amount || 0, context?.currency_code || 'INR', context?.locale_code || 'en-IN');
+  const roomText = [String(context?.room_label || '').trim(), String(context?.floor_label || '').trim()].filter(Boolean).join(' - ');
+  const body = `${tenantName} marked ${invoiceMonth || 'an invoice'} paid for ${amountText}${roomText ? ` (${roomText})` : ''}.`;
+  const notificationResult = await sendStoredNotificationToUser(ownerUserId, {
+    type: 'tenant_payment_request',
+    title: 'Tenant marked invoice paid',
+    body,
+    target_screen: 'Tenants',
+    target_params: { tab: 'invoices' },
+    data: {
+      requestId: Number(context?.request_id || 0),
+      invoiceId: Number(context?.invoice_id || 0),
+      tenantId: Number(context?.tenant_id || 0),
+      invoiceMonth,
+    },
+    dedupe_key: `tenant-payment-request:${Number(context?.request_id || 0)}`,
+  });
+  if (context?.owner_email) {
+    await sendTenantPaymentRequestEmail({
+      to: context.owner_email,
+      ownerName: context.owner_name,
+      tenantName: context.tenant_name,
+      buildingName: context.building_name,
+      roomLabel: context.room_label,
+      floorLabel: context.floor_label,
+      invoiceMonth: context.invoice_month,
+      dueDate: context.due_date,
+      requestedAmount: context.requested_amount,
+      totalAmount: context.total_amount,
+      tenantNote: context.tenant_note,
+      currencyCode: context.currency_code,
+      localeCode: context.locale_code,
+    });
+  }
+  return { notified: true, notificationResult };
+}
+
+async function notifyAdminAboutSocietyPaymentRequest(context = {}) {
+  const ownerUserId = Number(context?.owner_user_id || 0);
+  if (!ownerUserId) return { notified: false };
+  const memberName = String(context?.member_name || 'Member').trim() || 'Member';
+  const monthKey = String(context?.month_key || '').trim();
+  const amountText = formatNotificationCurrency(context?.requested_amount || 0, context?.currency_code || 'INR', context?.locale_code || 'en-IN');
+  const unitText = [String(context?.unit_label || '').trim(), String(context?.property_type || '').trim()].filter(Boolean).join(' - ');
+  const body = `${memberName} marked ${monthKey || 'monthly dues'} paid for ${amountText}${unitText ? ` (${unitText})` : ''}.`;
+  const notificationResult = await sendStoredNotificationToUser(ownerUserId, {
+    type: 'society_payment_request',
+    title: 'Member marked monthly due paid',
+    body,
+    target_screen: 'Societies',
+    target_params: { tab: 'requests' },
+    data: {
+      requestId: Number(context?.request_id || 0),
+      societyId: Number(context?.society_id || 0),
+      memberId: Number(context?.member_id || 0),
+      monthKey,
+    },
+    dedupe_key: `society-payment-request:${Number(context?.request_id || 0)}`,
+  });
+  if (context?.owner_email) {
+    await sendSocietyPaymentRequestEmail({
+      to: context.owner_email,
+      ownerName: context.owner_name,
+      memberName: context.member_name,
+      societyName: context.society_name,
+      unitLabel: context.unit_label,
+      propertyType: context.property_type,
+      monthKey: context.month_key,
+      requestedPaidOn: context.requested_paid_on,
+      requestedAmount: context.requested_amount,
+      monthlyDue: context.monthly_due,
+      memberNote: context.member_note,
+      currencyCode: context.currency_code,
+      localeCode: context.locale_code,
+    });
+  }
+  return { notified: true, notificationResult };
 }
 
 function parseReceiptDraftFromText(text) {
@@ -3708,6 +3804,472 @@ function getFinanceDb() {
 
 assertPostgresConfigured();
 
+function clearTenantPortalSession(req) {
+  if (!req?.session) return;
+  delete req.session.tenantPortal;
+  delete req.session.tenantPortalPending;
+}
+
+function tenantPortalSessionPayload(req) {
+  return req?.session?.tenantPortal && Number(req.session.tenantPortal.tenantId) > 0
+    ? req.session.tenantPortal
+    : null;
+}
+
+async function buildTenantPortalSessionResponse(req) {
+  const tenantPortal = tenantPortalSessionPayload(req);
+  if (!tenantPortal) return { authenticated: false };
+  const dashboard = await pgTenantDb.getTenantPortalDashboard(tenantPortal.tenantId);
+  if (!dashboard) {
+    clearTenantPortalSession(req);
+    return { authenticated: false };
+  }
+  return {
+    authenticated: true,
+    dashboard,
+  };
+}
+
+async function requireTenantPortalAuth(req, res, next) {
+  try {
+    const tenantPortal = tenantPortalSessionPayload(req);
+    if (!tenantPortal) {
+      return res.status(401).json({ error: 'Tenant session expired. Please log in again.' });
+    }
+    const dashboard = await pgTenantDb.getTenantPortalDashboard(tenantPortal.tenantId);
+    if (!dashboard) {
+      clearTenantPortalSession(req);
+      return res.status(401).json({ error: 'Tenant session expired. Please log in again.' });
+    }
+    req.tenantPortal = tenantPortal;
+    req.tenantPortalDashboard = dashboard;
+    return next();
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify tenant session.' });
+  }
+}
+
+function normalizeTenantPortalOtp(value) {
+  return String(value || '').replace(/\D+/g, '').slice(0, 6);
+}
+
+async function sendTenantPortalOtp(req, tenant, phone) {
+  const appOtp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  const otpMessage = `Your RentLedger tenant portal OTP is ${appOtp}. It is valid for 10 minutes.`;
+
+  if (isMsg91FlowSmsEnabled()) {
+    const smsResult = await sendMsg91FlowSms({
+      phone,
+      variables: {
+        OTP: appOtp,
+        otp: appOtp,
+        CODE: appOtp,
+        code: appOtp,
+        APP: 'RentLedger',
+        app: 'RentLedger',
+      },
+    });
+    req.session.tenantPortalPending = {
+      tenantId: Number(tenant.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: smsResult.requestId || 'msg91-flow',
+      maskedMobile: smsResult.maskedMobile,
+      otpCode: appOtp,
+      provider: 'msg91-flow-sms',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: smsResult.maskedMobile,
+      requires_otp: true,
+    };
+  }
+
+  if (isSmsEnabled()) {
+    const smsResult = await sendSms({
+      to: normalizeIndianMobile(phone),
+      body: otpMessage,
+    });
+    if (!smsResult?.sent) throw new Error('Could not send tenant OTP SMS.');
+    req.session.tenantPortalPending = {
+      tenantId: Number(tenant.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: String(smsResult.sid || 'twilio-sms'),
+      maskedMobile: maskIndianMobile(phone),
+      otpCode: appOtp,
+      provider: 'twilio-sms',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: maskIndianMobile(phone),
+      requires_otp: true,
+    };
+  }
+
+  if (isMsg91OtpEnabled()) {
+    const otpResult = await sendMsg91Otp({ phone });
+    req.session.tenantPortalPending = {
+      tenantId: Number(tenant.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: otpResult.requestId,
+      maskedMobile: otpResult.maskedMobile,
+      provider: 'msg91-widget-api',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: otpResult.maskedMobile,
+      requires_otp: true,
+    };
+  }
+  throw new Error('Tenant OTP is not configured on the server');
+}
+
+function clearSocietyPortalSession(req) {
+  if (!req?.session) return;
+  delete req.session.societyPortal;
+  delete req.session.societyPortalPending;
+}
+
+function societyPortalSessionPayload(req) {
+  return req?.session?.societyPortal && Number(req.session.societyPortal.memberId) > 0
+    ? req.session.societyPortal
+    : null;
+}
+
+async function buildSocietyPortalSessionResponse(req) {
+  const societyPortal = societyPortalSessionPayload(req);
+  if (!societyPortal) return { authenticated: false };
+  const dashboard = await pgCoreDb.getSocietyMemberPortalDashboard(societyPortal.memberId);
+  if (!dashboard) {
+    clearSocietyPortalSession(req);
+    return { authenticated: false };
+  }
+  return {
+    authenticated: true,
+    dashboard,
+  };
+}
+
+async function requireSocietyPortalAuth(req, res, next) {
+  try {
+    const societyPortal = societyPortalSessionPayload(req);
+    if (!societyPortal) {
+      return res.status(401).json({ error: 'Society session expired. Please log in again.' });
+    }
+    const dashboard = await pgCoreDb.getSocietyMemberPortalDashboard(societyPortal.memberId);
+    if (!dashboard) {
+      clearSocietyPortalSession(req);
+      return res.status(401).json({ error: 'Society session expired. Please log in again.' });
+    }
+    req.societyPortal = societyPortal;
+    req.societyPortalDashboard = dashboard;
+    return next();
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify society session.' });
+  }
+}
+
+function normalizeSocietyPortalOtp(value) {
+  return String(value || '').replace(/\D+/g, '').slice(0, 6);
+}
+
+async function sendSocietyPortalOtp(req, member, phone) {
+  const appOtp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  const otpMessage = `Your SocietyLedger member portal OTP is ${appOtp}. It is valid for 10 minutes.`;
+
+  if (isMsg91FlowSmsEnabled()) {
+    const smsResult = await sendMsg91FlowSms({
+      phone,
+      variables: {
+        OTP: appOtp,
+        otp: appOtp,
+        CODE: appOtp,
+        code: appOtp,
+        APP: 'SocietyLedger',
+        app: 'SocietyLedger',
+      },
+    });
+    req.session.societyPortalPending = {
+      memberId: Number(member.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: smsResult.requestId || 'msg91-flow',
+      maskedMobile: smsResult.maskedMobile,
+      otpCode: appOtp,
+      provider: 'msg91-flow-sms',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: smsResult.maskedMobile,
+      requires_otp: true,
+    };
+  }
+
+  if (isSmsEnabled()) {
+    const smsResult = await sendSms({
+      to: normalizeIndianMobile(phone),
+      body: otpMessage,
+    });
+    if (!smsResult?.sent) throw new Error('Could not send society OTP SMS.');
+    req.session.societyPortalPending = {
+      memberId: Number(member.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: String(smsResult.sid || 'twilio-sms'),
+      maskedMobile: maskIndianMobile(phone),
+      otpCode: appOtp,
+      provider: 'twilio-sms',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: maskIndianMobile(phone),
+      requires_otp: true,
+    };
+  }
+
+  if (isMsg91OtpEnabled()) {
+    const otpResult = await sendMsg91Otp({ phone });
+    req.session.societyPortalPending = {
+      memberId: Number(member.id),
+      phoneDigits: normalizeIndianMobile(phone),
+      requestId: otpResult.requestId,
+      maskedMobile: otpResult.maskedMobile,
+      provider: 'msg91-widget-api',
+      sentAt: new Date().toISOString(),
+    };
+    return {
+      success: true,
+      masked_mobile: otpResult.maskedMobile,
+      requires_otp: true,
+    };
+  }
+  throw new Error('Society OTP is not configured on the server');
+}
+
+router.post('/public/tenant-portal/send-otp', async (req, res) => {
+  try {
+    const phone = normalizeIndianMobile(req.body?.phone || req.body?.mobile || req.body?.contact_number || '');
+    if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+    const tenant = await pgTenantDb.getTenantPortalRecordByPhone(phone);
+    if (!tenant) return res.status(404).json({ error: 'No active tenant found for this mobile number.' });
+    clearTenantPortalSession(req);
+    const result = await sendTenantPortalOtp(req, tenant, phone);
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send OTP.' });
+  }
+});
+
+router.post('/public/tenant-portal/resend-otp', async (req, res) => {
+  try {
+    const pending = req.session?.tenantPortalPending || null;
+    const phone = normalizeIndianMobile(req.body?.phone || pending?.phoneDigits || '');
+    if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+    const tenant = await pgTenantDb.getTenantPortalRecordByPhone(phone);
+    if (!tenant) return res.status(404).json({ error: 'No active tenant found for this mobile number.' });
+    const result = await sendTenantPortalOtp(req, tenant, phone);
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not resend OTP.' });
+  }
+});
+
+router.post('/public/tenant-portal/verify-otp', async (req, res) => {
+  try {
+    const pending = req.session?.tenantPortalPending || null;
+    if (!pending?.tenantId) return res.status(400).json({ error: 'Send OTP first.' });
+    const otp = normalizeTenantPortalOtp(req.body?.otp || req.body?.code || '');
+    if (!otp) return res.status(400).json({ error: 'Enter the OTP.' });
+    if (pending.otpCode) {
+      if (otp !== String(pending.otpCode)) return res.status(400).json({ error: 'Invalid OTP.' });
+    } else {
+      await verifyMsg91Otp({ requestId: pending.requestId, otp });
+    }
+    req.session.tenantPortal = {
+      tenantId: Number(pending.tenantId),
+      phoneDigits: String(pending.phoneDigits || ''),
+      verifiedAt: new Date().toISOString(),
+    };
+    delete req.session.tenantPortalPending;
+    const response = await buildTenantPortalSessionResponse(req);
+    return res.json(response);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify OTP.' });
+  }
+});
+
+router.post('/public/tenant-portal/widget-login', async (req, res) => {
+  try {
+    if (!isMsg91WidgetSdkEnabled()) {
+      return res.status(503).json({ error: 'MSG91 widget OTP is not configured.' });
+    }
+    const accessToken = String(req.body?.access_token || req.body?.accessToken || req.body?.token || '').trim();
+    if (!accessToken) return res.status(400).json({ error: 'OTP verification token is required.' });
+    const verification = await verifyMsg91AccessToken({ accessToken });
+    const raw = verification?.raw || {};
+    const phone = normalizeIndianMobile(
+      raw?.mobile
+      || raw?.phone
+      || raw?.identifier
+      || raw?.identifierValue
+      || raw?.data?.mobile
+      || raw?.data?.phone
+      || raw?.data?.identifier
+      || raw?.data?.identifierValue
+      || raw?.result?.mobile
+      || raw?.result?.phone
+      || raw?.result?.identifier
+      || raw?.result?.identifierValue
+      || req.body?.phone
+      || req.body?.mobile
+      || ''
+    );
+    if (!phone) return res.status(400).json({ error: 'Could not verify tenant mobile number.' });
+    const tenant = await pgTenantDb.getTenantPortalRecordByPhone(phone);
+    if (!tenant) return res.status(404).json({ error: 'No active tenant found for this mobile number.' });
+    clearTenantPortalSession(req);
+    req.session.tenantPortal = {
+      tenantId: Number(tenant.id),
+      phoneDigits: phone,
+      verifiedAt: new Date().toISOString(),
+      provider: 'msg91-widget',
+    };
+    return res.json(await buildTenantPortalSessionResponse(req));
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify tenant OTP.' });
+  }
+});
+
+router.get('/public/tenant-portal/session', async (req, res) => {
+  try {
+    return res.json(await buildTenantPortalSessionResponse(req));
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load tenant session.' });
+  }
+});
+
+router.post('/public/tenant-portal/logout', (req, res) => {
+  clearTenantPortalSession(req);
+  return res.json({ success: true });
+});
+
+router.post('/public/tenant-portal/invoices/:id/mark-paid', requireTenantPortalAuth, async (req, res) => {
+  try {
+    const request = await pgTenantDb.createTenantInvoicePaymentRequest(
+      req.tenantPortal.tenantId,
+      req.params.id,
+      req.body || {}
+    );
+    const notificationContext = await pgTenantDb.getTenantInvoicePaymentRequestNotificationContext(request?.id);
+    if (notificationContext) {
+      try {
+        await notifyAdminAboutTenantPaymentRequest(notificationContext);
+      } catch (notifyErr) {
+        console.error('notifyAdminAboutTenantPaymentRequest failed', notifyErr);
+      }
+    }
+    const response = await buildTenantPortalSessionResponse(req);
+    return res.json({
+      success: true,
+      request,
+      dashboard: response.dashboard,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not submit payment request.' });
+  }
+});
+
+router.post('/public/society-portal/send-otp', async (req, res) => {
+  try {
+    const phone = normalizeIndianMobile(req.body?.phone || req.body?.mobile || req.body?.contact_number || '');
+    if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+    const member = await pgCoreDb.getSocietyMemberPortalRecordByPhone(phone);
+    if (!member) return res.status(404).json({ error: 'No active society member found for this mobile number.' });
+    clearSocietyPortalSession(req);
+    const result = await sendSocietyPortalOtp(req, member, phone);
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send OTP.' });
+  }
+});
+
+router.post('/public/society-portal/resend-otp', async (req, res) => {
+  try {
+    const pending = req.session?.societyPortalPending || null;
+    const phone = normalizeIndianMobile(req.body?.phone || pending?.phoneDigits || '');
+    if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+    const member = await pgCoreDb.getSocietyMemberPortalRecordByPhone(phone);
+    if (!member) return res.status(404).json({ error: 'No active society member found for this mobile number.' });
+    const result = await sendSocietyPortalOtp(req, member, phone);
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not resend OTP.' });
+  }
+});
+
+router.post('/public/society-portal/verify-otp', async (req, res) => {
+  try {
+    const pending = req.session?.societyPortalPending || null;
+    if (!pending?.memberId) return res.status(400).json({ error: 'Send OTP first.' });
+    const otp = normalizeSocietyPortalOtp(req.body?.otp || req.body?.code || '');
+    if (!otp) return res.status(400).json({ error: 'Enter the OTP.' });
+    if (pending.otpCode) {
+      if (otp !== String(pending.otpCode)) return res.status(400).json({ error: 'Invalid OTP.' });
+    } else {
+      await verifyMsg91Otp({ requestId: pending.requestId, otp });
+    }
+    req.session.societyPortal = {
+      memberId: Number(pending.memberId),
+      phoneDigits: String(pending.phoneDigits || ''),
+      verifiedAt: new Date().toISOString(),
+    };
+    delete req.session.societyPortalPending;
+    return res.json(await buildSocietyPortalSessionResponse(req));
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify OTP.' });
+  }
+});
+
+router.get('/public/society-portal/session', async (req, res) => {
+  try {
+    return res.json(await buildSocietyPortalSessionResponse(req));
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load society session.' });
+  }
+});
+
+router.post('/public/society-portal/logout', (req, res) => {
+  clearSocietyPortalSession(req);
+  return res.json({ success: true });
+});
+
+router.post('/public/society-portal/payment-requests', requireSocietyPortalAuth, async (req, res) => {
+  try {
+    const request = await pgCoreDb.createSocietyContributionPaymentRequestByMember(
+      req.societyPortal.memberId,
+      req.body || {}
+    );
+    const notificationContext = await pgCoreDb.getSocietyContributionPaymentRequestNotificationContext(request?.id);
+    if (notificationContext) {
+      try {
+        await notifyAdminAboutSocietyPaymentRequest(notificationContext);
+      } catch (notifyErr) {
+        console.error('notifyAdminAboutSocietyPaymentRequest failed', notifyErr);
+      }
+    }
+    const response = await buildSocietyPortalSessionResponse(req);
+    return res.json({
+      success: true,
+      request,
+      dashboard: response.dashboard,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not submit payment request.' });
+  }
+});
+
 // All API routes require auth
 router.use(requireAuth);
 
@@ -3995,6 +4557,30 @@ router.post('/live-split/voice-prefill', upload.single('file'), async (req, res)
   } catch (err) {
     console.error('[live-split/voice-prefill]', err?.message || err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not parse this live split voice note.' });
+  }
+});
+
+router.post('/ai/lookup/voice', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Audio file is required' });
+    if (!isSupportedAudioUpload(req.file)) {
+      return res.status(400).json({ error: 'Supported audio formats are mp3, mp4, m4a, wav, webm, and related audio files.' });
+    }
+    const voiceAccess = await Promise.resolve(pgDb.getUserVoiceAiAccess(req.session.userId));
+    if (!voiceAccess?.can_use) {
+      return res.status(403).json({ error: voiceAccess?.message || 'Voice AI is not available in your current plan.' });
+    }
+    const transcript = await transcribeAudioWithOpenAi(req.file);
+    await Promise.resolve(pgDb.consumeUserVoiceAiUsage(req.session.userId, 'ai_lookup_voice', 'ai_lookup'));
+    res.json({
+      success: true,
+      provider: 'openai',
+      configured: true,
+      transcript: String(transcript || '').trim(),
+    });
+  } catch (err) {
+    console.error('[ai/lookup/voice]', err?.message || err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not transcribe this AI Lookup voice note.' });
   }
 });
 
@@ -10072,6 +10658,15 @@ router.put('/societies/:id/contributions/:memberId', async (req, res) => {
   }
 });
 
+router.post('/societies/payment-requests/:id/review', async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgCoreDb.reviewSocietyContributionPaymentRequest(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not review society payment request.' });
+  }
+});
+
 router.post('/societies/:id/expenses', async (req, res) => {
   try {
     const expense = await Promise.resolve(pgCoreDb.addSocietyExpense(req.session.userId, req.params.id, req.body || {}));
@@ -10863,6 +11458,22 @@ router.get('/tenants/overview', async (req, res) => {
   }
 });
 
+router.get('/approval-badges', async (req, res) => {
+  try {
+    const [societies, tenants] = await Promise.all([
+      Promise.resolve(pgCoreDb.getSocietyPendingApprovalCount(req.session.userId)),
+      Promise.resolve(pgTenantDb.getTenantPendingApprovalCount(req.session.userId)),
+    ]);
+    res.json({
+      societies: Number(societies || 0),
+      tenants: Number(tenants || 0),
+      total: Number(societies || 0) + Number(tenants || 0),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load approval badge counts.' });
+  }
+});
+
 router.post('/tenants/upload', upload.single('file'), async (req, res) => {
   try {
     const file = saveTenantUploadFile(req.file);
@@ -11009,6 +11620,15 @@ router.patch('/tenants/invoices/:id/status', async (req, res) => {
     res.json({ success: true, invoice });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not update invoice status.' });
+  }
+});
+
+router.post('/tenants/payment-requests/:id/review', async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgTenantDb.reviewTenantInvoicePaymentRequest(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not review payment request.' });
   }
 });
 

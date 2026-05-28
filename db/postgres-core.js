@@ -5326,10 +5326,34 @@ async function ensureSocietyTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_payment_requests (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+      month_key TEXT NOT NULL,
+      requested_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      requested_paid_on DATE,
+      member_note TEXT,
+      request_source TEXT NOT NULL DEFAULT 'society_portal',
+      status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT,
+      reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS request_source TEXT NOT NULL DEFAULT 'society_portal'`);
+  await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS review_note TEXT`);
+  await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL`);
+  await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
   await query(`CREATE INDEX IF NOT EXISTS idx_societies_user_id ON societies(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_members_society_id ON society_members(society_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_contributions_society_month ON society_contributions(society_id, month_key)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_expenses_society_month ON society_expenses(society_id, month_key)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_payment_requests_society_status ON society_payment_requests(society_id, status, month_key)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_payment_requests_member_month ON society_payment_requests(member_id, month_key, status)`);
   societySchemaEnsured = true;
 }
 
@@ -5338,6 +5362,34 @@ function normalizeSocietyAmount(value, label = 'Amount', { allowZero = true } = 
   if (!Number.isFinite(amount)) throw validationError(`${label} is invalid`);
   if (allowZero ? amount < 0 : amount <= 0) throw validationError(`${label} must be ${allowZero ? '0 or more' : 'greater than 0'}`);
   return Math.round(amount * 100) / 100;
+}
+
+function mapSocietyPaymentRequestRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    member_id: Number(row.member_id),
+    month_key: row.month_key || '',
+    requested_amount: num(row.requested_amount || 0),
+    requested_paid_on: row.requested_paid_on || null,
+    member_note: row.member_note || '',
+    request_source: row.request_source || 'society_portal',
+    status: row.status || 'pending',
+    review_note: row.review_note || '',
+    reviewed_by: row.reviewed_by != null ? Number(row.reviewed_by) : null,
+    reviewed_at: row.reviewed_at || null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function normalizeSocietyPortalPhoneDigits(value) {
+  const digits = String(value || '').replace(/\D+/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(-10);
+  return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
 async function getSocietyOwnedByUser(userId, societyId) {
@@ -5428,8 +5480,12 @@ async function updateSociety(userId, societyId, data = {}) {
 
 async function deleteSociety(userId, societyId) {
   await ensureSocietyTables();
-  const result = await query('DELETE FROM societies WHERE id = $1 AND user_id = $2', [societyId, userId]);
-  return result.rowCount > 0;
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  return withTransaction(async (client) => {
+    const result = await client.query('DELETE FROM societies WHERE id = $1 AND user_id = $2', [societyId, userId]);
+    return result.rowCount > 0;
+  });
 }
 
 async function addSocietyMember(userId, societyId, data = {}) {
@@ -5494,6 +5550,242 @@ async function deleteSocietyMember(userId, societyId, memberId) {
   if (!society) throw validationError('Society not found');
   const result = await query('DELETE FROM society_members WHERE id = $1 AND society_id = $2', [memberId, societyId]);
   return result.rowCount > 0;
+}
+
+async function getSocietyMemberPortalRecordByPhone(phone) {
+  await ensureSocietyTables();
+  const localPhone = normalizeSocietyPortalPhoneDigits(phone);
+  if (!localPhone || localPhone.length !== 10) return null;
+  const result = await query(
+    `SELECT m.id,
+            m.society_id,
+            m.member_name,
+            m.phone_number,
+            m.unit_label,
+            m.property_type,
+            m.monthly_due,
+            m.is_active,
+            s.user_id,
+            s.name AS society_name,
+            s.location AS society_location
+     FROM society_members m
+     INNER JOIN societies s ON s.id = m.society_id
+     WHERE m.is_active = TRUE
+       AND RIGHT(REGEXP_REPLACE(COALESCE(m.phone_number, ''), '[^0-9]', '', 'g'), 10) = $1
+     ORDER BY m.updated_at DESC, m.id DESC
+     LIMIT 1`,
+    [localPhone]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    user_id: Number(row.user_id),
+    member_name: row.member_name || '',
+    phone_number: row.phone_number || '',
+    unit_label: row.unit_label || '',
+    property_type: row.property_type || 'home',
+    monthly_due: num(row.monthly_due),
+    is_active: !!row.is_active,
+    society_name: row.society_name || '',
+    society_location: row.society_location || '',
+  };
+}
+
+async function createSocietyContributionPaymentRequestByMember(memberId, data = {}) {
+  await ensureSocietyTables();
+  return withTransaction(async (client) => {
+    const memberResult = await client.query(
+      `SELECT m.id,
+              m.society_id,
+              m.member_name,
+              m.monthly_due,
+              m.is_active
+       FROM society_members m
+       WHERE m.id = $1
+       LIMIT 1`,
+      [memberId]
+    );
+    const member = memberResult.rows[0];
+    if (!member || !member.is_active) throw validationError('Society member not found');
+
+    const monthKey = normalizeMonthKey(data.month_key || currentMonthKey());
+    const requestedAmount = normalizeSocietyAmount(data.requested_amount != null ? data.requested_amount : data.amount, 'Requested amount', { allowZero: false });
+    const requestedPaidOn = data.requested_paid_on ? normalizeDateValue(data.requested_paid_on, 'Paid on') : (data.paid_on ? normalizeDateValue(data.paid_on, 'Paid on') : null);
+    const memberNote = normalizeOptionalText(data.member_note != null ? data.member_note : data.notes, 500);
+
+    const approvedContributionResult = await client.query(
+      `SELECT amount
+       FROM society_contributions
+       WHERE society_id = $1
+         AND member_id = $2
+         AND month_key = $3
+       LIMIT 1`,
+      [member.society_id, member.id, monthKey]
+    );
+    const approvedContribution = approvedContributionResult.rows[0];
+    if (approvedContribution && num(approvedContribution.amount) >= requestedAmount) {
+      throw validationError('This month is already marked as paid for this member');
+    }
+
+    const pendingResult = await client.query(
+      `SELECT *
+       FROM society_payment_requests
+       WHERE society_id = $1
+         AND member_id = $2
+         AND month_key = $3
+         AND status = 'pending'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [member.society_id, member.id, monthKey]
+    );
+    if (pendingResult.rows[0]) return mapSocietyPaymentRequestRow(pendingResult.rows[0]);
+
+    const inserted = await client.query(
+      `INSERT INTO society_payment_requests (
+        society_id, member_id, month_key, requested_amount, requested_paid_on, member_note, request_source, status, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, 'society_portal', 'pending', NOW()
+      )
+      RETURNING *`,
+      [member.society_id, member.id, monthKey, requestedAmount, requestedPaidOn, memberNote]
+    );
+    return mapSocietyPaymentRequestRow(inserted.rows[0]);
+  });
+}
+
+async function getSocietyContributionPaymentRequestNotificationContext(requestId) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT req.id,
+            req.society_id,
+            req.member_id,
+            req.month_key,
+            req.requested_amount,
+            req.requested_paid_on,
+            req.member_note,
+            req.status,
+            req.requested_at,
+            m.member_name,
+            m.phone_number,
+            m.unit_label,
+            m.property_type,
+            m.monthly_due,
+            s.user_id AS owner_user_id,
+            s.name AS society_name,
+            s.location AS society_location,
+            u.display_name AS owner_name,
+            u.email AS owner_email,
+            u.mobile AS owner_mobile,
+            u.currency_code,
+            u.locale_code
+     FROM society_payment_requests req
+     INNER JOIN society_members m ON m.id = req.member_id
+     INNER JOIN societies s ON s.id = req.society_id
+     LEFT JOIN users u ON u.id = s.user_id
+     WHERE req.id = $1
+     LIMIT 1`,
+    [requestId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    request_id: Number(row.id),
+    society_id: Number(row.society_id),
+    member_id: Number(row.member_id),
+    month_key: row.month_key || '',
+    requested_amount: num(row.requested_amount || 0),
+    requested_paid_on: row.requested_paid_on || null,
+    member_note: row.member_note || '',
+    status: row.status || 'pending',
+    requested_at: row.requested_at || null,
+    member_name: row.member_name || '',
+    phone_number: row.phone_number || '',
+    unit_label: row.unit_label || '',
+    property_type: row.property_type || 'home',
+    monthly_due: num(row.monthly_due || 0),
+    owner_user_id: Number(row.owner_user_id || 0),
+    owner_name: row.owner_name || '',
+    owner_email: row.owner_email || '',
+    owner_mobile: row.owner_mobile || '',
+    society_name: row.society_name || '',
+    society_location: row.society_location || '',
+    currency_code: row.currency_code || 'INR',
+    locale_code: row.locale_code || 'en-IN',
+  };
+}
+
+async function getSocietyPendingApprovalCount(userId) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM society_payment_requests req
+     INNER JOIN societies s ON s.id = req.society_id
+     WHERE s.user_id = $1
+       AND req.status = 'pending'`,
+    [userId]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function reviewSocietyContributionPaymentRequest(userId, requestId, data = {}) {
+  await ensureSocietyTables();
+  return withTransaction(async (client) => {
+    const requestResult = await client.query(
+      `SELECT req.*,
+              s.user_id AS owner_user_id,
+              m.monthly_due
+       FROM society_payment_requests req
+       INNER JOIN societies s ON s.id = req.society_id
+       INNER JOIN society_members m ON m.id = req.member_id
+       WHERE req.id = $1
+         AND s.user_id = $2
+       LIMIT 1`,
+      [requestId, userId]
+    );
+    const requestRow = requestResult.rows[0];
+    if (!requestRow) throw validationError('Payment request not found');
+    if (String(requestRow.status || '').toLowerCase() !== 'pending') {
+      throw validationError('This request has already been reviewed');
+    }
+    const decision = String(data.status || '').trim().toLowerCase();
+    if (!['approved', 'rejected'].includes(decision)) throw validationError('Status must be approved or rejected');
+    const reviewNote = normalizeOptionalText(data.review_note || '', 500);
+    const requestUpdate = await client.query(
+      `UPDATE society_payment_requests
+       SET status = $1,
+           review_note = $2,
+           reviewed_by = $3,
+           reviewed_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [decision, reviewNote, userId, requestId]
+    );
+    if (decision === 'approved') {
+      await client.query(
+        `INSERT INTO society_contributions (society_id, member_id, month_key, amount, paid_on, notes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (society_id, member_id, month_key)
+         DO UPDATE SET amount = EXCLUDED.amount,
+                       paid_on = EXCLUDED.paid_on,
+                       notes = EXCLUDED.notes,
+                       updated_at = NOW()`,
+        [
+          requestRow.society_id,
+          requestRow.member_id,
+          requestRow.month_key,
+          num(requestRow.requested_amount),
+          requestRow.requested_paid_on || null,
+          requestRow.member_note || 'Approved from society portal',
+        ]
+      );
+    }
+    return {
+      request: mapSocietyPaymentRequestRow(requestUpdate.rows[0]),
+    };
+  });
 }
 
 async function saveSocietyContribution(userId, societyId, memberId, data = {}) {
@@ -5601,7 +5893,7 @@ async function deleteSocietyExpense(userId, societyId, expenseId) {
 async function getSocietyDetail(userId, societyId, options = {}) {
   const society = await getSocietyOwnedByUser(userId, societyId);
   if (!society) throw validationError('Society not found');
-  const [membersR, contributionsR, expensesR] = await Promise.all([
+  const [membersR, contributionsR, expensesR, requestsR] = await Promise.all([
     query(
       `SELECT id, society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, created_at, updated_at
        FROM society_members
@@ -5621,6 +5913,13 @@ async function getSocietyDetail(userId, societyId, options = {}) {
        FROM society_expenses
        WHERE society_id = $1
        ORDER BY expense_date DESC, id DESC`,
+      [societyId]
+    ),
+    query(
+      `SELECT id, society_id, member_id, month_key, requested_amount, requested_paid_on, member_note, request_source, status, review_note, reviewed_by, reviewed_at, created_at, updated_at
+       FROM society_payment_requests
+       WHERE society_id = $1
+       ORDER BY created_at DESC, id DESC`,
       [societyId]
     ),
   ]);
@@ -5659,19 +5958,29 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));
+  const paymentRequests = requestsR.rows.map(mapSocietyPaymentRequestRow);
   const monthCandidates = [
     ...contributions.map((item) => item.month_key),
     ...expenses.map((item) => item.month_key),
+    ...paymentRequests.map((item) => item.month_key),
   ].filter(Boolean);
   const selectedMonth = options.month ? normalizeMonthKey(options.month) : (monthCandidates.sort().slice(-1)[0] || currentMonthKey());
   const matrixMonths = [...new Set([...monthCandidates, selectedMonth])].sort();
   const contributionByMemberMonth = new Map(contributions.map((item) => [`${item.member_id}:${item.month_key}`, item]));
+  const latestRequestByMemberMonth = new Map();
+  paymentRequests.forEach((request) => {
+    const key = `${request.member_id}:${request.month_key}`;
+    if (!latestRequestByMemberMonth.has(key)) latestRequestByMemberMonth.set(key, request);
+  });
   const membersWithContributions = members.map((member) => {
     const selectedContribution = contributionByMemberMonth.get(`${member.id}:${selectedMonth}`) || null;
+    const selectedRequest = latestRequestByMemberMonth.get(`${member.id}:${selectedMonth}`) || null;
     const contributionsByMonth = {};
+    const requestsByMonth = {};
     matrixMonths.forEach((monthKey) => {
       const found = contributionByMemberMonth.get(`${member.id}:${monthKey}`);
       contributionsByMonth[monthKey] = found ? num(found.amount) : 0;
+      requestsByMonth[monthKey] = latestRequestByMemberMonth.get(`${member.id}:${monthKey}`) || null;
     });
     return {
       ...member,
@@ -5683,7 +5992,10 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       selected_month_status: num(member.monthly_due) <= 0
         ? (selectedContribution && num(selectedContribution.amount) > 0 ? 'paid' : 'not_set')
         : (selectedContribution && num(selectedContribution.amount) >= num(member.monthly_due) ? 'paid' : 'pending'),
+      selected_month_request: selectedRequest,
+      selected_month_request_status: selectedRequest?.status || '',
       contributions_by_month: contributionsByMonth,
+      requests_by_month: requestsByMonth,
       total_contributed: contributions
         .filter((item) => item.member_id === member.id)
         .reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0),
@@ -5726,6 +6038,8 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     matrix_months: matrixMonths,
     members: membersWithContributions,
     contributions,
+    payment_requests: paymentRequests,
+    pending_payment_requests: paymentRequests.filter((item) => String(item.status || '').toLowerCase() === 'pending'),
     expenses,
     month_expenses: monthExpenses,
     month_summary: monthSummary,
@@ -5748,6 +6062,87 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       overall_spent: overallExpenseTotal,
       overall_balance: Math.round((overallContributionTotal - overallExpenseTotal) * 100) / 100,
     },
+  };
+}
+
+async function getSocietyMemberPortalDashboard(memberId) {
+  await ensureSocietyTables();
+  const memberResult = await query(
+    `SELECT m.id,
+            m.society_id,
+            m.member_name,
+            m.phone_number,
+            m.unit_label,
+            m.property_type,
+            m.monthly_due,
+            m.is_active,
+            s.user_id,
+            s.name AS society_name,
+            s.location AS society_location
+     FROM society_members m
+     INNER JOIN societies s ON s.id = m.society_id
+     WHERE m.id = $1
+     LIMIT 1`,
+    [memberId]
+  );
+  const memberRow = memberResult.rows[0];
+  if (!memberRow || !memberRow.is_active) return null;
+
+  const detail = await getSocietyDetail(Number(memberRow.user_id), Number(memberRow.society_id), {
+    month: currentMonthKey(),
+  });
+  const member = (detail.members || []).find((item) => Number(item.id) === Number(memberId));
+  if (!member) return null;
+
+  const requests = (detail.payment_requests || []).filter((item) => Number(item.member_id) === Number(memberId));
+  const monthKeys = [...new Set([currentMonthKey(), ...(detail.matrix_months || [])])].sort().reverse();
+  const contributionHistory = monthKeys.map((monthKey) => {
+    const amount = num((member.contributions_by_month || {})[monthKey] || 0);
+    const request = (member.requests_by_month || {})[monthKey] || null;
+    const due = num(member.monthly_due || 0);
+    let status = 'pending';
+    if (amount > 0 && (due <= 0 || amount >= due)) status = 'paid';
+    else if (request && String(request.status || '').toLowerCase() === 'pending') status = 'approval_pending';
+    else if (request && String(request.status || '').toLowerCase() === 'rejected') status = 'rejected';
+    return {
+      month_key: monthKey,
+      amount,
+      due_amount: due,
+      paid_on: monthKey === detail.selected_month ? member.selected_month_paid_on || null : null,
+      status,
+      request,
+    };
+  });
+
+  const latestPaid = contributionHistory.find((item) => item.status === 'paid' && item.amount > 0) || null;
+  const currentMonthItem = contributionHistory.find((item) => item.month_key === currentMonthKey()) || null;
+  const pendingMonths = contributionHistory.filter((item) => item.status === 'pending' && item.due_amount > 0);
+  const recentExpenses = (detail.expenses || []).slice(0, 8);
+
+  return {
+    society: detail.society,
+    member: {
+      id: Number(member.id),
+      member_name: member.member_name || '',
+      phone_number: member.phone_number || '',
+      unit_label: member.unit_label || '',
+      property_type: member.property_type || 'home',
+      monthly_due: num(member.monthly_due || 0),
+    },
+    summary: {
+      my_total: num(member.total_contributed || 0),
+      pending_amount: currentMonthItem ? Math.max(0, Math.round((currentMonthItem.due_amount - currentMonthItem.amount) * 100) / 100) : num(member.monthly_due || 0),
+      last_paid_month: latestPaid?.month_key || '',
+      pending_month_count: pendingMonths.length,
+      current_month: currentMonthKey(),
+    },
+    contribution_history: contributionHistory,
+    pending_requests: requests.filter((item) => String(item.status || '').toLowerCase() === 'pending'),
+    payment_requests: requests,
+    recent_expenses: recentExpenses,
+    month_summary: detail.month_summary || [],
+    totals: detail.totals || {},
+    payment_status: detail.payment_status || {},
   };
 }
 
@@ -6507,7 +6902,13 @@ module.exports = {
   addSocietyMember,
   updateSocietyMember,
   deleteSocietyMember,
+  getSocietyMemberPortalRecordByPhone,
+  getSocietyMemberPortalDashboard,
   saveSocietyContribution,
+  createSocietyContributionPaymentRequestByMember,
+  getSocietyContributionPaymentRequestNotificationContext,
+  getSocietyPendingApprovalCount,
+  reviewSocietyContributionPaymentRequest,
   addSocietyExpense,
   updateSocietyExpense,
   deleteSocietyExpense,

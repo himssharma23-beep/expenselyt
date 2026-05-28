@@ -79,6 +79,17 @@ const monthLabel = (value) => {
   const [year, month] = raw.split('-').map(Number);
   return new Date(year, month - 1, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
 };
+const electricityUsageText = (invoice, { includeRate = false } = {}) => {
+  const previousUnits = Number(invoice?.previous_electricity_units || 0);
+  const currentUnits = Number(invoice?.current_electricity_units || 0);
+  const usedUnits = Number(invoice?.electricity_units_used || 0);
+  const usageText = (previousUnits === 0 && currentUnits === 0)
+    ? `${usedUnits} units`
+    : `${currentUnits} - ${previousUnits} = ${usedUnits} units`;
+  return includeRate
+    ? `${usageText} Ã— <span class="money">${money(invoice?.electricity_unit_price_snapshot || 0)}</span>`
+    : usageText;
+};
 
 function renderInvoice(data) {
   const invoice = data?.invoice || {};
@@ -88,7 +99,7 @@ function renderInvoice(data) {
     ['Rent', `<span class="money">${money(invoice.rent_amount_snapshot || 0)}</span>`],
   ];
   if (Number(invoice.electricity_units_used || 0) !== 0 || Number(invoice.electricity_amount || 0) !== 0) {
-    rows.push(['Electricity', `${Number(invoice.electricity_units_used || 0)} units × <span class="money">${money(invoice.electricity_unit_price_snapshot || 0)}</span> = <span class="money">${money(invoice.electricity_amount || 0)}</span>`]);
+    rows.push(['Electricity', `${electricityUsageText(invoice, { includeRate: true })} = <span class="money">${money(invoice.electricity_amount || 0)}</span>`]);
   }
   if (Number(invoice.sewerage_charge_snapshot || 0) !== 0) rows.push(['Sewerage', `<span class="money">${money(invoice.sewerage_charge_snapshot || 0)}</span>`]);
   if (Number(invoice.water_charge_snapshot || 0) !== 0) rows.push(['Water', `<span class="money">${money(invoice.water_charge_snapshot || 0)}</span>`]);

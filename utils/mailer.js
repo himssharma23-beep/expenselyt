@@ -666,6 +666,97 @@ async function sendFixedDepositReminderEmail({
   });
 }
 
+async function sendTenantPaymentRequestEmail({
+  to,
+  ownerName,
+  tenantName,
+  buildingName,
+  roomLabel,
+  floorLabel,
+  invoiceMonth,
+  dueDate,
+  requestedAmount = 0,
+  totalAmount = 0,
+  tenantNote = '',
+  currencyCode = 'INR',
+  localeCode = 'en-IN',
+}) {
+  if (!to) return { sent: false, reason: 'missing_email' };
+  const roomText = [roomLabel, floorLabel].filter(Boolean).join(' - ') || '-';
+  return sendMail({
+    to,
+    subject: `Tenant marked invoice paid: ${tenantName || 'Tenant'}`,
+    html: renderEmailLayout({
+      preheader: `${tenantName || 'A tenant'} submitted a payment confirmation request.`,
+      eyebrow: 'Tenant Payment Request',
+      title: 'Tenant marked invoice as paid',
+      intro: `Hi ${ownerName || 'there'}, ${tenantName || 'your tenant'} submitted a payment confirmation request from the tenant portal.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">Review the payment request in the Tenants invoice screen and approve or reject it after checking the received payment.</p>
+        ${renderSummaryTable([
+          { label: 'Tenant', value: escapeHtml(tenantName || '-') },
+          { label: 'Building', value: escapeHtml(buildingName || '-') },
+          { label: 'Room', value: escapeHtml(roomText) },
+          { label: 'Invoice Month', value: escapeHtml(invoiceMonth || '-') },
+          { label: 'Due Date', value: escapeHtml(dueDate || '-') },
+          { label: 'Requested Amount', value: escapeHtml(formatCurrency(requestedAmount, currencyCode, localeCode)) },
+          { label: 'Invoice Total', value: escapeHtml(formatCurrency(totalAmount, currencyCode, localeCode)) },
+          { label: 'Tenant Note', value: `<div style="white-space:pre-wrap">${escapeHtml(tenantNote || 'No note provided')}</div>` },
+        ])}
+      `,
+      actionLabel: 'Open Tenants Invoices',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Tenant Portal', 'Invoice Review', 'Payment Confirmation'],
+    }),
+  });
+}
+
+async function sendSocietyPaymentRequestEmail({
+  to,
+  ownerName,
+  memberName,
+  societyName,
+  unitLabel,
+  propertyType,
+  monthKey,
+  requestedPaidOn,
+  requestedAmount = 0,
+  monthlyDue = 0,
+  memberNote = '',
+  currencyCode = 'INR',
+  localeCode = 'en-IN',
+}) {
+  if (!to) return { sent: false, reason: 'missing_email' };
+  const propertyText = String(propertyType || '').toLowerCase() === 'shop' ? 'Shop' : 'Home';
+  return sendMail({
+    to,
+    subject: `Society payment approval request: ${memberName || 'Member'}`,
+    html: renderEmailLayout({
+      preheader: `${memberName || 'A member'} submitted a society payment approval request.`,
+      eyebrow: 'Society Payment Request',
+      title: 'Member marked monthly due as paid',
+      intro: `Hi ${ownerName || 'there'}, ${memberName || 'a member'} submitted a payment approval request from the society portal.`,
+      bodyHtml: `
+        <p style="margin:0 0 16px;">Review the request in the Societies screen and approve or reject it after checking the received payment.</p>
+        ${renderSummaryTable([
+          { label: 'Member', value: escapeHtml(memberName || '-') },
+          { label: 'Society', value: escapeHtml(societyName || '-') },
+          { label: 'Unit', value: escapeHtml(unitLabel || '-') },
+          { label: 'Property', value: escapeHtml(propertyText) },
+          { label: 'Month', value: escapeHtml(monthKey || '-') },
+          { label: 'Paid On', value: escapeHtml(requestedPaidOn || '-') },
+          { label: 'Requested Amount', value: escapeHtml(formatCurrency(requestedAmount, currencyCode, localeCode)) },
+          { label: 'Monthly Due', value: escapeHtml(formatCurrency(monthlyDue, currencyCode, localeCode)) },
+          { label: 'Member Note', value: `<div style="white-space:pre-wrap">${escapeHtml(memberNote || 'No note provided')}</div>` },
+        ])}
+      `,
+      actionLabel: 'Open Societies',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Society Portal', 'Member Approval Queue', 'Payment Review'],
+    }),
+  });
+}
+
 module.exports = {
   ADMIN_EMAIL,
   isEmailEnabled,
@@ -684,6 +775,8 @@ module.exports = {
   sendRecurringAppliedEmail,
   sendTrackerExpenseAppliedEmail,
   sendFixedDepositReminderEmail,
+  sendTenantPaymentRequestEmail,
+  sendSocietyPaymentRequestEmail,
   sendLiveSplitInviteEmail,
   sendLiveSplitTripCreatedEmail,
   sendLiveSplitMonthlySummaryEmail,

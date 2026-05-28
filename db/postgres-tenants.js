@@ -35,6 +35,10 @@ function normalizePhoneNumber(value) {
   return normalized;
 }
 
+function phoneDigits(value) {
+  return String(value || '').replace(/\D+/g, '').trim();
+}
+
 function normalizeDateValue(value, label = 'Date') {
   const raw = String(value || '').trim();
   if (!raw) throw validationError(`${label} is required`);
@@ -76,8 +80,37 @@ function currentMonthKey() {
   return new Date().toISOString().slice(0, 7);
 }
 
+function monthKeyToDate(monthKey) {
+  const normalized = normalizeMonthKey(monthKey);
+  const parsed = new Date(`${normalized}-01T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) throw validationError('Month is invalid');
+  return parsed;
+}
+
+function previousMonthKey(monthKey) {
+  const date = monthKeyToDate(monthKey);
+  date.setUTCMonth(date.getUTCMonth() - 1);
+  return date.toISOString().slice(0, 7);
+}
+
+function formatInvoiceMonthLabel(monthKey) {
+  const date = monthKeyToDate(monthKey);
+  return date.toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
 function currentDateValue() {
   return formatLocalDateValue(new Date());
+}
+
+function monthStartDateValue(monthKey) {
+  return `${normalizeMonthKey(monthKey)}-01`;
+}
+
+function monthEndDateValue(monthKey) {
+  const date = monthKeyToDate(monthKey);
+  date.setUTCMonth(date.getUTCMonth() + 1);
+  date.setUTCDate(0);
+  return formatLocalDateValue(date);
 }
 
 async function syncExpiredTenantStatuses(userId) {
@@ -187,6 +220,38 @@ function normalizeTenantPaymentStatus(value) {
   throw validationError('Invoice status must be pending, paid, or partial paid');
 }
 
+function normalizeSplitFlag(value, fallback = false) {
+  if (value === undefined) return !!fallback;
+  return value === true || value === 'true' || value === 1 || value === '1' || value === 'on';
+}
+
+function normalizeTenantInvoiceSplitConfig(value = {}, defaultValue = false) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    divide_rent: normalizeSplitFlag(source.divide_rent, defaultValue),
+    divide_electricity: normalizeSplitFlag(source.divide_electricity, defaultValue),
+    divide_sewerage: normalizeSplitFlag(source.divide_sewerage, defaultValue),
+    divide_water: normalizeSplitFlag(source.divide_water, defaultValue),
+    divide_cleaning: normalizeSplitFlag(source.divide_cleaning, defaultValue),
+    divide_other: normalizeSplitFlag(source.divide_other, defaultValue),
+  };
+}
+
+function divideTenantChargeAmount(amount, shouldDivide, divisor) {
+  const safeAmount = num(amount);
+  const safeDivisor = Math.max(1, Number(divisor || 1));
+  if (!shouldDivide || safeDivisor <= 1) return safeAmount;
+  return Math.round((safeAmount / safeDivisor) * 100) / 100;
+}
+
+function applySplitToOtherChargeItems(items = [], shouldDivide, divisor) {
+  return normalizeOtherChargeItems(items).map((item) => (
+    isCarryForwardChargeItem(item)
+      ? item
+      : { ...item, amount: divideTenantChargeAmount(item.amount, shouldDivide, divisor) }
+  ));
+}
+
 function normalizeOtherChargeItems(value) {
   const list = Array.isArray(value) ? value : [];
   return list
@@ -195,13 +260,89 @@ function normalizeOtherChargeItems(value) {
       const amountRaw = item?.amount;
       const amount = normalizeAmount(amountRaw, 'Other charge amount', { allowZero: true, allowNegative: true });
       if (!detail && !amount) return null;
-      return {
+      const normalized = {
         detail: normalizeText(detail || 'Other charge', 'Other charge detail', 160),
         amount,
       };
+      const kind = String(item?.kind || '').trim();
+      if (kind) normalized.kind = kind.slice(0, 60);
+      const sourceInvoiceMonth = String(item?.source_invoice_month || '').trim();
+      if (sourceInvoiceMonth) normalized.source_invoice_month = normalizeMonthKey(sourceInvoiceMonth);
+      return normalized;
     })
     .filter(Boolean)
     .slice(0, 20);
+}
+
+function isCarryForwardChargeItem(item) {
+  return String(item?.kind || '').trim().toLowerCase() === 'carry_forward_pending';
+}
+
+function stripCarryForwardChargeItems(items = []) {
+  return normalizeOtherChargeItems(items).filter((item) => !isCarryForwardChargeItem(item));
+}
+
+function sortMonthKeysAsc(values = []) {
+  return [...new Set(values.filter(Boolean).map((value) => normalizeMonthKey(value)))].sort((a, b) => a.localeCompare(b));
+}
+
+async function buildTenantPendingCarryForwardItems(tenantId, invoiceMonth) {
+  const targetMonth = normalizeMonthKey(invoiceMonth);
+  const previousMonth = previousMonthKey(targetMonth);
+  const result = await query(
+    `SELECT invoice_month, total_amount, paid_amount, other_charge_items
+     FROM tenant_invoices
+     WHERE tenant_id = $1
+       AND invoice_month < $2
+     ORDER BY invoice_month ASC, id ASC`,
+    [tenantId, targetMonth]
+  );
+
+  const outstandingByMonth = new Map();
+  for (const row of result.rows || []) {
+    const rowMonth = normalizeMonthKey(row.invoice_month);
+    const chargeItems = normalizeOtherChargeItems(row.other_charge_items);
+    const carryItems = chargeItems.filter(isCarryForwardChargeItem);
+    const carryTotal = sumOtherChargeItems(carryItems);
+    const baseAmount = Math.max(0, num(row.total_amount) - carryTotal);
+    if (baseAmount > 0) {
+      outstandingByMonth.set(rowMonth, num((outstandingByMonth.get(rowMonth) || 0) + baseAmount));
+    }
+
+    let paymentRemaining = Math.max(0, num(row.paid_amount));
+    if (paymentRemaining > 0 && carryItems.length) {
+      const carryMonths = sortMonthKeysAsc(carryItems.map((item) => item.source_invoice_month).filter(Boolean));
+      for (const sourceMonth of carryMonths) {
+        if (paymentRemaining <= 0) break;
+        const currentOutstanding = num(outstandingByMonth.get(sourceMonth) || 0);
+        if (currentOutstanding <= 0) continue;
+        const applied = Math.min(paymentRemaining, currentOutstanding);
+        outstandingByMonth.set(sourceMonth, num(currentOutstanding - applied));
+        paymentRemaining = num(paymentRemaining - applied);
+      }
+    }
+
+    if (paymentRemaining > 0) {
+      const currentOutstanding = num(outstandingByMonth.get(rowMonth) || 0);
+      if (currentOutstanding > 0) {
+        const applied = Math.min(paymentRemaining, currentOutstanding);
+        outstandingByMonth.set(rowMonth, num(currentOutstanding - applied));
+      }
+    }
+  }
+
+  return sortMonthKeysAsc([...outstandingByMonth.keys()])
+    .map((monthKey) => ({
+      monthKey,
+      amount: num(outstandingByMonth.get(monthKey) || 0),
+    }))
+    .filter((item) => item.amount > 0)
+    .map((item) => ({
+      detail: item.monthKey === previousMonth ? 'Last month pending' : `${formatInvoiceMonthLabel(item.monthKey)} pending`,
+      amount: item.amount,
+      kind: 'carry_forward_pending',
+      source_invoice_month: item.monthKey,
+    }));
 }
 
 function sumOtherChargeItems(items = []) {
@@ -358,6 +499,8 @@ async function ensureTenantTables() {
       UNIQUE (tenant_id, invoice_month)
     )`);
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS other_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS split_config JSONB NOT NULL DEFAULT '{}'::jsonb`);
+  await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS roommate_count_snapshot INTEGER NOT NULL DEFAULT 1`);
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'`);
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
   await query(`
@@ -383,6 +526,28 @@ async function ensureTenantTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS tenant_invoice_payment_requests (
+      id BIGSERIAL PRIMARY KEY,
+      invoice_id BIGINT NOT NULL REFERENCES tenant_invoices(id) ON DELETE CASCADE,
+      tenant_id BIGINT NOT NULL REFERENCES tenant_records(id) ON DELETE CASCADE,
+      requested_status TEXT NOT NULL DEFAULT 'paid',
+      requested_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      tenant_note TEXT,
+      request_source TEXT NOT NULL DEFAULT 'tenant_portal',
+      status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT,
+      reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE tenant_invoice_payment_requests ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await query(`ALTER TABLE tenant_invoice_payment_requests ADD COLUMN IF NOT EXISTS request_source TEXT NOT NULL DEFAULT 'tenant_portal'`);
+  await query(`ALTER TABLE tenant_invoice_payment_requests ADD COLUMN IF NOT EXISTS review_note TEXT`);
+  await query(`ALTER TABLE tenant_invoice_payment_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL`);
+  await query(`ALTER TABLE tenant_invoice_payment_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_buildings_user_id ON tenant_buildings(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_rooms_building_id ON tenant_rooms(building_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_records_user_id ON tenant_records(user_id)`);
@@ -395,6 +560,8 @@ async function ensureTenantTables() {
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_share_links_user_id ON tenant_invoice_share_links(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_month_share_links_building_month ON tenant_invoice_month_share_links(building_id, invoice_month)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_month_share_links_user_id ON tenant_invoice_month_share_links(user_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_payment_requests_invoice_id ON tenant_invoice_payment_requests(invoice_id, requested_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_payment_requests_tenant_id ON tenant_invoice_payment_requests(tenant_id, requested_at DESC)`);
   tenantSchemaEnsured = true;
 }
 
@@ -470,6 +637,29 @@ async function findActiveTenantForRoom(userId, roomId, excludeTenantId = null) {
     params
   );
   return result.rows[0] || null;
+}
+
+async function countRoomTenantsForInvoiceMonth(roomId, invoiceMonth, excludeTenantId = null) {
+  await ensureTenantTables();
+  const monthStart = monthStartDateValue(invoiceMonth);
+  const monthEnd = monthEndDateValue(invoiceMonth);
+  const params = [roomId, monthStart, monthEnd];
+  let excludeSql = '';
+  if (excludeTenantId != null) {
+    params.push(excludeTenantId);
+    excludeSql = 'AND id <> $4';
+  }
+  const result = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM tenant_records
+     WHERE room_id = $1
+       AND start_date <= $3
+       AND (end_date IS NULL OR end_date >= $2)
+       AND (is_active = TRUE OR (end_date IS NOT NULL AND end_date >= $2))
+       ${excludeSql}`,
+    params
+  );
+  return Math.max(1, Number(result.rows[0]?.count || 0));
 }
 
 function mapTenantRow(row) {
@@ -635,7 +825,11 @@ function mapInvoiceRow(row) {
     other_charge_items: Array.isArray(row.other_charge_items) ? row.other_charge_items.map((item) => ({
       detail: String(item?.detail || '').trim(),
       amount: num(item?.amount || 0),
+      kind: String(item?.kind || '').trim(),
+      source_invoice_month: String(item?.source_invoice_month || '').trim(),
     })).filter((item) => item.detail || item.amount) : [],
+    split_config: normalizeTenantInvoiceSplitConfig(row.split_config || {}, false),
+    roommate_count_snapshot: Math.max(1, Number(row.roommate_count_snapshot || 1)),
     previous_electricity_units: Number(row.previous_electricity_units || 0),
     current_electricity_units: Number(row.current_electricity_units || 0),
     electricity_units_used: Number(row.electricity_units_used || 0),
@@ -644,6 +838,28 @@ function mapInvoiceRow(row) {
     payment_status: String(row.payment_status || 'pending'),
     paid_amount: num(row.paid_amount || 0),
     notes: row.notes || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    latest_payment_request: row.latest_payment_request || null,
+    pending_payment_request: row.pending_payment_request || null,
+  };
+}
+
+function mapTenantPaymentRequestRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    invoice_id: Number(row.invoice_id),
+    tenant_id: Number(row.tenant_id),
+    requested_status: String(row.requested_status || 'paid'),
+    requested_amount: num(row.requested_amount || 0),
+    tenant_note: row.tenant_note || '',
+    request_source: String(row.request_source || 'tenant_portal'),
+    status: String(row.status || 'pending'),
+    review_note: row.review_note || '',
+    reviewed_by: row.reviewed_by != null ? Number(row.reviewed_by) : null,
+    requested_at: row.requested_at,
+    reviewed_at: row.reviewed_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -661,7 +877,7 @@ async function listTenantsOverview(userId) {
   for (const row of existingTenantsForBackfill.rows) {
     await ensureTenantHasChargeHistory({ query }, row);
   }
-  const [buildingsR, roomsR, tenantsR, vehiclesR, itemsR, invoicesR] = await Promise.all([
+  const [buildingsR, roomsR, tenantsR, vehiclesR, itemsR, invoicesR, paymentRequestsR] = await Promise.all([
     query(
       `SELECT id, user_id, name, address, notes, created_at, updated_at
        FROM tenant_buildings
@@ -706,6 +922,14 @@ async function listTenantsOverview(userId) {
        INNER JOIN tenant_records t ON t.id = inv.tenant_id
        WHERE t.user_id = $1
        ORDER BY inv.invoice_month DESC, inv.id DESC`,
+      [userId]
+    ),
+    query(
+      `SELECT req.*
+       FROM tenant_invoice_payment_requests req
+       INNER JOIN tenant_records t ON t.id = req.tenant_id
+       WHERE t.user_id = $1
+       ORDER BY req.requested_at DESC, req.id DESC`,
       [userId]
     ),
   ]);
@@ -759,7 +983,20 @@ async function listTenantsOverview(userId) {
     });
     itemsByTenant.set(Number(row.tenant_id), list);
   });
-  const invoices = invoicesR.rows.map(mapInvoiceRow);
+  const paymentRequests = paymentRequestsR.rows.map(mapTenantPaymentRequestRow);
+  const latestPaymentRequestByInvoice = new Map();
+  const pendingPaymentRequestByInvoice = new Map();
+  paymentRequests.forEach((request) => {
+    if (!latestPaymentRequestByInvoice.has(request.invoice_id)) latestPaymentRequestByInvoice.set(request.invoice_id, request);
+    if (request.status === 'pending' && !pendingPaymentRequestByInvoice.has(request.invoice_id)) {
+      pendingPaymentRequestByInvoice.set(request.invoice_id, request);
+    }
+  });
+  const invoices = invoicesR.rows.map((row) => mapInvoiceRow({
+    ...row,
+    latest_payment_request: latestPaymentRequestByInvoice.get(Number(row.id)) || null,
+    pending_payment_request: pendingPaymentRequestByInvoice.get(Number(row.id)) || null,
+  }));
   const chargeHistoryRows = await listTenantChargeHistory({ query }, tenants.map((tenant) => tenant.id));
   const chargeHistoryByTenant = new Map();
   chargeHistoryRows.forEach((row) => {
@@ -783,13 +1020,18 @@ async function listTenantsOverview(userId) {
     latest_invoice: (invoicesByTenant.get(tenant.id) || [])[0] || null,
   }));
 
-  const tenantByRoomId = new Map();
+  const activeTenantsByRoomId = new Map();
   tenantsEnriched.forEach((tenant) => {
-    if (tenant.is_active && !tenantByRoomId.has(tenant.room_id)) tenantByRoomId.set(tenant.room_id, tenant);
+    if (!tenant.is_active) return;
+    const list = activeTenantsByRoomId.get(tenant.room_id) || [];
+    list.push(tenant);
+    activeTenantsByRoomId.set(tenant.room_id, list);
   });
   const roomsWithTenant = rooms.map((room) => ({
     ...room,
-    active_tenant: tenantByRoomId.get(room.id) || null,
+    active_tenants: activeTenantsByRoomId.get(room.id) || [],
+    active_tenant: (activeTenantsByRoomId.get(room.id) || [])[0] || null,
+    active_tenant_count: (activeTenantsByRoomId.get(room.id) || []).length,
   }));
   const roomsByBuilding = new Map();
   roomsWithTenant.forEach((room) => {
@@ -801,7 +1043,7 @@ async function listTenantsOverview(userId) {
   return {
     buildings: buildings.map((building) => {
       const buildingRooms = roomsByBuilding.get(building.id) || [];
-      const occupiedCount = buildingRooms.filter((room) => room.active_tenant).length;
+      const occupiedCount = buildingRooms.filter((room) => Number(room.active_tenant_count || 0) > 0).length;
       return {
         ...building,
         rooms: buildingRooms,
@@ -816,13 +1058,368 @@ async function listTenantsOverview(userId) {
     totals: {
       building_count: buildings.length,
       room_count: rooms.length,
-      occupied_count: roomsWithTenant.filter((room) => room.active_tenant).length,
+      occupied_count: roomsWithTenant.filter((room) => Number(room.active_tenant_count || 0) > 0).length,
       tenant_count: tenantsEnriched.filter((tenant) => tenant.is_active).length,
       monthly_rent: tenantsEnriched.filter((tenant) => tenant.is_active).reduce((sum, tenant) => Math.round((sum + num(tenant.rent_amount)) * 100) / 100, 0),
       security_deposit: tenantsEnriched.filter((tenant) => tenant.is_active).reduce((sum, tenant) => Math.round((sum + num(tenant.security_deposit)) * 100) / 100, 0),
       invoice_count: invoices.length,
     },
   };
+}
+
+async function getTenantPortalRecordByPhone(contactNumber) {
+  await ensureTenantTables();
+  const digits = phoneDigits(contactNumber);
+  if (!digits) throw validationError('Phone number is required');
+  const variants = [...new Set([digits, digits.length > 10 ? digits.slice(-10) : ''].filter(Boolean))];
+  const result = await query(
+    `SELECT t.*,
+            r.room_label,
+            r.floor_label,
+            b.name AS building_name,
+            b.address AS building_address
+     FROM tenant_records t
+     INNER JOIN tenant_rooms r ON r.id = t.room_id
+     INNER JOIN tenant_buildings b ON b.id = t.building_id
+     WHERE t.is_active = TRUE
+       AND (t.end_date IS NULL OR t.end_date >= $2)
+       AND regexp_replace(COALESCE(t.contact_number, ''), '\\D', '', 'g') = ANY($1::text[])
+     ORDER BY t.updated_at DESC, t.id DESC
+     LIMIT 1`,
+    [variants, currentDateValue()]
+  );
+  if (!result.rows[0]) return null;
+  return {
+    ...mapTenantRow(result.rows[0]),
+    room_label: result.rows[0].room_label || '',
+    floor_label: result.rows[0].floor_label || '',
+    building_name: result.rows[0].building_name || '',
+    building_address: result.rows[0].building_address || '',
+  };
+}
+
+function tenantPortalInvoiceVisualStatus(invoice = {}) {
+  const paymentStatus = String(invoice.payment_status || 'pending').trim().toLowerCase();
+  if (paymentStatus === 'paid') return 'paid';
+  if (invoice.latest_payment_request?.status === 'rejected') return 'rejected';
+  if (invoice.pending_payment_request?.status === 'pending') return 'approval_pending';
+  const dueDate = String(invoice.due_date || '').trim();
+  if (dueDate && dueDate < currentDateValue()) return 'overdue';
+  return 'pending';
+}
+
+async function getTenantPortalDashboard(tenantId) {
+  await ensureTenantTables();
+  const tenantResult = await query(
+    `SELECT t.*,
+            r.room_label,
+            r.floor_label,
+            b.name AS building_name,
+            b.address AS building_address,
+            u.display_name AS manager_name,
+            u.mobile AS manager_mobile,
+            u.email AS manager_email
+     FROM tenant_records t
+     INNER JOIN tenant_rooms r ON r.id = t.room_id
+     INNER JOIN tenant_buildings b ON b.id = t.building_id
+     LEFT JOIN users u ON u.id = t.user_id
+     WHERE t.id = $1
+     LIMIT 1`,
+    [tenantId]
+  );
+  if (!tenantResult.rows[0]) return null;
+  const tenant = {
+    ...mapTenantRow(tenantResult.rows[0]),
+    room_label: tenantResult.rows[0].room_label || '',
+    floor_label: tenantResult.rows[0].floor_label || '',
+    building_name: tenantResult.rows[0].building_name || '',
+    building_address: tenantResult.rows[0].building_address || '',
+  };
+  const [invoiceRows, chargeHistoryRows, requestRows, vehiclesRows, itemsRows] = await Promise.all([
+    query(
+      `SELECT inv.*
+       FROM tenant_invoices inv
+       WHERE inv.tenant_id = $1
+       ORDER BY inv.invoice_month DESC, inv.id DESC`,
+      [tenantId]
+    ),
+    listTenantChargeHistory({ query }, [tenantId]),
+    query(
+      `SELECT *
+       FROM tenant_invoice_payment_requests
+       WHERE tenant_id = $1
+       ORDER BY requested_at DESC, id DESC`,
+      [tenantId]
+    ),
+    query(
+      `SELECT v.id, v.vehicle_type, v.vehicle_number, v.notes, v.created_at, v.updated_at
+       FROM tenant_vehicles v
+       WHERE v.tenant_id = $1
+       ORDER BY v.id ASC`,
+      [tenantId]
+    ),
+    query(
+      `SELECT i.id, i.item_name, i.quantity, i.notes, i.created_at, i.updated_at
+       FROM tenant_items i
+       WHERE i.tenant_id = $1
+       ORDER BY i.id ASC`,
+      [tenantId]
+    ),
+  ]);
+  const latestPaymentRequestByInvoice = new Map();
+  const pendingPaymentRequestByInvoice = new Map();
+  requestRows.rows.map(mapTenantPaymentRequestRow).forEach((request) => {
+    if (!latestPaymentRequestByInvoice.has(request.invoice_id)) latestPaymentRequestByInvoice.set(request.invoice_id, request);
+    if (request.status === 'pending' && !pendingPaymentRequestByInvoice.has(request.invoice_id)) {
+      pendingPaymentRequestByInvoice.set(request.invoice_id, request);
+    }
+  });
+  const invoices = invoiceRows.rows.map((row) => {
+    const invoice = mapInvoiceRow({
+      ...row,
+      latest_payment_request: latestPaymentRequestByInvoice.get(Number(row.id)) || null,
+      pending_payment_request: pendingPaymentRequestByInvoice.get(Number(row.id)) || null,
+    });
+    return {
+      ...invoice,
+      visual_status: tenantPortalInvoiceVisualStatus(invoice),
+      can_mark_paid: String(invoice.payment_status || '').toLowerCase() !== 'paid'
+        && !(invoice.pending_payment_request && invoice.pending_payment_request.status === 'pending'),
+    };
+  });
+  const currentProfile = pickChargeProfileForDate(chargeHistoryRows, currentDateValue()) || chargeHistoryRows[0] || null;
+  const balanceDue = invoices.reduce((sum, invoice) => {
+    const remaining = num(invoice.total_amount || 0) - num(invoice.paid_amount || 0);
+    return sum + Math.max(0, remaining);
+  }, 0);
+  const latestInvoice = invoices[0] || null;
+  return {
+    tenant: {
+      id: tenant.id,
+      tenant_name: tenant.tenant_name,
+      contact_number: tenant.contact_number,
+      tenant_address: tenant.tenant_address || '',
+      start_date: tenant.start_date,
+      end_date: tenant.end_date || '',
+      contract_months: tenant.contract_months,
+      security_deposit: tenant.security_deposit || 0,
+      room_label: tenant.room_label || '',
+      floor_label: tenant.floor_label || '',
+      building_name: tenant.building_name || '',
+      building_address: tenant.building_address || '',
+      is_active: tenant.is_active,
+    },
+    manager: {
+      name: tenantResult.rows[0].manager_name || '',
+      mobile: tenantResult.rows[0].manager_mobile || '',
+      email: tenantResult.rows[0].manager_email || '',
+    },
+    charge_profile: currentProfile ? {
+      rent_amount: currentProfile.rent_amount || 0,
+      electricity_unit_price: currentProfile.electricity_unit_price || 0,
+      opening_electricity_units: currentProfile.opening_electricity_units || 0,
+      sewerage_charge: currentProfile.sewerage_charge || 0,
+      water_charge: currentProfile.water_charge || 0,
+      cleaning_charge: currentProfile.cleaning_charge || 0,
+      monthly_additional_charges: Array.isArray(currentProfile.monthly_additional_charges) && currentProfile.monthly_additional_charges.length
+        ? currentProfile.monthly_additional_charges
+        : (Array.isArray(tenant.monthly_additional_charges) ? tenant.monthly_additional_charges : []),
+    } : null,
+    summary: {
+      monthly_rent: currentProfile?.rent_amount || tenant.rent_amount || 0,
+      latest_invoice_month: latestInvoice?.invoice_month || '',
+      latest_invoice_total: latestInvoice?.total_amount || 0,
+      balance_due: num(balanceDue),
+    },
+    invoices,
+    vehicles: vehiclesRows.rows.map((row) => ({
+      id: Number(row.id),
+      vehicle_type: row.vehicle_type || '',
+      vehicle_number: row.vehicle_number || '',
+      notes: row.notes || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })),
+    provided_items: itemsRows.rows.map((row) => ({
+      id: Number(row.id),
+      item_name: row.item_name || '',
+      quantity: Number(row.quantity || 0),
+      notes: row.notes || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })),
+  };
+}
+
+async function createTenantInvoicePaymentRequest(tenantId, invoiceId, data = {}) {
+  await ensureTenantTables();
+  return withTransaction(async (client) => {
+    const invoiceResult = await client.query(
+      `SELECT inv.*
+       FROM tenant_invoices inv
+       WHERE inv.id = $1
+         AND inv.tenant_id = $2
+       LIMIT 1`,
+      [invoiceId, tenantId]
+    );
+    const invoice = invoiceResult.rows[0];
+    if (!invoice) throw validationError('Invoice not found');
+    if (String(invoice.payment_status || '').toLowerCase() === 'paid') {
+      throw validationError('This invoice is already marked as paid');
+    }
+    const pendingResult = await client.query(
+      `SELECT *
+       FROM tenant_invoice_payment_requests
+       WHERE invoice_id = $1
+         AND tenant_id = $2
+         AND status = 'pending'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [invoiceId, tenantId]
+    );
+    if (pendingResult.rows[0]) return mapTenantPaymentRequestRow(pendingResult.rows[0]);
+    const requestedAmount = normalizeAmount(data.requested_amount != null ? data.requested_amount : invoice.total_amount, 'Requested amount', { allowZero: false });
+    const tenantNote = normalizeOptionalText(data.tenant_note || '', 500);
+    const inserted = await client.query(
+      `INSERT INTO tenant_invoice_payment_requests (
+        invoice_id, tenant_id, requested_status, requested_amount, tenant_note, request_source, status, updated_at
+      ) VALUES (
+        $1, $2, 'paid', $3, $4, 'tenant_portal', 'pending', NOW()
+      )
+      RETURNING *`,
+      [invoiceId, tenantId, requestedAmount, tenantNote]
+    );
+    return mapTenantPaymentRequestRow(inserted.rows[0]);
+  });
+}
+
+async function getTenantInvoicePaymentRequestNotificationContext(requestId) {
+  await ensureTenantTables();
+  const result = await query(
+    `SELECT req.id,
+            req.invoice_id,
+            req.tenant_id,
+            req.requested_amount,
+            req.tenant_note,
+            req.status,
+            req.requested_at,
+            inv.invoice_month,
+            inv.due_date,
+            inv.total_amount,
+            t.tenant_name,
+            t.contact_number,
+            t.user_id AS owner_user_id,
+            r.room_label,
+            r.floor_label,
+            b.name AS building_name,
+            b.address AS building_address,
+            u.display_name AS owner_name,
+            u.email AS owner_email,
+            u.mobile AS owner_mobile,
+            u.currency_code,
+            u.locale_code
+     FROM tenant_invoice_payment_requests req
+     INNER JOIN tenant_invoices inv ON inv.id = req.invoice_id
+     INNER JOIN tenant_records t ON t.id = req.tenant_id
+     INNER JOIN tenant_rooms r ON r.id = t.room_id
+     INNER JOIN tenant_buildings b ON b.id = t.building_id
+     LEFT JOIN users u ON u.id = t.user_id
+     WHERE req.id = $1
+     LIMIT 1`,
+    [requestId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    request_id: Number(row.id),
+    invoice_id: Number(row.invoice_id),
+    tenant_id: Number(row.tenant_id),
+    requested_amount: num(row.requested_amount || 0),
+    tenant_note: row.tenant_note || '',
+    status: row.status || 'pending',
+    requested_at: row.requested_at || null,
+    invoice_month: row.invoice_month || '',
+    due_date: row.due_date || '',
+    total_amount: num(row.total_amount || 0),
+    tenant_name: row.tenant_name || '',
+    contact_number: row.contact_number || '',
+    owner_user_id: Number(row.owner_user_id || 0),
+    owner_name: row.owner_name || '',
+    owner_email: row.owner_email || '',
+    owner_mobile: row.owner_mobile || '',
+    room_label: row.room_label || '',
+    floor_label: row.floor_label || '',
+    building_name: row.building_name || '',
+    building_address: row.building_address || '',
+    currency_code: row.currency_code || 'INR',
+    locale_code: row.locale_code || 'en-IN',
+  };
+}
+
+async function getTenantPendingApprovalCount(userId) {
+  await ensureTenantTables();
+  const result = await query(
+    `SELECT COUNT(*)::int AS count
+     FROM tenant_invoice_payment_requests req
+     INNER JOIN tenant_records t ON t.id = req.tenant_id
+     WHERE t.user_id = $1
+       AND req.status = 'pending'`,
+    [userId]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function reviewTenantInvoicePaymentRequest(userId, requestId, data = {}) {
+  await ensureTenantTables();
+  return withTransaction(async (client) => {
+    const requestResult = await client.query(
+      `SELECT req.*, inv.total_amount, inv.payment_status, inv.paid_amount
+       FROM tenant_invoice_payment_requests req
+       INNER JOIN tenant_invoices inv ON inv.id = req.invoice_id
+       INNER JOIN tenant_records t ON t.id = req.tenant_id
+       WHERE req.id = $1
+         AND t.user_id = $2
+       LIMIT 1`,
+      [requestId, userId]
+    );
+    const requestRow = requestResult.rows[0];
+    if (!requestRow) throw validationError('Payment request not found');
+    if (String(requestRow.status || '').toLowerCase() !== 'pending') {
+      throw validationError('This request has already been reviewed');
+    }
+    const decision = String(data.status || '').trim().toLowerCase();
+    if (!['approved', 'rejected'].includes(decision)) throw validationError('Status must be approved or rejected');
+    const reviewNote = normalizeOptionalText(data.review_note || '', 500);
+    const requestUpdate = await client.query(
+      `UPDATE tenant_invoice_payment_requests
+       SET status = $1,
+           review_note = $2,
+           reviewed_by = $3,
+           reviewed_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [decision, reviewNote, userId, requestId]
+    );
+    if (decision === 'approved') {
+      const requestedAmount = num(requestRow.requested_amount || 0);
+      const totalAmount = num(requestRow.total_amount || 0);
+      const nextPaidAmount = Math.min(totalAmount, requestedAmount || totalAmount);
+      await client.query(
+        `UPDATE tenant_invoices
+         SET payment_status = $1,
+             paid_amount = $2,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [nextPaidAmount >= totalAmount ? 'paid' : 'partial_paid', nextPaidAmount, requestRow.invoice_id]
+      );
+    }
+    const invoiceResult = await client.query(`SELECT * FROM tenant_invoices WHERE id = $1 LIMIT 1`, [requestRow.invoice_id]);
+    return {
+      request: mapTenantPaymentRequestRow(requestUpdate.rows[0]),
+      invoice: invoiceResult.rows[0] ? mapInvoiceRow(invoiceResult.rows[0]) : null,
+    };
+  });
 }
 
 async function createTenantBuilding(userId, data = {}) {
@@ -861,8 +1458,13 @@ async function updateTenantBuilding(userId, buildingId, data = {}) {
 }
 
 async function deleteTenantBuilding(userId, buildingId) {
-  const result = await query('DELETE FROM tenant_buildings WHERE id = $1 AND user_id = $2', [buildingId, userId]);
-  return result.rowCount > 0;
+  await ensureTenantTables();
+  const building = await getBuildingOwnedByUser(userId, buildingId);
+  if (!building) throw validationError('Building not found');
+  return withTransaction(async (client) => {
+    const result = await client.query('DELETE FROM tenant_buildings WHERE id = $1 AND user_id = $2', [buildingId, userId]);
+    return result.rowCount > 0;
+  });
 }
 
 async function createTenantRoom(userId, buildingId, data = {}) {
@@ -978,7 +1580,9 @@ async function createTenantRecord(userId, data = {}) {
   const nextIsActive = data.is_active !== false && (!nextEndDate || nextEndDate > currentDateValue());
   if (nextIsActive) {
     const occupiedBy = await findActiveTenantForRoom(userId, room.id);
-    if (occupiedBy) throw validationError('This room already has an active tenant');
+    if (occupiedBy && !normalizeSplitFlag(data.allow_shared_room, false)) {
+      throw validationError('This room already has an active tenant. Enable shared room to add another tenant.');
+    }
   }
   const vehicles = normalizeVehicleRows(data.vehicles);
   const items = normalizeItemRows(data.provided_items);
@@ -1056,7 +1660,10 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
     && (!nextEndDate || nextEndDate > currentDateValue());
   if (nextIsActive) {
     const occupiedBy = await findActiveTenantForRoom(userId, room.id, tenantId);
-    if (occupiedBy) throw validationError('This room already has an active tenant');
+    const sameRoom = Number(room.id) === Number(current.room_id);
+    if (occupiedBy && !(sameRoom || normalizeSplitFlag(data.allow_shared_room, false))) {
+      throw validationError('This room already has an active tenant. Enable shared room to move another tenant here.');
+    }
   }
   const vehicles = data.vehicles !== undefined ? normalizeVehicleRows(data.vehicles) : null;
   const items = data.provided_items !== undefined ? normalizeItemRows(data.provided_items) : null;
@@ -1215,8 +1822,12 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   const invoiceReferenceDate = `${invoiceMonth}-01`;
   const chargeProfile = pickChargeProfileForDate(await listTenantChargeHistory({ query }, [tenantId]), invoiceReferenceDate);
   const currentUnits = normalizeInteger(data.current_electricity_units, 'Current electricity units', { min: 0, max: 100000000 });
-  const recurringChargeItems = normalizeOtherChargeItems(chargeProfile?.monthly_additional_charges ?? tenant.monthly_additional_charges);
-  const nextInvoiceChargeItems = normalizeOtherChargeItems(tenant.next_invoice_charge_items);
+  const recurringChargeItemsBase = normalizeOtherChargeItems(
+    Array.isArray(chargeProfile?.monthly_additional_charges) && chargeProfile.monthly_additional_charges.length
+      ? chargeProfile.monthly_additional_charges
+      : tenant.monthly_additional_charges
+  );
+  const nextInvoiceChargeItemsBase = normalizeOtherChargeItems(tenant.next_invoice_charge_items);
   const manualOtherChargeItems = normalizeOtherChargeItems(data.other_charge_items);
   const legacyOtherCharges = data.other_charge_items !== undefined
     ? 0
@@ -1231,10 +1842,28 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
     [tenantId, invoiceMonth]
   );
   const existing = existingR.rows[0] || null;
+  const existingOtherChargeItems = existing ? normalizeOtherChargeItems(existing.other_charge_items) : [];
+  const roommateCount = existing && data.split_config === undefined
+    ? Math.max(1, Number(existing.roommate_count_snapshot || 1))
+    : await countRoomTenantsForInvoiceMonth(room.id, invoiceMonth);
+  const defaultSplitEnabled = roommateCount > 1;
+  const splitConfig = normalizeTenantInvoiceSplitConfig(
+    data.split_config !== undefined ? data.split_config : (existing?.split_config || {}),
+    defaultSplitEnabled
+  );
+  const recurringChargeItems = applySplitToOtherChargeItems(recurringChargeItemsBase, splitConfig.divide_other, roommateCount);
+  const nextInvoiceChargeItems = applySplitToOtherChargeItems(nextInvoiceChargeItemsBase, splitConfig.divide_other, roommateCount);
+  const carryForwardChargeItems = await buildTenantPendingCarryForwardItems(tenantId, invoiceMonth);
   const autoChargeItems = [...recurringChargeItems, ...(!existing ? nextInvoiceChargeItems : [])];
+  const submittedNonCarryChargeItems = applySplitToOtherChargeItems(stripCarryForwardChargeItems(manualOtherChargeItems), splitConfig.divide_other, roommateCount);
+  const existingNonCarryChargeItems = stripCarryForwardChargeItems(existingOtherChargeItems);
   const otherChargeItems = data.other_charge_items !== undefined
-    ? (existing ? manualOtherChargeItems : [...autoChargeItems, ...manualOtherChargeItems])
-    : (existing ? normalizeOtherChargeItems(existing.other_charge_items) : autoChargeItems);
+    ? (existing
+        ? [...submittedNonCarryChargeItems, ...carryForwardChargeItems]
+        : [...autoChargeItems, ...submittedNonCarryChargeItems, ...carryForwardChargeItems])
+    : (existing
+        ? [...(existingNonCarryChargeItems.length ? existingNonCarryChargeItems : autoChargeItems), ...carryForwardChargeItems]
+        : [...autoChargeItems, ...carryForwardChargeItems]);
   const otherCharges = data.other_charge_items !== undefined || !existing
     ? sumOtherChargeItems(otherChargeItems)
     : num(existing.other_charges_snapshot);
@@ -1251,11 +1880,16 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   const electricityUnitPrice = data.electricity_unit_price !== undefined
     ? normalizeAmount(data.electricity_unit_price, 'Electricity per unit price')
     : num((chargeProfile?.electricity_unit_price ?? tenant.electricity_unit_price) || 0);
-  const rentAmount = data.rent_amount !== undefined ? normalizeAmount(data.rent_amount, 'Rent amount') : num((chargeProfile?.rent_amount ?? tenant.rent_amount) || 0);
-  const sewerageCharge = data.sewerage_charge !== undefined ? normalizeAmount(data.sewerage_charge, 'Sewerage charge') : num((chargeProfile?.sewerage_charge ?? tenant.sewerage_charge) || 0);
-  const waterCharge = data.water_charge !== undefined ? normalizeAmount(data.water_charge, 'Water charge') : num((chargeProfile?.water_charge ?? tenant.water_charge) || 0);
-  const cleaningCharge = data.cleaning_charge !== undefined ? normalizeAmount(data.cleaning_charge, 'Cleaning charge') : num((chargeProfile?.cleaning_charge ?? tenant.cleaning_charge) || 0);
-  const electricityAmount = Math.round((unitsUsed * electricityUnitPrice) * 100) / 100;
+  const baseRentAmount = data.rent_amount !== undefined ? normalizeAmount(data.rent_amount, 'Rent amount') : num((chargeProfile?.rent_amount ?? tenant.rent_amount) || 0);
+  const baseSewerageCharge = data.sewerage_charge !== undefined ? normalizeAmount(data.sewerage_charge, 'Sewerage charge') : num((chargeProfile?.sewerage_charge ?? tenant.sewerage_charge) || 0);
+  const baseWaterCharge = data.water_charge !== undefined ? normalizeAmount(data.water_charge, 'Water charge') : num((chargeProfile?.water_charge ?? tenant.water_charge) || 0);
+  const baseCleaningCharge = data.cleaning_charge !== undefined ? normalizeAmount(data.cleaning_charge, 'Cleaning charge') : num((chargeProfile?.cleaning_charge ?? tenant.cleaning_charge) || 0);
+  const baseElectricityAmount = Math.round((unitsUsed * electricityUnitPrice) * 100) / 100;
+  const rentAmount = divideTenantChargeAmount(baseRentAmount, splitConfig.divide_rent, roommateCount);
+  const sewerageCharge = divideTenantChargeAmount(baseSewerageCharge, splitConfig.divide_sewerage, roommateCount);
+  const waterCharge = divideTenantChargeAmount(baseWaterCharge, splitConfig.divide_water, roommateCount);
+  const cleaningCharge = divideTenantChargeAmount(baseCleaningCharge, splitConfig.divide_cleaning, roommateCount);
+  const electricityAmount = divideTenantChargeAmount(baseElectricityAmount, splitConfig.divide_electricity, roommateCount);
   const totalAmount = Math.round((rentAmount + sewerageCharge + waterCharge + cleaningCharge + otherCharges + electricityAmount) * 100) / 100;
   const paymentStatus = normalizeTenantPaymentStatus(data.payment_status);
   let paidAmountInput = data.paid_amount !== undefined ? normalizeAmount(data.paid_amount, 'Paid amount', { allowZero: true, allowNegative: false }) : 0;
@@ -1270,12 +1904,12 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
       tenant_id, invoice_month, due_date, tenant_name_snapshot, building_name_snapshot, room_label_snapshot,
       contact_number_snapshot, rent_amount_snapshot, electricity_unit_price_snapshot, sewerage_charge_snapshot,
       water_charge_snapshot, cleaning_charge_snapshot, other_charges_snapshot, other_charge_items, previous_electricity_units,
-      current_electricity_units, electricity_units_used, electricity_amount, total_amount, payment_status, paid_amount, notes, updated_at
+      current_electricity_units, electricity_units_used, electricity_amount, total_amount, split_config, roommate_count_snapshot, payment_status, paid_amount, notes, updated_at
      ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7, $8, $9, $10,
       $11, $12, $13, $14::jsonb,
-      $15, $16, $17, $18, $19, $20, $21, $22, NOW()
+      $15, $16, $17, $18, $19, $20::jsonb, $21, $22, $23, $24, NOW()
      )
      ON CONFLICT (tenant_id, invoice_month)
      DO UPDATE SET due_date = EXCLUDED.due_date,
@@ -1295,6 +1929,8 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
                    electricity_units_used = EXCLUDED.electricity_units_used,
                    electricity_amount = EXCLUDED.electricity_amount,
                    total_amount = EXCLUDED.total_amount,
+                   split_config = EXCLUDED.split_config,
+                   roommate_count_snapshot = EXCLUDED.roommate_count_snapshot,
                    payment_status = EXCLUDED.payment_status,
                    paid_amount = EXCLUDED.paid_amount,
                    notes = EXCLUDED.notes,
@@ -1320,6 +1956,8 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
       unitsUsed,
       electricityAmount,
       totalAmount,
+      JSON.stringify(splitConfig),
+      roommateCount,
       paymentStatus,
       paidAmountInput,
       normalizeOptionalText(data.notes, 500),
@@ -1633,6 +2271,7 @@ async function bulkCreateTenantInvoices(userId, buildingId, data = {}) {
       current_electricity_units: row?.current_electricity_units,
       payment_status: row?.payment_status || 'pending',
       paid_amount: row?.paid_amount || 0,
+      split_config: row?.split_config || {},
       other_charge_items: row?.other_charge_items || [],
       notes: row?.notes || '',
     });
@@ -2124,23 +2763,6 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
       invoicesImported += 1;
     }
 
-    for (const roomId of touchedRoomIds) {
-      const roomTenants = tenants.filter((tenant) => Number(tenant.room_id) === Number(roomId));
-      if (!roomTenants.length) continue;
-      const winner = roomTenants.sort((a, b) => {
-        const aKey = invoiceActivityByTenant.get(a.id) || String(a.start_date || '');
-        const bKey = invoiceActivityByTenant.get(b.id) || String(b.start_date || '');
-        return bKey.localeCompare(aKey) || Number(b.id) - Number(a.id);
-      })[0];
-      await client.query(
-        `UPDATE tenant_records
-         SET is_active = CASE WHEN id = $1 THEN TRUE ELSE FALSE END,
-             updated_at = NOW()
-         WHERE building_id = $2 AND room_id = $3`,
-        [winner.id, buildingId, roomId]
-      );
-    }
-
     return {
       building_id: Number(buildingId),
       rooms_added: roomsAdded,
@@ -2156,6 +2778,12 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
 
 module.exports = {
   listTenantsOverview,
+  getTenantPortalRecordByPhone,
+  getTenantPortalDashboard,
+  createTenantInvoicePaymentRequest,
+  getTenantInvoicePaymentRequestNotificationContext,
+  getTenantPendingApprovalCount,
+  reviewTenantInvoicePaymentRequest,
   createTenantBuilding,
   updateTenantBuilding,
   deleteTenantBuilding,
