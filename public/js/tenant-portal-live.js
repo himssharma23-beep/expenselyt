@@ -486,7 +486,7 @@
       </div>
       <div class="tenant-portal-otp-line">OTP sent to ${esc(state.maskedMobile || `+91 ${state.phone}`)}</div>
       <div class="tenant-portal-otp-grid">
-        ${state.otp.map((digit, index) => `<input class="tenant-portal-otp-input" id="tenantPortalOtp${index}" inputmode="numeric" maxlength="1" value="${esc(digit)}">`).join('')}
+        ${state.otp.map((digit, index) => `<input class="tenant-portal-otp-input" id="tenantPortalOtp${index}" inputmode="numeric" ${index === 0 ? 'autocomplete="one-time-code"' : ''} maxlength="6" value="${esc(digit)}">`).join('')}
       </div>
       <div class="tenant-portal-resend">Did not receive it? <button class="tenant-portal-link-btn" id="tenantPortalResendBtn" ${resendLocked ? 'disabled' : ''}>${state.sendingOtp ? 'Sending...' : resendSeconds > 0 ? `Resend in ${resendSeconds}s` : 'Resend OTP'}</button></div>
       <button class="tenant-portal-primary-btn" id="tenantPortalVerifyBtn" ${state.verifyingOtp ? 'disabled' : ''}>${state.verifyingOtp ? 'Verifying OTP...' : 'Verify OTP'}</button>
@@ -497,7 +497,18 @@
       const input = document.getElementById(`tenantPortalOtp${index}`);
       if (!input) return;
       input.addEventListener('input', () => {
-        const clean = input.value.replace(/\D+/g, '').slice(-1);
+        const normalized = input.value.replace(/\D+/g, '');
+        if (normalized.length > 1) {
+          const digits = normalized.slice(0, 6).split('');
+          for (let i = 0; i < 6; i += 1) {
+            state.otp[i] = digits[i] || '';
+            const box = document.getElementById(`tenantPortalOtp${i}`);
+            if (box) box.value = state.otp[i];
+          }
+          document.getElementById(`tenantPortalOtp${Math.min(digits.length, 5)}`)?.focus();
+          return;
+        }
+        const clean = normalized.slice(-1);
         input.value = clean;
         state.otp[index] = clean;
         if (clean && index < 5) {

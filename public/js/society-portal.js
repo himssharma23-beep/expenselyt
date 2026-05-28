@@ -15,9 +15,10 @@
     requestPaidOn: '',
     requestNote: '',
     submittingRequest: false,
-    dashboardTab: 'request',
+    dashboardTab: 'history',
     notice: '',
     noticeType: '',
+    requestModalOpen: false,
   };
 
   const moneyFmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
@@ -145,8 +146,23 @@
 
   function setDashboardTab(tab) {
     const nextTab = String(tab || '').trim().toLowerCase();
-    if (!['request', 'history', 'expenses', 'collections'].includes(nextTab)) return;
+    if (!['history', 'expenses', 'collections'].includes(nextTab)) return;
     state.dashboardTab = nextTab;
+    render();
+  }
+
+  function openRequestModal(monthKey) {
+    state.selectedRequestMonth = String(monthKey || '').trim();
+    state.requestAmount = '';
+    state.requestPaidOn = '';
+    state.requestNote = '';
+    syncRequestForm(state.dashboard);
+    state.requestModalOpen = true;
+    render();
+  }
+
+  function closeRequestModal() {
+    state.requestModalOpen = false;
     render();
   }
 
@@ -292,6 +308,7 @@
       state.submittingRequest = false;
       state.requestNote = '';
       state.requestAmount = '';
+      state.requestModalOpen = false;
       if (state.dashboard) syncRequestForm(state.dashboard);
       render();
       showNotice('Payment request sent to the admin for approval.', 'success');
@@ -314,8 +331,22 @@
     render();
   }
 
+  function applyOtpDigits(rawValue = '') {
+    const digits = String(rawValue || '').replace(/\D+/g, '').slice(0, 6);
+    if (!digits) return false;
+    state.otp = digits.split('').concat(Array(Math.max(0, 6 - digits.length)).fill('')).slice(0, 6);
+    render();
+    focusOtpInput(Math.min(digits.length, 5));
+    return true;
+  }
+
   function handleOtpInput(index, rawValue) {
-    const nextValue = String(rawValue || '').replace(/\D+/g, '').slice(-1);
+    const normalized = String(rawValue || '').replace(/\D+/g, '');
+    if (normalized.length > 1) {
+      applyOtpDigits(normalized);
+      return;
+    }
+    const nextValue = normalized.slice(-1);
     if (!nextValue) {
       state.otp[index] = '';
       render();
@@ -353,9 +384,7 @@
     const pasted = String(event.clipboardData?.getData('text') || '').replace(/\D+/g, '').slice(0, 6);
     if (!pasted) return;
     event.preventDefault();
-    state.otp = pasted.split('').concat(Array(Math.max(0, 6 - pasted.length)).fill('')).slice(0, 6);
-    render();
-    focusOtpInput(Math.min(pasted.length, 5));
+    applyOtpDigits(pasted);
   }
 
   function focusOtpInput(index) {
@@ -430,6 +459,16 @@
     const requestBtn = document.getElementById('spSubmitRequestBtn');
     if (requestBtn) requestBtn.addEventListener('click', submitPaymentRequest);
 
+    const requestCloseBtn = document.getElementById('spRequestModalClose');
+    if (requestCloseBtn) requestCloseBtn.addEventListener('click', closeRequestModal);
+
+    const requestCancelBtn = document.getElementById('spRequestModalCancel');
+    if (requestCancelBtn) requestCancelBtn.addEventListener('click', closeRequestModal);
+
+    document.querySelectorAll('[data-sp-request-month]').forEach((btn) => {
+      btn.addEventListener('click', () => openRequestModal(btn.getAttribute('data-sp-request-month')));
+    });
+
     document.querySelectorAll('[data-sp-tab]').forEach((btn) => {
       btn.addEventListener('click', () => setDashboardTab(btn.getAttribute('data-sp-tab')));
     });
@@ -465,7 +504,7 @@
               <div class="sp-otp-block">
                 <div class="sp-otp-hint">OTP sent to ${esc(state.maskedMobile || maskPhone(state.phone))}</div>
                 <div class="sp-otp-row">
-                  ${state.otp.map((digit, index) => `<input class="sp-otp-input" data-otp-index="${index}" type="text" inputmode="numeric" maxlength="1" value="${esc(digit)}">`).join('')}
+                  ${state.otp.map((digit, index) => `<input class="sp-otp-input" data-otp-index="${index}" type="text" inputmode="numeric" ${index === 0 ? 'autocomplete="one-time-code"' : ''} maxlength="6" value="${esc(digit)}">`).join('')}
                 </div>
                 <div class="sp-otp-actions">Didn't receive it? <button id="spResendBtn" class="sp-otp-resend" type="button">Resend OTP</button></div>
               </div>
@@ -488,7 +527,7 @@
     syncRequestForm(dashboard);
     const requestMonths = [...new Set([state.selectedRequestMonth || '', ...(dashboard.contribution_history || []).map((item) => item.month_key).filter(Boolean)])].filter(Boolean).sort().reverse();
     const selectedRequest = (dashboard.payment_requests || []).find((item) => item.month_key === state.selectedRequestMonth && String(item.status || '').toLowerCase() === 'pending') || null;
-    const latestPending = (dashboard.pending_requests || [])[0] || selectedRequest || null;
+    const latestPending = selectedRequest || (dashboard.pending_requests || [])[0] || null;
     const lastPaidValue = summary.last_paid_month ? fmtMonth(summary.last_paid_month, false).replace(' ', "'") : '-';
     const memberStatusText = summary.pending_month_count > 0 ? `${summary.pending_month_count} month${summary.pending_month_count === 1 ? '' : 's'} pending` : 'Active Member';
 
@@ -508,6 +547,9 @@
           <div>
             <div class="sp-row-title">${esc(fmtMonth(item.month_key, true))}</div>
             <div class="sp-row-sub">${esc(sub)}</div>
+            ${item.status === 'pending'
+              ? `<button type="button" class="sp-inline-action" data-sp-request-month="${esc(item.month_key)}">Request I Paid</button>`
+              : ''}
           </div>
           <div class="sp-row-right">
             <div class="sp-row-amount ${meta.badge === 'paid' ? 'green' : 'red'}">${fmtMoney(item.amount || item.due_amount || 0)}</div>
@@ -516,7 +558,7 @@
         </div>`;
     }).join('');
 
-    const expenseRows = (dashboard.recent_expenses || []).slice(0, 8).map((expense) => {
+    const expenseRows = (dashboard.expenses || dashboard.recent_expenses || []).map((expense) => {
       const cls = expenseCategoryClass(expense.category);
       return `
         <div class="sp-row">
@@ -556,7 +598,7 @@
         <div class="sp-overview-tile">
           <div class="sp-total-label">Total Expenses</div>
           <div class="sp-total-value red">${fmtMoney(dashboard.totals?.overall_spent || 0)}</div>
-          <div class="sp-total-sub">${dashboard.recent_expenses?.length || 0} recent items shown</div>
+          <div class="sp-total-sub">${dashboard.expenses?.length || dashboard.recent_expenses?.length || 0} expense items</div>
         </div>
         <div class="sp-overview-tile">
           <div class="sp-total-label">Net Balance</div>
@@ -573,8 +615,7 @@
     const tabsHtml = `
       <div class="sp-tabs">
         ${[
-          ['request', 'Payment'],
-          ['history', 'History'],
+          ['history', 'My Contribution'],
           ['expenses', 'Expenses'],
           ['collections', 'Collections'],
         ].map(([key, label]) => `
@@ -588,7 +629,7 @@
         <section>
           <div class="sp-section-head">
             <h2>My Contributions</h2>
-            <p>Recent payment history</p>
+            <p>Your month-wise contribution history</p>
           </div>
           <div class="sp-card sp-list-card">
             <div class="sp-list-head compact">
@@ -605,7 +646,7 @@
         <section>
           <div class="sp-section-head">
             <h2>Society Expenses</h2>
-            <p>Recent spending breakdown</p>
+            <p>All recorded society expenses</p>
           </div>
           <div class="sp-card sp-list-card">
             ${expenseRows || '<div class="sp-empty">No expenses added yet.</div>'}
@@ -624,40 +665,46 @@
             </div>
           </div>
         </section>`;
-    } else {
-      activeSection = `
-        <section>
-          <div class="sp-section-head">
-            <h2>Payment Request</h2>
-            <p>Notify the admin after you pay. It will stay pending until approved.</p>
-          </div>
-          <div class="sp-card sp-pay-card compact">
-            <div class="sp-pay-grid compact">
-              <label class="sp-input-label">Month
-                <input id="spRequestMonth" class="sp-pay-input" type="month" value="${esc(state.selectedRequestMonth)}" list="spRequestMonths">
-                <datalist id="spRequestMonths">${requestMonths.map((monthKey) => `<option value="${esc(monthKey)}">${esc(fmtMonth(monthKey, true))}</option>`).join('')}</datalist>
-              </label>
-              <label class="sp-input-label">Amount
-                <input id="spRequestAmount" class="sp-pay-input" type="number" min="0.01" step="0.01" value="${esc(String(state.requestAmount || ''))}" placeholder="Enter paid amount">
-              </label>
-            </div>
-            <div class="sp-request-inline">
-              <label class="sp-input-label">Paid On
-                <input id="spRequestPaidOn" class="sp-pay-input" type="date" value="${esc(state.requestPaidOn || '')}">
-              </label>
-              <div class="sp-input-label">Status
-                ${latestPending
-                  ? `<div class="sp-request-status ${requestStatusClass(latestPending.status)}">${esc(requestStatusLabel(latestPending.status))}</div>`
-                  : '<div class="sp-request-status approved">No pending request</div>'}
-              </div>
-            </div>
-            <label class="sp-input-label">Note
-              <textarea id="spRequestNote" class="sp-pay-textarea compact" placeholder="Optional payment note">${esc(state.requestNote || '')}</textarea>
-            </label>
-            <button id="spSubmitRequestBtn" class="sp-pill-btn" type="button" ${state.submittingRequest ? 'disabled' : ''}>${state.submittingRequest ? 'Sending request...' : 'I Paid This Month'}</button>
-          </div>
-        </section>`;
     }
+
+    const requestModal = state.requestModalOpen ? `
+      <div class="sp-modal-backdrop">
+        <div class="sp-modal-card">
+          <div class="sp-modal-head">
+            <div>
+              <div class="sp-row-title">Request I Paid</div>
+              <div class="sp-row-sub">Notify the admin after you pay. It will stay pending until approved.</div>
+            </div>
+            <button type="button" class="sp-modal-close" id="spRequestModalClose" aria-label="Close">&times;</button>
+          </div>
+          <div class="sp-pay-grid compact">
+            <label class="sp-input-label">Month
+              <input id="spRequestMonth" class="sp-pay-input" type="month" value="${esc(state.selectedRequestMonth)}" list="spRequestMonths">
+              <datalist id="spRequestMonths">${requestMonths.map((monthKey) => `<option value="${esc(monthKey)}">${esc(fmtMonth(monthKey, true))}</option>`).join('')}</datalist>
+            </label>
+            <label class="sp-input-label">Amount
+              <input id="spRequestAmount" class="sp-pay-input" type="number" min="0.01" step="0.01" value="${esc(String(state.requestAmount || ''))}" placeholder="Enter paid amount">
+            </label>
+          </div>
+          <div class="sp-request-inline">
+            <label class="sp-input-label">Paid On
+              <input id="spRequestPaidOn" class="sp-pay-input" type="date" value="${esc(state.requestPaidOn || '')}">
+            </label>
+            <div class="sp-input-label">Status
+              ${latestPending
+                ? `<div class="sp-request-status ${requestStatusClass(latestPending.status)}">${esc(requestStatusLabel(latestPending.status))}</div>`
+                : '<div class="sp-request-status approved">No pending request</div>'}
+            </div>
+          </div>
+          <label class="sp-input-label">Note
+            <textarea id="spRequestNote" class="sp-pay-textarea compact" placeholder="Optional payment note">${esc(state.requestNote || '')}</textarea>
+          </label>
+          <div class="sp-modal-actions">
+            <button id="spSubmitRequestBtn" class="sp-pill-btn" type="button" ${state.submittingRequest ? 'disabled' : ''}>${state.submittingRequest ? 'Sending request...' : 'Send Request'}</button>
+            <button id="spRequestModalCancel" class="sp-outline-btn" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>` : '';
 
     return `
       <div class="sp-dashboard">
@@ -702,6 +749,7 @@
           ${tabsHtml}
           ${activeSection}
         </div>
+        ${requestModal}
       </div>`;
   }
 

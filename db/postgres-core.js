@@ -6139,6 +6139,7 @@ async function getSocietyMemberPortalDashboard(memberId) {
     contribution_history: contributionHistory,
     pending_requests: requests.filter((item) => String(item.status || '').toLowerCase() === 'pending'),
     payment_requests: requests,
+    expenses: detail.expenses || [],
     recent_expenses: recentExpenses,
     month_summary: detail.month_summary || [],
     totals: detail.totals || {},
