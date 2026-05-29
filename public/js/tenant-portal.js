@@ -866,9 +866,6 @@
         </div>
       </div>`;
     document.getElementById('tenantPortalCloseModalBtn')?.addEventListener('click', closeModal);
-    document.getElementById('tenantPortalModalBackdrop')?.addEventListener('click', (event) => {
-      if (event.target?.id === 'tenantPortalModalBackdrop') closeModal();
-    });
     document.getElementById('tenantPortalDownloadPdfBtn')?.addEventListener('click', () => downloadTenantPortalInvoicePdf(invoice));
     document.getElementById('tenantPortalMarkPaidBtn')?.addEventListener('click', async () => {
       closeModal();
@@ -910,9 +907,6 @@
       </div>`;
     document.getElementById('tenantPortalCloseModalBtn')?.addEventListener('click', closeModal);
     document.getElementById('tenantPortalCancelPaymentBtn')?.addEventListener('click', closeModal);
-    document.getElementById('tenantPortalModalBackdrop')?.addEventListener('click', (event) => {
-      if (event.target?.id === 'tenantPortalModalBackdrop') closeModal();
-    });
     document.getElementById('tenantPortalSubmitPaymentBtn')?.addEventListener('click', async () => {
       const note = String(document.getElementById('tenantPortalPaymentNoteInput')?.value || '').trim();
       await submitMarkInvoicePaid(invoice.id, note);
