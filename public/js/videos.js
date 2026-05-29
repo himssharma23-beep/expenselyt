@@ -323,7 +323,26 @@ function buildVideoMobileStreamUrl(video) {
   return token ? `/api/videos/mobile-stream/${token}?platform=web&transcode=1` : '';
 }
 
+function guessVideoMimeType(video) {
+  const explicitMime = String(video?.mime_type || '').trim();
+  if (explicitMime) return explicitMime;
+  const filename = String(video?.filename || '').trim().toLowerCase();
+  if (filename.endsWith('.mp4') || filename.endsWith('.m4v')) return 'video/mp4';
+  if (filename.endsWith('.webm')) return 'video/webm';
+  if (filename.endsWith('.ogg') || filename.endsWith('.ogv')) return 'video/ogg';
+  if (filename.endsWith('.mov')) return 'video/quicktime';
+  return 'video/mp4';
+}
+
 function getPlayableVideoSource(video, audioTrackId = '') {
+  const normalizedAudioTrackId = String(audioTrackId || '').trim();
+  const directStreamUrl = !normalizedAudioTrackId ? buildVideoStreamUrl(video, '') : '';
+  if (directStreamUrl) {
+    return {
+      src: directStreamUrl,
+      type: guessVideoMimeType(video),
+    };
+  }
   return {
     src: buildVideoHlsUrl(video, audioTrackId),
     type: 'application/x-mpegURL',
@@ -454,13 +473,23 @@ function disposeVideoLibraryPlayer() {
 async function initializeVideoLibraryPlayer(video, audioTrackId = '') {
   const playerEl = document.getElementById('videoLibraryPlayer');
   if (!playerEl) return null;
-  await ensureVideoJsAssetsLoaded();
-  disposeVideoLibraryPlayer();
   const source = getPlayableVideoSource(video, audioTrackId);
+  disposeVideoLibraryPlayer();
   playerEl.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
   playerEl.setAttribute('disablepictureinpicture', 'true');
   playerEl.setAttribute('disableremoteplayback', 'true');
   playerEl.oncontextmenu = () => false;
+  if (!String(source?.type || '').toLowerCase().includes('mpegurl')) {
+    if (source?.type) {
+      playerEl.setAttribute('type', source.type);
+    } else {
+      playerEl.removeAttribute('type');
+    }
+    playerEl.src = source?.src || '';
+    playerEl.load();
+    return null;
+  }
+  await ensureVideoJsAssetsLoaded();
   _videoJsPlayer = window.videojs(playerEl, {
     autoplay: false,
     controls: true,
@@ -638,6 +667,19 @@ function setVideoLibraryPlayerSource(video, audioTrackId = '') {
       playerEl.addEventListener('durationchange', restorePlaybackState, { once: true });
       playerEl.addEventListener('canplay', restorePlaybackState, { once: true });
     }
+  }
+  if (!String(source?.type || '').toLowerCase().includes('mpegurl')) {
+    if (playerInstance) {
+      disposeVideoLibraryPlayer();
+    }
+    if (source?.type) {
+      playerEl.setAttribute('type', source.type);
+    } else {
+      playerEl.removeAttribute('type');
+    }
+    playerEl.src = source?.src || '';
+    playerEl.load();
+    return;
   }
   if (playerInstance && typeof playerInstance.src === 'function') {
     playerInstance.src(source);

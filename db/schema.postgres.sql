@@ -115,6 +115,145 @@ CREATE INDEX IF NOT EXISTS idx_user_notifications_unread ON user_notifications (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_dedupe
   ON user_notifications (user_id, type, COALESCE(dedupe_key, ''));
 
+CREATE TABLE IF NOT EXISTS notification_templates (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  image_url TEXT,
+  redirect_url TEXT,
+  notification_type TEXT NOT NULL DEFAULT 'general',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  payload_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_notification_templates_active ON notification_templates (is_active, created_at DESC) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS notification_campaigns (
+  id BIGSERIAL PRIMARY KEY,
+  template_id BIGINT REFERENCES notification_templates(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  image_url TEXT,
+  redirect_url TEXT,
+  notification_type TEXT NOT NULL DEFAULT 'general',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  status TEXT NOT NULL DEFAULT 'draft',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  send_mode TEXT NOT NULL DEFAULT 'immediate',
+  recurrence_type TEXT NOT NULL DEFAULT 'none',
+  recurrence_interval INTEGER NOT NULL DEFAULT 1,
+  schedule_date TEXT,
+  schedule_time TEXT,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  scheduled_for TIMESTAMPTZ,
+  start_date TEXT,
+  end_date TEXT,
+  expiry_at TIMESTAMPTZ,
+  target_mode TEXT NOT NULL DEFAULT 'all',
+  target_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  total_recipients INTEGER NOT NULL DEFAULT 0,
+  pending_count INTEGER NOT NULL DEFAULT 0,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_sent_at TIMESTAMPTZ,
+  last_processed_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_notification_campaigns_status ON notification_campaigns (status, is_active, scheduled_for) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_campaigns_created ON notification_campaigns (created_at DESC) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS notification_schedules (
+  id BIGSERIAL PRIMARY KEY,
+  notification_id BIGINT NOT NULL REFERENCES notification_campaigns(id) ON DELETE CASCADE,
+  run_at TIMESTAMPTZ NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  recurrence_type TEXT NOT NULL DEFAULT 'none',
+  recurrence_interval INTEGER NOT NULL DEFAULT 1,
+  start_date TEXT,
+  end_date TEXT,
+  schedule_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_notification_schedules_due ON notification_schedules (status, run_at) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS notification_recipients (
+  id BIGSERIAL PRIMARY KEY,
+  notification_id BIGINT NOT NULL REFERENCES notification_campaigns(id) ON DELETE CASCADE,
+  schedule_id BIGINT REFERENCES notification_schedules(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  targeting_reason TEXT,
+  payload_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  device_count INTEGER NOT NULL DEFAULT 0,
+  success_device_count INTEGER NOT NULL DEFAULT 0,
+  failed_device_count INTEGER NOT NULL DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  failed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE (notification_id, schedule_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_recipients_status ON notification_recipients (status, next_retry_at, created_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_recipients_user ON notification_recipients (user_id, created_at DESC) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS notification_delivery_logs (
+  id BIGSERIAL PRIMARY KEY,
+  notification_id BIGINT NOT NULL REFERENCES notification_campaigns(id) ON DELETE CASCADE,
+  schedule_id BIGINT REFERENCES notification_schedules(id) ON DELETE CASCADE,
+  recipient_id BIGINT REFERENCES notification_recipients(id) ON DELETE CASCADE,
+  user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  device_token_id BIGINT REFERENCES push_device_tokens(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  provider_message_id TEXT,
+  status TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL DEFAULT 1,
+  error_message TEXT,
+  response_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_logs_notification ON notification_delivery_logs (notification_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_logs_status ON notification_delivery_logs (status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_topic_memberships (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic TEXT NOT NULL,
+  channel TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_topic_memberships_unique_active
+  ON notification_topic_memberships (user_id, lower(topic), lower(COALESCE(channel, '')))
+  WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -8817,6 +8817,26 @@ let _adminNotifDraftTitle = '';
 let _adminNotifDraftMessage = '';
 let _adminNotifListScrollTop = 0;
 let _adminNotifLastResult = null;
+let _adminPushState = {
+  dashboard: null,
+  tab: 'campaigns',
+  campaigns: [],
+  campaignPagination: { page: 1, page_size: 12, total: 0, total_pages: 1 },
+  campaignFilters: { search: '', status: 'all' },
+  templates: [],
+  logs: [],
+  logsPagination: { page: 1, page_size: 20, total: 0, total_pages: 1 },
+  logFilters: { search: '', status: 'all', from_date: '', to_date: '' },
+  devices: [],
+  devicesPagination: { page: 1, page_size: 20, total: 0, total_pages: 1 },
+  deviceSearch: '',
+  users: [],
+  userPagination: { page: 1, page_size: 10, total: 0, total_pages: 1 },
+  userSearch: '',
+  selectedUsers: new Set(),
+  plans: [],
+  editor: null,
+};
 let _adminAiDays = 30;
 let _adminAiReport = null;
 let _adminAiTestResult = null;

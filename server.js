@@ -15,6 +15,7 @@ const pgDb = require('./db/postgres-auth');
 const pgCoreDb = require('./db/postgres-core');
 const pgPetrolDb = require('./db/postgres-petrol');
 const pgOpsDb = require('./db/postgres-ops');
+const pgAdminNotificationsDb = require('./db/postgres-admin-notifications');
 const { getPool } = require('./db/postgres');
 const PgSession = require('connect-pg-simple')(session);
 const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./utils/mailer');
@@ -351,9 +352,14 @@ setTimeout(() => {
   runMonthlyEmailCycle().catch(() => {});
   runPushCycle().catch(() => {});
   runRecurringCycle().catch(() => {});
+  pgAdminNotificationsDb.processDueNotifications().catch(() => {});
   setInterval(() => {
     runMonthlyEmailCycle().catch(() => {});
     runPushCycle().catch(() => {});
     runRecurringCycle().catch(() => {});
+    pgAdminNotificationsDb.processDueNotifications().catch(() => {});
   }, 60 * 60 * 1000);
+  setInterval(() => {
+    pgAdminNotificationsDb.processDueNotifications().catch(() => {});
+  }, 60 * 1000);
 }, 10 * 1000);

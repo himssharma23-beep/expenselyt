@@ -25,7 +25,7 @@ function isExpoPushToken(token) {
 
 // Send via Expo (legacy fallback for any remaining Expo tokens)
 async function sendViaExpo(messages) {
-  if (!messages.length) return { sent: 0, errors: [], tickets: [] };
+  if (!messages.length) return { sent: 0, errors: [], tickets: [], results: [] };
 
   const expoHeaders = {
     'Content-Type': 'application/json',
@@ -35,6 +35,7 @@ async function sendViaExpo(messages) {
 
   const errors = [];
   const tickets = [];
+  const results = [];
 
   for (const batch of chunkArray(messages, 100)) {
     let response;
@@ -60,6 +61,14 @@ async function sendViaExpo(messages) {
     const ticketData = Array.isArray(payload?.data) ? payload.data : [];
     ticketData.forEach((ticket, index) => {
       tickets.push({ meta: batch[index]?.meta || null, ticket: ticket || null });
+      results.push({
+        provider: 'expo',
+        success: ticket?.status === 'ok',
+        provider_message_id: ticket?.id || null,
+        error: ticket?.status === 'error' ? (ticket?.message || ticket?.details?.error || 'Expo push failed') : null,
+        response: ticket || {},
+        meta: batch[index]?.meta || null,
+      });
     });
   }
 
@@ -68,23 +77,24 @@ async function sendViaExpo(messages) {
     .map((e) => e?.ticket?.message || e?.ticket?.details?.error)
     .filter(Boolean);
 
-  return { sent: messages.length, errors: [...errors, ...ticketErrors], tickets };
+  return { sent: messages.length, errors: [...errors, ...ticketErrors], tickets, results };
 }
 
 // Send via Firebase Cloud Messaging directly
 async function sendViaFcm(messages) {
-  if (!messages.length) return { sent: 0, errors: [] };
+  if (!messages.length) return { sent: 0, errors: [], results: [] };
 
   let messaging;
   try {
     const { getMessaging } = require('./firebase');
     messaging = getMessaging();
   } catch (err) {
-    return { sent: 0, errors: [`Firebase not configured: ${err.message}`] };
+    return { sent: 0, errors: [`Firebase not configured: ${err.message}`], results: [] };
   }
 
   const errors = [];
   let sent = 0;
+  const results = [];
 
   // FCM sendEach supports up to 500 messages per batch
   for (const batch of chunkArray(messages, 500)) {
@@ -123,16 +133,38 @@ async function sendViaFcm(messages) {
       const result = await messaging.sendEach(fcmMessages);
       sent += result.successCount || 0;
       (result.responses || []).forEach((resp, i) => {
+        results.push({
+          provider: 'fcm',
+          success: !!resp?.success,
+          provider_message_id: resp?.messageId || null,
+          error: resp?.success ? null : (resp?.error?.message || 'FCM send failed'),
+          response: {
+            success: !!resp?.success,
+            messageId: resp?.messageId || null,
+            error: resp?.error?.message || null,
+          },
+          meta: batch[i]?.meta || null,
+        });
         if (!resp.success && resp.error) {
           errors.push(`Token ${batch[i]?.meta?.to?.slice(0, 20)}...: ${resp.error.message}`);
         }
       });
     } catch (err) {
       errors.push(err.message || 'FCM batch send failed');
+      batch.forEach((item) => {
+        results.push({
+          provider: 'fcm',
+          success: false,
+          provider_message_id: null,
+          error: err.message || 'FCM batch send failed',
+          response: {},
+          meta: item?.meta || null,
+        });
+      });
     }
   }
 
-  return { sent, errors };
+  return { sent, errors, results };
 }
 
 async function sendExpoPushNotifications(messages = []) {
@@ -181,6 +213,7 @@ async function sendExpoPushNotifications(messages = []) {
     errors: allErrors,
     tickets: expoResult.tickets || [],
     receipts: [],
+    results: [...(fcmResult.results || []), ...(expoResult.results || [])],
   };
 }
 

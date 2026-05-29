@@ -17,6 +17,7 @@ const pgPetrolDb = require('../db/postgres-petrol');
 const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
+const pgAdminNotificationsDb = require('../db/postgres-admin-notifications');
 const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeMessagePayload, sendExpoPushNotifications } = require('../utils/push-notifications');
@@ -8451,6 +8452,216 @@ router.post('/admin/users/:id/otp', requireAdmin, async (req, res) => {
     const code = await Promise.resolve(pgDb.generateOtp(req.params.id, purpose || 'login', channel || 'email'));
     res.json({ success: true, otp: code });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/v1/admin/push-notifications/dashboard', requireAdmin, async (_req, res) => {
+  try {
+    const summary = await Promise.resolve(pgAdminNotificationsDb.getDashboardSummary());
+    res.json({ summary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/users', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgAdminNotificationsDb.listUsersForTargeting({
+      page: req.query.page,
+      page_size: req.query.page_size,
+      search: req.query.search,
+      role: req.query.role,
+      plan_id: req.query.plan_id,
+      active_only: req.query.active_only,
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/devices', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgAdminNotificationsDb.listDeviceTokens({
+      page: req.query.page,
+      page_size: req.query.page_size,
+      search: req.query.search,
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/templates', requireAdmin, async (req, res) => {
+  try {
+    const templates = await Promise.resolve(pgAdminNotificationsDb.listTemplates({ search: req.query.search }));
+    res.json({ templates });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/templates', requireAdmin, async (req, res) => {
+  try {
+    const template = await Promise.resolve(pgAdminNotificationsDb.upsertTemplate(req.body || {}, req.user?.id || null));
+    res.json({ success: true, template });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.put('/v1/admin/push-notifications/templates/:id', requireAdmin, async (req, res) => {
+  try {
+    const template = await Promise.resolve(pgAdminNotificationsDb.upsertTemplate(req.body || {}, req.user?.id || null, req.params.id));
+    res.json({ success: true, template });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/v1/admin/push-notifications/templates/:id', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(pgAdminNotificationsDb.softDeleteTemplate(req.params.id, req.user?.id || null));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/campaigns', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgAdminNotificationsDb.listCampaigns({
+      page: req.query.page,
+      page_size: req.query.page_size,
+      status: req.query.status,
+      search: req.query.search,
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/campaigns', requireAdmin, async (req, res) => {
+  try {
+    const campaign = await Promise.resolve(pgAdminNotificationsDb.saveCampaign(req.body || {}, req.user?.id || null));
+    if (String(campaign?.status || '').toLowerCase() !== 'draft') {
+      setTimeout(() => { pgAdminNotificationsDb.processDueNotifications().catch(() => {}); }, 50);
+    }
+    res.json({ success: true, campaign });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/campaigns/:id', requireAdmin, async (req, res) => {
+  try {
+    const campaign = await Promise.resolve(pgAdminNotificationsDb.getCampaignById(req.params.id));
+    if (!campaign) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ campaign });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/v1/admin/push-notifications/campaigns/:id', requireAdmin, async (req, res) => {
+  try {
+    const campaign = await Promise.resolve(pgAdminNotificationsDb.saveCampaign(req.body || {}, req.user?.id || null, req.params.id));
+    if (String(campaign?.status || '').toLowerCase() !== 'draft') {
+      setTimeout(() => { pgAdminNotificationsDb.processDueNotifications().catch(() => {}); }, 50);
+    }
+    res.json({ success: true, campaign });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/v1/admin/push-notifications/campaigns/:id', requireAdmin, async (req, res) => {
+  try {
+    await Promise.resolve(pgAdminNotificationsDb.softDeleteCampaign(req.params.id, req.user?.id || null));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/campaigns/:id/duplicate', requireAdmin, async (req, res) => {
+  try {
+    const campaign = await Promise.resolve(pgAdminNotificationsDb.duplicateCampaign(req.params.id, req.user?.id || null));
+    res.json({ success: true, campaign });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/campaigns/:id/cancel', requireAdmin, async (req, res) => {
+  try {
+    const campaign = await Promise.resolve(pgAdminNotificationsDb.cancelScheduledCampaign(req.params.id, req.user?.id || null));
+    res.json({ success: true, campaign });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/campaigns/:id/process-now', requireAdmin, async (req, res) => {
+  try {
+    const outcome = await Promise.resolve(pgAdminNotificationsDb.processDueNotifications());
+    res.json({ success: true, outcome });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/process-now', requireAdmin, async (req, res) => {
+  try {
+    const outcome = await Promise.resolve(pgAdminNotificationsDb.processDueNotifications());
+    res.json({ success: true, outcome });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/v1/admin/push-notifications/test', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgAdminNotificationsDb.sendTestNotification(req.body || {}, req.user?.id || null));
+    res.json({ success: result.success, result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/logs', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgAdminNotificationsDb.listDeliveryLogs({
+      page: req.query.page,
+      page_size: req.query.page_size,
+      search: req.query.search,
+      status: req.query.status,
+      from_date: req.query.from_date,
+      to_date: req.query.to_date,
+      notification_id: req.query.notification_id,
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/v1/admin/push-notifications/logs/export.csv', requireAdmin, async (req, res) => {
+  try {
+    const csv = await Promise.resolve(pgAdminNotificationsDb.exportDeliveryLogsCsv({
+      search: req.query.search,
+      status: req.query.status,
+      from_date: req.query.from_date,
+      to_date: req.query.to_date,
+      notification_id: req.query.notification_id,
+    }));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="notification-logs-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/admin/notifications/users', requireAdmin, async (req, res) => {
