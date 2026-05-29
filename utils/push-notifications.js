@@ -172,8 +172,10 @@ async function sendExpoPushNotifications(messages = []) {
     const to = String(entry.to || '').trim();
     if (!to) return null;
     const base = normalizeMessagePayload(entry);
+    const extraMeta = entry.meta && typeof entry.meta === 'object' ? entry.meta : {};
     return {
       meta: {
+        ...extraMeta,
         to,
         user_id: entry.user_id != null ? Number(entry.user_id) : null,
         notification_id: entry.notification_id != null ? Number(entry.notification_id) : null,

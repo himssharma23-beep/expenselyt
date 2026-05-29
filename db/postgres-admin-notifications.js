@@ -1175,10 +1175,26 @@ async function getPushDevicesForUsers(userIds = []) {
   const normalized = normalizeIntegerArray(userIds);
   if (!normalized.length) return [];
   const result = await query(
-    `SELECT id, user_id, expo_push_token AS token, platform, device_name, app_version
-     FROM push_device_tokens
-     WHERE deleted_at IS NULL
-       AND user_id = ANY($1::bigint[])`,
+    `SELECT DISTINCT ON (pdt.user_id)
+        pdt.id,
+        pdt.user_id,
+        pdt.expo_push_token AS token,
+        pdt.platform,
+        pdt.device_name,
+        pdt.app_version
+     FROM push_device_tokens pdt
+     JOIN users u ON u.id = pdt.user_id
+     LEFT JOIN user_notification_preferences unp ON unp.user_id = u.id
+     WHERE pdt.deleted_at IS NULL
+       AND pdt.user_id = ANY($1::bigint[])
+       AND u.deleted_at IS NULL
+       AND u.is_active = TRUE
+       AND COALESCE(unp.push_enabled, TRUE) = TRUE
+     ORDER BY
+       pdt.user_id,
+       pdt.last_seen_at DESC NULLS LAST,
+       pdt.updated_at DESC NULLS LAST,
+       pdt.id DESC`,
     [normalized]
   );
   return result.rows.map((row) => ({
