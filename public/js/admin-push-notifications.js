@@ -66,22 +66,37 @@
     return ['general', 'billing', 'reminder', 'announcement', 'promotion', 'system'];
   }
 
+  function titleCase(value) {
+    return String(value || '')
+      .replace(/[_-]+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+
+  function campaignMetaPill(label, value, tone = 'default') {
+    return `
+      <div class="admin-push-meta-pill tone-${esc(tone)}">
+        <span class="admin-push-meta-pill-label">${esc(label)}</span>
+        <strong>${esc(value)}</strong>
+      </div>`;
+  }
+
   function renderDashboardCards(summary = {}) {
     const cards = [
-      ['Total notifications', summary.total_notifications || 0, 'All campaigns'],
-      ['Sent today', summary.sent_today || 0, 'Delivered today'],
-      ['Failed today', summary.failed_today || 0, 'Need attention'],
-      ['Delivery success %', `${summary.delivery_success_percent || 0}%`, 'Across all logs'],
-      ['Active scheduled jobs', summary.active_scheduled_jobs || 0, 'Future or recurring'],
-      ['Pending deliveries', summary.pending_deliveries || 0, 'Queued or retrying'],
+      ['Total campaigns', summary.total_notifications || 0, 'All campaigns', 'neutral'],
+      ['Sent today', summary.sent_today || 0, 'Delivered today', 'green'],
+      ['Failed today', summary.failed_today || 0, 'Need attention', 'red'],
+      ['Delivery success', `${summary.delivery_success_percent || 0}%`, 'Across all logs', 'blue'],
+      ['Scheduled jobs', summary.active_scheduled_jobs || 0, 'Future or recurring', 'amber'],
+      ['Pending', summary.pending_deliveries || 0, 'Queued or retrying', 'purple'],
     ];
     return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px">
-        ${cards.map(([label, value, note]) => `
-          <div class="card" style="padding:16px">
-            <div style="font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">${esc(label)}</div>
-            <div style="font-size:28px;font-weight:800;margin-top:6px">${esc(value)}</div>
-            <div style="font-size:12px;color:var(--t3);margin-top:4px">${esc(note)}</div>
+      <div class="admin-push-stat-grid">
+        ${cards.map(([label, value, note, tone]) => `
+          <div class="admin-push-stat-card tone-${esc(tone)}">
+            <div class="admin-push-stat-label">${esc(label)}</div>
+            <div class="admin-push-stat-value">${esc(value)}</div>
+            <div class="admin-push-stat-sub">${esc(note)}</div>
           </div>`).join('')}
       </div>`;
   }
@@ -94,76 +109,100 @@
       ['devices', 'Device Tokens'],
     ];
     return `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px">
-        ${tabs.map(([key, label]) => `<button class="btn ${state.tab === key ? 'btn-p' : 'btn-s'}" onclick="window.__adminPushState.tab='${key}';loadAdminNotifications()">${esc(label)}</button>`).join('')}
+      <div class="admin-push-tabs">
+        ${tabs.map(([key, label]) => `<button class="admin-push-tab ${state.tab === key ? 'active' : ''}" onclick="window.__adminPushState.tab='${key}';loadAdminNotifications()">${esc(label)}</button>`).join('')}
       </div>`;
   }
 
   function renderCampaignsTab() {
-    const rows = (state.campaigns || []).map((item) => `
-      <tr>
-        <td style="padding:12px 10px">
-          <div style="font-weight:700">${esc(item.title)}</div>
-          <div style="font-size:12px;color:var(--t3);margin-top:4px">${esc(item.body || '').slice(0, 110)}</div>
-        </td>
-        <td style="padding:12px 10px">${chip(item.status)}</td>
-        <td style="padding:12px 10px">${esc(item.target_mode || 'all')}</td>
-        <td style="padding:12px 10px">${esc(item.send_mode || 'immediate')}</td>
-        <td style="padding:12px 10px">${fmtAdminDate(item.scheduled_for || item.created_at)}</td>
-        <td style="padding:12px 10px">${Number(item.sent_count || 0)} / ${Number(item.total_recipients || 0)}</td>
-        <td style="padding:12px 10px">
-          <div class="fa" style="justify-content:flex-end">
-            <button class="btn btn-s btn-sm" onclick="adminPushOpenCampaignModal(${item.id})">View</button>
-            <button class="btn btn-s btn-sm" onclick="adminPushOpenCampaignModal(${item.id}, true)">Edit</button>
-            <button class="btn btn-s btn-sm" onclick="adminPushDuplicateCampaign(${item.id})">Clone</button>
-            ${(String(item.status || '').toLowerCase() === 'scheduled' || String(item.status || '').toLowerCase() === 'processing') ? `<button class="btn btn-g btn-sm" onclick="adminPushCancelCampaign(${item.id})">Cancel</button>` : ''}
-            <button class="btn btn-g btn-sm" onclick="adminPushDeleteCampaign(${item.id})">Delete</button>
+    const campaigns = state.campaigns || [];
+    const summary = state.dashboard || {};
+    const cards = campaigns.map((item) => `
+      <article class="admin-push-campaign-card">
+        <div class="admin-push-campaign-top">
+          <div class="admin-push-campaign-copy">
+            <div class="admin-push-campaign-title-row">
+              <h3 class="admin-push-campaign-title">${esc(item.title || 'Untitled notification')}</h3>
+              ${chip(item.status)}
+            </div>
+            <p class="admin-push-campaign-body">${esc(item.body || 'No message added yet.')}</p>
           </div>
-        </td>
-      </tr>`).join('');
+          <div class="admin-push-campaign-sent">
+            <span>Delivered</span>
+            <strong>${Number(item.sent_count || 0)} / ${Number(item.total_recipients || 0)}</strong>
+          </div>
+        </div>
+        <div class="admin-push-campaign-meta-grid">
+          ${campaignMetaPill('Target', titleCase(item.target_mode || 'all'), 'green')}
+          ${campaignMetaPill('Send', titleCase(item.send_mode || 'immediate'), 'blue')}
+          ${campaignMetaPill('Schedule', fmtAdminDate(item.scheduled_for || item.created_at), 'amber')}
+          ${campaignMetaPill('Last update', fmtAdminDate(item.updated_at || item.created_at), 'purple')}
+        </div>
+        <div class="admin-push-campaign-actions">
+          <button class="btn btn-s btn-sm" onclick="adminPushOpenCampaignModal(${item.id})">View</button>
+          <button class="btn btn-s btn-sm" onclick="adminPushOpenCampaignModal(${item.id}, true)">Edit</button>
+          <button class="btn btn-s btn-sm" onclick="adminPushDuplicateCampaign(${item.id})">Clone</button>
+          ${(String(item.status || '').toLowerCase() === 'scheduled' || String(item.status || '').toLowerCase() === 'processing') ? `<button class="btn btn-s btn-sm" onclick="adminPushCancelCampaign(${item.id})">Cancel</button>` : ''}
+          <button class="btn btn-g btn-sm" onclick="adminPushDeleteCampaign(${item.id})">Delete</button>
+        </div>
+      </article>`).join('');
     return `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
-          <div>
-            <div style="font-size:18px;font-weight:800">Push Notification Campaigns</div>
-            <div style="font-size:12px;color:var(--t3)">Create, schedule, clone, preview, and monitor admin push notifications.</div>
+      <section class="card admin-push-campaign-shell">
+        <div class="admin-push-campaign-hero">
+          <div class="admin-push-campaign-hero-copy">
+            <div class="admin-push-kicker">Push Center</div>
+            <div class="admin-push-campaign-hero-title">Push Notification Campaigns</div>
+            <div class="admin-push-campaign-hero-sub">Create, schedule, preview, and monitor notifications from one compact workspace.</div>
           </div>
-          <div class="fa">
+          <div class="admin-push-campaign-hero-actions">
             <button class="btn btn-s" onclick="adminPushRunQueueNow()">Process Queue</button>
             <button class="btn btn-p" onclick="adminPushOpenCampaignModal()">Create Notification</button>
           </div>
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-          <input class="fi" style="max-width:260px" placeholder="Search title or message" value="${esc(state.campaignFilters.search || '')}" oninput="window.__adminPushState.campaignFilters.search=this.value">
-          <select class="fi" style="max-width:180px" onchange="window.__adminPushState.campaignFilters.status=this.value">
-            ${campaignStatusOptions().map((status) => `<option value="${status}" ${String(state.campaignFilters.status || 'all') === status ? 'selected' : ''}>${esc(status === 'all' ? 'All statuses' : status)}</option>`).join('')}
-          </select>
-          <button class="btn btn-p btn-sm" onclick="window.__adminPushState.campaignPagination.page=1;loadAdminNotifications()">Apply</button>
-        </div>
-        <div style="overflow:auto">
-          <table style="width:100%;border-collapse:collapse">
-            <thead>
-              <tr style="background:var(--bg2);text-align:left">
-                <th style="padding:10px">Notification</th>
-                <th style="padding:10px">Status</th>
-                <th style="padding:10px">Target</th>
-                <th style="padding:10px">Send</th>
-                <th style="padding:10px">Schedule</th>
-                <th style="padding:10px">Sent</th>
-                <th style="padding:10px;text-align:right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>${rows || '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--t3)">No notifications found.</td></tr>'}</tbody>
-          </table>
-        </div>
-        <div class="fa" style="justify-content:space-between;margin-top:14px">
-          <div style="font-size:12px;color:var(--t3)">Showing page ${state.campaignPagination.page} of ${state.campaignPagination.total_pages || 1}</div>
-          <div class="fa">
-            <button class="btn btn-s btn-sm" ${state.campaignPagination.page <= 1 ? 'disabled' : ''} onclick="window.__adminPushState.campaignPagination.page=Math.max(1,window.__adminPushState.campaignPagination.page-1);loadAdminNotifications()">Prev</button>
-            <button class="btn btn-s btn-sm" ${state.campaignPagination.page >= (state.campaignPagination.total_pages || 1) ? 'disabled' : ''} onclick="window.__adminPushState.campaignPagination.page+=1;loadAdminNotifications()">Next</button>
+        <div class="admin-push-toolbar-row">
+          <div class="admin-push-campaign-highlights">
+            ${campaignMetaPill('Queued today', Number(summary.sent_today || 0), 'green')}
+            ${campaignMetaPill('Open failures', Number(summary.failed_today || 0), 'red')}
+            ${campaignMetaPill('Active schedules', Number(summary.active_scheduled_jobs || 0), 'amber')}
+          </div>
+          <div class="admin-push-filter-bar">
+            <div class="admin-push-filter-input">
+              <span class="admin-push-filter-icon">&#9906;</span>
+              <input class="fi" placeholder="Search title or message" value="${esc(state.campaignFilters.search || '')}" oninput="window.__adminPushState.campaignFilters.search=this.value">
+            </div>
+            <select class="fi admin-push-filter-select" onchange="window.__adminPushState.campaignFilters.status=this.value">
+              ${campaignStatusOptions().map((status) => `<option value="${status}" ${String(state.campaignFilters.status || 'all') === status ? 'selected' : ''}>${esc(status === 'all' ? 'All statuses' : status)}</option>`).join('')}
+            </select>
+            <button class="btn btn-p btn-sm" onclick="window.__adminPushState.campaignPagination.page=1;loadAdminNotifications()">Apply</button>
           </div>
         </div>
-      </div>`;
+        <div class="admin-push-campaign-list">
+          ${cards || `
+            <div class="admin-push-empty-state">
+              <div class="admin-push-empty-orb">+</div>
+              <div class="admin-push-empty-title">No notification campaigns yet</div>
+              <div class="admin-push-empty-copy">Create your first campaign to send updates, reminders, or announcements to users.</div>
+              <button class="btn btn-p" onclick="adminPushOpenCampaignModal()">Create Notification</button>
+            </div>`}
+        </div>
+        <div class="admin-push-pagination">
+          <div class="admin-push-pagination-copy">
+            <strong>Page ${state.campaignPagination.page}</strong>
+            <span>of ${state.campaignPagination.total_pages || 1}</span>
+          </div>
+          <div class="admin-push-pagination-controls">
+            <button class="admin-push-page-btn" ${state.campaignPagination.page <= 1 ? 'disabled' : ''} onclick="window.__adminPushState.campaignPagination.page=Math.max(1,window.__adminPushState.campaignPagination.page-1);loadAdminNotifications()">
+              <span class="admin-push-page-arrow">&#8592;</span>
+              <span>Previous</span>
+            </button>
+            <div class="admin-push-page-pill">${state.campaignPagination.page} / ${state.campaignPagination.total_pages || 1}</div>
+            <button class="admin-push-page-btn" ${state.campaignPagination.page >= (state.campaignPagination.total_pages || 1) ? 'disabled' : ''} onclick="window.__adminPushState.campaignPagination.page+=1;loadAdminNotifications()">
+              <span>Next</span>
+              <span class="admin-push-page-arrow">&#8594;</span>
+            </button>
+          </div>
+        </div>
+      </section>`;
   }
 
   function renderTemplatesTab() {
@@ -217,13 +256,13 @@
           </div>
           <a class="btn btn-s" href="/api/v1/admin/push-notifications/logs/export.csv?search=${encodeURIComponent(state.logFilters.search || '')}&status=${encodeURIComponent(state.logFilters.status || 'all')}&from_date=${encodeURIComponent(state.logFilters.from_date || '')}&to_date=${encodeURIComponent(state.logFilters.to_date || '')}">Export CSV</a>
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-          <input class="fi" style="max-width:220px" placeholder="Search logs" value="${esc(state.logFilters.search || '')}" oninput="window.__adminPushState.logFilters.search=this.value">
-          <select class="fi" style="max-width:160px" onchange="window.__adminPushState.logFilters.status=this.value">
+        <div class="admin-push-log-filter-bar">
+          <input class="fi admin-push-log-filter-input" placeholder="Search logs" value="${esc(state.logFilters.search || '')}" oninput="window.__adminPushState.logFilters.search=this.value">
+          <select class="fi admin-push-log-filter-select" onchange="window.__adminPushState.logFilters.status=this.value">
             ${['all', 'sent', 'failed'].map((status) => `<option value="${status}" ${String(state.logFilters.status || 'all') === status ? 'selected' : ''}>${esc(status === 'all' ? 'All statuses' : status)}</option>`).join('')}
           </select>
-          <input class="fi" type="date" value="${esc(state.logFilters.from_date || '')}" onchange="window.__adminPushState.logFilters.from_date=this.value">
-          <input class="fi" type="date" value="${esc(state.logFilters.to_date || '')}" onchange="window.__adminPushState.logFilters.to_date=this.value">
+          <input class="fi admin-push-log-filter-date" type="date" value="${esc(state.logFilters.from_date || '')}" onchange="window.__adminPushState.logFilters.from_date=this.value">
+          <input class="fi admin-push-log-filter-date" type="date" value="${esc(state.logFilters.to_date || '')}" onchange="window.__adminPushState.logFilters.to_date=this.value">
           <button class="btn btn-p btn-sm" onclick="window.__adminPushState.logsPagination.page=1;loadAdminNotifications()">Apply</button>
         </div>
         <div style="overflow:auto">
@@ -352,6 +391,33 @@
     if (meta) meta.textContent = `Page ${state.userPagination.page} of ${state.userPagination.total_pages || 1} • ${state.selectedUsers.size} selected`;
   }
 
+  function renderUserPicker() {
+    const list = document.getElementById('adminPushUserPicker');
+    if (!list) return;
+    const selectedCount = state.selectedUsers.size;
+    list.innerHTML = (state.users || []).map((user) => `
+      <label class="admin-push-user-row ${state.selectedUsers.has(user.id) ? 'selected' : ''}">
+        <div class="admin-push-user-check">
+          <input type="checkbox" ${state.selectedUsers.has(user.id) ? 'checked' : ''} onchange="adminPushToggleUser(${user.id})">
+        </div>
+        <div class="admin-push-user-copy">
+          <div class="admin-push-user-topline">
+            <div class="admin-push-user-name">${esc(user.display_name || user.email || `User ${user.id}`)}</div>
+            <span class="admin-push-user-badge">${Number(user.push_device_count || 0)} device${Number(user.push_device_count || 0) === 1 ? '' : 's'}</span>
+          </div>
+          <div class="admin-push-user-email">${esc(user.email || '')}</div>
+          <div class="admin-push-user-meta-row">
+            <span class="admin-push-user-meta-chip">${esc(user.role || 'user')}</span>
+            <span class="admin-push-user-meta-chip">${user.is_active === false ? 'inactive' : 'active'}</span>
+          </div>
+        </div>
+      </label>`).join('') || '<div style="color:var(--t3);padding:12px">No users found.</div>';
+    const meta = document.getElementById('adminPushUserPickerMeta');
+    if (meta) meta.innerHTML = `
+      <span class="admin-push-meta-pill tone-blue"><span class="admin-push-meta-pill-label">Page</span><strong>${state.userPagination.page} / ${state.userPagination.total_pages || 1}</strong></span>
+      <span class="admin-push-meta-pill tone-green"><span class="admin-push-meta-pill-label">Selected</span><strong>${selectedCount}</strong></span>`;
+  }
+
   function collectCampaignForm(editingId) {
     return {
       id: editingId || null,
@@ -410,6 +476,17 @@
       const schedule = campaign || {};
       window.__modalClassName = 'modal-wide admin-push-modal-shell';
       openModal(id ? (editMode ? 'Edit Notification' : 'Notification Details') : 'Create Notification', `
+        <div class="admin-push-modal-toolbar">
+          <div class="admin-push-modal-toolbar-copy">
+            <div class="admin-push-kicker">Notification Studio</div>
+            <div class="admin-push-modal-toolbar-title">${esc(id ? (editMode ? 'Edit campaign' : 'Campaign details') : 'New campaign')}</div>
+          </div>
+          <div class="admin-push-modal-toolbar-actions">
+            ${(!editMode && id) ? '' : `<button class="btn btn-s" onclick="adminPushSendTest(${id || 'null'})">Send test</button>`}
+            ${id ? `<button class="btn btn-s" onclick="adminPushDuplicateCampaign(${id})">Clone</button>` : ''}
+            <button class="btn btn-g" onclick="closeModal()">Close</button>
+          </div>
+        </div>
         <div class="admin-push-builder">
           <div class="admin-push-builder-main">
             <section class="card admin-push-section-card">
@@ -488,12 +565,13 @@
                     <div class="admin-push-mini-title">Selected users</div>
                     <div id="adminPushUserPickerMeta" class="admin-push-meta"></div>
                   </div>
-                  ${!editMode && id ? '' : `<div class="fa admin-push-user-toolbar"><input class="fi" id="adminPushUserSearch" placeholder="Search users" value="${esc(state.userSearch || '')}" oninput="window.__adminPushState.userSearch=this.value"><button class="btn btn-s btn-sm" onclick="adminPushRefreshUserPicker(1)">Search</button><button class="btn btn-s btn-sm" onclick="adminPushSelectVisibleUsers()">Select visible</button></div>`}
+                  ${!editMode && id ? '' : `<div class="admin-push-user-toolbar"><div class="admin-push-user-search-wrap"><span class="admin-push-user-search-icon">&#9906;</span><input class="fi" id="adminPushUserSearch" placeholder="Search users by name or email" value="${esc(state.userSearch || '')}" oninput="window.__adminPushState.userSearch=this.value"></div><button class="btn btn-s btn-sm" onclick="adminPushRefreshUserPicker(1)">Search</button><button class="btn btn-s btn-sm" onclick="adminPushSelectVisibleUsers()">Select visible</button></div>`}
                 </div>
                 <div id="adminPushUserPicker" class="admin-push-user-picker"></div>
-                <div class="fa" style="justify-content:flex-end;margin-top:10px">
-                  <button class="btn btn-s btn-sm" onclick="adminPushRefreshUserPicker(Math.max(1, (window.__adminPushState.userPagination.page || 1)-1))" ${state.userPagination.page <= 1 ? 'disabled' : ''}>Prev</button>
-                  <button class="btn btn-s btn-sm" onclick="adminPushRefreshUserPicker((window.__adminPushState.userPagination.page || 1)+1)" ${state.userPagination.page >= (state.userPagination.total_pages || 1) ? 'disabled' : ''}>Next</button>
+                <div class="admin-push-user-pager">
+                  <button class="admin-push-page-btn" onclick="adminPushRefreshUserPicker(Math.max(1, (window.__adminPushState.userPagination.page || 1)-1))" ${state.userPagination.page <= 1 ? 'disabled' : ''}><span class="admin-push-page-arrow">&#8592;</span><span>Previous</span></button>
+                  <div class="admin-push-page-pill">${state.userPagination.page} / ${state.userPagination.total_pages || 1}</div>
+                  <button class="admin-push-page-btn" onclick="adminPushRefreshUserPicker((window.__adminPushState.userPagination.page || 1)+1)" ${state.userPagination.page >= (state.userPagination.total_pages || 1) ? 'disabled' : ''}><span>Next</span><span class="admin-push-page-arrow">&#8594;</span></button>
                 </div>
               </div>
             </section>
