@@ -13701,16 +13701,7 @@ function renderBankAccountsPageView() {
           </div>
         </div>
         <div class="card" style="padding:14px;margin-bottom:16px">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-            <label class="fl" style="min-width:220px">Person
-              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-            </label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-            </div>
-          </div>
+          ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
         </div>
         <div class="table-wrap">
           <table>
@@ -15077,6 +15068,8 @@ let _fixedDepositPeople = [];
 let _fixedDepositTotals = { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
 let _fixedDepositPersonFilter = 'all';
 let _fixedDepositStatusFilter = 'all';
+let _fixedDepositExpiryMonthFilter = '';
+let _fixedDepositNumberSearch = '';
 let _selectedBankFixedDepositId = null;
 let _showBankFixedDepositsPanel = false;
 let _fixedDepositImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
@@ -15905,16 +15898,7 @@ function renderBankAccounts() {
           <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
         </div>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-        <label class="fl" style="min-width:220px">Person
-          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-        </label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-        </div>
-      </div>
+      ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
     </div>
     <div class="bank-grid">${fdCards}</div>
     ${selectedFdTable}`;
@@ -16471,16 +16455,7 @@ async function renderExpenseBucketGrid() {
           <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
         </div>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-        <label class="fl" style="min-width:220px">Person
-          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-        </label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-        </div>
-      </div>
+      ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
     </div>
     <div class="table-wrap">
       <table>
@@ -16535,16 +16510,7 @@ async function renderExpenseBucketGrid() {
           </div>
         </div>
         <div class="card" style="padding:14px;margin-bottom:16px">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-            <label class="fl" style="min-width:220px">Person
-              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-            </label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-            </div>
-          </div>
+          ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
         </div>
         <div class="table-wrap">
           <table>
@@ -16601,16 +16567,7 @@ async function renderExpenseBucketGrid() {
           <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
         </div>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-        <label class="fl" style="min-width:220px">Person
-          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-        </label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-        </div>
-      </div>
+      ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
     </div>
     <div class="table-wrap">
       <table>
@@ -17292,6 +17249,14 @@ function fixedDepositFilteredRows() {
   return (_fixedDeposits || []).filter((item) => {
     if (_fixedDepositPersonFilter !== 'all' && String(item.person_name || '') !== String(_fixedDepositPersonFilter || '')) return false;
     if (_fixedDepositStatusFilter !== 'all' && String(item.status || '') !== String(_fixedDepositStatusFilter || '')) return false;
+    if (_fixedDepositExpiryMonthFilter) {
+      const maturityMonthKey = String(item?.maturity_date || '').slice(0, 7);
+      if (maturityMonthKey !== _fixedDepositExpiryMonthFilter) return false;
+    }
+    if (_fixedDepositNumberSearch) {
+      const haystack = String(item?.fd_number || '').trim().toLowerCase();
+      if (!haystack.includes(String(_fixedDepositNumberSearch || '').trim().toLowerCase())) return false;
+    }
     return true;
   }).sort((a, b) => {
     const aDate = String(a?.maturity_date || '');
@@ -17301,6 +17266,124 @@ function fixedDepositFilteredRows() {
     if (!aDate && bDate) return 1;
     return String(a?.fd_number || '').localeCompare(String(b?.fd_number || ''));
   });
+}
+
+function fixedDepositDurationParts(source = {}) {
+  const totalMonths = Number(source?.tenure_months || 0);
+  const years = Number(source?.tenure_years ?? Math.floor(totalMonths / 12)) || 0;
+  const extraMonths = Number(source?.tenure_extra_months ?? (totalMonths % 12)) || 0;
+  const days = Number(source?.tenure_days || 0) || 0;
+  return {
+    years: Math.max(0, years),
+    months: Math.max(0, extraMonths),
+    days: Math.max(0, days),
+  };
+}
+
+function fixedDepositTotalMonthsFromParts(parts = {}) {
+  const years = Number(parts.years || 0);
+  const months = Number(parts.months || 0);
+  return Math.max(0, (years * 12) + months);
+}
+
+function fixedDepositDurationMonthsForInterest(parts = {}) {
+  return fixedDepositTotalMonthsFromParts(parts) + (Math.max(0, Number(parts.days || 0)) / 30);
+}
+
+function fixedDepositAddDuration(dateValue, parts = {}) {
+  const raw = String(dateValue || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return '';
+  const [year, month, day] = raw.split('-').map(Number);
+  const next = new Date(year, month - 1, day);
+  if (Number.isNaN(next.getTime())) return '';
+  const originalDay = next.getDate();
+  const totalMonths = fixedDepositTotalMonthsFromParts(parts);
+  if (totalMonths > 0) {
+    next.setMonth(next.getMonth() + totalMonths);
+    if (next.getDate() !== originalDay) next.setDate(0);
+  }
+  const extraDays = Math.max(0, Number(parts.days || 0));
+  if (extraDays > 0) next.setDate(next.getDate() + extraDays);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
+function fixedDepositDurationDiffParts(startDate, endDate) {
+  const start = String(startDate || '').trim();
+  const end = String(endDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return { years: 0, months: 0, days: 0, totalMonths: '' };
+  }
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  let from = new Date(sy, sm - 1, sd);
+  const to = new Date(ey, em - 1, ed);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to < from) {
+    return { years: 0, months: 0, days: 0, totalMonths: '' };
+  }
+  let years = 0;
+  let months = 0;
+  while (true) {
+    const nextYear = new Date(from);
+    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    if (nextYear <= to) {
+      years += 1;
+      from = nextYear;
+      continue;
+    }
+    break;
+  }
+  while (true) {
+    const nextMonth = new Date(from);
+    const originalDay = nextMonth.getDate();
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+    if (nextMonth.getDate() !== originalDay) nextMonth.setDate(0);
+    if (nextMonth <= to) {
+      months += 1;
+      from = nextMonth;
+      continue;
+    }
+    break;
+  }
+  const days = Math.max(0, Math.round((to - from) / 86400000));
+  return {
+    years,
+    months,
+    days,
+    totalMonths: String((years * 12) + months || ''),
+  };
+}
+
+function fixedDepositFilterSummary() {
+  const parts = [];
+  parts.push(_fixedDepositPersonFilter !== 'all' ? _fixedDepositPersonFilter : 'All people');
+  parts.push(_fixedDepositStatusFilter !== 'all' ? _fixedDepositStatusFilter : 'All statuses');
+  if (_fixedDepositExpiryMonthFilter) {
+    const [year, month] = String(_fixedDepositExpiryMonthFilter).split('-').map(Number);
+    if (year && month) parts.push(`Expiry ${_MONTHS_LONG[month - 1]} ${year}`);
+  }
+  if (_fixedDepositNumberSearch) parts.push(`FD ${_fixedDepositNumberSearch}`);
+  return parts.join(' · ');
+}
+
+function fixedDepositFilterControlsHtml(peopleOptions) {
+  return `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <label class="fl" style="min-width:220px">Person
+        <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${peopleOptions}</select>
+      </label>
+      <label class="fl" style="min-width:170px">Expiry Month
+        <input class="fi" type="month" value="${escHtml(_fixedDepositExpiryMonthFilter || '')}" onchange="setFixedDepositExpiryMonthFilter(this.value)">
+      </label>
+      <label class="fl" style="min-width:220px;flex:1 1 220px">FD Number
+        <input class="fi" value="${escHtml(_fixedDepositNumberSearch || '')}" placeholder="Search FD number" oninput="setFixedDepositNumberSearch(this.value)">
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
+        <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
+        <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
+        <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
+        ${_fixedDepositExpiryMonthFilter || _fixedDepositNumberSearch ? `<button class="btn btn-s btn-sm" onclick="setFixedDepositExpiryMonthFilter('');setFixedDepositNumberSearch('')">Clear</button>` : ''}
+      </div>
+    </div>`;
 }
 
 function fixedDepositStatusChip(status) {
@@ -17358,7 +17441,11 @@ function fixedDepositAddDays(dateValue, days) {
 function fixedDepositCompoundedValues() {
   const principal = Number(document.getElementById('fdAmountDeposited')?.value || 0);
   const rate = Number(document.getElementById('fdInterestRate')?.value || 0);
-  const tenureMonths = Number(document.getElementById('fdTenureMonths')?.value || 0);
+  const tenureMonths = fixedDepositDurationMonthsForInterest({
+    years: document.getElementById('fdTenureYears')?.value || 0,
+    months: document.getElementById('fdTenureMonths')?.value || 0,
+    days: document.getElementById('fdTenureDays')?.value || 0,
+  });
   if (!(principal > 0) || !(rate >= 0) || !(tenureMonths > 0)) {
     return { interest: 0, maturity: principal > 0 ? principal : 0 };
   }
@@ -17372,16 +17459,24 @@ function fixedDepositCompoundedValues() {
 function recalculateFixedDepositFields(source = 'general') {
   const depositDateEl = document.getElementById('fdDepositDate');
   const maturityDateEl = document.getElementById('fdMaturityDate');
-  const tenureEl = document.getElementById('fdTenureMonths');
+  const tenureYearsEl = document.getElementById('fdTenureYears');
+  const tenureMonthsEl = document.getElementById('fdTenureMonths');
+  const tenureDaysEl = document.getElementById('fdTenureDays');
   const principal = Number(document.getElementById('fdAmountDeposited')?.value || 0);
   const interestEl = document.getElementById('fdInterestAmount');
   const maturityAmountEl = document.getElementById('fdMaturityAmount');
   if (source === 'tenure' || source === 'deposit') {
-    const nextMaturity = fixedDepositAddMonths(depositDateEl?.value || '', tenureEl?.value || 0);
+    const nextMaturity = fixedDepositAddDuration(depositDateEl?.value || '', {
+      years: tenureYearsEl?.value || 0,
+      months: tenureMonthsEl?.value || 0,
+      days: tenureDaysEl?.value || 0,
+    });
     if (nextMaturity && maturityDateEl) maturityDateEl.value = nextMaturity;
   } else if (source === 'maturity') {
-    const diff = fixedDepositMonthDiff(depositDateEl?.value || '', maturityDateEl?.value || '');
-    if (diff && tenureEl) tenureEl.value = diff;
+    const diff = fixedDepositDurationDiffParts(depositDateEl?.value || '', maturityDateEl?.value || '');
+    if (tenureYearsEl) tenureYearsEl.value = diff.years ? String(diff.years) : '0';
+    if (tenureMonthsEl) tenureMonthsEl.value = diff.months ? String(diff.months) : '0';
+    if (tenureDaysEl) tenureDaysEl.value = diff.days ? String(diff.days) : '0';
   }
   if (source === 'maturityAmount') {
     const maturityValue = Number(maturityAmountEl?.value || 0);
@@ -17402,6 +17497,18 @@ function setFixedDepositPersonFilter(value) {
 
 function setFixedDepositStatusFilter(value) {
   _fixedDepositStatusFilter = String(value || 'all');
+  if (currentTab === 'banks') renderBankAccounts();
+  else renderTrackerGrid();
+}
+
+function setFixedDepositExpiryMonthFilter(value) {
+  _fixedDepositExpiryMonthFilter = String(value || '').trim();
+  if (currentTab === 'banks') renderBankAccounts();
+  else renderTrackerGrid();
+}
+
+function setFixedDepositNumberSearch(value) {
+  _fixedDepositNumberSearch = String(value || '');
   if (currentTab === 'banks') renderBankAccounts();
   else renderTrackerGrid();
 }
@@ -17479,16 +17586,7 @@ function renderFixedDepositsGrid() {
         </div>
       </div>
       <div class="card" style="padding:14px;margin-bottom:16px">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-          <label class="fl" style="min-width:220px">Person
-            <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${peopleOptions}</select>
-          </label>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-            <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-            <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-            <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-          </div>
-        </div>
+        ${fixedDepositFilterControlsHtml(peopleOptions)}
       </div>
       <div class="table-wrap">
         <table>
@@ -17516,6 +17614,7 @@ function renderFixedDepositsGrid() {
 async function showFixedDepositModal(id = null, seed = null) {
   const fd = id ? (_fixedDeposits || []).find((item) => String(item.id) === String(id)) : null;
   const source = seed || fd || null;
+  const duration = fixedDepositDurationParts(source || {});
   window.__modalClassName = 'modal-wide fixed-deposit-modal-shell';
   openModal(fd ? 'Edit Fixed Deposit' : 'Add Fixed Deposit', `
     <div class="fd-modal-shell">
@@ -17532,7 +17631,9 @@ async function showFixedDepositModal(id = null, seed = null) {
         <div class="fd-modal-section">
           <div class="fd-modal-section-title">Timeline</div>
           <div class="fd-modal-grid fd-modal-grid-tight">
-            <label class="fl">Time Period (months) *<input class="fi" type="number" min="1" id="fdTenureMonths" value="${escHtml(source?.tenure_months ?? '')}" oninput="recalculateFixedDepositFields('tenure')"></label>
+            <label class="fl">Years<input class="fi" type="number" min="0" id="fdTenureYears" value="${escHtml(duration.years)}" oninput="recalculateFixedDepositFields('tenure')"></label>
+            <label class="fl">Months<input class="fi" type="number" min="0" id="fdTenureMonths" value="${escHtml(duration.months)}" oninput="recalculateFixedDepositFields('tenure')"></label>
+            <label class="fl">Days<input class="fi" type="number" min="0" id="fdTenureDays" value="${escHtml(duration.days)}" oninput="recalculateFixedDepositFields('tenure')"></label>
             <label class="fl">Date of Deposit *<input class="fi" type="date" id="fdDepositDate" value="${escHtml(source?.deposit_date || todayStr())}" oninput="recalculateFixedDepositFields('deposit')"></label>
             <label class="fl full">Date of Maturity *<input class="fi" type="date" id="fdMaturityDate" value="${escHtml(source?.maturity_date || '')}" oninput="recalculateFixedDepositFields('maturity')"></label>
           </div>
@@ -17589,14 +17690,18 @@ function renewFixedDeposit(id) {
   const fd = (_fixedDeposits || []).find((item) => String(item.id) === String(id));
   if (!fd) return;
   const nextDepositDate = fixedDepositAddDays(fd.maturity_date || '', 1) || todayStr();
-  const tenureMonths = Number(fd.tenure_months || 0);
-  const nextMaturityDate = fixedDepositAddMonths(nextDepositDate, tenureMonths || 0);
+  const duration = fixedDepositDurationParts(fd || {});
+  const tenureMonths = fixedDepositTotalMonthsFromParts(duration);
+  const nextMaturityDate = fixedDepositAddDuration(nextDepositDate, duration);
   showFixedDepositModal(null, {
     person_name: fd.person_name || '',
     bank_name: fd.bank_name || '',
     fd_number: '',
     interest_rate: fd.interest_rate,
     tenure_months: tenureMonths > 0 ? String(tenureMonths) : '',
+    tenure_years: duration.years,
+    tenure_extra_months: duration.months,
+    tenure_days: duration.days,
     deposit_date: nextDepositDate,
     maturity_date: nextMaturityDate || '',
     amount_deposited: Number(fd.maturity_amount || 0) > 0 ? String(fd.maturity_amount) : '',
@@ -17623,7 +17728,14 @@ async function saveFixedDeposit(id) {
     bank_name: document.getElementById('fdBankName')?.value?.trim() || '',
     fd_number: document.getElementById('fdNumber')?.value?.trim() || '',
     interest_rate: document.getElementById('fdInterestRate')?.value || 0,
-    tenure_months: document.getElementById('fdTenureMonths')?.value || null,
+    tenure_years: document.getElementById('fdTenureYears')?.value || 0,
+    tenure_extra_months: document.getElementById('fdTenureMonths')?.value || 0,
+    tenure_days: document.getElementById('fdTenureDays')?.value || 0,
+    tenure_months: fixedDepositTotalMonthsFromParts({
+      years: document.getElementById('fdTenureYears')?.value || 0,
+      months: document.getElementById('fdTenureMonths')?.value || 0,
+      days: document.getElementById('fdTenureDays')?.value || 0,
+    }) || null,
     deposit_date: document.getElementById('fdDepositDate')?.value || '',
     maturity_date: document.getElementById('fdMaturityDate')?.value || '',
     amount_deposited: document.getElementById('fdAmountDeposited')?.value || 0,
@@ -17886,16 +17998,7 @@ function renderBankAccounts() {
           </div>
         </div>
         <div class="card" style="padding:14px;margin-bottom:16px">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-            <label class="fl" style="min-width:220px">Person
-              <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-            </label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-              <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-              <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-            </div>
-          </div>
+          ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
         </div>
         <div class="table-wrap">
           <table>
@@ -17947,16 +18050,7 @@ function renderBankAccounts() {
           <button class="btn btn-p btn-sm" onclick="showFixedDepositModal()">+ Add FD</button>
         </div>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-        <label class="fl" style="min-width:220px">Person
-          <select class="fi" onchange="setFixedDepositPersonFilter(this.value)">${fdPeopleOptions}</select>
-        </label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:2px">
-          <button class="btn ${_fixedDepositStatusFilter === 'all' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('all')">All</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'ongoing' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('ongoing')">Ongoing</button>
-          <button class="btn ${_fixedDepositStatusFilter === 'expired' ? 'btn-p' : 'btn-s'} btn-sm" onclick="setFixedDepositStatusFilter('expired')">Expired</button>
-        </div>
-      </div>
+      ${fixedDepositFilterControlsHtml(fdPeopleOptions)}
     </div>
     <div class="table-wrap">
       <table>

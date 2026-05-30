@@ -1629,6 +1629,9 @@ function mapFixedDepositRow(row) {
     interest_amount: num(row.interest_amount),
     interest_rate: num(row.interest_rate),
     tenure_months: row.tenure_months != null ? Number(row.tenure_months) : null,
+    tenure_years: row.tenure_years != null ? Number(row.tenure_years) : 0,
+    tenure_extra_months: row.tenure_extra_months != null ? Number(row.tenure_extra_months) : 0,
+    tenure_days: row.tenure_days != null ? Number(row.tenure_days) : 0,
     notify_enabled: !!row.notify_enabled,
     email_enabled: !!row.email_enabled,
     reminder_days_before: normalizeReminderDaysBefore(row.reminder_days_before),
@@ -1639,7 +1642,20 @@ function mapFixedDepositRow(row) {
   };
 }
 
+async function ensureFixedDepositDurationColumns() {
+  await query(`ALTER TABLE fixed_deposits ADD COLUMN IF NOT EXISTS tenure_years INTEGER NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE fixed_deposits ADD COLUMN IF NOT EXISTS tenure_extra_months INTEGER NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE fixed_deposits ADD COLUMN IF NOT EXISTS tenure_days INTEGER NOT NULL DEFAULT 0`);
+}
+
+function normalizeNonNegativeInteger(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
 async function getFixedDeposits(userId, filters = {}) {
+  await ensureFixedDepositDurationColumns();
   const params = [userId];
   const clauses = ['user_id = $1'];
   const personName = String(filters.person_name || '').trim();
@@ -1667,11 +1683,17 @@ async function getFixedDeposits(userId, filters = {}) {
 }
 
 async function addFixedDeposit(userId, data = {}) {
+  await ensureFixedDepositDurationColumns();
   const personName = normalizeText(data.person_name, 'Person name', 100);
   const bankName = normalizeText(data.bank_name, 'Bank name', 100);
   const fdNumber = normalizeText(data.fd_number, 'FD number', 120);
   const interestRate = normalizeNonNegativeAmount(data.interest_rate || 0, 'Interest rate');
-  const tenureMonths = data.tenure_months == null || data.tenure_months === '' ? null : Math.max(1, parseInt(data.tenure_months, 10) || 0);
+  const tenureYears = normalizeNonNegativeInteger(data.tenure_years, 0);
+  const tenureExtraMonths = normalizeNonNegativeInteger(data.tenure_extra_months, 0);
+  const tenureDays = normalizeNonNegativeInteger(data.tenure_days, 0);
+  const tenureMonths = data.tenure_months == null || data.tenure_months === ''
+    ? ((tenureYears || tenureExtraMonths || tenureDays) ? (tenureYears * 12) + tenureExtraMonths : null)
+    : Math.max(1, parseInt(data.tenure_months, 10) || 0);
   const depositDate = normalizeDateValue(data.deposit_date, 'Deposit date');
   const maturityDate = normalizeDateValue(data.maturity_date, 'Maturity date');
   if (!depositDate || !maturityDate) throw validationError('Deposit date and maturity date are required');
@@ -1688,25 +1710,32 @@ async function addFixedDeposit(userId, data = {}) {
   const result = await query(
     `INSERT INTO fixed_deposits (
       user_id, person_name, bank_name, fd_number, interest_rate, tenure_months,
+      tenure_years, tenure_extra_months, tenure_days,
       deposit_date, maturity_date, amount_deposited, maturity_amount, interest_amount,
       notify_enabled, email_enabled, reminder_days_before, reminder_frequency, reminder_silent,
       is_active, created_by, updated_by
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$1,$1)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$1,$1)
     RETURNING id`,
-    [userId, personName, bankName, fdNumber, interestRate, tenureMonths, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive]
+    [userId, personName, bankName, fdNumber, interestRate, tenureMonths, tenureYears, tenureExtraMonths, tenureDays, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive]
   );
   return Number(result.rows[0]?.id || 0);
 }
 
 async function updateFixedDeposit(userId, id, data = {}) {
+  await ensureFixedDepositDurationColumns();
   const currentR = await query('SELECT id FROM fixed_deposits WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
   if (!currentR.rows[0]) throw validationError('FD not found');
   const personName = normalizeText(data.person_name, 'Person name', 100);
   const bankName = normalizeText(data.bank_name, 'Bank name', 100);
   const fdNumber = normalizeText(data.fd_number, 'FD number', 120);
   const interestRate = normalizeNonNegativeAmount(data.interest_rate || 0, 'Interest rate');
-  const tenureMonths = data.tenure_months == null || data.tenure_months === '' ? null : Math.max(1, parseInt(data.tenure_months, 10) || 0);
+  const tenureYears = normalizeNonNegativeInteger(data.tenure_years, 0);
+  const tenureExtraMonths = normalizeNonNegativeInteger(data.tenure_extra_months, 0);
+  const tenureDays = normalizeNonNegativeInteger(data.tenure_days, 0);
+  const tenureMonths = data.tenure_months == null || data.tenure_months === ''
+    ? ((tenureYears || tenureExtraMonths || tenureDays) ? (tenureYears * 12) + tenureExtraMonths : null)
+    : Math.max(1, parseInt(data.tenure_months, 10) || 0);
   const depositDate = normalizeDateValue(data.deposit_date, 'Deposit date');
   const maturityDate = normalizeDateValue(data.maturity_date, 'Maturity date');
   if (!depositDate || !maturityDate) throw validationError('Deposit date and maturity date are required');
@@ -1727,22 +1756,25 @@ async function updateFixedDeposit(userId, id, data = {}) {
          fd_number = $3,
          interest_rate = $4,
          tenure_months = $5,
-         deposit_date = $6,
-         maturity_date = $7,
-         amount_deposited = $8,
-         maturity_amount = $9,
-         interest_amount = $10,
-         notify_enabled = $11,
-         email_enabled = $12,
-         reminder_days_before = $13,
-         reminder_frequency = $14,
-         reminder_silent = $15,
-         is_active = $16,
+         tenure_years = $6,
+         tenure_extra_months = $7,
+         tenure_days = $8,
+         deposit_date = $9,
+         maturity_date = $10,
+         amount_deposited = $11,
+         maturity_amount = $12,
+         interest_amount = $13,
+         notify_enabled = $14,
+         email_enabled = $15,
+         reminder_days_before = $16,
+         reminder_frequency = $17,
+         reminder_silent = $18,
+         is_active = $19,
          updated_at = NOW(),
-         updated_by = $18
-     WHERE id = $17
-       AND user_id = $18`,
-    [personName, bankName, fdNumber, interestRate, tenureMonths, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive, id, userId]
+         updated_by = $21
+     WHERE id = $20
+       AND user_id = $21`,
+    [personName, bankName, fdNumber, interestRate, tenureMonths, tenureYears, tenureExtraMonths, tenureDays, depositDate, maturityDate, amountDeposited, maturityAmount, interestAmount, notifyEnabled, emailEnabled, reminderDaysBefore, reminderFrequency, reminderSilent, isActive, id, userId]
   );
 }
 

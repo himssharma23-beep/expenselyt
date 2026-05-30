@@ -1146,12 +1146,9 @@ async function downloadTrackersOverviewPdf(year, month) {
 
 async function downloadFixedDepositsPdf() {
   const deposits = typeof fixedDepositFilteredRows === 'function' ? fixedDepositFilteredRows() : [];
-  const personLabel = (typeof _fixedDepositPersonFilter !== 'undefined' && _fixedDepositPersonFilter && _fixedDepositPersonFilter !== 'all')
-    ? _fixedDepositPersonFilter
-    : 'All People';
-  const statusLabel = (typeof _fixedDepositStatusFilter !== 'undefined' && _fixedDepositStatusFilter && _fixedDepositStatusFilter !== 'all')
-    ? _fixedDepositStatusFilter
-    : 'All Statuses';
+  const subtitle = typeof fixedDepositFilterSummary === 'function'
+    ? fixedDepositFilterSummary()
+    : 'All People · All Statuses';
   const totals = deposits.reduce((acc, item) => {
     acc.deposit += Number(item.amount_deposited || 0);
     acc.maturity += Number(item.maturity_amount || 0);
@@ -1160,7 +1157,7 @@ async function downloadFixedDepositsPdf() {
   }, { deposit: 0, maturity: 0, interest: 0 });
 
   const doc = _P.init(true);
-  let y = _P.header(doc, 'Fixed Deposits', `${personLabel} · ${statusLabel}`);
+  let y = _P.header(doc, 'Fixed Deposits', subtitle);
   y = _P.cards(doc, y, [
     { label: 'FD Count', value: deposits.length, color: '' },
     { label: 'Deposited', value: _P.cur(totals.deposit), color: '' },
@@ -1190,7 +1187,12 @@ async function downloadFixedDepositsPdf() {
     },
     true
   );
-  _P.save(doc, `Fixed_Deposits_${personLabel}_${statusLabel}`);
+  const fileParts = ['Fixed_Deposits'];
+  if (typeof _fixedDepositPersonFilter !== 'undefined' && _fixedDepositPersonFilter && _fixedDepositPersonFilter !== 'all') fileParts.push(_fixedDepositPersonFilter);
+  if (typeof _fixedDepositStatusFilter !== 'undefined' && _fixedDepositStatusFilter && _fixedDepositStatusFilter !== 'all') fileParts.push(_fixedDepositStatusFilter);
+  if (typeof _fixedDepositExpiryMonthFilter !== 'undefined' && _fixedDepositExpiryMonthFilter) fileParts.push(`Expiry_${_fixedDepositExpiryMonthFilter}`);
+  if (typeof _fixedDepositNumberSearch !== 'undefined' && _fixedDepositNumberSearch) fileParts.push(`FD_${_fixedDepositNumberSearch}`);
+  _P.save(doc, fileParts.join('_').replace(/[^A-Za-z0-9_-]+/g, '_'));
 }
 
 // —— Habit Tracker — Monthly Overview ————————————————————————————————
