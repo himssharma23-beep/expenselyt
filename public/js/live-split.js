@@ -48,7 +48,7 @@
     rowDetailRef: '',
     eventDetailContext: null,
     sort: 'az',
-    friendFilter: 'all',
+    friendFilter: 'hide_settled',
     showCompletedTrips: false,
     tripCreate: null,
     tripManage: null,
