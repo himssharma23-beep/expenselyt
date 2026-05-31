@@ -542,7 +542,7 @@
             ? `Rejected${item.request.review_note ? ` • ${item.request.review_note}` : ''}`
             : `${fmtMoney(item.due_amount || member.monthly_due || 0)} due`;
       return `
-        <div class="sp-row">
+        <div class="sp-row sp-contribution-row">
           <div class="sp-row-badge ${meta.badge}"><div>${esc(m)}</div><div>${esc(y)}</div></div>
           <div>
             <div class="sp-row-title">${esc(fmtMonth(item.month_key, true))}</div>
@@ -561,7 +561,7 @@
     const expenseRows = (dashboard.expenses || dashboard.recent_expenses || []).map((expense) => {
       const cls = expenseCategoryClass(expense.category);
       return `
-        <div class="sp-row">
+        <div class="sp-row sp-expense-row">
           <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
           <div>
             <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
@@ -579,7 +579,7 @@
       const balance = toNumber(row.balance || 0);
       const progress = Math.max(8, Math.min(100, Math.round((collected / Math.max(collected + spent, 1)) * 100)));
       return `
-        <div class="sp-month-cell">
+        <div class="sp-month-cell sp-collection-cell">
           <div class="sp-month-name">${esc(fmtMonth(row.month_key, true))}</div>
           <div class="sp-month-collected">${esc(fmtMoney(collected).replace('.00', ''))}</div>
           <div class="sp-month-exp">Exp: ${esc(fmtMoney(spent).replace('.00', ''))}</div>
@@ -631,7 +631,7 @@
             <h2>My Contributions</h2>
             <p>Your month-wise contribution history</p>
           </div>
-          <div class="sp-card sp-list-card">
+          <div class="sp-card sp-list-card sp-history-list">
             <div class="sp-list-head compact">
               <div>
                 <div class="sp-total-label">All Time Paid</div>
@@ -648,7 +648,7 @@
             <h2>Society Expenses</h2>
             <p>All recorded society expenses</p>
           </div>
-          <div class="sp-card sp-list-card">
+          <div class="sp-card sp-list-card sp-expenses-list">
             ${expenseRows || '<div class="sp-empty">No expenses added yet.</div>'}
           </div>
         </section>`;
@@ -659,7 +659,7 @@
             <h2>Monthly Collection</h2>
             <p>Society-wide collection per month</p>
           </div>
-          <div class="sp-card">
+          <div class="sp-card sp-collections-card">
             <div class="sp-month-grid">
               ${monthSummary || '<div class="sp-empty">No monthly collection data yet.</div>'}
             </div>

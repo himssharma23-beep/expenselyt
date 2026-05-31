@@ -1441,3 +1441,421 @@ body {
     padding: 14px;
   }
 }
+
+@media (max-width: 540px) {
+  .sp-hero {
+    padding-bottom: 22px;
+  }
+
+  .sp-hero-brand {
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.68);
+  }
+
+  .sp-outline-btn {
+    min-width: 92px;
+    min-height: 46px;
+    padding: 0 18px;
+    border-radius: 16px;
+  }
+
+  .sp-greeting {
+    margin-top: 24px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .sp-member-name {
+    font-size: clamp(30px, 10vw, 42px);
+    line-height: 1.02;
+    letter-spacing: -0.06em;
+  }
+
+  .sp-hero-info {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  .sp-hero-pill {
+    min-height: 42px;
+    max-width: 100%;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .sp-hero-pill:first-child {
+    max-width: calc(100% - 132px);
+  }
+
+  .sp-hero-pill:last-child {
+    flex: 0 0 auto;
+  }
+
+  .sp-hero-pill:first-child::before {
+    content: '⌂';
+    font-size: 14px;
+  }
+
+  .sp-hero-pill:last-child {
+    background: rgba(201, 154, 28, 0.22);
+    border-color: rgba(255, 216, 122, 0.26);
+    color: #ffd867;
+  }
+
+  .sp-summary-grid,
+  .sp-overview-grid {
+    gap: 12px;
+  }
+
+  .sp-summary-card,
+  .sp-overview-tile {
+    min-height: 104px;
+    padding: 16px 14px;
+    border-radius: 18px;
+    border-color: rgba(255, 255, 255, 0.06);
+    background: rgba(22, 67, 43, 0.42);
+    box-shadow: none;
+  }
+
+  .sp-summary-value,
+  .sp-total-value {
+    margin-top: 12px;
+    font-size: 17px;
+    line-height: 1.1;
+  }
+
+  .sp-summary-label,
+  .sp-total-label {
+    letter-spacing: 0.14em;
+    color: rgba(255, 255, 255, 0.48);
+  }
+
+  .sp-total-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.54);
+  }
+
+  .sp-overview-grid > :last-child {
+    grid-column: auto;
+  }
+
+  .sp-main {
+    margin-top: 0;
+  }
+
+  .sp-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    padding: 0 2px;
+    margin-top: -2px;
+    background: #fff;
+    border-bottom: 1px solid var(--sp-border);
+  }
+
+  .sp-tab-btn {
+    min-height: 52px;
+    padding: 0 10px;
+    background: transparent;
+    color: #5f6c66;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .sp-tab-btn:first-child,
+  .sp-tab-btn:last-child {
+    border-radius: 0;
+  }
+
+  .sp-tab-btn.active {
+    background: transparent;
+    border-color: var(--sp-green-700);
+    color: var(--sp-green-700);
+  }
+
+  .sp-section-head {
+    margin-top: 8px;
+  }
+
+  .sp-section-head h2 {
+    font-size: 17px;
+  }
+
+  .sp-section-head p {
+    margin-top: 4px;
+  }
+
+  .sp-list-card {
+    padding: 12px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .sp-list-head {
+    border: 1px solid #dce9e0;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #f5fcf7 0%, #eff8f1 100%);
+    box-shadow: 0 8px 20px rgba(19, 44, 33, 0.06);
+  }
+
+  .sp-card:not(.sp-list-card) {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .sp-row,
+  .sp-month-cell {
+    border: 1px solid #e2ebe5;
+    border-radius: 18px;
+    box-shadow: 0 10px 24px rgba(18, 42, 31, 0.06);
+  }
+
+  .sp-row {
+    padding: 14px 14px 13px;
+  }
+
+  .sp-row-badge,
+  .sp-expense-icon {
+    width: 44px;
+    min-height: 44px;
+    height: 44px;
+  }
+
+  .sp-row-title {
+    font-size: 15px;
+    line-height: 1.25;
+  }
+
+  .sp-row-sub {
+    margin-top: 4px;
+  }
+
+  .sp-row-amount {
+    font-size: 14px;
+  }
+
+  .sp-row-chip {
+    min-height: 28px;
+    padding: 0 12px;
+    font-size: 10px;
+  }
+
+  .sp-month-cell {
+    padding: 14px 14px 16px;
+  }
+
+  .sp-month-name {
+    font-size: 13px;
+    color: #7d877f;
+  }
+
+  .sp-month-collected {
+    font-size: 17px;
+  }
+
+  .sp-month-exp {
+    margin-top: 7px;
+  }
+}
+
+@media (max-width: 420px) {
+  .sp-tab-btn {
+    font-size: 12px;
+  }
+
+  .sp-summary-card,
+  .sp-overview-tile {
+    min-height: 96px;
+  }
+
+  .sp-summary-value,
+  .sp-total-value,
+  .sp-month-collected {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 540px) {
+  .sp-history-list,
+  .sp-expenses-list {
+    padding: 0;
+    background: #fff;
+    border: 1px solid #e2ebe5;
+    border-radius: 22px;
+    box-shadow: 0 12px 28px rgba(18, 42, 31, 0.08);
+    overflow: hidden;
+  }
+
+  .sp-history-list .sp-list-head {
+    margin: 10px 10px 8px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #f6fdf8 0%, #eef8f1 100%);
+  }
+
+  .sp-history-list .sp-contribution-row,
+  .sp-expenses-list .sp-expense-row {
+    margin-top: 0;
+    border: 0;
+    border-top: 1px solid #edf1ee;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 12px 14px;
+  }
+
+  .sp-history-list .sp-contribution-row {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 12px;
+  }
+
+  .sp-history-list .sp-contribution-row:first-of-type,
+  .sp-expenses-list .sp-expense-row:first-of-type {
+    border-top: 0;
+  }
+
+  .sp-history-list .sp-total-label {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: #2a7a58;
+  }
+
+  .sp-history-list .sp-list-total {
+    font-size: 18px;
+    color: #1f7a53;
+  }
+
+  .sp-history-list .sp-row-badge {
+    width: 42px;
+    min-height: 42px;
+    height: 42px;
+    padding: 7px 5px;
+    border-radius: 12px;
+    font-size: 10px;
+    line-height: 1.05;
+  }
+
+  .sp-history-list .sp-row-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: flex-end;
+    justify-self: end;
+    grid-column: auto;
+    gap: 6px;
+    text-align: right;
+  }
+
+  .sp-history-list .sp-inline-action {
+    min-height: 26px;
+    margin-top: 8px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    text-decoration: none;
+  }
+
+  .sp-history-list .sp-inline-action:hover {
+    text-decoration: none;
+  }
+
+  .sp-history-list .sp-row-title {
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .sp-history-list .sp-row-sub {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #8a938d;
+  }
+
+  .sp-history-list .sp-row-amount {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .sp-history-list .sp-row-chip {
+    min-height: 22px;
+    padding: 0 10px;
+    font-size: 10px;
+    gap: 4px;
+    margin-top: 0;
+    white-space: nowrap;
+  }
+
+  .sp-expenses-list .sp-expense-row {
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+  }
+
+  .sp-expenses-list .sp-expense-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  .sp-expenses-list .sp-row-title {
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .sp-expenses-list .sp-row-sub {
+    margin-top: 3px;
+  }
+
+  .sp-expenses-list .sp-row-right {
+    grid-column: auto;
+    text-align: right;
+    justify-items: end;
+  }
+
+  .sp-collections-card {
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .sp-collections-card .sp-month-grid {
+    gap: 14px;
+  }
+
+  .sp-collections-card .sp-collection-cell {
+    border: 1px solid #e2ebe5;
+    border-radius: 20px;
+    background: #fff;
+    box-shadow: 0 12px 28px rgba(18, 42, 31, 0.08);
+    padding: 16px;
+  }
+
+  .sp-collections-card .sp-month-name {
+    color: #7d877f;
+    font-weight: 700;
+  }
+
+  .sp-collections-card .sp-month-collected {
+    margin-top: 10px;
+    font-size: 18px;
+  }
+
+  .sp-collections-card .sp-progress {
+    margin-top: 12px;
+    height: 6px;
+  }
+
+  .sp-collections-card .sp-balance {
+    margin-top: 10px;
+    font-size: 13px;
+  }
+}

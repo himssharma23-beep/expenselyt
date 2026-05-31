@@ -329,7 +329,8 @@ body{min-height:100vh}
 .tenant-portal-month-box.overdue{background:#f9ebe7;color:#b6533d}
 .tenant-portal-month-box.pending{background:#fff5df;color:#bb7e1f}
 .tenant-portal-month-box.rejected{background:#fbe8e6;color:#bf473d}
-.tenant-portal-invoice-body{grid-area:body}
+  .tenant-portal-invoice-body{grid-area:body}
+  .tenant-portal-invoice-body{min-width:0}
 .tenant-portal-invoice-title{font-size:14px;font-weight:800;letter-spacing:-.03em}
 .tenant-portal-invoice-sub{margin-top:2px;font-size:12px;color:#7f8881}
 .tenant-portal-invoice-status-wrap{
@@ -564,17 +565,29 @@ body{min-height:100vh}
   }
   .tenant-portal-section-tabs{
     margin-bottom:0;
+    background:#fff;
+    border-bottom:1px solid var(--tp-line);
   }
   .tenant-portal-section-tab{
     min-height:52px;
-    font-size:15px;
-    background:#fff;
+    font-size:14px;
+    font-weight:600;
+    background:transparent;
+    border:0;
+    border-bottom:2px solid transparent;
+    color:#5f6c66;
   }
   .tenant-portal-section-tab:first-child{
-    border-radius:18px 0 0 0;
+    border-radius:0;
   }
   .tenant-portal-section-tab:last-child{
-    border-radius:0 18px 0 0;
+    border-radius:0;
+    border-left:0;
+  }
+  .tenant-portal-section-tab.active{
+    box-shadow:none;
+    color:var(--tp-green);
+    border-color:var(--tp-green);
   }
   .tenant-portal-section-title{font-size:18px}
   .tenant-portal-section-sub{font-size:13px}
@@ -590,17 +603,20 @@ body{min-height:100vh}
     padding-right:16px;
   }
   .tenant-portal-detail-tabs{
-    flex-wrap:nowrap;
-    overflow-x:auto;
-    -webkit-overflow-scrolling:touch;
-    gap:10px;
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:8px;
+    padding-top:10px;
+    padding-bottom:10px;
   }
   .tenant-portal-detail-tab{
-    flex:0 0 auto;
-    min-height:44px;
-    padding:0 18px;
+    min-height:40px;
+    min-width:0;
+    padding:0 8px;
+    justify-content:center;
+    text-align:center;
     border-radius:999px;
-    font-size:12px;
+    font-size:10px;
   }
   .tenant-portal-detail-cell{
     padding:16px 14px;
@@ -610,21 +626,30 @@ body{min-height:100vh}
     box-shadow:none;
   }
   .tenant-portal-detail-pills{
-    gap:12px;
+    gap:8px;
     padding-top:18px;
     padding-bottom:18px;
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
   }
   .tenant-portal-detail-pill{
-    min-height:54px;
-    padding:0 22px;
+    min-height:44px;
+    min-width:0;
+    padding:0 8px;
+    justify-content:center;
+    text-align:center;
     border-radius:999px;
-    font-size:13px;
+    font-size:10px;
+    white-space:nowrap;
   }
   .tenant-portal-detail-grid{
-    grid-template-columns:1fr;
+    grid-template-columns:repeat(2,minmax(0,1fr));
   }
   .tenant-portal-detail-grid .tenant-portal-detail-cell{
-    border-right:none;
+    border-right:1px solid var(--tp-line) !important;
+  }
+  .tenant-portal-detail-grid .tenant-portal-detail-cell:nth-child(2n){
+    border-right:none !important;
   }
   .tenant-portal-detail-label{
     font-size:10px;
@@ -636,36 +661,119 @@ body{min-height:100vh}
     line-height:1.28;
   }
   .tenant-portal-filter-row{
-    flex-wrap:nowrap;
-    overflow-x:auto;
-    -webkit-overflow-scrolling:touch;
-    padding-bottom:4px;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+    width:100%;
+    padding-bottom:0;
+    overflow:visible;
   }
   .tenant-portal-filter-btn{
-    flex:0 0 auto;
-    min-width:max-content;
+    min-width:0;
+    min-height:38px;
+    padding:0 10px;
+    border-radius:14px;
+    font-size:11px;
+    text-align:center;
   }
   .tenant-portal-invoice-section .tenant-portal-section-head{
     align-items:flex-start;
     flex-direction:column;
+    gap:10px;
   }
   .tenant-portal-invoice-card{
-    padding:18px 16px;
-    margin-top:14px;
-    border:1px solid var(--tp-line);
-    border-radius:24px;
-    border-top:1px solid var(--tp-line);
+    padding:10px 10px 9px;
+    margin-top:7px;
+    border:1px solid #ece6d7;
+    border-radius:15px;
+    border-top:1px solid #ece6d7;
+    gap:6px 8px;
+    background:linear-gradient(180deg,#fffdf7 0%,#fffaf0 100%);
+    align-items:start;
   }
   .tenant-portal-invoice-card:first-child{
     margin-top:0;
   }
+  .tenant-portal-invoice-card.pending,
+  .tenant-portal-invoice-card.overdue,
+  .tenant-portal-invoice-card.rejected{
+    border-left-width:3px;
+  }
+  .tenant-portal-month-box{
+    width:44px;
+    height:44px;
+    border-radius:11px;
+    font-size:9px;
+    line-height:1;
+  }
+  .tenant-portal-invoice-title{
+    font-size:14px;
+    line-height:1.1;
+  }
+  .tenant-portal-invoice-sub{
+    margin-top:2px;
+    font-size:10px;
+    line-height:1.25;
+    color:#d08f1f;
+    font-weight:700;
+  }
+  .tenant-portal-invoice-card.paid .tenant-portal-invoice-sub{color:#2f7b52}
+  .tenant-portal-invoice-card.overdue .tenant-portal-invoice-sub,
+  .tenant-portal-invoice-card.rejected .tenant-portal-invoice-sub{color:#e2554a}
+  .tenant-portal-invoice-meta{
+    display:flex;
+    gap:5px;
+    flex-wrap:wrap;
+    margin-top:7px;
+  }
+  .tenant-portal-invoice-chip{
+    display:inline-flex;
+    align-items:center;
+    min-height:21px;
+    padding:0 7px;
+    border-radius:999px;
+    border:1px solid #e5e3de;
+    background:#f3f1ec;
+    color:#7a7772;
+    font-size:9px;
+    font-weight:700;
+    line-height:1;
+  }
+  .tenant-portal-invoice-status-wrap{
+    width:98px;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-end;
+    justify-content:flex-start;
+    text-align:right;
+    gap:3px;
+  }
+  .tenant-portal-invoice-money{
+    font-size:13px;
+    line-height:1;
+  }
+  .tenant-portal-invoice-note{
+    font-size:9px;
+    color:#a3a09a;
+    font-weight:600;
+    line-height:1.2;
+    max-width:100%;
+  }
+  .tenant-portal-invoice-actions{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    border-top:1px solid #ece6d7;
+    padding-top:9px;
+    gap:7px;
+    width:100%;
+  }
   .tenant-portal-mini-btn{
     min-width:0;
-    flex:1 1 140px;
+    width:100%;
     text-align:center;
-    min-height:46px;
-    border-radius:16px;
-    font-size:14px;
+    min-height:34px;
+    border-radius:10px;
+    font-size:11px;
   }
   .tenant-portal-help-card{
     padding:14px;
@@ -673,15 +781,33 @@ body{min-height:100vh}
   }
   .tenant-portal-modal-backdrop{
     padding:12px;
-    align-items:flex-end;
+    align-items:center;
+    justify-content:center;
   }
   .tenant-portal-modal{
-    width:100%;
-    max-height:88vh;
-    border-radius:20px 20px 0 0;
+    width:min(420px,100%);
+    max-height:min(82vh,680px);
+    border-radius:22px;
   }
   .tenant-portal-modal-title{
-    font-size:20px;
+    font-size:18px;
+  }
+  .tenant-portal-breakdown{
+    gap:10px;
+  }
+  .tenant-portal-breakdown-row{
+    padding:11px 12px;
+    border-radius:12px;
+    font-size:14px;
+  }
+  .tenant-portal-modal-note{
+    margin-top:12px;
+    font-size:12px;
+    line-height:1.5;
+  }
+  .tenant-portal-modal-actions{
+    margin-top:14px;
+    gap:8px;
   }
   .tenant-portal-modal-actions > *{
     flex:1 1 100%;
@@ -761,61 +887,90 @@ body{min-height:100vh}
   }
   .tenant-portal-section-tab{
     min-height:48px;
-    font-size:14px;
+    font-size:13px;
   }
   .tenant-portal-detail-pills{
-    gap:10px;
+    gap:8px;
   }
   .tenant-portal-detail-pill{
-    min-height:48px;
-    padding:0 18px;
-    font-size:12px;
+    min-height:42px;
+    padding:0 6px;
+    font-size:9px;
   }
   .tenant-portal-detail-tab{
-    padding:0 16px;
-    font-size:11px;
+    min-height:38px;
+    padding:0 6px;
+    font-size:9px;
     text-align:center;
+  }
+  .tenant-portal-filter-row{
+    grid-template-columns:repeat(2,minmax(0,1fr));
   }
   .tenant-portal-detail-list-row{
     gap:10px;
     padding:10px;
   }
+  .tenant-portal-detail-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .tenant-portal-detail-grid .tenant-portal-detail-cell{
+    padding:14px 12px;
+    border-right:1px solid var(--tp-line) !important;
+  }
+  .tenant-portal-detail-grid .tenant-portal-detail-cell:nth-child(2n){
+    border-right:none !important;
+  }
   .tenant-portal-invoice-card{
-    grid-template-columns:72px 1fr;
-    gap:10px;
-    padding:16px 14px;
+    grid-template-columns:44px minmax(0,1fr) 108px;
+    gap:8px 9px;
+    padding:11px 10px 10px;
     grid-template-areas:
-      "month amount"
-      "body body"
-      "status status"
-      "actions actions";
+      "month body status"
+      "actions actions actions";
   }
   .tenant-portal-month-box{
-    width:58px;
-    height:58px;
-    border-radius:16px;
-    font-size:12px;
+    width:42px;
+    height:42px;
+    border-radius:10px;
+    font-size:8px;
   }
   .tenant-portal-invoice-title{
-    font-size:17px;
+    font-size:14px;
     line-height:1.2;
   }
   .tenant-portal-invoice-sub{
-    margin-top:8px;
-    font-size:11px;
-    line-height:1.45;
+    margin-top:4px;
+    font-size:10px;
+    line-height:1.25;
   }
-  .tenant-portal-invoice-status-wrap,
-  .tenant-portal-invoice-amount{
+  .tenant-portal-invoice-meta{
+    gap:4px;
+    margin-top:6px;
+  }
+  .tenant-portal-invoice-chip{
+    min-height:20px;
+    padding:0 6px;
+    border:1px solid #e5e3de;
+    background:#f3f1ec;
+    color:#7a7772;
+    font-size:8px;
+  }
+  .tenant-portal-invoice-status-wrap{
+    width:108px;
     justify-content:flex-start;
-    text-align:left;
+    align-items:flex-end;
+    text-align:right;
   }
   .tenant-portal-invoice-money{
-    font-size:16px;
+    font-size:13px;
+  }
+  .tenant-portal-invoice-note{
+    font-size:9px;
   }
   .tenant-portal-mini-btn{
-    padding:0 14px;
-    font-size:13px;
+    min-height:32px;
+    padding:0 8px;
+    font-size:10px;
   }
   .tenant-portal-help-title{
     font-size:15px;
@@ -825,8 +980,16 @@ body{min-height:100vh}
     padding-left:14px;
     padding-right:14px;
   }
+  .tenant-portal-modal{
+    width:min(390px,100%);
+    border-radius:20px;
+  }
+  .tenant-portal-modal-head{
+    padding-top:14px;
+    padding-bottom:12px;
+  }
   .tenant-portal-breakdown-row{
-    padding:10px 12px;
-    font-size:14px;
+    padding:10px 11px;
+    font-size:13px;
   }
 }

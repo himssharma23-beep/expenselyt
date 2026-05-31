@@ -652,7 +652,6 @@
         ${detailCell('Contact', esc(tenant.contact_number || '-'), 'green')}
         ${detailCell('Room', esc(`${tenant.room_label || '-'}${tenant.floor_label ? ` - ${tenant.floor_label}` : ''}`))}
         ${detailCell('Started', esc(fmtDate(tenant.start_date)))}
-        ${detailCell('Contract', tenant.end_date ? esc(`Until ${fmtDate(tenant.end_date)}`) : '<span class="tenant-portal-detail-value muted">No end date set</span>')}
         ${detailCell('Opening Units', esc(String(toNumber(profile.opening_electricity_units || 0))))}
         ${detailCell('Address on Record', esc(tenant.tenant_address || 'Not provided'), 'muted')}
         ${detailCell('Water Charge', fmtMoney(profile.water_charge || 0))}
@@ -665,6 +664,10 @@
     const rawStatus = String(invoice?.visual_status || 'pending').toLowerCase();
     const [mon, year] = monthBadgeLabel(invoice.invoice_month);
     const unitMath = electricityUsageText(invoice);
+    const usedUnits = toNumber(invoice?.electricity_units_used);
+    const readingText = (toNumber(invoice?.current_electricity_units) || toNumber(invoice?.previous_electricity_units))
+      ? `${toNumber(invoice?.current_electricity_units)} - ${toNumber(invoice?.previous_electricity_units)}`
+      : '';
     const dueOrPaid = meta.cls === 'paid'
       ? `Paid ${fmtDate(invoice.latest_payment_request?.reviewed_at || invoice.updated_at)} - ${unitMath}`
       : rawStatus === 'approval_pending'
@@ -684,18 +687,26 @@
           <div>${esc(year)}</div>
         </div>
         <div class="tenant-portal-invoice-body">
-          <div class="tenant-portal-invoice-title">${esc(fmtMonth(invoice.invoice_month, true))} Invoice</div>
-          <div class="tenant-portal-invoice-sub">${esc(dueOrPaid)}</div>
+          <div class="tenant-portal-invoice-title">${esc(fmtMonth(invoice.invoice_month, true))}</div>
+          <div class="tenant-portal-invoice-sub">${esc(meta.label)}</div>
+          <div class="tenant-portal-invoice-meta">
+            ${usedUnits ? `<span class="tenant-portal-invoice-chip">${esc(`${usedUnits} units`)}</span>` : ''}
+            ${readingText ? `<span class="tenant-portal-invoice-chip">${esc(readingText)}</span>` : ''}
+          </div>
         </div>
         <div class="tenant-portal-invoice-status-wrap">
-          <div class="tenant-portal-status-chip ${meta.cls}">${esc(meta.label)}</div>
+          <div class="tenant-portal-invoice-money">${fmtMoney(invoice.total_amount)}</div>
+          <div class="tenant-portal-invoice-note">${esc(
+            rawStatus === 'approval_pending'
+              ? 'Awaiting admin'
+              : meta.cls === 'paid'
+                ? `Paid ${fmtDate(invoice.latest_payment_request?.reviewed_at || invoice.updated_at)}`
+                : `Due ${fmtDate(invoice.due_date)}`
+          )}</div>
         </div>
         <div class="tenant-portal-invoice-actions">
           <button class="tenant-portal-mini-btn" data-view-invoice="${Number(invoice.id)}">View</button>
           ${primaryAction}
-        </div>
-        <div class="tenant-portal-invoice-amount">
-          <div class="tenant-portal-invoice-money">${fmtMoney(invoice.total_amount)}</div>
         </div>
       </div>`;
   }
