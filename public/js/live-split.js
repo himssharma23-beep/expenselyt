@@ -135,11 +135,13 @@
     const safeName = String(name || 'User').trim() || 'User';
     const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
     if (!safeAvatarUrl) return _renderAvatar(safeName, avatarUrl, extraStyle);
+    const encodedName = encodeURIComponent(safeName);
+    const encodedAvatarUrl = encodeURIComponent(safeAvatarUrl);
     return `
       <button
         type="button"
         class="live-split-avatar-trigger"
-        onclick="return liveSplitOpenAvatarPreview(event, ${toJsArg(safeName)}, ${toJsArg(safeAvatarUrl)})"
+        onclick="return liveSplitOpenAvatarPreview(event, decodeURIComponent('${encodedName}'), decodeURIComponent('${encodedAvatarUrl}'))"
         aria-label="View ${escHtml(safeName)} photo"
         title="View photo"
         style="padding:0;border:none;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center"
@@ -2694,10 +2696,10 @@
       const tone = row.amount > 0 ? 'var(--green)' : row.amount < 0 ? 'var(--red)' : 'var(--t3)';
       const label = row.amount > 0 ? 'They owe' : row.amount < 0 ? 'You owe' : 'Settled';
       return `
-        <div class="friend-card live-split-card" style="cursor:pointer" onclick="liveSplitOpenDetails('${rowRef}')">
+        <div class="friend-card live-split-card">
           <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
             ${renderAvatarPreviewTrigger(row.name, row.linked_user_avatar_url)}
-            <div class="friend-info">
+            <div class="friend-info" style="cursor:pointer" onclick="liveSplitOpenDetails('${rowRef}')">
               <div class="friend-name">${escHtml(row.name)}</div>
               <div style="font-size:11px;color:${tone}">${escHtml(label)}</div>
             </div>

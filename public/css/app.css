@@ -3926,6 +3926,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .friend-card { display:flex; align-items:center; gap:14px; padding:14px 18px; background:var(--white); border-radius:12px; border:1px solid var(--border-l); cursor:pointer; transition:all 0.15s; margin-bottom:6px; }
 .friend-card:hover { border-color:var(--em); box-shadow:0 2px 12px rgba(0,0,0,0.06); }
 .avatar { width:40px; height:40px; border-radius:20px; background:var(--em-xl); color:var(--em); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:17px; flex-shrink:0; }
+.live-split-avatar-trigger { flex:0 0 auto; position:relative; z-index:2; cursor:pointer; }
 .friend-info { flex:1; }
 .friend-name { font-weight:600; font-size:14.5px; }
 .friend-bal { font-family:var(--mono); font-weight:600; font-size:14px; white-space:nowrap; }
