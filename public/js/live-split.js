@@ -139,7 +139,7 @@
       <button
         type="button"
         class="live-split-avatar-trigger"
-        onclick="event.stopPropagation();liveSplitOpenAvatarPreview(${toJsArg(safeName)}, ${toJsArg(safeAvatarUrl)})"
+        onclick="return liveSplitOpenAvatarPreview(event, ${toJsArg(safeName)}, ${toJsArg(safeAvatarUrl)})"
         aria-label="View ${escHtml(safeName)} photo"
         title="View photo"
         style="padding:0;border:none;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center"
@@ -147,9 +147,12 @@
         ${_renderAvatar(safeName, safeAvatarUrl, extraStyle)}
       </button>`;
   }
-  function openAvatarPreview(name, avatarUrl) {
+  function openAvatarPreview(ev, name, avatarUrl) {
+    if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+    if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    if (ev && typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
     const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
-    if (!safeAvatarUrl) return;
+    if (!safeAvatarUrl) return false;
     openModal(escHtml(String(name || 'Photo').trim() || 'Photo'), `
       <div style="display:grid;gap:12px">
         <div style="display:flex;justify-content:center">
@@ -161,6 +164,7 @@
         </div>
       </div>
     `);
+    return false;
   }
   function isYouLabel(value) {
     return textKey(value) === 'you';
