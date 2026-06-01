@@ -9037,7 +9037,10 @@ function renderAdminPortalAccess() {
           <div class="card-title">Portal Access History</div>
           <div style="font-size:12px;color:var(--t3)">Track who opened the tenant and society portals, when they logged in, and when they came back with an already active session.</div>
         </div>
-        <div style="font-size:12px;color:var(--t3)">Showing ${logs.length} of ${Number(_adminPortalAccessState.total || 0)} records</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div style="font-size:12px;color:var(--t3)">Showing ${logs.length} of ${Number(_adminPortalAccessState.total || 0)} records</div>
+          <button class="btn btn-s btn-sm" onclick="loadAdminPortalAccess(${Number(_adminPortalAccessState.page || 1)})">Refresh</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:1.3fr .9fr .9fr .9fr .9fr auto;gap:10px;align-items:end;margin-bottom:14px">
         <label class="fl">Search
