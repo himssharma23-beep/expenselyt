@@ -593,7 +593,7 @@ async function sendLiveSplitMonthlySummaryEmail({ to, name, month, oweToMe = 0, 
   const [year, mon] = String(month || '').split('-').map(Number);
   const monthDate = year && mon ? new Date(year, mon - 1, 1) : new Date();
   const monthLabel = monthDate.toLocaleDateString(localeCode || 'en-IN', { month: 'long', year: 'numeric' });
-  const rows = (topRows || []).slice(0, 5).map((row) => {
+  const rows = (topRows || []).filter((row) => Math.abs(Number(row?.amount || 0)) > 0.004).slice(0, 5).map((row) => {
     const amount = Number(Math.abs(Number(row?.amount || 0)).toFixed(2));
     const status = Number(row?.amount || 0) > 0 ? 'owes you' : Number(row?.amount || 0) < 0 ? 'you owe' : 'settled';
     return `<li style="margin:0 0 6px;color:#334155;">${escapeHtml(String(row?.name || 'Friend'))} - ${escapeHtml(status)} ${escapeHtml(formatCurrency(amount, currencyCode, localeCode))}</li>`;

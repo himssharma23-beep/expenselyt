@@ -265,7 +265,9 @@ async function sendMonthlySummaryEmailsForCurrentMonth() {
       const oweToMe = Number(liveSplitSummary?.totals?.oweToMe || 0);
       const iOwe = Number(liveSplitSummary?.totals?.iOwe || 0);
       if (oweToMe > 0 || iOwe > 0) {
-        const topRows = (liveSplitSummary?.rows || []).slice(0, 5);
+        const topRows = (liveSplitSummary?.rows || [])
+          .filter((row) => Math.abs(Number(row?.amount || 0)) > 0.004)
+          .slice(0, 5);
         await sendLiveSplitMonthlySummaryEmail({
           to: user.email,
           name: user.display_name,

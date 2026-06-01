@@ -13,6 +13,10 @@ function r2(value) {
   return Math.round(n(value) * 100) / 100;
 }
 
+function hasMeaningfulBalance(row) {
+  return Math.abs(r2(row?.amount)) > 0.004;
+}
+
 function formatCurrency(amount, currencyCode = 'INR', localeCode = 'en-IN') {
   try {
     return new Intl.NumberFormat(localeCode || 'en-IN', {
@@ -166,7 +170,7 @@ async function notifyMonthlyLiveSplitSummary(user, month) {
   const iOwe = r2(summary?.totals?.iOwe);
   if (!(oweToMe > 0 || iOwe > 0)) return { skipped: true };
   const balance = r2(oweToMe - iOwe);
-  const topRows = (summary?.rows || []).slice(0, 3);
+  const topRows = (summary?.rows || []).filter(hasMeaningfulBalance).slice(0, 3);
   const topLine = topRows.length
     ? topRows.map((row) => {
       const amount = Math.abs(r2(row.amount));

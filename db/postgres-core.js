@@ -6805,6 +6805,7 @@ async function getSchoolKidDetail(userId, kidId) {
 }
 
 module.exports = {
+  computeLiveSplitDashboardSummary,
   getExpenses,
   getExpenseCategories,
   getExpenseById,

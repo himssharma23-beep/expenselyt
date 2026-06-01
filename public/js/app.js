@@ -506,15 +506,7 @@ function normalizeInputDate(value) {
   const str = String(value).trim();
   if (!str) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
-    const parsedIso = new Date(str);
-    if (!Number.isNaN(parsedIso.getTime())) {
-      const y = parsedIso.getFullYear();
-      const m = String(parsedIso.getMonth() + 1).padStart(2, '0');
-      const d = String(parsedIso.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) return str.slice(0, 10);
   const dmy = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
   if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
   const parsed = new Date(str);

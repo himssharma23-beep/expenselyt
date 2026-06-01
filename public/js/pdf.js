@@ -371,11 +371,14 @@ function tripStartsInPdfLabel(startDate) {
   if (!raw) return '';
   const today = new Date();
   const current = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const start = new Date(`${raw}T00:00:00`);
+  const normalized = raw.slice(0, 10);
+  const start = new Date(`${normalized}T00:00:00`);
   if (Number.isNaN(start.getTime())) return '';
   const diff = Math.round((start.getTime() - current.getTime()) / 86400000);
-  if (diff <= 0) return '';
-  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
+  if (diff < 0) return '';
+  const inclusiveDays = diff + 1;
+  if (inclusiveDays <= 0) return '';
+  return inclusiveDays === 1 ? 'Starts in 1 day' : `Starts in ${inclusiveDays} days`;
 }
 
 function tripItineraryTimeLabel(item) {
