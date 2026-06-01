@@ -419,6 +419,11 @@
   }
 
   function collectCampaignForm(editingId) {
+    const sendMode = document.getElementById('adminPushSendMode')?.value || 'immediate';
+    const isActive = document.getElementById('adminPushIsActive')?.checked !== false;
+    let status = document.getElementById('adminPushStatus')?.value || (sendMode === 'immediate' ? 'queued' : 'scheduled');
+    if (!isActive && status !== 'cancelled') status = 'draft';
+    else if (isActive && status === 'draft') status = sendMode === 'immediate' ? 'queued' : 'scheduled';
     return {
       id: editingId || null,
       title: document.getElementById('adminPushTitle')?.value?.trim() || '',
@@ -427,8 +432,8 @@
       redirect_url: document.getElementById('adminPushRedirectUrl')?.value?.trim() || '',
       notification_type: document.getElementById('adminPushType')?.value || 'general',
       priority: document.getElementById('adminPushPriority')?.value || 'normal',
-      status: document.getElementById('adminPushStatus')?.value || 'draft',
-      is_active: document.getElementById('adminPushIsActive')?.checked !== false,
+      status,
+      is_active: isActive,
       target_config: {
         target_mode: document.getElementById('adminPushTargetMode')?.value || 'all',
         user_ids: [...state.selectedUsers],
@@ -474,6 +479,7 @@
       await loadTargetUsers(1);
       const targetConfig = campaign?.target_config || {};
       const schedule = campaign || {};
+      const statusOptions = [...new Set(['draft', 'queued', 'scheduled', 'processing', 'completed', 'failed', 'cancelled', String(campaign?.status || '').toLowerCase()].filter(Boolean))];
       window.__modalClassName = 'modal-wide admin-push-modal-shell';
       openModal(id ? (editMode ? 'Edit Notification' : 'Notification Details') : 'Create Notification', `
         <div class="admin-push-modal-toolbar">
@@ -507,7 +513,7 @@
               </div>
               <div class="admin-push-grid admin-push-grid-4 admin-push-stack-gap">
                 <label class="fl">Priority<select class="fi" id="adminPushPriority" ${!editMode && id ? 'disabled' : ''}>${['low', 'normal', 'high', 'critical'].map((item) => `<option value="${item}" ${String(campaign?.priority || 'normal') === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
-                <label class="fl">Status<select class="fi" id="adminPushStatus" ${!editMode && id ? 'disabled' : ''}>${['draft', 'queued', 'scheduled'].map((item) => `<option value="${item}" ${String(campaign?.status || 'draft') === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
+                <label class="fl">Status<select class="fi" id="adminPushStatus" ${!editMode && id ? 'disabled' : ''}>${statusOptions.map((item) => `<option value="${item}" ${String(campaign?.status || (campaign?.send_mode === 'immediate' ? 'queued' : 'scheduled')).toLowerCase() === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
                 <label class="fl">Send Mode<select class="fi" id="adminPushSendMode" ${!editMode && id ? 'disabled' : ''}>${['immediate', 'scheduled', 'recurring'].map((item) => `<option value="${item}" ${String(campaign?.send_mode || 'immediate') === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
                 <label class="fl admin-push-toggle-field"><span>Active</span><input id="adminPushIsActive" type="checkbox" ${campaign?.is_active !== false ? 'checked' : ''} ${!editMode && id ? 'disabled' : ''}></label>
               </div>

@@ -606,7 +606,12 @@ async function saveCampaign(input = {}, actorUserId = null, campaignId = null) {
   const payload = sanitizeNotificationPayload(input);
   const target = normalizeTargetConfig(input.targeting || input.target_config || {});
   const schedule = buildSchedulePayload(input.schedule || input);
-  const status = normalizeStatus(input.status || '', ['draft', 'queued', 'scheduled', 'processing', 'completed', 'cancelled', 'failed'], schedule.send_mode === 'immediate' ? 'queued' : 'draft');
+  let status = normalizeStatus(input.status || '', ['draft', 'queued', 'scheduled', 'processing', 'completed', 'cancelled', 'failed'], schedule.send_mode === 'immediate' ? 'queued' : 'scheduled');
+  if (!payload.is_active && status !== 'cancelled') {
+    status = 'draft';
+  } else if (payload.is_active && status === 'draft') {
+    status = schedule.send_mode === 'immediate' ? 'queued' : 'scheduled';
+  }
   const templateId = input.template_id ? Number(input.template_id) : null;
   const scheduledFor = computeScheduledAt(schedule);
   const campaignValues = [
@@ -1385,7 +1390,7 @@ async function completeSchedule(scheduleId, campaign, scheduleRow, lastError = n
        WHERE id = $1`,
       [scheduleId, lastError ? 'failed' : 'completed', lastError]
     );
-    if (nextRun && !lastError && campaign.is_active && campaign.status !== 'cancelled') {
+    if (nextRun && campaign.is_active && campaign.status !== 'cancelled') {
       await client.query(
         `INSERT INTO notification_schedules
            (notification_id, run_at, timezone, recurrence_type, recurrence_interval, start_date, end_date, schedule_config, status)
@@ -1565,22 +1570,35 @@ async function processDueNotifications() {
       try {
         await processSchedule(scheduleRow);
       } catch (err) {
-        await query(
-          `UPDATE notification_schedules
-           SET status = 'failed',
-               completed_at = NOW(),
-               updated_at = NOW(),
-               last_error = $2
-           WHERE id = $1`,
-          [scheduleRow.id, err?.message || 'Notification processing failed']
-        );
-        await query(
-          `UPDATE notification_campaigns
-           SET status = 'failed',
-               updated_at = NOW()
-           WHERE id = $1`,
-          [scheduleRow.notification_id]
-        );
+        const failureMessage = err?.message || 'Notification processing failed';
+        let handledRecurringFailure = false;
+        try {
+          const campaign = await getCampaignById(scheduleRow.notification_id);
+          if (campaign && campaign.send_mode === 'recurring' && campaign.is_active && campaign.status !== 'cancelled') {
+            await completeSchedule(scheduleRow.id, campaign, scheduleRow, failureMessage);
+            handledRecurringFailure = true;
+          }
+        } catch (_followupErr) {
+          handledRecurringFailure = false;
+        }
+        if (!handledRecurringFailure) {
+          await query(
+            `UPDATE notification_schedules
+             SET status = 'failed',
+                 completed_at = NOW(),
+                 updated_at = NOW(),
+                 last_error = $2
+             WHERE id = $1`,
+            [scheduleRow.id, failureMessage]
+          );
+          await query(
+            `UPDATE notification_campaigns
+             SET status = 'failed',
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [scheduleRow.notification_id]
+          );
+        }
       }
       processed += 1;
       if (processed >= 10) break;
