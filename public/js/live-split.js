@@ -131,6 +131,37 @@
     }
     return `<div class="avatar"${styleAttr}>${initial}</div>`;
   }
+  function renderAvatarPreviewTrigger(name, avatarUrl, extraStyle = '') {
+    const safeName = String(name || 'User').trim() || 'User';
+    const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
+    if (!safeAvatarUrl) return _renderAvatar(safeName, avatarUrl, extraStyle);
+    return `
+      <button
+        type="button"
+        class="live-split-avatar-trigger"
+        onclick="event.stopPropagation();liveSplitOpenAvatarPreview(${toJsArg(safeName)}, ${toJsArg(safeAvatarUrl)})"
+        aria-label="View ${escHtml(safeName)} photo"
+        title="View photo"
+        style="padding:0;border:none;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center"
+      >
+        ${_renderAvatar(safeName, safeAvatarUrl, extraStyle)}
+      </button>`;
+  }
+  function openAvatarPreview(name, avatarUrl) {
+    const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
+    if (!safeAvatarUrl) return;
+    openModal(escHtml(String(name || 'Photo').trim() || 'Photo'), `
+      <div style="display:grid;gap:12px">
+        <div style="display:flex;justify-content:center">
+          <img
+            src="${escHtml(safeAvatarUrl)}"
+            alt="${escHtml(String(name || 'User photo').trim() || 'User photo')}"
+            style="max-width:min(92vw,520px);max-height:70vh;width:auto;height:auto;display:block;border-radius:18px;object-fit:contain;background:#f4f7f5;border:1px solid var(--line)"
+          >
+        </div>
+      </div>
+    `);
+  }
   function isYouLabel(value) {
     return textKey(value) === 'you';
   }
@@ -2661,7 +2692,7 @@
       return `
         <div class="friend-card live-split-card" style="cursor:pointer" onclick="liveSplitOpenDetails('${rowRef}')">
           <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-            ${_renderAvatar(row.name, row.linked_user_avatar_url)}
+            ${renderAvatarPreviewTrigger(row.name, row.linked_user_avatar_url)}
             <div class="friend-info">
               <div class="friend-name">${escHtml(row.name)}</div>
               <div style="font-size:11px;color:${tone}">${escHtml(label)}</div>
@@ -5941,6 +5972,7 @@
     renderMain();
   };
   window.liveSplitOpenPendingInvites = openPendingInvitesModal;
+  window.liveSplitOpenAvatarPreview = openAvatarPreview;
   window.liveSplitAcceptInvite = acceptIncomingInvite;
   window.liveSplitRejectInvite = rejectIncomingInvite;
   window.liveSplitCancelInvite = cancelPendingInvite;
