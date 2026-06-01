@@ -8797,7 +8797,7 @@ async function deleteShareLink(id) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | ai | currencies
+let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | portal_access | ai | currencies
 let _adminExpenseStatsSearch = '';
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
@@ -8828,6 +8828,21 @@ let _adminPushState = {
   selectedUsers: new Set(),
   plans: [],
   editor: null,
+};
+let _adminPortalAccessState = {
+  logs: [],
+  summary: null,
+  page: 1,
+  page_size: 20,
+  total: 0,
+  total_pages: 1,
+  filters: {
+    portal_type: 'all',
+    access_kind: 'all',
+    search: '',
+    from_date: '',
+    to_date: '',
+  },
 };
 let _adminAiDays = 30;
 let _adminAiReport = null;
@@ -8914,11 +8929,12 @@ async function loadAdmin() {
   else if (adminSection === 'subscriptions') await loadAdminSubscriptions();
   else if (adminSection === 'currencies') await loadAdminCurrencies();
   else if (adminSection === 'notifications') await loadAdminNotifications();
+  else if (adminSection === 'portal_access') await loadAdminPortalAccess();
   else if (adminSection === 'ai') await loadAdminAiLearning();
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['currencies','Currencies'], ['notifications','Notifications'], ['ai','AI Learning']];
+  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['currencies','Currencies'], ['notifications','Notifications'], ['portal_access','Portal Access'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -8928,6 +8944,151 @@ function renderAdminShell() {
       <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
+}
+
+async function loadAdminPortalAccess(page = _adminPortalAccessState.page || 1) {
+  const filters = _adminPortalAccessState.filters || {};
+  const query = new URLSearchParams({
+    page: String(page || 1),
+    page_size: String(_adminPortalAccessState.page_size || 20),
+  });
+  if (filters.portal_type && filters.portal_type !== 'all') query.set('portal_type', filters.portal_type);
+  if (filters.access_kind && filters.access_kind !== 'all') query.set('access_kind', filters.access_kind);
+  if (filters.search) query.set('search', filters.search);
+  if (filters.from_date) query.set('from_date', filters.from_date);
+  if (filters.to_date) query.set('to_date', filters.to_date);
+  const data = await api(`/api/admin/portal-access-logs?${query.toString()}`);
+  _adminPortalAccessState.logs = Array.isArray(data?.logs) ? data.logs : [];
+  _adminPortalAccessState.summary = data?.summary || null;
+  _adminPortalAccessState.page = Number(data?.page || page || 1);
+  _adminPortalAccessState.page_size = Number(data?.page_size || _adminPortalAccessState.page_size || 20);
+  _adminPortalAccessState.total = Number(data?.total || 0);
+  _adminPortalAccessState.total_pages = Number(data?.total_pages || 1);
+  renderAdminPortalAccess();
+}
+
+function setAdminPortalAccessFilter(key, value) {
+  _adminPortalAccessState.filters[key] = value;
+}
+
+function applyAdminPortalAccessFilters() {
+  _adminPortalAccessState.page = 1;
+  loadAdminPortalAccess(1);
+}
+
+function renderAdminPortalAccess() {
+  const summary = _adminPortalAccessState.summary || {};
+  const logs = Array.isArray(_adminPortalAccessState.logs) ? _adminPortalAccessState.logs : [];
+  const filters = _adminPortalAccessState.filters || {};
+  const statCard = (label, value, hint) => `
+    <div class="card" style="padding:16px 18px;display:grid;gap:8px">
+      <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">${escHtml(label)}</div>
+      <div style="font-size:28px;font-weight:900;color:var(--t1);line-height:1">${escHtml(String(value))}</div>
+      <div style="font-size:12px;color:var(--t3)">${escHtml(hint || '')}</div>
+    </div>`;
+  const portalBadge = (value) => {
+    const safe = String(value || '').toLowerCase();
+    const label = safe === 'society' ? 'Society Portal' : 'Tenant Portal';
+    const tone = safe === 'society' ? 'var(--blue-l)' : 'var(--green-l)';
+    const color = safe === 'society' ? 'var(--blue)' : 'var(--green)';
+    return `<span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:${tone};color:${color};font-size:11px;font-weight:700">${label}</span>`;
+  };
+  const accessBadge = (value) => {
+    const safe = String(value || '').toLowerCase();
+    const map = {
+      otp_login: ['OTP Login', '#eef6ff', '#2563eb'],
+      widget_login: ['Widget Login', '#ede9fe', '#7c3aed'],
+      session_open: ['Session Open', '#ecfdf5', '#15803d'],
+    };
+    const current = map[safe] || ['Access', '#f5f5f5', '#5b6472'];
+    return `<span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:${current[1]};color:${current[2]};font-size:11px;font-weight:700">${current[0]}</span>`;
+  };
+  const rows = logs.length ? logs.map((item) => `
+    <tr>
+      <td style="padding:12px;white-space:nowrap">${fmtDate(item.logged_at)}</td>
+      <td style="padding:12px">${portalBadge(item.portal_type)}</td>
+      <td style="padding:12px">${accessBadge(item.access_kind)}</td>
+      <td style="padding:12px">
+        <div style="font-weight:700;color:var(--t1)">${escHtml(item.display_name || '-')}</div>
+        <div style="font-size:12px;color:var(--t3)">${escHtml(item.phone_number || '')}</div>
+      </td>
+      <td style="padding:12px">
+        <div>${escHtml(item.unit_label || '-')}</div>
+        <div style="font-size:12px;color:var(--t3)">${escHtml(item.property_type || '')}</div>
+      </td>
+      <td style="padding:12px">${escHtml(item.location_label || '-')}</td>
+      <td style="padding:12px">
+        <div>${escHtml(item.ip_address || '-')}</div>
+        <div style="font-size:11px;color:var(--t3);max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(item.user_agent || '')}">${escHtml(item.user_agent || '')}</div>
+      </td>
+    </tr>
+  `).join('') : `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--t3)">No portal access logs found for these filters.</td></tr>`;
+
+  document.getElementById('adminContent').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px">
+      ${statCard('Total Access Events', Number(summary.total || 0), 'All tenant and society portal opens')}
+      ${statCard('Tenant Portal', Number(summary.tenant_total || 0), 'Tenant portal access events')}
+      ${statCard('Society Portal', Number(summary.society_total || 0), 'Society member portal access events')}
+      ${statCard('Session Opens', Number(summary.session_open_total || 0), 'Already-logged-in portal opens')}
+    </div>
+    <div class="card" style="padding:18px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <div class="card-title">Portal Access History</div>
+          <div style="font-size:12px;color:var(--t3)">Track who opened the tenant and society portals, when they logged in, and when they came back with an already active session.</div>
+        </div>
+        <div style="font-size:12px;color:var(--t3)">Showing ${logs.length} of ${Number(_adminPortalAccessState.total || 0)} records</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.3fr .9fr .9fr .9fr .9fr auto;gap:10px;align-items:end;margin-bottom:14px">
+        <label class="fl">Search
+          <input class="fi" value="${escHtml(filters.search || '')}" placeholder="Name, phone, unit, society, building, IP" oninput="setAdminPortalAccessFilter('search', this.value.trim())" onkeydown="if(event.key==='Enter'){applyAdminPortalAccessFilters()}">
+        </label>
+        <label class="fl">Portal
+          <select class="fi" onchange="setAdminPortalAccessFilter('portal_type', this.value)">
+            ${[['all','All portals'],['tenant','Tenant Portal'],['society','Society Portal']].map(([v,l]) => `<option value="${v}" ${String(filters.portal_type || 'all') === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="fl">Access
+          <select class="fi" onchange="setAdminPortalAccessFilter('access_kind', this.value)">
+            ${[['all','All access'],['otp_login','OTP Login'],['widget_login','Widget Login'],['session_open','Session Open']].map(([v,l]) => `<option value="${v}" ${String(filters.access_kind || 'all') === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="fl">From
+          <input class="fi" type="date" value="${escHtml(filters.from_date || '')}" onchange="setAdminPortalAccessFilter('from_date', this.value)">
+        </label>
+        <label class="fl">To
+          <input class="fi" type="date" value="${escHtml(filters.to_date || '')}" onchange="setAdminPortalAccessFilter('to_date', this.value)">
+        </label>
+        <div style="display:flex;gap:8px;align-items:end">
+          <button class="btn btn-p btn-sm" onclick="applyAdminPortalAccessFilters()">Apply</button>
+          <button class="btn btn-g btn-sm" onclick="_adminPortalAccessState.filters={portal_type:'all',access_kind:'all',search:'',from_date:'',to_date:''};loadAdminPortalAccess(1)">Clear</button>
+        </div>
+      </div>
+      <div style="overflow:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:980px">
+          <thead>
+            <tr style="background:var(--bg2);color:var(--t2)">
+              <th style="text-align:left;padding:10px 12px;font-size:12px">When</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Portal</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Access</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Person</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Unit</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">Society / Building</th>
+              <th style="text-align:left;padding:10px 12px;font-size:12px">IP / Device</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+        <div style="font-size:12px;color:var(--t3)">Page ${Number(_adminPortalAccessState.page || 1)} of ${Number(_adminPortalAccessState.total_pages || 1)}</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s btn-sm" ${Number(_adminPortalAccessState.page || 1) <= 1 ? 'disabled' : ''} onclick="loadAdminPortalAccess(${Math.max(1, Number(_adminPortalAccessState.page || 1) - 1)})">Previous</button>
+          <button class="btn btn-s btn-sm" ${Number(_adminPortalAccessState.page || 1) >= Number(_adminPortalAccessState.total_pages || 1) ? 'disabled' : ''} onclick="loadAdminPortalAccess(${Math.min(Number(_adminPortalAccessState.total_pages || 1), Number(_adminPortalAccessState.page || 1) + 1)})">Next</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 async function loadAdminCurrencies() {

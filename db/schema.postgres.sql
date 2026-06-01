@@ -254,6 +254,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_topic_memberships_unique_acti
   ON notification_topic_memberships (user_id, lower(topic), lower(COALESCE(channel, '')))
   WHERE deleted_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS portal_access_logs (
+  id BIGSERIAL PRIMARY KEY,
+  portal_type TEXT NOT NULL,
+  access_kind TEXT NOT NULL,
+  tenant_id BIGINT,
+  member_id BIGINT,
+  owner_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  session_id TEXT,
+  display_name TEXT,
+  phone_number TEXT,
+  unit_label TEXT,
+  property_type TEXT,
+  location_label TEXT,
+  ip_address TEXT,
+  user_agent TEXT,
+  logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_portal_access_logs_logged_at ON portal_access_logs (logged_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_portal_access_logs_portal_kind ON portal_access_logs (portal_type, access_kind, logged_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_portal_access_logs_owner ON portal_access_logs (owner_user_id, logged_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_portal_access_logs_tenant ON portal_access_logs (tenant_id, logged_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_portal_access_logs_member ON portal_access_logs (member_id, logged_at DESC) WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

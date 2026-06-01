@@ -18,6 +18,7 @@ const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
 const pgAdminNotificationsDb = require('../db/postgres-admin-notifications');
+const pgPortalAccessDb = require('../db/postgres-portal-access');
 const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeMessagePayload, sendExpoPushNotifications } = require('../utils/push-notifications');
@@ -3811,6 +3812,37 @@ function clearTenantPortalSession(req) {
   delete req.session.tenantPortalPending;
 }
 
+function requestIpAddress(req) {
+  const forwarded = String(req?.headers?.['x-forwarded-for'] || '').trim();
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return String(req?.ip || req?.socket?.remoteAddress || '').trim();
+}
+
+async function logTenantPortalAccess(req, accessKind, dashboard = null) {
+  try {
+    const tenantPortal = tenantPortalSessionPayload(req);
+    if (!tenantPortal?.tenantId) return;
+    const safeDashboard = dashboard || await pgTenantDb.getTenantPortalDashboard(tenantPortal.tenantId);
+    const tenant = safeDashboard?.tenant || {};
+    await pgPortalAccessDb.logPortalAccess({
+      portal_type: 'tenant',
+      access_kind: accessKind,
+      tenant_id: Number(tenantPortal.tenantId),
+      owner_user_id: Number(tenant.user_id || 0) || null,
+      session_id: req?.sessionID || '',
+      display_name: tenant.tenant_name || '',
+      phone_number: tenant.contact_number || tenantPortal.phoneDigits || '',
+      unit_label: [tenant.room_label, tenant.floor_label].filter(Boolean).join(' - '),
+      property_type: 'tenant',
+      location_label: tenant.building_name || tenant.building_address || '',
+      ip_address: requestIpAddress(req),
+      user_agent: req?.headers?.['user-agent'] || '',
+    });
+  } catch (err) {
+    console.error('[portal-access] tenant log failed:', err?.message || err);
+  }
+}
+
 function tenantPortalSessionPayload(req) {
   return req?.session?.tenantPortal && Number(req.session.tenantPortal.tenantId) > 0
     ? req.session.tenantPortal
@@ -3931,6 +3963,32 @@ function clearSocietyPortalSession(req) {
   if (!req?.session) return;
   delete req.session.societyPortal;
   delete req.session.societyPortalPending;
+}
+
+async function logSocietyPortalAccess(req, accessKind, dashboard = null) {
+  try {
+    const societyPortal = societyPortalSessionPayload(req);
+    if (!societyPortal?.memberId) return;
+    const safeDashboard = dashboard || await pgCoreDb.getSocietyMemberPortalDashboard(societyPortal.memberId);
+    const member = safeDashboard?.member || {};
+    const society = safeDashboard?.society || {};
+    await pgPortalAccessDb.logPortalAccess({
+      portal_type: 'society',
+      access_kind: accessKind,
+      member_id: Number(societyPortal.memberId),
+      owner_user_id: Number(society.user_id || 0) || null,
+      session_id: req?.sessionID || '',
+      display_name: member.member_name || '',
+      phone_number: member.phone_number || societyPortal.phoneDigits || '',
+      unit_label: member.unit_label || '',
+      property_type: member.property_type || '',
+      location_label: society.name || society.location || '',
+      ip_address: requestIpAddress(req),
+      user_agent: req?.headers?.['user-agent'] || '',
+    });
+  } catch (err) {
+    console.error('[portal-access] society log failed:', err?.message || err);
+  }
 }
 
 function societyPortalSessionPayload(req) {
@@ -4095,6 +4153,7 @@ router.post('/public/tenant-portal/verify-otp', async (req, res) => {
     };
     delete req.session.tenantPortalPending;
     const response = await buildTenantPortalSessionResponse(req);
+    await logTenantPortalAccess(req, 'otp_login', response?.dashboard);
     return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify OTP.' });
@@ -4137,7 +4196,9 @@ router.post('/public/tenant-portal/widget-login', async (req, res) => {
       verifiedAt: new Date().toISOString(),
       provider: 'msg91-widget',
     };
-    return res.json(await buildTenantPortalSessionResponse(req));
+    const response = await buildTenantPortalSessionResponse(req);
+    await logTenantPortalAccess(req, 'widget_login', response?.dashboard);
+    return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify tenant OTP.' });
   }
@@ -4145,7 +4206,9 @@ router.post('/public/tenant-portal/widget-login', async (req, res) => {
 
 router.get('/public/tenant-portal/session', async (req, res) => {
   try {
-    return res.json(await buildTenantPortalSessionResponse(req));
+    const response = await buildTenantPortalSessionResponse(req);
+    if (response?.authenticated) await logTenantPortalAccess(req, 'session_open', response?.dashboard);
+    return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load tenant session.' });
   }
@@ -4227,7 +4290,9 @@ router.post('/public/society-portal/verify-otp', async (req, res) => {
       verifiedAt: new Date().toISOString(),
     };
     delete req.session.societyPortalPending;
-    return res.json(await buildSocietyPortalSessionResponse(req));
+    const response = await buildSocietyPortalSessionResponse(req);
+    await logSocietyPortalAccess(req, 'otp_login', response?.dashboard);
+    return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify OTP.' });
   }
@@ -4235,7 +4300,9 @@ router.post('/public/society-portal/verify-otp', async (req, res) => {
 
 router.get('/public/society-portal/session', async (req, res) => {
   try {
-    return res.json(await buildSocietyPortalSessionResponse(req));
+    const response = await buildSocietyPortalSessionResponse(req);
+    if (response?.authenticated) await logSocietyPortalAccess(req, 'session_open', response?.dashboard);
+    return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load society session.' });
   }
@@ -8661,6 +8728,23 @@ router.get('/v1/admin/push-notifications/logs/export.csv', requireAdmin, async (
     res.send(csv);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/portal-access-logs', requireAdmin, async (req, res) => {
+  try {
+    const result = await Promise.resolve(pgPortalAccessDb.listPortalAccessLogs({
+      page: req.query.page,
+      page_size: req.query.page_size,
+      portal_type: req.query.portal_type,
+      access_kind: req.query.access_kind,
+      search: req.query.search,
+      from_date: req.query.from_date,
+      to_date: req.query.to_date,
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not load portal access logs' });
   }
 });
 

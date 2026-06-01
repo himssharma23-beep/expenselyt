@@ -135,13 +135,12 @@
     const safeName = String(name || 'User').trim() || 'User';
     const safeAvatarUrl = normalizeAvatarUrl(avatarUrl);
     if (!safeAvatarUrl) return _renderAvatar(safeName, avatarUrl, extraStyle);
-    const encodedName = encodeURIComponent(safeName);
-    const encodedAvatarUrl = encodeURIComponent(safeAvatarUrl);
     return `
       <button
         type="button"
         class="live-split-avatar-trigger"
-        onclick="return liveSplitOpenAvatarPreview(event, decodeURIComponent('${encodedName}'), decodeURIComponent('${encodedAvatarUrl}'))"
+        data-avatar-name="${escHtml(safeName)}"
+        data-avatar-url="${escHtml(safeAvatarUrl)}"
         aria-label="View ${escHtml(safeName)} photo"
         title="View photo"
         style="padding:0;border:none;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center"
@@ -167,6 +166,22 @@
       </div>
     `);
     return false;
+  }
+  function bindAvatarPreviewClicks() {
+    if (window.__liveSplitAvatarPreviewBound) return;
+    window.__liveSplitAvatarPreviewBound = true;
+    document.addEventListener('click', (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest('.live-split-avatar-trigger') : null;
+      if (!trigger) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      openAvatarPreview(
+        event,
+        trigger.getAttribute('data-avatar-name') || 'Photo',
+        trigger.getAttribute('data-avatar-url') || ''
+      );
+    }, true);
   }
   function isYouLabel(value) {
     return textKey(value) === 'you';
@@ -6179,4 +6194,5 @@
   };
   window.liveSplitOpenDetails = openRowDetails;
   window.liveSplitOpenEvent = openEventDetails;
+  bindAvatarPreviewClicks();
 })();
