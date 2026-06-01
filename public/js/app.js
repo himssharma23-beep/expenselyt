@@ -19090,11 +19090,14 @@ function showSocietyContributionModal(memberId, monthKey = _societyMonth) {
   if (!member) return;
   const targetMonth = monthKey || _societyMonth;
   const monthValue = Number((member.contributions_by_month || {})[targetMonth] || 0);
+  const paidOnValue = targetMonth === _societyMonth
+    ? (normalizeInputDate(member.selected_month_paid_on) || todayStr())
+    : todayStr();
   openModal(`Contribution - ${escHtml(member.member_name)}`, `
     <div class="fg">
       <label class="fl">Month *<input class="fi" type="month" id="societyContributionMonth" value="${escHtml(targetMonth)}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0" id="societyContributionAmount" value="${escHtml(String(monthValue || (targetMonth === _societyMonth ? (member.selected_month_amount || member.selected_month_due || member.monthly_due || 0) : (member.monthly_due || 0))))}"></label>
-      <label class="fl">Paid On<input class="fi" type="date" id="societyContributionPaidOn" value="${escHtml(targetMonth === _societyMonth ? (member.selected_month_paid_on || '') : '')}"></label>
+      <label class="fl">Paid On<input class="fi" type="date" id="societyContributionPaidOn" value="${escHtml(paidOnValue)}"></label>
       <label class="fl full">Notes<textarea class="fi" rows="3" id="societyContributionNotes" placeholder="Optional note">${escHtml(member.selected_month_notes || '')}</textarea></label>
     </div>
     <div style="font-size:12px;color:var(--t3);margin-top:8px">Monthly due for this member is ${fmtCur(member.monthly_due || 0)}. Set amount to 0 if you want to remove this month's contribution entry.</div>
@@ -19124,7 +19127,7 @@ function showSocietyExpenseModal(expenseId = null) {
   const expense = expenseId ? ((_societyDetail?.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
   openModal(expenseId ? 'Edit Society Expense' : 'Add Society Expense', `
     <div class="fg">
-      <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(expense.expense_date || `${_societyMonth}-01`)}"></label>
+      <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || `${_societyMonth}-01`)}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
       <label class="fl full">Title *<input class="fi" id="societyExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Security Guard Salary"></label>
       <label class="fl">Category<input class="fi" id="societyExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Salary, Repair"></label>
