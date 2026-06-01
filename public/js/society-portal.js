@@ -196,7 +196,10 @@
     const contributionItem = (dashboard?.contribution_history || []).find((item) => item.month_key === targetMonth) || null;
     state.selectedRequestMonth = targetMonth;
     if (!state.requestAmount) {
-      state.requestAmount = String(contributionItem?.due_amount || dashboard?.member?.monthly_due || '');
+      const requestedAmount = contributionItem?.request?.requested_amount;
+      state.requestAmount = requestedAmount != null && requestedAmount !== ''
+        ? String(requestedAmount)
+        : (Number(contributionItem?.amount || 0) > 0 ? String(contributionItem.amount) : '');
     }
     if (!state.requestPaidOn) state.requestPaidOn = new Date().toISOString().slice(0, 10);
   }
@@ -534,13 +537,17 @@
     const contributionRows = (dashboard.contribution_history || []).slice(0, 12).map((item) => {
       const meta = contributionStatus(item);
       const [m, y] = monthBadgeLines(item.month_key);
+      const requestedAmount = toNumber(item.request?.requested_amount || 0);
+      const displayAmount = toNumber(item.amount || 0) > 0
+        ? toNumber(item.amount || 0)
+        : (requestedAmount > 0 ? requestedAmount : 0);
       const sub = item.status === 'paid'
         ? `Paid${item.paid_on ? ` on ${fmtDate(item.paid_on)}` : ''}`
         : item.request?.status === 'pending'
           ? `Request sent${item.request.created_at ? ` on ${fmtDate(item.request.created_at)}` : ''}`
           : item.request?.status === 'rejected'
             ? `Rejected${item.request.review_note ? ` • ${item.request.review_note}` : ''}`
-            : `${fmtMoney(item.due_amount || member.monthly_due || 0)} due`;
+            : 'Not marked as paid yet';
       return `
         <div class="sp-row sp-contribution-row">
           <div class="sp-row-badge ${meta.badge}"><div>${esc(m)}</div><div>${esc(y)}</div></div>
@@ -552,7 +559,7 @@
               : ''}
           </div>
           <div class="sp-row-right">
-            <div class="sp-row-amount ${meta.badge === 'paid' ? 'green' : 'red'}">${fmtMoney(item.amount || item.due_amount || 0)}</div>
+            <div class="sp-row-amount ${meta.badge === 'paid' ? 'green' : 'red'}">${displayAmount > 0 ? fmtMoney(displayAmount) : '-'}</div>
             <div class="sp-row-chip ${meta.badge}">${esc(meta.label)}</div>
           </div>
         </div>`;

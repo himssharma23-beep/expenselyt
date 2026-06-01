@@ -5989,9 +5989,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       selected_month_paid_on: selectedContribution?.paid_on || null,
       selected_month_notes: selectedContribution?.notes || '',
       selected_month_pending: Math.max(0, Math.round((num(member.monthly_due) - num(selectedContribution ? selectedContribution.amount : 0)) * 100) / 100),
-      selected_month_status: num(member.monthly_due) <= 0
-        ? (selectedContribution && num(selectedContribution.amount) > 0 ? 'paid' : 'not_set')
-        : (selectedContribution && num(selectedContribution.amount) >= num(member.monthly_due) ? 'paid' : 'pending'),
+      selected_month_status: selectedContribution && num(selectedContribution.amount) > 0 ? 'paid' : (num(member.monthly_due) <= 0 ? 'not_set' : 'pending'),
       selected_month_request: selectedRequest,
       selected_month_request_status: selectedRequest?.status || '',
       contributions_by_month: contributionsByMonth,
@@ -6015,7 +6013,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     const spent = expenses.filter((item) => item.month_key === monthKey).reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
     const paidCount = membersWithContributions.filter((member) => {
       const amount = num((member.contributions_by_month || {})[monthKey] || 0);
-      return num(member.monthly_due) > 0 ? amount >= num(member.monthly_due) : amount > 0;
+      return amount > 0;
     }).length;
     return {
       month_key: monthKey,
@@ -6101,7 +6099,7 @@ async function getSocietyMemberPortalDashboard(memberId) {
     const request = (member.requests_by_month || {})[monthKey] || null;
     const due = num(member.monthly_due || 0);
     let status = 'pending';
-    if (amount > 0 && (due <= 0 || amount >= due)) status = 'paid';
+    if (amount > 0) status = 'paid';
     else if (request && String(request.status || '').toLowerCase() === 'pending') status = 'approval_pending';
     else if (request && String(request.status || '').toLowerCase() === 'rejected') status = 'rejected';
     return {
@@ -6131,9 +6129,11 @@ async function getSocietyMemberPortalDashboard(memberId) {
     },
     summary: {
       my_total: num(member.total_contributed || 0),
-      pending_amount: currentMonthItem ? Math.max(0, Math.round((currentMonthItem.due_amount - currentMonthItem.amount) * 100) / 100) : num(member.monthly_due || 0),
+      pending_amount: currentMonthItem?.request && String(currentMonthItem.request.status || '').toLowerCase() === 'pending'
+        ? num(currentMonthItem.request.requested_amount || 0)
+        : 0,
       last_paid_month: latestPaid?.month_key || '',
-      pending_month_count: pendingMonths.length,
+      pending_month_count: contributionHistory.filter((item) => ['pending', 'approval_pending'].includes(String(item.status || '').toLowerCase())).length,
       current_month: currentMonthKey(),
     },
     contribution_history: contributionHistory,
