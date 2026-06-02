@@ -20746,6 +20746,8 @@ async function renderHabitTrackerDetail() {
     </button>`;
   }).join('');
 
+
+  
   document.getElementById('main').innerHTML = `
     <div class="tab-content">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
