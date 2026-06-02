@@ -2270,6 +2270,7 @@ function showTenantRecordDetailsModal(recordId) {
         ${tenantInfoRow('Start Date', escHtml(tenantDateLabel(tenant.start_date)))}
         ${tenantInfoRow('End Date', escHtml(tenantDateLabel(tenant.end_date)))}
         ${tenantInfoRow('Contract', escHtml(tenant.contract_months ? `${Number(tenant.contract_months)} months` : '-'))}
+        ${tenantInfoRow('Portal Invoices From', escHtml(tenant.portal_invoices_visible_from ? tenantMonthLabel(tenant.portal_invoices_visible_from) : 'All months'))}
         ${tenantInfoRow('Security Deposit', fmtCur(tenant.security_deposit || 0))}
         ${tenantInfoRow('Notes', escHtml(tenant.notes || '-'))}
       </div>
@@ -2410,7 +2411,12 @@ function showTenantRecordModal(recordId = null) {
               <span class="tenant-editor-label">Security Deposited</span>
               <input class="fi" type="number" min="0" step="0.01" id="tenantRecordSecurity" value="${escHtml(String(record?.security_deposit || 0))}" placeholder="12000">
             </label>
+            <label class="fl">
+              <span class="tenant-editor-label">Portal Invoices Visible From</span>
+              <input class="fi" type="month" id="tenantPortalInvoicesVisibleFrom" value="${escHtml(String(record?.portal_invoices_visible_from || ''))}">
+            </label>
           </div>
+          <div style="font-size:12px;color:var(--t3);margin-top:10px">Leave blank to let the tenant see all invoice months. Set a month to hide any older invoices in the tenant portal.</div>
           <div id="tenantSharedRoomNotice" style="margin-top:14px"></div>
           ${tenantEditorSection('Address & Notes')}
           <div class="fg">
@@ -2566,6 +2572,7 @@ async function saveTenantRecord(recordId = null) {
     end_date: document.getElementById('tenantRecordEndDate')?.value || '',
     charge_effective_from: document.getElementById('tenantChargeEffectiveFrom')?.value || tenantDefaultStartDate(),
     contract_months: document.getElementById('tenantRecordContractMonths')?.value || '',
+    portal_invoices_visible_from: document.getElementById('tenantPortalInvoicesVisibleFrom')?.value || '',
     tenant_address: document.getElementById('tenantRecordAddress')?.value?.trim() || '',
     contact_number: document.getElementById('tenantRecordContact')?.value?.trim() || '',
     security_deposit: Number(document.getElementById('tenantRecordSecurity')?.value || 0),

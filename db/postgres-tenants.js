@@ -76,6 +76,15 @@ function normalizeMonthKey(value) {
   return raw;
 }
 
+function normalizeOptionalMonthKey(value, label = 'Month') {
+  if (value == null || value === '') return null;
+  try {
+    return normalizeMonthKey(value);
+  } catch (_err) {
+    throw validationError(`${label} must be in YYYY-MM format`);
+  }
+}
+
 function currentMonthKey() {
   return new Date().toISOString().slice(0, 7);
 }
@@ -423,6 +432,7 @@ async function ensureTenantTables() {
       cleaning_charge NUMERIC(12,2) NOT NULL DEFAULT 0,
       monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb,
       next_invoice_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+      portal_invoices_visible_from TEXT,
       opening_electricity_units INTEGER NOT NULL DEFAULT 0,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       notes TEXT,
@@ -432,6 +442,7 @@ async function ensureTenantTables() {
   await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS end_date DATE`);
   await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS monthly_additional_charges JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS next_invoice_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE tenant_records ADD COLUMN IF NOT EXISTS portal_invoices_visible_from TEXT`);
   await query(`
     CREATE TABLE IF NOT EXISTS tenant_charge_history (
       id BIGSERIAL PRIMARY KEY,
@@ -694,6 +705,7 @@ function mapTenantRow(row) {
     cleaning_charge: num(row.cleaning_charge),
     monthly_additional_charges: normalizeOtherChargeItems(row.monthly_additional_charges),
     next_invoice_charge_items: normalizeOtherChargeItems(row.next_invoice_charge_items),
+    portal_invoices_visible_from: normalizeOptionalMonthKey(row.portal_invoices_visible_from, 'Portal invoice visibility month'),
     opening_electricity_units: Number(row.opening_electricity_units || 0),
     is_active: row.is_active !== false,
     notes: row.notes || '',
@@ -1187,12 +1199,16 @@ async function getTenantPortalDashboard(tenantId) {
         && !(invoice.pending_payment_request && invoice.pending_payment_request.status === 'pending'),
     };
   });
+  const visibleFromMonth = normalizeOptionalMonthKey(tenant.portal_invoices_visible_from, 'Portal invoice visibility month');
+  const visibleInvoices = visibleFromMonth
+    ? invoices.filter((invoice) => String(invoice.invoice_month || '') >= visibleFromMonth)
+    : invoices;
   const currentProfile = pickChargeProfileForDate(chargeHistoryRows, currentDateValue()) || chargeHistoryRows[0] || null;
-  const balanceDue = invoices.reduce((sum, invoice) => {
+  const balanceDue = visibleInvoices.reduce((sum, invoice) => {
     const remaining = num(invoice.total_amount || 0) - num(invoice.paid_amount || 0);
     return sum + Math.max(0, remaining);
   }, 0);
-  const latestInvoice = invoices[0] || null;
+  const latestInvoice = visibleInvoices[0] || null;
   return {
     tenant: {
       id: tenant.id,
@@ -1207,6 +1223,7 @@ async function getTenantPortalDashboard(tenantId) {
       floor_label: tenant.floor_label || '',
       building_name: tenant.building_name || '',
       building_address: tenant.building_address || '',
+      portal_invoices_visible_from: tenant.portal_invoices_visible_from || '',
       is_active: tenant.is_active,
     },
     manager: {
@@ -1231,7 +1248,7 @@ async function getTenantPortalDashboard(tenantId) {
       latest_invoice_total: latestInvoice?.total_amount || 0,
       balance_due: num(balanceDue),
     },
-    invoices,
+    invoices: visibleInvoices,
     vehicles: vehiclesRows.rows.map((row) => ({
       id: Number(row.id),
       vehicle_type: row.vehicle_type || '',
@@ -1588,17 +1605,18 @@ async function createTenantRecord(userId, data = {}) {
   const items = normalizeItemRows(data.provided_items);
   const monthlyAdditionalCharges = normalizeOtherChargeItems(data.monthly_additional_charges);
   const nextInvoiceChargeItems = normalizeOtherChargeItems(data.next_invoice_charge_items);
+  const portalInvoicesVisibleFrom = normalizeOptionalMonthKey(data.portal_invoices_visible_from, 'Portal invoice visibility month');
   const result = await query(
     `INSERT INTO tenant_records (
       user_id, building_id, room_id, tenant_name, start_date, end_date, contract_months, tenant_address, address_proof,
       contact_number, security_deposit, rent_amount, proof_attachments, photo_attachment,
-      electricity_unit_price, sewerage_charge, water_charge, cleaning_charge, monthly_additional_charges, next_invoice_charge_items, opening_electricity_units,
+      electricity_unit_price, sewerage_charge, water_charge, cleaning_charge, monthly_additional_charges, next_invoice_charge_items, portal_invoices_visible_from, opening_electricity_units,
       is_active, notes, updated_at
      ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
       $10, $11, $12, $13::jsonb, $14::jsonb,
-      $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21,
-      $22, $23, NOW()
+      $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22,
+      $23, $24, NOW()
      )
      RETURNING *`,
     [
@@ -1622,6 +1640,7 @@ async function createTenantRecord(userId, data = {}) {
       normalizeAmount(data.cleaning_charge, 'Cleaning charge'),
       JSON.stringify(monthlyAdditionalCharges),
       JSON.stringify(nextInvoiceChargeItems),
+      portalInvoicesVisibleFrom,
       normalizeInteger(data.opening_electricity_units, 'Opening electricity units', { min: 0, max: 100000000 }),
       nextIsActive,
       normalizeOptionalText(data.notes, 1000),
@@ -1670,6 +1689,9 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
   const currentProofAttachments = Array.isArray(current.proof_attachments) ? current.proof_attachments : [];
   const currentMonthlyAdditionalCharges = normalizeOtherChargeItems(current.monthly_additional_charges);
   const currentNextInvoiceChargeItems = normalizeOtherChargeItems(current.next_invoice_charge_items);
+  const nextPortalInvoicesVisibleFrom = data.portal_invoices_visible_from !== undefined
+    ? normalizeOptionalMonthKey(data.portal_invoices_visible_from, 'Portal invoice visibility month')
+    : normalizeOptionalMonthKey(current.portal_invoices_visible_from, 'Portal invoice visibility month');
   const nextChargeProfile = {
     rent_amount: data.rent_amount !== undefined ? normalizeAmount(data.rent_amount, 'Rent amount per month') : num(current.rent_amount),
     electricity_unit_price: data.electricity_unit_price !== undefined ? normalizeAmount(data.electricity_unit_price, 'Electricity per unit price') : num(current.electricity_unit_price),
@@ -1747,11 +1769,12 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
            cleaning_charge = $17,
            monthly_additional_charges = $18::jsonb,
            next_invoice_charge_items = $19::jsonb,
-           opening_electricity_units = $20,
-           is_active = $21,
-           notes = $22,
+           portal_invoices_visible_from = $20,
+           opening_electricity_units = $21,
+           is_active = $22,
+           notes = $23,
            updated_at = NOW()
-       WHERE id = $23 AND user_id = $24
+       WHERE id = $24 AND user_id = $25
        RETURNING *`,
       [
         Number(building.id),
@@ -1782,6 +1805,7 @@ async function updateTenantRecord(userId, tenantId, data = {}) {
             ? normalizeOtherChargeItems(data.next_invoice_charge_items)
             : currentNextInvoiceChargeItems
         ),
+        nextPortalInvoicesVisibleFrom,
         nextChargeProfile.opening_electricity_units,
         nextIsActive,
         data.notes !== undefined ? normalizeOptionalText(data.notes, 1000) : current.notes,
