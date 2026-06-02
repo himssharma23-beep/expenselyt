@@ -2321,8 +2321,6 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
   return withTransaction(async (client) => {
     const sorted = [...invoices].sort((a, b) => String(a.invoice_month || '').localeCompare(String(b.invoice_month || '')));
     let imported = 0;
-    let firstPreviousUnits = null;
-    let latestEntry = null;
 
     for (const entry of sorted) {
       const invoiceMonth = normalizeMonthKey(entry.invoice_month);
@@ -2332,18 +2330,23 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
       const unitsUsed = normalizeInteger(
         entry.electricity_units_used != null && entry.electricity_units_used !== ''
           ? entry.electricity_units_used
-          : Math.max(0, currentUnits - previousUnits),
+          : 0,
         'Electricity units used',
         { min: 0, max: 100000000 }
       );
       const electricityAmount = normalizeAmount(entry.electricity_amount, 'Electricity bill');
       const totalAmount = normalizeAmount(entry.total_amount, 'Total amount');
       const rentAmount = normalizeAmount(entry.rent_amount_snapshot, 'Monthly rent');
-      const electricityUnitPrice = normalizeAmount(entry.electricity_unit_price_snapshot, 'Electricity per unit price');
+      const electricityUnitPrice = normalizeAmount(entry.electricity_unit_price_snapshot || 0, 'Electricity per unit price');
       const sewerageCharge = normalizeAmount(entry.sewerage_charge_snapshot, 'Sewerage charge');
       const waterCharge = normalizeAmount(entry.water_charge_snapshot || 0, 'Water charge');
       const cleaningCharge = normalizeAmount(entry.cleaning_charge_snapshot, 'Cleaning charge');
       const otherCharges = normalizeAmount(entry.other_charges_snapshot, 'Other charges', { allowZero: true, allowNegative: true });
+      const otherChargeItems = normalizeOtherChargeItems(entry.other_charge_items);
+      const paymentStatus = normalizeTenantPaymentStatus(entry.payment_status || 'paid');
+      const paidAmount = paymentStatus === 'paid'
+        ? totalAmount
+        : normalizeAmount(entry.paid_amount || 0, 'Paid amount', { allowZero: true, allowNegative: false });
       const notes = normalizeOptionalText(entry.notes, 500);
 
       await client.query(
@@ -2394,51 +2397,18 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
           waterCharge,
           cleaningCharge,
           otherCharges,
-          JSON.stringify([]),
+          JSON.stringify(otherChargeItems),
           previousUnits,
           currentUnits,
           unitsUsed,
           electricityAmount,
           totalAmount,
-          'pending',
-          0,
+          paymentStatus,
+          paidAmount,
           notes,
         ]
       );
-      if (firstPreviousUnits == null) firstPreviousUnits = previousUnits;
-      latestEntry = {
-        rent_amount: rentAmount,
-        electricity_unit_price: electricityUnitPrice,
-        sewerage_charge: sewerageCharge,
-        water_charge: waterCharge,
-        cleaning_charge: cleaningCharge,
-        opening_electricity_units: currentUnits,
-      };
       imported += 1;
-    }
-
-    if (firstPreviousUnits != null || latestEntry) {
-      await client.query(
-        `UPDATE tenant_records
-         SET rent_amount = $1,
-             electricity_unit_price = $2,
-             sewerage_charge = $3,
-             water_charge = $4,
-             cleaning_charge = $5,
-             opening_electricity_units = $6,
-             updated_at = NOW()
-         WHERE id = $7 AND user_id = $8`,
-        [
-          latestEntry?.rent_amount ?? num(tenant.rent_amount),
-          latestEntry?.electricity_unit_price ?? num(tenant.electricity_unit_price),
-          latestEntry?.sewerage_charge ?? num(tenant.sewerage_charge),
-          latestEntry?.water_charge ?? num(tenant.water_charge),
-          latestEntry?.cleaning_charge ?? num(tenant.cleaning_charge),
-          latestEntry?.opening_electricity_units ?? firstPreviousUnits ?? Number(tenant.opening_electricity_units || 0),
-          tenant.id,
-          userId,
-        ]
-      );
     }
 
     return { imported };

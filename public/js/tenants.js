@@ -1788,7 +1788,8 @@ function showTenantInvoiceImportModal(recordId) {
       <div style="font-size:12px;color:var(--t3);line-height:1.7">
         Expected columns from your invoice sheet:
         <br><b>Rent date</b>, <b>Rent paid on</b>, <b>Monthly rent</b>, meter <b>last/current</b>, <b>Total Units</b>, <b>Electricity Bill</b>,
-        <br><b>Sewarage and water charges</b>, <b>Cleaning Charges</b>, <b>Parking Charges</b>, <b>other charges detail</b>, <b>other charges</b>, <b>Total</b>.
+        <br><b>Sewerage Charges</b>, <b>Water Charges</b>, <b>Cleaning Charges</b>, <b>other charges detail</b>, <b>other charges</b>, <b>Total</b>.
+        <br>These rows are imported exactly as-is for the selected tenant and saved as <b>Paid</b>. No charge recalculation is done from the tenant profile.
       </div>
       <div id="tenantInvoiceImportSheetArea"></div>
       <div id="tenantInvoiceImportPreview"></div>
@@ -1867,6 +1868,9 @@ async function previewTenantInvoiceImport(recordId) {
       <td style="text-align:right">${Number(row.current_electricity_units || 0)}</td>
       <td>${Number(row.electricity_units_used || 0)} units</td>
       <td style="text-align:right">${fmtCur(row.electricity_amount || 0)}</td>
+      <td style="text-align:right">${fmtCur(row.sewerage_charge_snapshot || 0)}</td>
+      <td style="text-align:right">${fmtCur(row.water_charge_snapshot || 0)}</td>
+      <td style="text-align:right">${fmtCur(row.cleaning_charge_snapshot || 0)}</td>
       <td style="text-align:right">${fmtCur(row.other_charges_snapshot || 0)}</td>
       <td style="text-align:right;font-weight:800">${fmtCur(row.total_amount || 0)}</td>
     </tr>`).join('');
@@ -1879,8 +1883,8 @@ async function previewTenantInvoiceImport(recordId) {
       </div>
       <div class="table-wrap" style="margin-top:14px">
         <table>
-          <thead><tr><th>Month</th><th style="text-align:right">Rent</th><th style="text-align:right">Previous</th><th style="text-align:right">Current</th><th>Units</th><th style="text-align:right">Electricity</th><th style="text-align:right">Other</th><th style="text-align:right">Total</th></tr></thead>
-          <tbody>${rowsHtml || '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No valid invoice rows found.</td></tr>'}</tbody>
+          <thead><tr><th>Month</th><th style="text-align:right">Rent</th><th style="text-align:right">Previous</th><th style="text-align:right">Current</th><th>Units</th><th style="text-align:right">Electricity</th><th style="text-align:right">Sewerage</th><th style="text-align:right">Water</th><th style="text-align:right">Cleaning</th><th style="text-align:right">Other</th><th style="text-align:right">Total</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="11" style="text-align:center;color:var(--t3)">No valid invoice rows found.</td></tr>'}</tbody>
         </table>
       </div>
       <div class="fa" style="margin-top:16px">

@@ -11462,13 +11462,15 @@ function mapTenantChargesHeader(normalized) {
 function mapTenantInvoiceHeader(normalized) {
   if (['name', 'tenant', 'tenant name'].includes(normalized)) return 'tenant_name';
   if (['rent date', 'invoice date', 'month'].includes(normalized)) return 'rent_date';
-  if (['rent paid on', 'paid on', 'payment date'].includes(normalized)) return 'rent_paid_on';
+  if (['rent paid on', 'prent paid on', 'paid on', 'payment date'].includes(normalized)) return 'rent_paid_on';
   if (['montly rent', 'monthly rent', 'rent'].includes(normalized)) return 'monthly_rent';
   if (['meter reading electricity last', 'last', 'previous units', 'last units'].includes(normalized)) return 'last_units';
   if (['meter reading electricity current', 'current', 'current units'].includes(normalized)) return 'current_units';
   if (['total units', 'units', 'units used'].includes(normalized)) return 'total_units';
   if (['electricity bill', 'electricity amount'].includes(normalized)) return 'electricity_bill';
   if (['sewarage and water charges', 'sewerage and water charges', 'sewerage water charges'].includes(normalized)) return 'sewerage_water_charge';
+  if (['sewarage charges', 'sewerage charges', 'sewarage charge', 'sewerage charge'].includes(normalized)) return 'sewerage_charge';
+  if (['water charges', 'water charge'].includes(normalized)) return 'water_charge';
   if (['cleaning charges', 'cleaning charge'].includes(normalized)) return 'cleaning_charge';
   if (['parking charges', 'parking charge'].includes(normalized)) return 'parking_charge';
   if (['other charges detail', 'other charge detail', 'remarks', 'details'].includes(normalized)) return 'other_charges_detail';
@@ -11477,6 +11479,50 @@ function mapTenantInvoiceHeader(normalized) {
   if (['payment paid', 'paid amount'].includes(normalized)) return 'payment_paid';
   if (['pending amount', 'pending'].includes(normalized)) return 'pending_amount';
   return null;
+}
+
+function detectTenantInvoiceHeaderRow(rows = []) {
+  let best = { index: -1, score: -1 };
+  const limit = Math.min(Array.isArray(rows) ? rows.length : 0, 5);
+  for (let rowIndex = 0; rowIndex < limit; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    const nextRow = rows[rowIndex + 1] || [];
+    const columnCount = Math.max(row.length, nextRow.length);
+    let score = 0;
+    for (let index = 0; index < columnCount; index += 1) {
+      const combined = normalizeExcelHeader(`${row[index] || ''} ${nextRow[index] || ''}`);
+      const direct = normalizeExcelHeader(row[index] || nextRow[index] || '');
+      const alias = mapTenantInvoiceHeader(combined) || mapTenantInvoiceHeader(direct);
+      if (alias) score += 1;
+    }
+    if (score > best.score) best = { index: rowIndex, score };
+  }
+  return best.score > 0 ? best.index : -1;
+}
+
+function buildTenantInvoiceImportColumnMap(headerRow = [], nextRow = []) {
+  const columnMap = {};
+  const columnCount = Math.max(headerRow.length, nextRow.length);
+  for (let index = 0; index < columnCount; index += 1) {
+    const combined = normalizeExcelHeader(`${headerRow[index] || ''} ${nextRow[index] || ''}`);
+    const direct = normalizeExcelHeader(headerRow[index] || nextRow[index] || '');
+    const alias = mapTenantInvoiceHeader(combined) || mapTenantInvoiceHeader(direct);
+    if (alias && columnMap[alias] == null) columnMap[alias] = index;
+  }
+  if (columnMap.monthly_rent != null) {
+    const start = Number(columnMap.monthly_rent);
+    if (columnMap.last_units == null) columnMap.last_units = start + 1;
+    if (columnMap.current_units == null) columnMap.current_units = start + 2;
+    if (columnMap.total_units == null) columnMap.total_units = start + 3;
+    if (columnMap.electricity_bill == null) columnMap.electricity_bill = start + 4;
+    if (columnMap.sewerage_charge == null && columnMap.sewerage_water_charge == null) columnMap.sewerage_charge = start + 5;
+    if (columnMap.water_charge == null) columnMap.water_charge = start + 6;
+    if (columnMap.cleaning_charge == null) columnMap.cleaning_charge = start + 7;
+    if (columnMap.other_charges_detail == null) columnMap.other_charges_detail = start + 8;
+    if (columnMap.other_charges == null) columnMap.other_charges = start + 9;
+    if (columnMap.total_amount == null) columnMap.total_amount = start + 10;
+  }
+  return columnMap;
 }
 
 function parseTenantWorkbookImport(buffer) {
@@ -11678,21 +11724,17 @@ function parseTenantInvoiceImportSheet(buffer, selectedSheet = '') {
   const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false });
   if (!sheetRows.length) throw new Error('The selected sheet is empty.');
 
-  const firstRow = sheetRows[0] || [];
-  const secondRow = sheetRows[1] || [];
-  const columnMap = {};
-  const columnCount = Math.max(firstRow.length, secondRow.length);
-  for (let index = 0; index < columnCount; index += 1) {
-    const normalized = normalizeExcelHeader(`${firstRow[index] || ''} ${secondRow[index] || ''}`)
-      || normalizeExcelHeader(firstRow[index] || secondRow[index] || '');
-    const alias = mapTenantInvoiceHeader(normalized);
-    if (alias && columnMap[alias] == null) columnMap[alias] = index;
-  }
+  const headerRowIndex = detectTenantInvoiceHeaderRow(sheetRows);
+  if (headerRowIndex < 0) throw new Error('Could not detect invoice columns in this sheet.');
+  const headerRow = sheetRows[headerRowIndex] || [];
+  const nextRow = sheetRows[headerRowIndex + 1] || [];
+  const columnMap = buildTenantInvoiceImportColumnMap(headerRow, nextRow);
 
   if (columnMap.rent_date == null) throw new Error('Could not detect the Rent date column.');
+  if (columnMap.monthly_rent == null) throw new Error('Could not detect the Monthly rent column.');
 
   const invoices = [];
-  for (let rowIndex = 2; rowIndex < sheetRows.length; rowIndex += 1) {
+  for (let rowIndex = headerRowIndex + 1; rowIndex < sheetRows.length; rowIndex += 1) {
     const row = sheetRows[rowIndex] || [];
     if (!row.some((cell) => String(cell || '').trim())) continue;
     const rentDate = parseExcelDate(row[columnMap.rent_date]);
@@ -11700,37 +11742,39 @@ function parseTenantInvoiceImportSheet(buffer, selectedSheet = '') {
     const invoiceMonth = String(rentDate).slice(0, 7);
     const previousUnits = normalizeTenantImportInt(row[columnMap.last_units]);
     const currentUnits = normalizeTenantImportInt(row[columnMap.current_units]);
-    const unitsUsedRaw = normalizeTenantImportInt(row[columnMap.total_units]);
-    const unitsUsed = unitsUsedRaw || Math.max(0, currentUnits - previousUnits);
+    const unitsUsed = normalizeTenantImportInt(row[columnMap.total_units]);
     const electricityBill = normalizeTenantImportNumber(row[columnMap.electricity_bill], { allowNegative: true });
-    const electricityRate = unitsUsed ? Math.round((electricityBill / unitsUsed) * 100) / 100 : 0;
-    const sewerageWater = normalizeTenantImportNumber(row[columnMap.sewerage_water_charge], { allowNegative: true });
+    const sewerageCharge = columnMap.sewerage_charge != null
+      ? normalizeTenantImportNumber(row[columnMap.sewerage_charge], { allowNegative: true })
+      : normalizeTenantImportNumber(row[columnMap.sewerage_water_charge], { allowNegative: true });
+    const waterCharge = columnMap.water_charge != null
+      ? normalizeTenantImportNumber(row[columnMap.water_charge], { allowNegative: true })
+      : 0;
     const cleaningCharge = normalizeTenantImportNumber(row[columnMap.cleaning_charge], { allowNegative: true });
-    const parkingCharge = normalizeTenantImportNumber(row[columnMap.parking_charge], { allowNegative: true });
     const otherCharge = normalizeTenantImportNumber(row[columnMap.other_charges], { allowNegative: true });
     const totalAmount = normalizeTenantImportNumber(row[columnMap.total_amount], { allowNegative: true });
-    const paidAmount = normalizeTenantImportNumber(row[columnMap.payment_paid], { allowNegative: true });
-    const pendingAmount = normalizeTenantImportNumber(row[columnMap.pending_amount], { allowNegative: true });
-    const noteParts = [
-      row[columnMap.other_charges_detail] ? `Other details: ${String(row[columnMap.other_charges_detail]).trim()}` : '',
-      paidAmount ? `Payment paid: ${paidAmount}` : '',
-      pendingAmount ? `Pending amount: ${pendingAmount}` : '',
-    ].filter(Boolean);
+    const otherDetail = row[columnMap.other_charges_detail] ? String(row[columnMap.other_charges_detail]).trim() : '';
+    const otherChargeItems = (otherDetail || otherCharge)
+      ? [{ detail: otherDetail || 'Other charge', amount: otherCharge }]
+      : [];
     invoices.push({
       invoice_month: invoiceMonth,
       due_date: parseExcelDate(row[columnMap.rent_paid_on]) || rentDate,
       rent_amount_snapshot: normalizeTenantImportNumber(row[columnMap.monthly_rent], { allowNegative: true }),
-      electricity_unit_price_snapshot: electricityRate,
-      sewerage_charge_snapshot: sewerageWater,
-      water_charge_snapshot: 0,
+      electricity_unit_price_snapshot: 0,
+      sewerage_charge_snapshot: sewerageCharge,
+      water_charge_snapshot: waterCharge,
       cleaning_charge_snapshot: cleaningCharge,
-      other_charges_snapshot: Math.round((parkingCharge + otherCharge) * 100) / 100,
+      other_charges_snapshot: otherCharge,
+      other_charge_items: otherChargeItems,
       previous_electricity_units: previousUnits,
       current_electricity_units: currentUnits,
       electricity_units_used: unitsUsed,
       electricity_amount: electricityBill,
       total_amount: totalAmount,
-      notes: noteParts.join('\n'),
+      notes: '',
+      payment_status: 'paid',
+      paid_amount: totalAmount,
     });
   }
 
