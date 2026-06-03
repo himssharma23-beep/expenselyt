@@ -3278,6 +3278,34 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 /* Card */
 .card { background:var(--white); border-radius:14px; padding:22px; border:1px solid var(--border-l); margin-bottom:16px; }
 .card-title { font-size:15px; font-weight:700; margin-bottom:12px; }
+.admin-shell { display:grid; gap:16px; }
+.admin-topbar { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.admin-title { font-size:20px; font-weight:700; color:var(--t1); }
+.admin-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+.admin-tabs-scroll { overflow-x:auto; flex-wrap:nowrap; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+.admin-tabs-scroll .chip { flex:0 0 auto; }
+.admin-stats-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; }
+.admin-stat-card { padding:16px 18px; display:grid; gap:8px; }
+.admin-stat-label { font-size:12px; font-weight:700; color:var(--t3); text-transform:uppercase; letter-spacing:.08em; }
+.admin-stat-value { font-size:28px; font-weight:900; color:var(--t1); line-height:1; }
+.admin-stat-hint { font-size:12px; color:var(--t3); }
+.admin-card { padding:18px; }
+.admin-toolbar { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+.admin-toolbar-main { min-width:0; flex:1; }
+.admin-toolbar-copy { font-size:12px; color:var(--t3); }
+.admin-toolbar-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.admin-filter-grid { display:grid; grid-template-columns:1.3fr .9fr .9fr .9fr .9fr auto; gap:10px; align-items:end; margin-bottom:14px; }
+.admin-filter-grid.simple { grid-template-columns:minmax(0, 1fr) auto; }
+.admin-filter-grid.mid { grid-template-columns:minmax(0, 1fr) auto auto; }
+.admin-inline-actions { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+.admin-table-card { width:100%; overflow:auto; -webkit-overflow-scrolling:touch; }
+.admin-table { width:100%; border-collapse:collapse; min-width:760px; }
+.admin-table.wide { min-width:980px; }
+.admin-table th { text-align:left; padding:10px 12px; font-size:12px; background:var(--bg2); color:var(--t2); }
+.admin-table td { padding:12px; vertical-align:top; }
+.admin-pagination { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-top:14px; }
+.admin-pagination-copy { font-size:12px; color:var(--t3); }
+.admin-empty-card { text-align:center; color:var(--t3); padding:30px; }
 
 .admin-user-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
 .admin-user-card { background:var(--white); border:1px solid var(--border); border-radius:16px; padding:18px; box-shadow:0 4px 18px rgba(17,24,39,0.04); }
@@ -4547,6 +4575,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .admin-user-audit { grid-template-columns:1fr; }
   .admin-ai-grid { grid-template-columns:1fr; }
   .admin-ai-directory { grid-template-columns:1fr; }
+  .admin-stats-grid { grid-template-columns:1fr 1fr; }
 }
 
 /* Animations */
@@ -5637,6 +5666,51 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   }
   .trip-settlement-modal {
     max-width:calc(100vw - 8px) !important;
+  }
+  .admin-tabs {
+    display:flex;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    padding-bottom:2px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .admin-tabs .chip {
+    flex:0 0 auto;
+  }
+  .admin-topbar,
+  .admin-toolbar,
+  .admin-pagination {
+    flex-direction:column;
+    align-items:stretch;
+  }
+  .admin-toolbar-actions,
+  .admin-inline-actions {
+    width:100%;
+    justify-content:stretch;
+  }
+  .admin-toolbar-actions .btn,
+  .admin-inline-actions .btn {
+    flex:1 1 0;
+    justify-content:center;
+  }
+  .admin-stats-grid {
+    grid-template-columns:1fr;
+  }
+  .admin-filter-grid,
+  .admin-filter-grid.simple,
+  .admin-filter-grid.mid {
+    grid-template-columns:1fr;
+    align-items:stretch;
+  }
+  .admin-table {
+    min-width:560px;
+  }
+  .admin-table.wide {
+    min-width:760px;
+  }
+  .admin-stat-card,
+  .admin-card {
+    padding:14px;
   }
   .trip-settlement-table-wrap { display:none; }
   .trip-settlement-mobile-list { display:block; }

@@ -2269,7 +2269,7 @@ async function loadExcelSheets() {
       <span style="font-size:13px">${s}</span>
     </label>`).join('');
   document.getElementById('xlsxSheetArea').innerHTML = `
-    <div style="margin-bottom:12px">
+    <div class="admin-filter-grid simple">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span style="font-size:12px;font-weight:600;color:var(--t2)">SELECT SHEETS</span>
         <span style="font-size:11px;color:var(--t3);cursor:pointer" onclick="document.querySelectorAll('.xlsx-sheet-cb').forEach(c=>c.checked=true)">Select all</span>
@@ -5279,6 +5279,51 @@ function isTripSettlementExpense(expense) {
   return String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
 }
 
+function buildTripMemberShareTotals(trip) {
+  const members = Array.isArray(trip?.members) ? trip.members : [];
+  const spendingExpenses = Array.isArray(trip?.expenses)
+    ? trip.expenses.filter((expense) => !isTripSettlementExpense(expense))
+    : [];
+  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
+  const memberByName = new Map();
+  const peopleMap = {};
+
+  members.forEach((member) => {
+    const key = memberShareKey(member);
+    memberByName.set(memberNameKey(member?.member_name), key);
+    peopleMap[key] = {
+      member_key: key,
+      member_name: member?.member_name || 'Member',
+      share_total: 0,
+    };
+  });
+
+  spendingExpenses.forEach((expense) => {
+    (expense.splits || []).forEach((split) => {
+      const byNameKey = memberByName.get(memberNameKey(split?.member_name));
+      const matchedMember = byNameKey
+        ? members.find((member) => memberShareKey(member) === byNameKey)
+        : members.find((member) => {
+            const stableKey = memberShareKey(member);
+            return String(split?.member_key || '') === stableKey || String(split?.member_key || '') === String(_memberKey(member));
+          });
+      const targetKey = byNameKey || (matchedMember ? memberShareKey(matchedMember) : String(split?.member_key || ''));
+      if (peopleMap[targetKey]) peopleMap[targetKey].share_total += Number(split?.share_amount || 0);
+    });
+  });
+
+  return members.map((member) => {
+    const key = memberShareKey(member);
+    const total = peopleMap[key]?.share_total || 0;
+    return {
+      member_key: key,
+      member_name: member?.member_name || 'Member',
+      share_total: Math.round(total * 100) / 100,
+    };
+  });
+}
+
 function tripExpenseSelectionLabel() {
   return _tripExpIsSettlement ? 'Choose who received this payment.' : 'Choose members who should share this expense.';
 }
@@ -7215,23 +7260,7 @@ async function openTripDetail(tripId) {
 function syncTripListRowFromDetail(trip) {
   if (!trip?.id || !Array.isArray(_trips)) return;
   const members = Array.isArray(trip.members) ? trip.members : [];
-  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
-  const memberShareTotals = members.map((member) => {
-    const stableKey = memberShareKey(member);
-    const total = (trip.expenses || []).reduce((sum, expense) => (
-      sum + (expense.splits || []).reduce((splitSum, split) => {
-        const sameKey = String(split?.member_key || '') === stableKey || String(split?.member_key || '') === String(_memberKey(member));
-        const sameName = memberNameKey(split?.member_name) === memberNameKey(member?.member_name);
-        return splitSum + ((sameKey || sameName) ? Number(split?.share_amount || 0) : 0);
-      }, 0)
-    ), 0);
-    return {
-      member_key: stableKey,
-      member_name: member?.member_name || '',
-      share_total: Math.round(total * 100) / 100,
-    };
-  });
+  const memberShareTotals = buildTripMemberShareTotals(trip);
   _trips = _trips.map((row) => {
     if (String(row?.id) !== String(trip.id)) return row;
     const spendingExpenses = Array.isArray(trip.expenses)
@@ -7294,6 +7323,7 @@ function renderTripDetail() {
   const allTripExpenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   const settlementEntries = allTripExpenses.filter((expense) => isTripSettlementExpense(expense));
   const spendingExpenseCount = allTripExpenses.filter((expense) => !isTripSettlementExpense(expense)).length;
+  const memberShareTotals = buildTripMemberShareTotals(trip);
   const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
   const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
   const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
@@ -7330,13 +7360,13 @@ function renderTripDetail() {
   const memberChips = members.length
     ? members.map((member) => {
         const key = memberShareKey(member);
-        const totals = peopleMap[key] || { totalShare: 0, totalGave: 0 };
+        const totals = memberShareTotals.find((row) => String(row.member_key) === key) || { share_total: 0 };
         const initial = escHtml(String(member.member_name || '?').trim().charAt(0).toUpperCase() || '?');
         return `<div class="trip-detail-member-card">
           <div class="trip-detail-member-avatar">${initial}</div>
           <div class="trip-detail-member-name">${escHtml(member.member_name)}</div>
           <div class="trip-detail-member-label">Share</div>
-          <div class="trip-detail-member-share">${fmtCur(totals.totalShare || 0)}</div>
+          <div class="trip-detail-member-share">${fmtCur(totals.share_total || 0)}</div>
         </div>`;
       }).join('')
     : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
@@ -8939,9 +8969,9 @@ function renderAdminShell() {
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
   document.getElementById('main').innerHTML = `
-    <div class="tab-content">
-      <div style="font-size:20px;font-weight:700;margin-bottom:16px">Admin Panel</div>
-      <div style="display:flex;gap:8px;margin-bottom:20px">${tabHtml}</div>
+    <div class="tab-content admin-shell">
+      <div class="admin-title">Admin Panel</div>
+      <div class="admin-tabs admin-tabs-scroll">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
 }
@@ -8981,10 +9011,10 @@ function renderAdminPortalAccess() {
   const logs = Array.isArray(_adminPortalAccessState.logs) ? _adminPortalAccessState.logs : [];
   const filters = _adminPortalAccessState.filters || {};
   const statCard = (label, value, hint) => `
-    <div class="card" style="padding:16px 18px;display:grid;gap:8px">
-      <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">${escHtml(label)}</div>
-      <div style="font-size:28px;font-weight:900;color:var(--t1);line-height:1">${escHtml(String(value))}</div>
-      <div style="font-size:12px;color:var(--t3)">${escHtml(hint || '')}</div>
+    <div class="card admin-stat-card">
+      <div class="admin-stat-label">${escHtml(label)}</div>
+      <div class="admin-stat-value">${escHtml(String(value))}</div>
+      <div class="admin-stat-hint">${escHtml(hint || '')}</div>
     </div>`;
   const portalBadge = (value) => {
     const safe = String(value || '').toLowerCase();
@@ -9025,24 +9055,24 @@ function renderAdminPortalAccess() {
   `).join('') : `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--t3)">No portal access logs found for these filters.</td></tr>`;
 
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px">
+    <div class="admin-stats-grid" style="margin-bottom:16px">
       ${statCard('Total Access Events', Number(summary.total || 0), 'All tenant and society portal opens')}
       ${statCard('Tenant Portal', Number(summary.tenant_total || 0), 'Tenant portal access events')}
       ${statCard('Society Portal', Number(summary.society_total || 0), 'Society member portal access events')}
       ${statCard('Session Opens', Number(summary.session_open_total || 0), 'Already-logged-in portal opens')}
     </div>
-    <div class="card" style="padding:18px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-        <div>
+    <div class="card admin-card">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-main">
           <div class="card-title">Portal Access History</div>
-          <div style="font-size:12px;color:var(--t3)">Track who opened the tenant and society portals, when they logged in, and when they came back with an already active session.</div>
+          <div class="admin-toolbar-copy">Track who opened the tenant and society portals, when they logged in, and when they came back with an already active session.</div>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <div style="font-size:12px;color:var(--t3)">Showing ${logs.length} of ${Number(_adminPortalAccessState.total || 0)} records</div>
+        <div class="admin-toolbar-actions">
+          <div class="admin-pagination-copy">Showing ${logs.length} of ${Number(_adminPortalAccessState.total || 0)} records</div>
           <button class="btn btn-s btn-sm" onclick="loadAdminPortalAccess(${Number(_adminPortalAccessState.page || 1)})">Refresh</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1.3fr .9fr .9fr .9fr .9fr auto;gap:10px;align-items:end;margin-bottom:14px">
+      <div class="admin-filter-grid">
         <label class="fl">Search
           <input class="fi" value="${escHtml(filters.search || '')}" placeholder="Name, phone, unit, society, building, IP" oninput="setAdminPortalAccessFilter('search', this.value.trim())" onkeydown="if(event.key==='Enter'){applyAdminPortalAccessFilters()}">
         </label>
@@ -9062,30 +9092,30 @@ function renderAdminPortalAccess() {
         <label class="fl">To
           <input class="fi" type="date" value="${escHtml(filters.to_date || '')}" onchange="setAdminPortalAccessFilter('to_date', this.value)">
         </label>
-        <div style="display:flex;gap:8px;align-items:end">
+        <div class="admin-inline-actions">
           <button class="btn btn-p btn-sm" onclick="applyAdminPortalAccessFilters()">Apply</button>
           <button class="btn btn-g btn-sm" onclick="_adminPortalAccessState.filters={portal_type:'all',access_kind:'all',search:'',from_date:'',to_date:''};loadAdminPortalAccess(1)">Clear</button>
         </div>
       </div>
-      <div style="overflow:auto">
-        <table style="width:100%;border-collapse:collapse;min-width:980px">
+      <div class="admin-table-card">
+        <table class="admin-table wide">
           <thead>
             <tr style="background:var(--bg2);color:var(--t2)">
-              <th style="text-align:left;padding:10px 12px;font-size:12px">When</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Portal</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Access</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Person</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Unit</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Society / Building</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">IP / Device</th>
+              <th>When</th>
+              <th>Portal</th>
+              <th>Access</th>
+              <th>Person</th>
+              <th>Unit</th>
+              <th>Society / Building</th>
+              <th>IP / Device</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
-        <div style="font-size:12px;color:var(--t3)">Page ${Number(_adminPortalAccessState.page || 1)} of ${Number(_adminPortalAccessState.total_pages || 1)}</div>
-        <div style="display:flex;gap:8px">
+      <div class="admin-pagination">
+        <div class="admin-pagination-copy">Page ${Number(_adminPortalAccessState.page || 1)} of ${Number(_adminPortalAccessState.total_pages || 1)}</div>
+        <div class="admin-inline-actions">
           <button class="btn btn-s btn-sm" ${Number(_adminPortalAccessState.page || 1) <= 1 ? 'disabled' : ''} onclick="loadAdminPortalAccess(${Math.max(1, Number(_adminPortalAccessState.page || 1) - 1)})">Previous</button>
           <button class="btn btn-s btn-sm" ${Number(_adminPortalAccessState.page || 1) >= Number(_adminPortalAccessState.total_pages || 1) ? 'disabled' : ''} onclick="loadAdminPortalAccess(${Math.min(Number(_adminPortalAccessState.total_pages || 1), Number(_adminPortalAccessState.page || 1) + 1)})">Next</button>
         </div>
@@ -9123,26 +9153,26 @@ function renderAdminCurrencies() {
       .join('')
     : `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--t3)">No currencies added yet.</td></tr>`;
   document.getElementById('adminContent').innerHTML = `
-    <div class="card" style="padding:18px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-        <div>
+    <div class="card admin-card">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-main">
           <div class="card-title">Currency Master</div>
-          <div style="font-size:12px;color:var(--t3)">Manage currency rates once here. Trip expense forms will use these saved rates automatically.</div>
+          <div class="admin-toolbar-copy">Manage currency rates once here. Trip expense forms will use these saved rates automatically.</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="admin-toolbar-actions">
           <button class="btn btn-s btn-sm" onclick="syncAdminCurrencyRates()">Sync Latest Rates</button>
           <button class="btn btn-p btn-sm" onclick="openAdminCurrencyModal()">Add Currency</button>
         </div>
       </div>
-      <div style="overflow:auto">
-        <table style="width:100%;border-collapse:collapse;min-width:640px">
+      <div class="admin-table-card">
+        <table class="admin-table">
           <thead>
             <tr style="background:var(--bg2);color:var(--t2)">
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Currency</th>
-              <th style="text-align:right;padding:10px 12px;font-size:12px">Rate To INR</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Status</th>
-              <th style="text-align:left;padding:10px 12px;font-size:12px">Updated</th>
-              <th style="text-align:right;padding:10px 12px;font-size:12px">Actions</th>
+              <th>Currency</th>
+              <th style="text-align:right">Rate To INR</th>
+              <th>Status</th>
+              <th>Updated</th>
+              <th style="text-align:right">Actions</th>
             </tr>
           </thead>
           <tbody>${html}</tbody>
@@ -9262,12 +9292,12 @@ function renderAdminExpenseStats() {
         .join('')
     : `<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:24px">No users found.</td></tr>`;
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:grid;gap:16px">
-      <div class="card" style="padding:18px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-          <div>
+    <div class="admin-shell">
+      <div class="card admin-card">
+        <div class="admin-toolbar">
+          <div class="admin-toolbar-main">
             <div class="card-title">Expense Items Added By Users</div>
-            <div style="font-size:12px;color:var(--t3)">Live total of all saved expense rows across users.</div>
+            <div class="admin-toolbar-copy">Live total of all saved expense rows across users.</div>
           </div>
         </div>
         <div class="admin-expense-stats-grid admin-expense-stats-grid-inline">
@@ -9282,13 +9312,13 @@ function renderAdminExpenseStats() {
           </button>
         </div>
       </div>
-      <div class="card" style="padding:18px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-          <div>
+      <div class="card admin-card">
+        <div class="admin-toolbar">
+          <div class="admin-toolbar-main">
             <div class="card-title">User-wise Expense Items</div>
-            <div style="font-size:12px;color:var(--t3)">Shows each user and how many expense items they have added.</div>
+            <div class="admin-toolbar-copy">Shows each user and how many expense items they have added.</div>
           </div>
-          <div style="font-size:12px;color:var(--t3)">Users: ${filteredRows.length}${filteredRows.length !== userRows.length ? ` of ${userRows.length}` : ''}</div>
+          <div class="admin-pagination-copy">Users: ${filteredRows.length}${filteredRows.length !== userRows.length ? ` of ${userRows.length}` : ''}</div>
         </div>
         <div class="admin-expense-search-row">
           <input
@@ -9298,16 +9328,16 @@ function renderAdminExpenseStats() {
             value="${escHtml(_adminExpenseStatsSearch || '')}"
             oninput="_adminExpenseStatsSearch=this.value;renderAdminExpenseStats()">
         </div>
-        <div style="overflow:auto">
-          <table style="width:100%;border-collapse:collapse;min-width:760px">
+        <div class="admin-table-card">
+          <table class="admin-table">
             <thead>
               <tr style="background:var(--bg2);color:var(--t2)">
-                <th style="text-align:left;padding:10px 12px;font-size:12px">#</th>
-                <th style="text-align:left;padding:10px 12px;font-size:12px">Username</th>
-                <th style="text-align:left;padding:10px 12px;font-size:12px">Name</th>
-                <th style="text-align:left;padding:10px 12px;font-size:12px">Email</th>
-                <th style="text-align:left;padding:10px 12px;font-size:12px">Phone Number</th>
-                <th style="text-align:right;padding:10px 12px;font-size:12px">Total Expense Items</th>
+                <th>#</th>
+                <th>Username</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Phone Number</th>
+                <th style="text-align:right">Total Expense Items</th>
               </tr>
             </thead>
             <tbody>
@@ -9348,31 +9378,31 @@ async function loadAdminPublicStats() {
 function renderAdminPublicStats() {
   const stats = _adminPublicStats || {};
   const readonlyCard = (label, value, hint) => `
-    <div class="card" style="padding:16px">
-      <div style="font-size:12px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${label}</div>
+    <div class="card admin-stat-card">
+      <div class="admin-stat-label">${label}</div>
       <div style="font-size:30px;font-weight:800;color:var(--t1);margin-top:8px;font-family:'JetBrains Mono',monospace">${Number(value || 0).toLocaleString('en-IN')}</div>
-      <div style="font-size:12px;color:var(--t3);margin-top:6px">${hint}</div>
+      <div class="admin-stat-hint">${hint}</div>
     </div>`;
 
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:grid;gap:16px">
-      <div class="card" style="padding:18px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-          <div>
+    <div class="admin-shell">
+      <div class="card admin-card">
+        <div class="admin-toolbar">
+          <div class="admin-toolbar-main">
             <div class="card-title">Landing Page Public Stats</div>
-            <div style="font-size:12px;color:var(--t3)">Users and expense items come from live database counts. Downloads and daily visitors can be updated here for the public homepage circles.</div>
+            <div class="admin-toolbar-copy">Users and expense items come from live database counts. Downloads and daily visitors can be updated here for the public homepage circles.</div>
           </div>
           <button class="btn btn-s btn-sm" onclick="loadAdminPublicStats()">Refresh</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+      <div class="admin-stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
         ${readonlyCard('Unique Users', stats.unique_users, 'Live count from active registered users')}
         ${readonlyCard('Expense Items', stats.expense_items, 'Live count from saved expense rows')}
       </div>
-      <div class="card" style="padding:18px">
+      <div class="card admin-card">
         <div class="card-title">Editable Public Counters</div>
-        <div style="font-size:12px;color:var(--t3);margin-bottom:14px">Update the numbers shown on the landing page for app downloads and daily visitors.</div>
+        <div class="admin-toolbar-copy" style="margin-bottom:14px">Update the numbers shown on the landing page for app downloads and daily visitors.</div>
         <div class="fg">
           <label class="fl">App Downloads
             <input class="fi" id="adminPublicAppDownloads" type="number" min="0" step="1" value="${Number(stats.app_downloads || 0)}">
@@ -10162,16 +10192,18 @@ function _renderAdminUsersPage() {
 
   const cards = filtered.map(_renderAdminUserCard).join('');
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
-      <div style="font-size:14px;font-weight:700">Users (${filtered.length}/${_adminUsersData.length})</div>
-      <button class="btn btn-p btn-sm" onclick="showAdminCreateUserModal()">+ Add User</button>
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-main" style="font-size:14px;font-weight:700">Users (${filtered.length}/${_adminUsersData.length})</div>
+      <div class="admin-toolbar-actions">
+        <button class="btn btn-p btn-sm" onclick="showAdminCreateUserModal()">+ Add User</button>
+      </div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+    <div class="admin-toolbar" style="margin-bottom:12px">
       <input class="fi" id="adminUserSearch" placeholder="Search name, username, email, phone…"
         style="flex:1;min-width:180px;max-width:320px;padding:7px 10px;font-size:13px"
         value="${escHtml(_adminUserSearch)}"
         oninput="_adminUserHandleSearchInput(this)">
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div class="admin-toolbar-actions" style="justify-content:flex-start">
         ${filterBtn('all','All')}
         ${filterBtn('active','Active')}
         ${filterBtn('inactive','Inactive')}
@@ -11060,17 +11092,19 @@ function _renderAdminSubsPage() {
   }).join('') : `<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:20px">${q ? 'No subscriptions match' : 'No subscriptions yet'}</td></tr>`;
 
   document.getElementById('adminContent').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
-      <div style="font-size:14px;font-weight:700">Subscriptions (${filtered.length}/${_adminSubsData.length})</div>
-      <button class="btn btn-p btn-sm" onclick="showNewSubModal()">+ Add Subscription</button>
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-main" style="font-size:14px;font-weight:700">Subscriptions (${filtered.length}/${_adminSubsData.length})</div>
+      <div class="admin-toolbar-actions">
+        <button class="btn btn-p btn-sm" onclick="showNewSubModal()">+ Add Subscription</button>
+      </div>
     </div>
     <div style="margin-bottom:12px">
       <input class="fi" id="adminSubSearch" placeholder="Search user, plan, status…"
-        style="width:100%;max-width:340px;padding:7px 10px;font-size:13px"
+        style="width:100%;padding:7px 10px;font-size:13px"
         value="${escHtml(_adminSubSearch)}"
         oninput="_adminSubSearch=this.value;_renderAdminSubsPage()">
     </div>
-    <div class="table-wrap"><table>
+    <div class="table-wrap admin-table-card"><table class="admin-table">
       <thead><tr><th>User</th><th>Plan</th><th>Cycle</th><th>Start</th><th>End</th><th>Status</th><th style="width:100px">Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
