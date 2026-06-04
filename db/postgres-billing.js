@@ -491,10 +491,11 @@ async function updateCycleTotals(cycleId, client = null) {
   );
 }
 
-async function autoClosePastCcCycles(userId, cardId = null) {
+async function autoClosePastCcCycles(userId, cardId = null, client = null) {
+  const run = client || { query };
   const today = _localDate(new Date());
   const params = cardId ? [userId, today, cardId] : [userId, today];
-  const result = await query(
+  const result = await run.query(
     `SELECT id, net_payable, paid_amount, paid_date
      FROM cc_cycles
      WHERE user_id = $1 AND status = 'open' AND cycle_end < $2${cardId ? ' AND card_id = $3' : ''}`,
@@ -504,7 +505,7 @@ async function autoClosePastCcCycles(userId, cardId = null) {
     const paid = num(cycle.paid_amount);
     const due = num(cycle.total_amount || cycle.net_payable);
     const status = paid >= due - 0.01 ? 'paid' : paid > 0 ? 'partial' : 'billed';
-    await query(
+    await run.query(
       `UPDATE cc_cycles
        SET status = $1, paid_amount = $2, paid_date = $3, closed_at = COALESCE(closed_at, NOW())
        WHERE id = $4`,
@@ -828,16 +829,35 @@ async function repairCreditCardCycles(userId, cardId) {
     const card = cardR.rows[0];
     if (!card) throw new Error('Card not found');
     await rebalanceOpenCycleForCard(userId, card.id, card, client);
-    await autoClosePastCcCycles(userId, card.id);
-    const [current, cycles] = await Promise.all([
-      getCcCurrentCycle(userId, card.id),
-      getCcCycles(userId, card.id),
-    ]);
+    await autoClosePastCcCycles(userId, card.id, client);
+    const currentCycleR = await client.query(
+      `SELECT *
+       FROM cc_cycles
+       WHERE card_id = $1
+         AND user_id = $2
+         AND status = 'open'
+       ORDER BY cycle_start ASC, created_at ASC, id ASC`,
+      [card.id, userId]
+    );
+    const cycleCountR = await client.query(
+      `SELECT COUNT(*)::int AS cycle_count
+       FROM cc_cycles
+       WHERE card_id = $1
+         AND user_id = $2`,
+      [card.id, userId]
+    );
+    const currentCycle = currentCycleR.rows[0] || null;
     return {
       card_id: Number(card.id),
       card_name: card.card_name,
-      current_cycle: current?.cycle || null,
-      cycle_count: Array.isArray(cycles) ? cycles.length : 0,
+      current_cycle: currentCycle ? {
+        id: Number(currentCycle.id),
+        cycle_start: currentCycle.cycle_start,
+        cycle_end: currentCycle.cycle_end,
+        due_date: currentCycle.due_date,
+        status: currentCycle.status,
+      } : null,
+      cycle_count: Number(cycleCountR.rows[0]?.cycle_count || 0),
     };
   });
 }
