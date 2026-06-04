@@ -35,13 +35,37 @@ jobs:
           PORT_SECRET: ${{ secrets.HOSTINGER_SSH_PORT }}
         run: |
           set -e
+          looks_like_ssh() {
+            local host="$1"
+            local port="$2"
+            local tmp_out="/tmp/ssh-probe-${port}.out"
+            local tmp_log="/tmp/ssh-probe-${port}.log"
+            : > "$tmp_out"
+            : > "$tmp_log"
+
+            ssh-keyscan -4 -T 8 -p "$port" -H "$host" > "$tmp_out" 2> "$tmp_log" || true
+            if [ -s "$tmp_out" ]; then
+              return 0
+            fi
+
+            ssh-keyscan -T 8 -p "$port" -H "$host" > "$tmp_out" 2>> "$tmp_log" || true
+            if [ -s "$tmp_out" ]; then
+              return 0
+            fi
+
+            timeout 8 bash -lc "exec 3<>/dev/tcp/$host/$port; IFS= read -r -t 5 banner <&3 || exit 1; [[ \"\$banner\" == SSH-* ]]" \
+              >/dev/null 2>>"$tmp_log"
+          }
+
           RAW_HOST="${HOST:-}"
           RAW_HOST="${RAW_HOST#ssh://}"
           RAW_HOST="${RAW_HOST#http://}"
           RAW_HOST="${RAW_HOST#https://}"
           RAW_HOST="${RAW_HOST##*@}"
           RAW_HOST="${RAW_HOST%%/*}"
+          EMBEDDED_PORT=""
           if [[ "$RAW_HOST" == *:* && "$RAW_HOST" != \[*\] ]]; then
+            EMBEDDED_PORT="${RAW_HOST##*:}"
             RAW_HOST="${RAW_HOST%%:*}"
           fi
           if [ -z "$RAW_HOST" ]; then
@@ -51,22 +75,23 @@ jobs:
           echo "host=$RAW_HOST" >> "$GITHUB_OUTPUT"
           PORT="${PORT_VAR:-}"
           if [ -z "$PORT" ]; then PORT="${PORT_SECRET:-}"; fi
+          if [ -z "$PORT" ]; then PORT="${EMBEDDED_PORT:-}"; fi
           if [ -n "$PORT" ]; then
             echo "Using configured SSH port: $PORT"
             echo "port=$PORT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
  
-          echo "No SSH port configured. Probing common ports (22, 65002)..."
-          for p in 22 65002; do
-            if timeout 5 bash -lc "cat < /dev/null > /dev/tcp/$RAW_HOST/$p" 2>/dev/null; then
-              echo "Detected reachable SSH port: $p"
+          echo "No SSH port configured. Probing SSH ports (65002, 22)..."
+          for p in 65002 22; do
+            if looks_like_ssh "$RAW_HOST" "$p"; then
+              echo "Detected SSH service on port: $p"
               echo "port=$p" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
  
-          echo "Unable to detect SSH port for configured host. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
+          echo "Unable to detect an SSH service for configured host. Set HOSTINGER_SSH_PORT in repo Variables or Secrets."
           exit 1
  
       - name: Add host key
