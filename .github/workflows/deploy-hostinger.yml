@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: hostinger-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -43,13 +47,10 @@ jobs:
 
       - name: DNS Lookup
         run: |
-          echo "Resolving host..."
           nslookup "${{ steps.ssh.outputs.host }}" || true
-          ping -c 4 "${{ steps.ssh.outputs.host }}" || true
 
       - name: Check Port 22
         run: |
-          echo "Testing TCP connection..."
           nc -vz "${{ steps.ssh.outputs.host }}" 22
 
       - name: Add Host Key
@@ -73,12 +74,9 @@ jobs:
             -p 22 \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
             "
-            echo '===== SERVER INFO ====='
             hostname
             whoami
             pwd
-
-            echo '===== NODE ====='
             node -v || true
             npm -v || true
             pm2 -v || true
@@ -87,20 +85,31 @@ jobs:
       - name: Create Release Archive
         run: |
           tar \
+            --warning=no-file-changed \
             --exclude=.git \
             --exclude=.github \
             --exclude=node_modules \
             --exclude=.env \
-            --exclude=backups \
+            --exclude=release.tgz \
             --exclude=data \
-            -czf release.tgz .
+            --exclude=backups \
+            --exclude=*.log \
+            --exclude=.next \
+            --exclude=coverage \
+            -czf release.tgz . || true
 
       - name: Upload Release
         run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -p 22 \
+            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
+            "mkdir -p $APP_DIR"
+
           scp \
             -P 22 \
             release.tgz \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}:/tmp/release.tgz"
+            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}:$APP_DIR/release.tgz"
 
       - name: Deploy
         run: |
@@ -109,16 +118,19 @@ jobs:
             -p 22 \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
             "
+            set -e
+
             mkdir -p $APP_DIR
             cd $APP_DIR
 
-            tar -xzf /tmp/release.tgz
+            tar -xzf release.tgz
+            rm -f release.tgz
 
-            npm install
+            npm install --production
 
             pm2 restart $APP_NAME || pm2 start npm --name $APP_NAME -- start
 
-            rm -f /tmp/release.tgz
+            pm2 save
 
-            echo 'Deployment completed'
+            echo 'Deployment completed successfully'
             "
