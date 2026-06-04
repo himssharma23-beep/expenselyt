@@ -12997,7 +12997,7 @@ function renderCcBillMatchModalContent() {
 }
 
 function refreshCcBillMatchModal() {
-  const body = document.getElementById('modalBody');
+  const body = document.querySelector('#modalContent .modal-body');
   if (body) body.innerHTML = renderCcBillMatchModalContent();
 }
 
