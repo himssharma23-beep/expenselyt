@@ -184,6 +184,70 @@ async function mergeCycleInto(run, userId, sourceCycleId, targetCycleId) {
   return targetId;
 }
 
+async function collapseOverlappingHistoricalCycles(userId, cardId, card, client) {
+  const historyR = await client.query(
+    `SELECT *
+     FROM cc_cycles
+     WHERE user_id = $1
+       AND card_id = $2
+       AND status != 'open'
+     ORDER BY cycle_start ASC, cycle_end ASC, created_at ASC, id ASC`,
+    [userId, cardId]
+  );
+  const cycles = historyR.rows;
+  if (cycles.length < 2) return;
+
+  let anchor = null;
+  let anchorStart = '';
+  let anchorEnd = '';
+  const mergeIds = [];
+
+  const flushCluster = async () => {
+    if (!anchor) return;
+    if (mergeIds.length) {
+      await client.query(
+        `UPDATE cc_cycles
+         SET cycle_start = $1,
+             cycle_end = $2,
+             due_date = $3
+         WHERE id = $4
+           AND user_id = $5`,
+        [anchorStart, anchorEnd, getCcDueDate(anchorEnd, card.due_days || 20), anchor.id, userId]
+      );
+      for (const cycleId of mergeIds) {
+        await mergeCycleInto(client, userId, cycleId, anchor.id);
+      }
+      await updateCycleTotals(anchor.id, client);
+    }
+    anchor = null;
+    anchorStart = '';
+    anchorEnd = '';
+    mergeIds.length = 0;
+  };
+
+  for (const cycle of cycles) {
+    if (!anchor) {
+      anchor = cycle;
+      anchorStart = String(cycle.cycle_start || '');
+      anchorEnd = String(cycle.cycle_end || '');
+      continue;
+    }
+    const overlaps = String(cycle.cycle_start || '') <= String(anchorEnd || '');
+    if (overlaps) {
+      if (String(cycle.cycle_start || '') < anchorStart) anchorStart = String(cycle.cycle_start || '');
+      if (String(cycle.cycle_end || '') > anchorEnd) anchorEnd = String(cycle.cycle_end || '');
+      mergeIds.push(Number(cycle.id));
+      continue;
+    }
+    await flushCluster();
+    anchor = cycle;
+    anchorStart = String(cycle.cycle_start || '');
+    anchorEnd = String(cycle.cycle_end || '');
+  }
+
+  await flushCluster();
+}
+
 async function getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, dueDays, client = null) {
   const run = client || { query };
   await lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd);
@@ -829,6 +893,7 @@ async function repairCreditCardCycles(userId, cardId) {
     const card = cardR.rows[0];
     if (!card) throw new Error('Card not found');
     await rebalanceOpenCycleForCard(userId, card.id, card, client);
+    await collapseOverlappingHistoricalCycles(userId, card.id, card, client);
     await autoClosePastCcCycles(userId, card.id, client);
     const currentCycleR = await client.query(
       `SELECT *
