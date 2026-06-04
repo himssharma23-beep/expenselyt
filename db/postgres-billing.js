@@ -1,5 +1,22 @@
 const { query, withTransaction } = require('./postgres');
 
+let ccBillMatchColumnsReadyPromise = null;
+
+async function ensureCcBillMatchColumns() {
+  if (!ccBillMatchColumnsReadyPromise) {
+    ccBillMatchColumnsReadyPromise = (async () => {
+      await query(`ALTER TABLE IF EXISTS cc_cycles ADD COLUMN IF NOT EXISTS bill_match_result JSONB`);
+      await query(`ALTER TABLE IF EXISTS cc_cycles ADD COLUMN IF NOT EXISTS bill_match_verified_at TIMESTAMPTZ`);
+      await query(`ALTER TABLE IF EXISTS cc_cycles ADD COLUMN IF NOT EXISTS bill_match_file_name TEXT`);
+      await query(`ALTER TABLE IF EXISTS cc_cycles ADD COLUMN IF NOT EXISTS bill_match_provider TEXT`);
+    })().catch((err) => {
+      ccBillMatchColumnsReadyPromise = null;
+      throw err;
+    });
+  }
+  return ccBillMatchColumnsReadyPromise;
+}
+
 function num(value) {
   return Number(value || 0);
 }
@@ -131,6 +148,53 @@ function normalizeCcDateValue(value, label = 'Date') {
 function normalizeCcDateValueOrEmpty(value, label = 'Date') {
   if (value == null || value === '') return '';
   return normalizeCcDateValue(value, label);
+}
+
+function mapStoredBillMatch(row) {
+  const raw = row?.bill_match_result;
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    ...raw,
+    saved_file_name: String(row?.bill_match_file_name || '').trim(),
+    saved_provider: String(row?.bill_match_provider || '').trim(),
+    saved_at: row?.bill_match_verified_at || null,
+  };
+}
+
+function mapCycleForClient(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    bill_match: mapStoredBillMatch(row),
+  };
+}
+
+async function saveCcBillMatchResult(userId, cycleId, result, fileName = '', client = null) {
+  await ensureCcBillMatchColumns();
+  const run = client || { query };
+  const safePayload = result && typeof result === 'object'
+    ? {
+        success: !!result.success,
+        provider: String(result.provider || 'openai'),
+        cycle: result.cycle || null,
+        summary: result.summary || {},
+        notes: String(result.notes || ''),
+        matches: Array.isArray(result.matches) ? result.matches : [],
+        statement_only: Array.isArray(result.statement_only) ? result.statement_only : [],
+        app_only: Array.isArray(result.app_only) ? result.app_only : [],
+        statement_rows: Array.isArray(result.statement_rows) ? result.statement_rows : [],
+      }
+    : null;
+  await run.query(
+    `UPDATE cc_cycles
+     SET bill_match_result = $1,
+         bill_match_verified_at = NOW(),
+         bill_match_file_name = $2,
+         bill_match_provider = $3
+     WHERE id = $4
+       AND user_id = $5`,
+    [safePayload, String(fileName || '').trim(), String(result?.provider || 'openai').trim() || 'openai', cycleId, userId]
+  );
 }
 
 function getNextCcCyclePeriod(period, billGenDay) {
@@ -770,6 +834,7 @@ async function addCcTxn(userId, txn) {
 
 async function getCcCurrentCycle(userId, cardId) {
   return withTransaction(async (client) => {
+    await ensureCcBillMatchColumns();
     await autoClosePastCcCycles(userId, cardId);
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
     const card = cardR.rows[0];
@@ -784,7 +849,7 @@ async function getCcCurrentCycle(userId, cardId) {
     const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC, id ASC', [cycle.id]);
     return {
       card,
-      cycle: cycle ? { ...cycle, net_payable: num(cycle.total_amount || cycle.net_payable) } : cycle,
+      cycle: cycle ? { ...mapCycleForClient(cycle), net_payable: num(cycle.total_amount || cycle.net_payable) } : cycle,
       txns: txnsR.rows.map((row) => ({ ...row, amount: num(row.amount), discount_pct: num(row.discount_pct), discount_amount: num(row.discount_amount), net_amount: num(row.amount) })),
     };
   });
@@ -792,6 +857,7 @@ async function getCcCurrentCycle(userId, cardId) {
 
 async function getCcCycles(userId, cardId) {
   return withTransaction(async (client) => {
+    await ensureCcBillMatchColumns();
     await autoClosePastCcCycles(userId, cardId);
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [cardId, userId]);
     if (!cardR.rows[0]) return [];
@@ -805,7 +871,7 @@ async function getCcCycles(userId, cardId) {
       }
       const txnsR = await client.query('SELECT * FROM cc_txns WHERE cycle_id = $1 ORDER BY txn_date ASC', [cycle.id]);
       cycles.push({
-        ...cycle,
+        ...mapCycleForClient(cycle),
         total_amount: num(cycle.total_amount),
         total_discount: num(cycle.total_discount),
         net_payable: num(cycle.total_amount || cycle.net_payable),
@@ -819,6 +885,7 @@ async function getCcCycles(userId, cardId) {
 
 async function getCcCycleById(userId, cycleId) {
   return withTransaction(async (client) => {
+    await ensureCcBillMatchColumns();
     const cycleR = await client.query(
       'SELECT * FROM cc_cycles WHERE id = $1 AND user_id = $2 LIMIT 1',
       [cycleId, userId]
@@ -842,7 +909,7 @@ async function getCcCycleById(userId, cycleId) {
     return {
       card,
       cycle: {
-        ...cycle,
+        ...mapCycleForClient(cycle),
         total_amount: num(cycle.total_amount),
         total_discount: num(cycle.total_discount),
         net_payable: num(cycle.total_amount || cycle.net_payable),
@@ -1322,6 +1389,7 @@ module.exports = {
   getCcCurrentCycle,
   getCcCycles,
   getCcCycleById,
+  saveCcBillMatchResult,
   getCcMonthlySummary,
   getCcYearlySummary,
   getCcAvailableYears,

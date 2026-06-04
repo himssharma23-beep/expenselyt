@@ -738,6 +738,10 @@ CREATE TABLE IF NOT EXISTS cc_cycles (
   closed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE cc_cycles ADD COLUMN IF NOT EXISTS bill_match_result JSONB;
+ALTER TABLE cc_cycles ADD COLUMN IF NOT EXISTS bill_match_verified_at TIMESTAMPTZ;
+ALTER TABLE cc_cycles ADD COLUMN IF NOT EXISTS bill_match_file_name TEXT;
+ALTER TABLE cc_cycles ADD COLUMN IF NOT EXISTS bill_match_provider TEXT;
 CREATE INDEX IF NOT EXISTS idx_cc_cycles_card ON cc_cycles(card_id);
 WITH ranked_cycles AS (
   SELECT

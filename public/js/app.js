@@ -12857,7 +12857,7 @@ function renderCcHistory(cycles) {
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-l)">
         ${c.status === 'open' ? `<button class="btn btn-s btn-sm" onclick="showAddCycleTxnModal(${c.id}, '${c.cycle_start}', '${c.cycle_end}')">+ Add Transaction</button>` : ''}
         <button class="btn btn-s btn-sm" onclick="showCcExcelImportModal(${c.id}, '${c.cycle_start}', '${c.cycle_end}', ${_ccCard?.default_discount_pct || 0})">Import Excel</button>
-        ${canAccessFeature('creditcard_bill_match') ? `<button class="btn btn-s btn-sm" onclick="showCcBillMatchModal(${c.id})">Verify Bill PDF</button>` : ''}
+        ${canAccessFeature('creditcard_bill_match') ? `<button class="btn btn-s btn-sm" onclick="showCcBillMatchModal(${c.id})">${c.bill_match ? 'View Bill Match' : 'Verify Bill PDF'}</button>` : ''}
         <button class="btn btn-sm" style="border:1px solid var(--border)" onclick="showEditCycleModal(${c.id})">${c.status === 'open' ? 'Edit Cycle' : 'Edit / Mark Status'}</button>
         ${isFutureOpen ? `<button class="btn btn-sm" style="border:1px solid var(--red);color:var(--red);background:transparent" onclick="deleteFutureCycle(${c.id})">Delete Cycle</button>` : ''}
       </div>` : '';
@@ -12955,26 +12955,72 @@ function renderCcBillMatchResult(result) {
   `;
 }
 
-function showCcBillMatchModal(cycleId) {
-  _ccBillMatchState = { cycleId, result: null, loading: false };
-  openModal('Verify Credit Card Bill PDF', `
-    <div style="font-size:12px;color:var(--t2);margin-bottom:12px;background:var(--bg2);border-radius:10px;padding:10px">
-      Upload the bill PDF for this billing cycle. AI will extract statement transactions and match them mainly by date and amount, while allowing merchant names to differ.
-    </div>
+function renderCcBillMatchModalContent() {
+  const result = _ccBillMatchState?.result || null;
+  const showUploader = !result || !!_ccBillMatchState?.showUploader;
+  const fileName = String(_ccBillMatchState?.file?.name || '').trim();
+  const savedFileName = String(result?.saved_file_name || '').trim();
+  const savedAt = result?.saved_at ? fmtDate(result.saved_at) : '';
+  const savedBanner = result ? `
+    <div style="font-size:12px;color:var(--t2);margin-bottom:12px;background:linear-gradient(180deg,#f6fbff 0%,#eef7ff 100%);border:1px solid #d7e8fb;border-radius:12px;padding:12px">
+      <div style="font-weight:800;color:var(--t1);margin-bottom:4px">Saved verification found for this billing period</div>
+      <div>${savedFileName ? `Last PDF: ${escHtml(savedFileName)}` : 'This cycle already has a saved bill verification result.'}${savedAt ? ` &middot; Verified ${escHtml(savedAt)}` : ''}</div>
+    </div>` : '';
+  const uploadBox = showUploader ? `
     <div class="fg">
       <label class="fl full">Bill PDF
         <input type="file" id="ccBillMatchFile" accept="application/pdf,.pdf" class="fi">
       </label>
       <label class="fl full">PDF Password (optional)
-        <input type="password" id="ccBillMatchPassword" class="fi" placeholder="Enter password only if the PDF is protected">
+        <input type="password" id="ccBillMatchPassword" class="fi" placeholder="Enter password only if the PDF is protected" value="${escHtml(_ccBillMatchState?.password || '')}">
       </label>
     </div>
     <div class="fa" style="margin-top:12px">
-      <button class="btn btn-p" id="ccBillMatchBtn" onclick="runCcBillMatch(${Number(cycleId)})">Verify PDF</button>
-      <button class="btn btn-g" onclick="closeModal()">Close</button>
+      ${result ? `<button class="btn btn-g" onclick="toggleCcBillMatchUploader(false)">Keep Saved Result</button>` : `<button class="btn btn-g" onclick="closeModal()">Close</button>`}
+      <button class="btn btn-p" id="ccBillMatchBtn" onclick="runCcBillMatch(${Number(_ccBillMatchState?.cycleId || 0)})">${_ccBillMatchState?.loading ? 'Checking...' : (result ? 'Upload And Verify Again' : 'Verify PDF')}</button>
     </div>
-    <div id="ccBillMatchResult" style="margin-top:14px"></div>
-  `);
+    <div style="font-size:12px;color:var(--t3);margin-top:8px">${fileName ? `Selected PDF: ${escHtml(fileName)}` : 'Choose a new PDF only when you want to replace the saved verification.'}</div>
+  ` : `
+    <div class="fa" style="margin-top:12px">
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+      <button class="btn btn-p" onclick="toggleCcBillMatchUploader(true)">Upload Again</button>
+    </div>
+  `;
+  return `
+    <div style="font-size:12px;color:var(--t2);margin-bottom:12px;background:var(--bg2);border-radius:10px;padding:10px">
+      Upload the bill PDF for this billing cycle. AI will extract statement transactions and match them mainly by date and amount, while allowing merchant names to differ.
+    </div>
+    ${savedBanner}
+    ${uploadBox}
+    <div id="ccBillMatchResult" style="margin-top:14px">${result ? renderCcBillMatchResult(result) : ''}</div>
+  `;
+}
+
+function refreshCcBillMatchModal() {
+  const body = document.getElementById('modalBody');
+  if (body) body.innerHTML = renderCcBillMatchModalContent();
+}
+
+function toggleCcBillMatchUploader(showUploader) {
+  _ccBillMatchState = {
+    ...(_ccBillMatchState || {}),
+    showUploader: !!showUploader,
+    loading: false,
+  };
+  refreshCcBillMatchModal();
+}
+
+function showCcBillMatchModal(cycleId) {
+  const cycle = (_ccHistoryCycles || []).find((item) => _sameId(item.id, cycleId)) || null;
+  _ccBillMatchState = {
+    cycleId,
+    result: cycle?.bill_match || null,
+    loading: false,
+    showUploader: !cycle?.bill_match,
+    password: '',
+    file: null,
+  };
+  openModal('Verify Credit Card Bill PDF', renderCcBillMatchModalContent());
 }
 
 async function runCcBillMatch(cycleId) {
@@ -12989,7 +13035,7 @@ async function runCcBillMatch(cycleId) {
   const fd = new FormData();
   fd.append('file', file);
   if (password.trim()) fd.append('password', password.trim());
-  _ccBillMatchState.loading = true;
+  _ccBillMatchState = { ..._ccBillMatchState, loading: true, password, file: file ? { name: file.name } : null };
   if (button) button.disabled = true;
   if (resultBox) resultBox.innerHTML = `<div style="color:var(--t3);font-size:13px;padding:10px 0">Checking the bill against app entries...</div>`;
   try {
@@ -12998,11 +13044,13 @@ async function runCcBillMatch(cycleId) {
     if (!response.ok || data?.error) {
       throw new Error(data?.error || `Bill verification failed with HTTP ${response.status}`);
     }
-    _ccBillMatchState = { cycleId, result: data, loading: false };
-    if (resultBox) resultBox.innerHTML = renderCcBillMatchResult(data);
+    _ccBillMatchState = { cycleId, result: data, loading: false, showUploader: false, password: '', file: null };
+    const cycleIndex = (_ccHistoryCycles || []).findIndex((item) => _sameId(item.id, cycleId));
+    if (cycleIndex >= 0) _ccHistoryCycles[cycleIndex] = { ..._ccHistoryCycles[cycleIndex], bill_match: data };
+    refreshCcBillMatchModal();
     toast(`Bill checked: ${data?.summary?.matched_count || 0} matched`, 'success');
   } catch (err) {
-    _ccBillMatchState.loading = false;
+    _ccBillMatchState = { ..._ccBillMatchState, loading: false };
     if (resultBox) resultBox.innerHTML = `<div style="color:var(--red);font-size:13px;padding:10px 0">${escHtml(err.message || 'Could not verify this PDF right now.')}</div>`;
     toast(err.message || 'Could not verify this PDF right now.', 'error');
   } finally {

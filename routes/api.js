@@ -9657,7 +9657,18 @@ router.post('/cc/cycles/:id/bill-match', withUpload, async (req, res) => {
       ...cycleData,
       password: String(req.body?.password || '').trim(),
     });
-    res.json(result);
+    await Promise.resolve(getBillingDb().saveCcBillMatchResult(
+      req.session.userId,
+      req.params.id,
+      result,
+      req.file?.originalname || req.file?.filename || ''
+    ));
+    res.json({
+      ...result,
+      saved_file_name: req.file?.originalname || req.file?.filename || '',
+      saved_provider: result?.provider || 'openai',
+      saved_at: new Date().toISOString(),
+    });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not match this bill PDF.' });
   }
