@@ -9515,6 +9515,12 @@ router.put('/cc/cards/:id', (req, res) => {
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
 
+router.post('/cc/cards/:id/repair-cycles', (req, res) => {
+  Promise.resolve(getBillingDb().repairCreditCardCycles(req.session.userId, req.params.id)).then((result) => {
+    res.json({ success: true, result });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
+
 router.delete('/cc/cards/:id', (req, res) => {
   Promise.resolve(getBillingDb().deleteCreditCard(req.session.userId, req.params.id)).then(() => {
     res.json({ success: true });
