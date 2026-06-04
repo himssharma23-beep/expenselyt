@@ -255,6 +255,47 @@ async function collapseOverlappingHistoricalCycles(userId, cardId, card, client)
   await flushCluster();
 }
 
+function buildOverlappingCycleCluster(cycles = [], seedCycle = null) {
+  if (!seedCycle) return [];
+  const normalized = (Array.isArray(cycles) ? cycles : [])
+    .map((cycle) => ({
+      ...cycle,
+      _cycle_start_norm: normalizeCcDateValueOrEmpty(cycle.cycle_start, 'Cycle start'),
+      _cycle_end_norm: normalizeCcDateValueOrEmpty(cycle.cycle_end, 'Cycle end'),
+    }))
+    .filter((cycle) => cycle._cycle_start_norm && cycle._cycle_end_norm)
+    .sort((a, b) => a._cycle_start_norm.localeCompare(b._cycle_start_norm) || Number(a.id || 0) - Number(b.id || 0));
+
+  const seedId = Number(seedCycle.id || 0);
+  const seed = normalized.find((cycle) => Number(cycle.id || 0) === seedId)
+    || {
+      ...seedCycle,
+      _cycle_start_norm: normalizeCcDateValue(seedCycle.cycle_start, 'Cycle start'),
+      _cycle_end_norm: normalizeCcDateValue(seedCycle.cycle_end, 'Cycle end'),
+    };
+
+  let clusterStart = seed._cycle_start_norm;
+  let clusterEnd = seed._cycle_end_norm;
+  let changed = true;
+  const includedIds = new Set([Number(seed.id || 0)]);
+
+  while (changed) {
+    changed = false;
+    for (const cycle of normalized) {
+      const cycleId = Number(cycle.id || 0);
+      if (includedIds.has(cycleId)) continue;
+      const overlaps = cycle._cycle_start_norm <= clusterEnd && cycle._cycle_end_norm >= clusterStart;
+      if (!overlaps) continue;
+      includedIds.add(cycleId);
+      if (cycle._cycle_start_norm < clusterStart) clusterStart = cycle._cycle_start_norm;
+      if (cycle._cycle_end_norm > clusterEnd) clusterEnd = cycle._cycle_end_norm;
+      changed = true;
+    }
+  }
+
+  return normalized.filter((cycle) => includedIds.has(Number(cycle.id || 0)));
+}
+
 async function getOrCreateCycleForPeriod(cardId, userId, cycleStart, cycleEnd, dueDays, client = null) {
   const run = client || { query };
   await lockCyclePeriod(run, userId, cardId, cycleStart, cycleEnd);
@@ -296,12 +337,10 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
   let targetHistoricalStart = '';
   let targetHistoricalEnd = '';
   if (historicalSeed) {
-    const clusterFloor = addDaysToIsoDate(historicalSeed.cycle_end, -35);
-    const overlappingHistorical = historicalCycles
-      .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') >= clusterFloor)
-      .filter((cycle) => normalizeCcDateValue(cycle.cycle_start, 'Cycle start') <= normalizeCcDateValue(historicalSeed.cycle_end, 'Cycle end'))
-      .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart)
-      .sort((a, b) => normalizeCcDateValue(a.cycle_start, 'Cycle start').localeCompare(normalizeCcDateValue(b.cycle_start, 'Cycle start')) || Number(a.id || 0) - Number(b.id || 0));
+    const overlappingHistorical = buildOverlappingCycleCluster(
+      historicalCycles.filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart),
+      historicalSeed
+    );
 
     primaryHistorical = overlappingHistorical[0] || historicalSeed;
     targetHistoricalStart = overlappingHistorical.reduce(
