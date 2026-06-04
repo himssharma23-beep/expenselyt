@@ -191,21 +191,28 @@ async function mergeCycleInto(run, userId, sourceCycleId, targetCycleId) {
 
 async function pruneEmptyCycles(userId, cardId, client, { keepOpen = true } = {}) {
   const cyclesR = await client.query(
-    `SELECT cy.id, cy.status, COUNT(tx.id)::int AS txn_count
+    `SELECT cy.id,
+            cy.status,
+            COALESCE(cy.manual_total_override, FALSE) AS manual_total_override,
+            COUNT(tx.id)::int AS txn_count
      FROM cc_cycles cy
      LEFT JOIN cc_txns tx
        ON tx.cycle_id = cy.id
       AND tx.user_id = cy.user_id
      WHERE cy.user_id = $1
        AND cy.card_id = $2
-     GROUP BY cy.id, cy.status`,
+     GROUP BY cy.id, cy.status, cy.manual_total_override`,
     [userId, cardId]
   );
 
   for (const cycle of cyclesR.rows) {
     const txnCount = Number(cycle.txn_count || 0);
     const isOpen = String(cycle.status) === 'open';
+    const isPaid = String(cycle.status) === 'paid';
+    const isManualHistorical = Boolean(cycle.manual_total_override) && !isOpen;
     if (txnCount > 0) continue;
+    if (isPaid) continue;
+    if (isManualHistorical) continue;
     if (keepOpen && isOpen) continue;
     await client.query(
       `DELETE FROM cc_cycles
@@ -226,7 +233,7 @@ async function collapseOverlappingHistoricalCycles(userId, cardId, card, client)
       AND tx.user_id = cy.user_id
      WHERE cy.user_id = $1
        AND cy.card_id = $2
-       AND cy.status != 'open'
+       AND cy.status IN ('billed', 'partial')
      GROUP BY cy.id
      HAVING COUNT(tx.id) > 0
      ORDER BY cycle_start ASC, cycle_end ASC, created_at ASC, id ASC`,
@@ -360,9 +367,9 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
   );
   const cycles = cyclesR.rows;
   const openCycles = cycles.filter((cycle) => String(cycle.status) === 'open');
-  const historicalCycles = cycles.filter((cycle) => String(cycle.status) !== 'open');
+  const repairableHistoricalCycles = cycles.filter((cycle) => ['billed', 'partial'].includes(String(cycle.status)));
 
-  const historicalSeed = [...historicalCycles]
+  const historicalSeed = [...repairableHistoricalCycles]
     .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart)
     .sort((a, b) => normalizeCcDateValue(b.cycle_end, 'Cycle end').localeCompare(normalizeCcDateValue(a.cycle_end, 'Cycle end')) || normalizeCcDateValue(a.cycle_start, 'Cycle start').localeCompare(normalizeCcDateValue(b.cycle_start, 'Cycle start')) || Number(a.id || 0) - Number(b.id || 0))[0] || null;
 
@@ -371,7 +378,7 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
   let targetHistoricalEnd = '';
   if (historicalSeed) {
     const overlappingHistorical = buildOverlappingCycleCluster(
-      historicalCycles.filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart),
+      repairableHistoricalCycles.filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart),
       historicalSeed
     );
 
@@ -971,11 +978,18 @@ async function repairCreditCardTxnCycles(userId, cardId = null) {
 async function repairCreditCardTxnCyclesOnClient(userId, card, client) {
   if (!card?.id) return { checked_count: 0, moved_count: 0 };
   const txnsR = await client.query(
-    `SELECT id, cycle_id, txn_date
-     FROM cc_txns
-     WHERE user_id = $1
-       AND card_id = $2
-     ORDER BY txn_date ASC, id ASC`,
+    `SELECT tx.id,
+            tx.cycle_id,
+            tx.txn_date,
+            COALESCE(cy.status, '') AS cycle_status,
+            COALESCE(cy.manual_total_override, FALSE) AS manual_total_override
+     FROM cc_txns tx
+     LEFT JOIN cc_cycles cy
+       ON cy.id = tx.cycle_id
+      AND cy.user_id = tx.user_id
+     WHERE tx.user_id = $1
+       AND tx.card_id = $2
+     ORDER BY tx.txn_date ASC, tx.id ASC`,
     [userId, card.id]
   );
 
@@ -983,6 +997,8 @@ async function repairCreditCardTxnCyclesOnClient(userId, card, client) {
   let movedCount = 0;
 
   for (const txn of txnsR.rows) {
+    if (String(txn.cycle_status) === 'paid') continue;
+    if (Boolean(txn.manual_total_override) && String(txn.cycle_status) !== 'open') continue;
     const txnDate = normalizeCcDateValue(txn.txn_date, 'Transaction date');
     const targetPeriod = getCcCyclePeriodForDate(card.bill_gen_day || 1, txnDate);
     const targetCycle = await getOrCreateCycleForPeriod(
@@ -994,6 +1010,7 @@ async function repairCreditCardTxnCyclesOnClient(userId, card, client) {
       client
     );
     if (!targetCycle) continue;
+    if (String(targetCycle.status) === 'paid') continue;
 
     const currentCycleId = Number(txn.cycle_id || 0);
     const targetCycleId = Number(targetCycle.id);
