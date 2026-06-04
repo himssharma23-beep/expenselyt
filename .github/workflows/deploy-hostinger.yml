@@ -15,8 +15,15 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      APP_DIR: /var/www/expense-lite-ai
-      APP_NAME: expense-lite-ai
+      APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
+      APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
+      SSH_OPTS: >-
+        -o BatchMode=yes
+        -o ConnectTimeout=15
+        -o ServerAliveInterval=30
+        -o ServerAliveCountMax=3
+        -o StrictHostKeyChecking=accept-new
+        -o UserKnownHostsFile=~/.ssh/known_hosts
 
     steps:
       - name: Checkout
@@ -27,110 +34,198 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
 
-      - name: Resolve SSH Settings
-        id: ssh
+      - name: Resolve SSH port
+        id: ssh_port
         env:
           HOST: ${{ secrets.HOSTINGER_HOST }}
-          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT_VAR: ${{ vars.HOSTINGER_SSH_PORT }}
+          PORT_SECRET: ${{ secrets.HOSTINGER_SSH_PORT }}
         run: |
-          echo "host=$HOST" >> $GITHUB_OUTPUT
-          echo "username=$USERNAME" >> $GITHUB_OUTPUT
-          echo "port=22" >> $GITHUB_OUTPUT
+          set -e
 
-      - name: Debug Connection
+          RAW_HOST="${HOST:-}"
+          RAW_HOST="${RAW_HOST#ssh://}"
+          RAW_HOST="${RAW_HOST#http://}"
+          RAW_HOST="${RAW_HOST#https://}"
+          RAW_HOST="${RAW_HOST##*@}"
+          RAW_HOST="${RAW_HOST%%/*}"
+
+          EMBEDDED_PORT=""
+
+          if [[ "$RAW_HOST" == *:* && "$RAW_HOST" != \[*\] ]]; then
+            EMBEDDED_PORT="${RAW_HOST##*:}"
+            RAW_HOST="${RAW_HOST%%:*}"
+          fi
+
+          if [ -z "$RAW_HOST" ]; then
+            echo "HOSTINGER_HOST secret is empty or invalid."
+            exit 1
+          fi
+
+          echo "host=$RAW_HOST" >> "$GITHUB_OUTPUT"
+
+          PORT="${PORT_VAR:-}"
+
+          if [ -z "$PORT" ]; then
+            PORT="${PORT_SECRET:-}"
+          fi
+
+          if [ -z "$PORT" ]; then
+            PORT="${EMBEDDED_PORT:-}"
+          fi
+
+          if [ -z "$PORT" ]; then
+            PORT="22"
+            echo "No SSH port configured. Defaulting to server SSH port 22."
+          fi
+
+          echo "Using SSH port: $PORT"
+          echo "port=$PORT" >> "$GITHUB_OUTPUT"
+
+      - name: Add host key
         env:
-          HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOST: ${{ steps.ssh_port.outputs.host }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
-          echo "Host Length: ${#HOST}"
-          echo "User: ${{ steps.ssh.outputs.username }}"
-          echo "Port: ${{ steps.ssh.outputs.port }}"
+          set -e
 
-      - name: DNS Lookup
-        run: |
-          nslookup "${{ steps.ssh.outputs.host }}" || true
+          if [ -z "$HOST" ]; then
+            echo "ERROR: HOSTINGER_HOST secret is not set."
+            exit 1
+          fi
 
-      - name: Check Port 22
-        run: |
-          nc -vz "${{ steps.ssh.outputs.host }}" 22
+          if [ -z "$PORT" ]; then
+            echo "ERROR: SSH port could not be determined."
+            exit 1
+          fi
 
-      - name: Add Host Key
-        run: |
+          echo "Scanning host key for $HOST on port $PORT ..."
+
           mkdir -p ~/.ssh
-          ssh-keyscan -H -p 22 "${{ steps.ssh.outputs.host }}" >> ~/.ssh/known_hosts
+          touch ~/.ssh/known_hosts
 
-      - name: Test SSH Login
+          : > /tmp/keyscan.log
+          : > /tmp/keyscan.out
+
+          ssh-keyscan -4 -T 30 -p "$PORT" -H "$HOST" \
+            > /tmp/keyscan.out 2> /tmp/keyscan.log || true
+
+          if [ ! -s /tmp/keyscan.out ]; then
+            ssh-keyscan -T 30 -p "$PORT" -H "$HOST" \
+              > /tmp/keyscan.out 2>> /tmp/keyscan.log || true
+          fi
+
+          if [ ! -s /tmp/keyscan.out ]; then
+            echo "WARNING: ssh-keyscan returned no host keys."
+            echo "Falling back to StrictHostKeyChecking=accept-new during SSH connection."
+            cat /tmp/keyscan.log
+            exit 0
+          fi
+
+          cat /tmp/keyscan.out >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          echo "Host key added successfully."
+
+      - name: SSH connectivity check
+        env:
+          HOST: ${{ steps.ssh_port.outputs.host }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
-          ssh \
-            -o StrictHostKeyChecking=no \
-            -o BatchMode=yes \
-            -p 22 \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
-            "echo SSH LOGIN SUCCESS"
+          set -e
 
-      - name: Check Remote Environment
+          echo "Testing SSH to $USERNAME@$HOST:$PORT ..."
+
+          if ! timeout 10 bash -lc "cat < /dev/null > /dev/tcp/$HOST/$PORT" 2>/dev/null; then
+            echo "TCP connection to $HOST:$PORT failed."
+            echo "This usually means the SSH port is blocked, the server is down, or SSH is not listening on that port."
+            exit 1
+          fi
+
+          if ! ssh $SSH_OPTS \
+            -o PreferredAuthentications=publickey \
+            -o PubkeyAuthentication=yes \
+            -p "$PORT" \
+            "$USERNAME@$HOST" \
+            "echo 'SSH OK'"; then
+            echo "SSH handshake reached the server, but login failed."
+            echo "Check HOSTINGER_SSH_USER, HOSTINGER_SSH_KEY, and that the public key is installed for that user on the server."
+            exit 1
+          fi
+
+      - name: Remote runtime check
+        env:
+          HOST: ${{ steps.ssh_port.outputs.host }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
         run: |
-          ssh \
-            -o StrictHostKeyChecking=no \
-            -p 22 \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
-            "
-            hostname
-            whoami
-            pwd
-            node -v || true
-            npm -v || true
-            pm2 -v || true
-            "
+          set -e
 
-      - name: Create Release Archive
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "
+            set -e
+            echo 'Remote host:' \$(hostname)
+            command -v bash
+            command -v rsync
+            command -v node
+            command -v npm
+            command -v pm2
+            node -v
+            npm -v
+            pm2 -v
+          "
+
+      - name: Pack release
         run: |
           tar \
             --warning=no-file-changed \
             --exclude=.git \
             --exclude=.github \
             --exclude=node_modules \
-            --exclude=.env \
-            --exclude=release.tgz \
             --exclude=data \
             --exclude=backups \
+            --exclude=.env \
+            --exclude=.claude \
             --exclude=*.log \
-            --exclude=.next \
-            --exclude=coverage \
             -czf release.tgz . || true
 
-      - name: Upload Release
+      - name: Upload release
+        env:
+          HOST: ${{ steps.ssh_port.outputs.host }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
+          SHA: ${{ github.sha }}
         run: |
-          ssh \
-            -o StrictHostKeyChecking=no \
-            -p 22 \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
-            "mkdir -p $APP_DIR"
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" \
+            "mkdir -p '$APP_DIR/incoming/$SHA'"
 
-          scp \
-            -P 22 \
+          scp $SSH_OPTS -P "$PORT" \
             release.tgz \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}:$APP_DIR/release.tgz"
+            "$USERNAME@$HOST:$APP_DIR/incoming/$SHA/release.tgz"
 
-      - name: Deploy
+      - name: Deploy on server
+        env:
+          HOST: ${{ steps.ssh_port.outputs.host }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ steps.ssh_port.outputs.port }}
+          SHA: ${{ github.sha }}
         run: |
-          ssh \
-            -o StrictHostKeyChecking=no \
-            -p 22 \
-            "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
-            "
+          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "
             set -e
 
-            mkdir -p $APP_DIR
-            cd $APP_DIR
+            mkdir -p '$APP_DIR/incoming/$SHA/source'
 
-            tar -xzf release.tgz
-            rm -f release.tgz
+            tar -xzf '$APP_DIR/incoming/$SHA/release.tgz' \
+              -C '$APP_DIR/incoming/$SHA/source'
 
-            npm install --production
+            cd '$APP_DIR/incoming/$SHA/source'
 
-            pm2 restart $APP_NAME || pm2 start npm --name $APP_NAME -- start
+            chmod +x scripts/deploy-hostinger.sh
 
-            pm2 save
+            APP_DIR='$APP_DIR' \
+            APP_NAME='$APP_NAME' \
+            bash scripts/deploy-hostinger.sh \
+              '$APP_DIR/incoming/$SHA/source'
 
-            echo 'Deployment completed successfully'
-            "
+            rm -rf '$APP_DIR/incoming/$SHA'
+          "
