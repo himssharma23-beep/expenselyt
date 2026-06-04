@@ -16,7 +16,7 @@ jobs:
     env:
       APP_DIR: ${{ vars.HOSTINGER_APP_DIR || '/var/www/expense-lite-ai' }}
       APP_NAME: ${{ vars.HOSTINGER_APP_NAME || 'expense-lite-ai' }}
-      SSH_OPTS: -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3
+      SSH_OPTS: -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts
 
     steps:
       - name: Checkout
@@ -87,9 +87,9 @@ jobs:
             ssh-keyscan -T 30 -p "$PORT" -H "$HOST" > /tmp/keyscan.out 2>> /tmp/keyscan.log || true
           fi
           if [ ! -s /tmp/keyscan.out ]; then
-            echo "ERROR: ssh-keyscan returned no host keys. Host may be unreachable."
+            echo "WARNING: ssh-keyscan returned no host keys. Falling back to StrictHostKeyChecking=accept-new during SSH connection."
             cat /tmp/keyscan.log
-            exit 1
+            exit 0
           fi
           cat /tmp/keyscan.out >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
