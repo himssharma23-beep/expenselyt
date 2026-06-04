@@ -12498,6 +12498,7 @@ let _ccYearFilter = new Date().getFullYear();
 let _ccMonthlyYear = new Date().getFullYear();
 let _ccHistoryCycles = [];
 let _ccBillMatchState = { cycleId: null, result: null, loading: false };
+let _ccRepairState = { cardId: null, loading: false };
 
 function _sameId(a, b) {
   return a != null && b != null && String(a) === String(b);
@@ -12604,17 +12605,72 @@ async function openCcDetail(cardId) {
   await renderCcDetail();
 }
 
-async function repairCcCardCycles(cardId) {
+function showRepairCcCardModal(cardId) {
   const card = _findCcCardById(cardId);
   const label = card ? `${card.bank_name} ${card.card_name}` : 'this card';
-  if (!confirm(`Repair billing cycles for ${label}? This will clean duplicate last/current cycles and remove empty future open cycles.`)) return;
+  _ccRepairState = { cardId, loading: false };
+  openModal('Repair Billing Cycles', `
+    <div style="padding:2px 0 4px">
+      <div style="padding:14px;border-radius:16px;background:linear-gradient(180deg,#f6fbff 0%,#eef7ff 100%);border:1px solid #d7e8fb;margin-bottom:14px">
+        <div style="font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px">Credit Card Repair</div>
+        <div style="font-size:18px;font-weight:800;color:var(--t1);line-height:1.3">${escHtml(label)}</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-top:8px">We will clean duplicate last and current cycles, move transactions by their actual dates, and remove empty future open cycles.</div>
+      </div>
+      <div style="display:grid;gap:8px;margin-bottom:16px">
+        <div style="font-size:13px;color:var(--t2);padding:10px 12px;border-radius:12px;background:var(--bg2)">Keeps historical transactions intact and only reassigns them by cycle date.</div>
+        <div style="font-size:13px;color:var(--t2);padding:10px 12px;border-radius:12px;background:var(--bg2)">Useful when bill-day edits created overlapping or future cycles.</div>
+      </div>
+      <div id="ccRepairStatus" style="display:none;font-size:13px;color:var(--t2);padding:10px 12px;border-radius:12px;background:var(--bg2);margin-bottom:14px"></div>
+      <div class="fa">
+        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-p" id="ccRepairRunBtn" onclick="runRepairCcCardCycles(${Number(cardId)})">Repair Now</button>
+      </div>
+    </div>`);
+}
+
+async function runRepairCcCardCycles(cardId) {
+  const statusEl = document.getElementById('ccRepairStatus');
+  const button = document.getElementById('ccRepairRunBtn');
+  _ccRepairState = { cardId, loading: true };
+  if (statusEl) {
+    statusEl.style.display = '';
+    statusEl.innerHTML = `<div style="font-weight:700;color:var(--t1);margin-bottom:4px">Repair in progress</div><div>Checking cycles and rebuilding the card boundary...</div>`;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Repairing...';
+  }
   try {
     const res = await api(`/api/cc/cards/${cardId}/repair-cycles`, { method: 'POST', body: {} });
     if (!res?.success) throw new Error(res?.error || 'Repair failed');
-    toast('Billing cycles repaired', 'success');
+    _ccRepairState = { cardId, loading: false };
+    if (statusEl) {
+      const current = res?.result?.current_cycle || null;
+      statusEl.style.display = '';
+      statusEl.style.background = 'linear-gradient(180deg,#eef9f1 0%,#e6f6eb 100%)';
+      statusEl.style.color = 'var(--green)';
+      statusEl.innerHTML = `
+        <div style="font-weight:800;color:var(--green);margin-bottom:4px">Repair completed</div>
+        <div style="font-size:13px;line-height:1.6;color:var(--t2)">
+          ${current?.cycle_start && current?.cycle_end ? `Current cycle is now ${fmtDate(current.cycle_start)} to ${fmtDate(current.cycle_end)}.` : 'Cycle repair finished.'}
+        </div>`;
+    }
     await renderCcDetail();
+    toast('Billing cycles repaired', 'success');
   } catch (err) {
+    _ccRepairState = { cardId, loading: false };
+    if (statusEl) {
+      statusEl.style.display = '';
+      statusEl.style.background = '#fff4f4';
+      statusEl.style.color = 'var(--red)';
+      statusEl.innerHTML = `<div style="font-weight:800;color:var(--red);margin-bottom:4px">Repair failed</div><div>${escHtml(err.message || 'Could not repair billing cycles right now.')}</div>`;
+    }
     toast(err.message || 'Could not repair billing cycles right now.', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Repair Again';
+    }
   }
 }
 
@@ -12672,7 +12728,7 @@ async function renderCcDetail() {
           <div style="font-size:12px;color:var(--t2)">${escHtml(card.bank_name)} **** ${escHtml(card.last4)} &nbsp;&middot;&nbsp; Expires ${expiry} &nbsp;&middot;&nbsp; Bill on day ${card.bill_gen_day} &nbsp;&middot;&nbsp; Due ${card.due_days} days after</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s btn-sm" onclick="repairCcCardCycles(${card.id})">Repair Cycles</button>
+          <button class="btn btn-s btn-sm" onclick="showRepairCcCardModal(${card.id})">Repair Cycles</button>
           <button class="btn btn-s btn-sm" onclick="showCcCardModal(${card.id})">Edit Card</button>
         </div>
       </div>
@@ -12746,7 +12802,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
       <div class="cc-current-cycle-head" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <div class="card-title" style="margin:0">Transactions</div>
         <div class="cc-current-cycle-actions" style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-s btn-sm" onclick="repairCcCardCycles(${card.id})">Repair Cycles</button>
+          <button class="btn btn-s btn-sm" onclick="showRepairCcCardModal(${card.id})">Repair Cycles</button>
           <button class="btn btn-s btn-sm" onclick="downloadCcCyclePdf(${card.id},${cycle.id},'${escHtml(card.bank_name)} ${escHtml(card.card_name)}')">PDF</button>
           <button class="btn btn-p btn-sm" onclick="showCcTxnModal(${card.id})">+ Add Transaction</button>
           <button class="btn btn-s btn-sm" onclick="showCcExcelImportModal(${cycle.id}, '${cycle.cycle_start}', '${cycle.cycle_end}', ${card.default_discount_pct || 0})">Import Excel</button>
@@ -12766,7 +12822,7 @@ function renderCcHistory(cycles) {
   const _ccLabel = _ccCard ? `${_ccCard.bank_name} ${_ccCard.card_name}` : 'Card';
   const importBtn = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
     <button class="btn btn-s btn-sm" onclick="downloadCcHistoryPdf(${_ccSelectedCardId},'${_ccLabel.replace(/'/g,"\\'")}')">PDF History</button>
-    <button class="btn btn-s btn-sm" onclick="repairCcCardCycles(${_ccSelectedCardId})">Repair Cycles</button>
+    <button class="btn btn-s btn-sm" onclick="showRepairCcCardModal(${_ccSelectedCardId})">Repair Cycles</button>
     <button class="btn btn-s btn-sm" onclick="showImportHistoryModal(${_ccSelectedCardId})">Import Historical Data</button>
   </div>`;
 

@@ -128,6 +128,11 @@ function normalizeCcDateValue(value, label = 'Date') {
   return _localDate(_parseDateInput(value, label));
 }
 
+function normalizeCcDateValueOrEmpty(value, label = 'Date') {
+  if (value == null || value === '') return '';
+  return normalizeCcDateValue(value, label);
+}
+
 function getNextCcCyclePeriod(period, billGenDay) {
   const nextDate = _parseDateInput(period.cycleEnd, 'Cycle end date');
   nextDate.setDate(nextDate.getDate() + 1);
@@ -228,21 +233,23 @@ async function collapseOverlappingHistoricalCycles(userId, cardId, card, client)
   for (const cycle of cycles) {
     if (!anchor) {
       anchor = cycle;
-      anchorStart = String(cycle.cycle_start || '');
-      anchorEnd = String(cycle.cycle_end || '');
+      anchorStart = normalizeCcDateValueOrEmpty(cycle.cycle_start, 'Cycle start');
+      anchorEnd = normalizeCcDateValueOrEmpty(cycle.cycle_end, 'Cycle end');
       continue;
     }
-    const overlaps = String(cycle.cycle_start || '') <= String(anchorEnd || '');
+    const cycleStart = normalizeCcDateValueOrEmpty(cycle.cycle_start, 'Cycle start');
+    const cycleEnd = normalizeCcDateValueOrEmpty(cycle.cycle_end, 'Cycle end');
+    const overlaps = cycleStart <= String(anchorEnd || '');
     if (overlaps) {
-      if (String(cycle.cycle_start || '') < anchorStart) anchorStart = String(cycle.cycle_start || '');
-      if (String(cycle.cycle_end || '') > anchorEnd) anchorEnd = String(cycle.cycle_end || '');
+      if (cycleStart < anchorStart) anchorStart = cycleStart;
+      if (cycleEnd > anchorEnd) anchorEnd = cycleEnd;
       mergeIds.push(Number(cycle.id));
       continue;
     }
     await flushCluster();
     anchor = cycle;
-    anchorStart = String(cycle.cycle_start || '');
-    anchorEnd = String(cycle.cycle_end || '');
+    anchorStart = normalizeCcDateValueOrEmpty(cycle.cycle_start, 'Cycle start');
+    anchorEnd = normalizeCcDateValueOrEmpty(cycle.cycle_end, 'Cycle end');
   }
 
   await flushCluster();
@@ -282,8 +289,8 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
   const historicalCycles = cycles.filter((cycle) => String(cycle.status) !== 'open');
 
   const historicalSeed = [...historicalCycles]
-    .filter((cycle) => cycle.cycle_end < expectedCurrentStart)
-    .sort((a, b) => String(b.cycle_end).localeCompare(String(a.cycle_end)) || String(a.cycle_start).localeCompare(String(b.cycle_start)) || Number(a.id || 0) - Number(b.id || 0))[0] || null;
+    .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart)
+    .sort((a, b) => normalizeCcDateValue(b.cycle_end, 'Cycle end').localeCompare(normalizeCcDateValue(a.cycle_end, 'Cycle end')) || normalizeCcDateValue(a.cycle_start, 'Cycle start').localeCompare(normalizeCcDateValue(b.cycle_start, 'Cycle start')) || Number(a.id || 0) - Number(b.id || 0))[0] || null;
 
   let primaryHistorical = null;
   let targetHistoricalStart = '';
@@ -291,21 +298,31 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
   if (historicalSeed) {
     const clusterFloor = addDaysToIsoDate(historicalSeed.cycle_end, -35);
     const overlappingHistorical = historicalCycles
-      .filter((cycle) => cycle.cycle_end >= clusterFloor)
-      .filter((cycle) => cycle.cycle_start <= historicalSeed.cycle_end)
-      .filter((cycle) => cycle.cycle_end < expectedCurrentStart)
-      .sort((a, b) => String(a.cycle_start).localeCompare(String(b.cycle_start)) || Number(a.id || 0) - Number(b.id || 0));
+      .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') >= clusterFloor)
+      .filter((cycle) => normalizeCcDateValue(cycle.cycle_start, 'Cycle start') <= normalizeCcDateValue(historicalSeed.cycle_end, 'Cycle end'))
+      .filter((cycle) => normalizeCcDateValue(cycle.cycle_end, 'Cycle end') < expectedCurrentStart)
+      .sort((a, b) => normalizeCcDateValue(a.cycle_start, 'Cycle start').localeCompare(normalizeCcDateValue(b.cycle_start, 'Cycle start')) || Number(a.id || 0) - Number(b.id || 0));
 
     primaryHistorical = overlappingHistorical[0] || historicalSeed;
     targetHistoricalStart = overlappingHistorical.reduce(
-      (minValue, cycle) => (!minValue || String(cycle.cycle_start) < String(minValue) ? String(cycle.cycle_start) : minValue),
-      String(primaryHistorical.cycle_start || '')
+      (minValue, cycle) => {
+        const cycleStart = normalizeCcDateValue(cycle.cycle_start, 'Cycle start');
+        return (!minValue || cycleStart < minValue) ? cycleStart : minValue;
+      },
+      normalizeCcDateValueOrEmpty(primaryHistorical.cycle_start, 'Cycle start')
     );
     targetHistoricalEnd = overlappingHistorical.reduce(
-      (maxValue, cycle) => (!maxValue || String(cycle.cycle_end) > String(maxValue) ? String(cycle.cycle_end) : maxValue),
-      String(primaryHistorical.cycle_end || '')
+      (maxValue, cycle) => {
+        const cycleEnd = normalizeCcDateValue(cycle.cycle_end, 'Cycle end');
+        return (!maxValue || cycleEnd > maxValue) ? cycleEnd : maxValue;
+      },
+      normalizeCcDateValueOrEmpty(primaryHistorical.cycle_end, 'Cycle end')
     );
-    if (primaryHistorical.cycle_start !== targetHistoricalStart || primaryHistorical.cycle_end !== targetHistoricalEnd || primaryHistorical.due_date !== getCcDueDate(targetHistoricalEnd, card.due_days || 20)) {
+    if (
+      normalizeCcDateValue(primaryHistorical.cycle_start, 'Cycle start') !== targetHistoricalStart
+      || normalizeCcDateValue(primaryHistorical.cycle_end, 'Cycle end') !== targetHistoricalEnd
+      || normalizeCcDateValue(primaryHistorical.due_date, 'Due date') !== getCcDueDate(targetHistoricalEnd, card.due_days || 20)
+    ) {
       await client.query(
         `UPDATE cc_cycles
          SET cycle_start = $1,
@@ -324,17 +341,17 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
     primaryHistorical = refreshedPrimaryR.rows[0] || primaryHistorical;
   }
 
-  const desiredCurrentStart = primaryHistorical?.cycle_end ? addDaysToIsoDate(primaryHistorical.cycle_end, 1) : expectedCurrentStart;
+  const desiredCurrentStart = primaryHistorical?.cycle_end ? addDaysToIsoDate(normalizeCcDateValue(primaryHistorical.cycle_end, 'Cycle end'), 1) : expectedCurrentStart;
   const desiredCurrentPeriod = getCcCyclePeriodForDate(card.bill_gen_day || 1, desiredCurrentStart);
   const desiredCurrentEnd = normalizeCcDateValue(desiredCurrentPeriod.cycleEnd, 'Cycle end');
 
-  let activeCycle = openCycles.find((cycle) => cycle.cycle_start === desiredCurrentStart && cycle.cycle_end === desiredCurrentEnd) || null;
+  let activeCycle = openCycles.find((cycle) => normalizeCcDateValue(cycle.cycle_start, 'Cycle start') === desiredCurrentStart && normalizeCcDateValue(cycle.cycle_end, 'Cycle end') === desiredCurrentEnd) || null;
   if (!activeCycle) {
-    activeCycle = openCycles.find((cycle) => cycle.cycle_start <= today && cycle.cycle_end >= today) || null;
+    activeCycle = openCycles.find((cycle) => normalizeCcDateValue(cycle.cycle_start, 'Cycle start') <= today && normalizeCcDateValue(cycle.cycle_end, 'Cycle end') >= today) || null;
   }
   if (!activeCycle && openCycles.length) {
     activeCycle = [...openCycles]
-      .sort((a, b) => String(a.cycle_start).localeCompare(String(b.cycle_start)) || Number(a.id || 0) - Number(b.id || 0))[0];
+      .sort((a, b) => normalizeCcDateValue(a.cycle_start, 'Cycle start').localeCompare(normalizeCcDateValue(b.cycle_start, 'Cycle start')) || Number(a.id || 0) - Number(b.id || 0))[0];
   }
   if (!activeCycle) {
     activeCycle = await getOrCreateCycleForPeriod(
@@ -381,7 +398,7 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
          AND cycle_id = $4
          AND txn_date >= $5
          AND txn_date <= $6`,
-      [primaryHistorical.id, userId, cardId, activeCycle.id, primaryHistorical.cycle_start, primaryHistorical.cycle_end]
+      [primaryHistorical.id, userId, cardId, activeCycle.id, normalizeCcDateValue(primaryHistorical.cycle_start, 'Cycle start'), normalizeCcDateValue(primaryHistorical.cycle_end, 'Cycle end')]
     );
     await client.query(
       `UPDATE cc_txns
@@ -406,7 +423,7 @@ async function rebalanceOpenCycleForCard(userId, cardId, card, client) {
            AND cycle_id = $4
            AND txn_date >= $5
            AND txn_date <= $6`,
-        [primaryHistorical.id, userId, cardId, cycle.id, primaryHistorical.cycle_start, primaryHistorical.cycle_end]
+        [primaryHistorical.id, userId, cardId, cycle.id, normalizeCcDateValue(primaryHistorical.cycle_start, 'Cycle start'), normalizeCcDateValue(primaryHistorical.cycle_end, 'Cycle end')]
       );
     }
     await client.query(
