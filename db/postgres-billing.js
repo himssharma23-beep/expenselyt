@@ -935,6 +935,59 @@ async function repairCreditCardTxnCycles(userId, cardId = null) {
   });
 }
 
+async function repairCreditCardTxnCyclesOnClient(userId, card, client) {
+  if (!card?.id) return { checked_count: 0, moved_count: 0 };
+  const txnsR = await client.query(
+    `SELECT id, cycle_id, txn_date
+     FROM cc_txns
+     WHERE user_id = $1
+       AND card_id = $2
+     ORDER BY txn_date ASC, id ASC`,
+    [userId, card.id]
+  );
+
+  const affectedCycleIds = new Set();
+  let movedCount = 0;
+
+  for (const txn of txnsR.rows) {
+    const txnDate = normalizeCcDateValue(txn.txn_date, 'Transaction date');
+    const targetPeriod = getCcCyclePeriodForDate(card.bill_gen_day || 1, txnDate);
+    const targetCycle = await getOrCreateCycleForPeriod(
+      card.id,
+      userId,
+      targetPeriod.cycleStart,
+      targetPeriod.cycleEnd,
+      card.due_days || 20,
+      client
+    );
+    if (!targetCycle) continue;
+
+    const currentCycleId = Number(txn.cycle_id || 0);
+    const targetCycleId = Number(targetCycle.id);
+    affectedCycleIds.add(targetCycleId);
+    if (currentCycleId > 0) affectedCycleIds.add(currentCycleId);
+    if (currentCycleId === targetCycleId) continue;
+
+    await client.query(
+      `UPDATE cc_txns
+       SET cycle_id = $1
+       WHERE id = $2
+         AND user_id = $3`,
+      [targetCycleId, txn.id, userId]
+    );
+    movedCount += 1;
+  }
+
+  for (const cycleId of affectedCycleIds) {
+    await updateCycleTotals(cycleId, client);
+  }
+
+  return {
+    checked_count: txnsR.rows.length,
+    moved_count: movedCount,
+  };
+}
+
 async function repairCreditCardCycles(userId, cardId) {
   return withTransaction(async (client) => {
     const cardR = await client.query(
@@ -948,6 +1001,7 @@ async function repairCreditCardCycles(userId, cardId) {
     );
     const card = cardR.rows[0];
     if (!card) throw new Error('Card not found');
+    const txnRepair = await repairCreditCardTxnCyclesOnClient(userId, card, client);
     await rebalanceOpenCycleForCard(userId, card.id, card, client);
     await collapseOverlappingHistoricalCycles(userId, card.id, card, client);
     await autoClosePastCcCycles(userId, card.id, client);
@@ -971,6 +1025,8 @@ async function repairCreditCardCycles(userId, cardId) {
     return {
       card_id: Number(card.id),
       card_name: card.card_name,
+      txn_checked_count: Number(txnRepair.checked_count || 0),
+      txn_moved_count: Number(txnRepair.moved_count || 0),
       current_cycle: currentCycle ? {
         id: Number(currentCycle.id),
         cycle_start: currentCycle.cycle_start,
