@@ -224,9 +224,9 @@ async function collapseOverlappingHistoricalCycles(userId, cardId, card, client)
      LEFT JOIN cc_txns tx
        ON tx.cycle_id = cy.id
       AND tx.user_id = cy.user_id
-     WHERE user_id = $1
-       AND card_id = $2
-       AND status != 'open'
+     WHERE cy.user_id = $1
+       AND cy.card_id = $2
+       AND cy.status != 'open'
      GROUP BY cy.id
      HAVING COUNT(tx.id) > 0
      ORDER BY cycle_start ASC, cycle_end ASC, created_at ASC, id ASC`,
