@@ -3202,6 +3202,9 @@ async function videoCatalogAiDraftNow() {
   }
 }
 
+
+
+
 async function videoCatalogClearNow() {
   _videoCatalogModalState.path = document.getElementById('videoCatalogScanPath')?.value?.trim() || _videoCatalogModalState.path || '';
   const targetPath = _videoCatalogModalState.path || '';
