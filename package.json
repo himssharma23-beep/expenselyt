@@ -21,6 +21,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.10.1",
+    "pdfjs-dist": "^6.0.227",
     "pg": "^8.20.0",
     "tesseract.js": "^7.0.0",
     "twilio": "^5.13.1",

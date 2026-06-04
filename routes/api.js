@@ -1312,6 +1312,23 @@ function getOpenAiReceiptScanTimeoutMs() {
   return Math.round(raw);
 }
 
+function getOpenAiCcBillMatchModel() {
+  return String(
+    process.env.OPENAI_CC_BILL_MATCH_MODEL ||
+    process.env.OPENAI_RECEIPT_SCAN_MODEL ||
+    process.env.OPENAI_SMART_CAPTURE_MODEL ||
+    'gpt-4o-mini'
+  ).trim();
+}
+
+function getOpenAiCcBillMatchTimeoutMs() {
+  const raw = Number(process.env.OPENAI_CC_BILL_MATCH_TIMEOUT_MS || 90000);
+  if (!Number.isFinite(raw)) return 90000;
+  if (raw < 20000) return 20000;
+  if (raw > 180000) return 180000;
+  return Math.round(raw);
+}
+
 async function postOpenAiResponseWithTimeout(body, apiKey, timeoutMs = getOpenAiReceiptScanTimeoutMs()) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -3732,6 +3749,337 @@ async function scanReceiptFile(file, options = {}) {
       final_rows: Array.isArray(draft?.items) ? draft.items : [],
     },
   };
+}
+
+async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
+  if (!file) {
+    const err = new Error('No PDF uploaded');
+    err.statusCode = 400;
+    throw err;
+  }
+  const mimeType = String(file.mimetype || '').toLowerCase();
+  if (mimeType !== 'application/pdf') {
+    const err = new Error('Only PDF bills are supported right now.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const config = getOpenAiSmartCaptureConfig();
+  if (!config.enabled) {
+    const err = new Error('OpenAI bill matching is not configured. Add OPENAI_API_KEY on the server first.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const cycle = context?.cycle || {};
+  const card = context?.card || {};
+  const pdfPassword = String(context?.password || '').trim();
+  const appTransactions = Array.isArray(context?.txns) ? context.txns : [];
+  const normalizedTxns = appTransactions.map((item) => ({
+    app_txn_id: Number(item?.id || 0),
+    txn_date: String(item?.txn_date || '').slice(0, 10),
+    amount: Number(item?.amount || item?.net_amount || 0),
+    description: String(item?.description || '').trim(),
+  })).filter((item) => item.app_txn_id > 0 && item.amount > 0 && item.txn_date);
+
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['statement_rows', 'matches', 'unmatched_statement_indexes', 'unmatched_app_txn_ids', 'notes'],
+    properties: {
+      notes: { type: 'string' },
+      statement_rows: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['statement_index', 'txn_date', 'amount', 'description'],
+          properties: {
+            statement_index: { type: 'integer' },
+            txn_date: { type: 'string' },
+            amount: { type: 'number' },
+            description: { type: 'string' },
+          },
+        },
+      },
+      matches: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['statement_index', 'app_txn_id', 'confidence', 'reason'],
+          properties: {
+            statement_index: { type: 'integer' },
+            app_txn_id: { type: 'integer' },
+            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+            reason: { type: 'string' },
+          },
+        },
+      },
+      unmatched_statement_indexes: {
+        type: 'array',
+        items: { type: 'integer' },
+      },
+      unmatched_app_txn_ids: {
+        type: 'array',
+        items: { type: 'integer' },
+      },
+    },
+  };
+
+  const systemPrompt = [
+    'You reconcile a credit card bill PDF against existing app transactions for one billing cycle.',
+    pdfPassword
+      ? 'Use the provided extracted statement text from the unlocked PDF as the primary source of truth and extract actual purchase or charge rows from the statement.'
+      : 'Use the uploaded PDF as the primary source of truth and extract actual purchase or charge rows from the statement.',
+    'Focus mostly on transaction date and amount. Description similarity is secondary because merchant names may differ between the statement and the app.',
+    'Prefer an exact amount match. A date difference of up to 3 days is acceptable when the amount matches and there is no better candidate.',
+    'Match each statement row to at most one app transaction and each app transaction to at most one statement row.',
+    'Ignore statement summary sections, total due, minimum due, opening balance, closing balance, available limit, rewards, fees summary, payment confirmations, EMI summary blocks, and non-transaction boilerplate.',
+    'Ignore payment received rows, credits, reversals, refunds, and autopay confirmations unless they clearly represent a real purchase transaction the user would have saved as a spend.',
+    'Return only rows that belong to the provided billing cycle period.',
+    'Do not force a match when amounts differ materially.',
+    'Keep dates in YYYY-MM-DD format. If the statement only shows day and month, infer the correct year from the billing cycle period.',
+    'Return strict JSON only.',
+  ].join(' ');
+
+  let extractedStatementPages = [];
+  if (pdfPassword) {
+    extractedStatementPages = await extractPasswordProtectedPdfStatementText(file.buffer, pdfPassword);
+  }
+
+  const userPayload = {
+    task: pdfPassword
+      ? 'Extract statement transactions from this unlocked statement text and reconcile them with the provided app transactions.'
+      : 'Extract statement transactions from this PDF and reconcile them with the provided app transactions.',
+    billing_cycle: {
+      cycle_id: Number(cycle?.id || 0) || null,
+      cycle_start: String(cycle?.cycle_start || '').slice(0, 10),
+      cycle_end: String(cycle?.cycle_end || '').slice(0, 10),
+      due_date: String(cycle?.due_date || '').slice(0, 10),
+    },
+    card: {
+      bank_name: String(card?.bank_name || '').trim(),
+      card_name: String(card?.card_name || '').trim(),
+      last4: String(card?.last4 || '').trim(),
+    },
+    app_transactions: normalizedTxns,
+    statement_text_pages: extractedStatementPages,
+  };
+
+  const userContent = pdfPassword
+    ? [{
+        type: 'input_text',
+        text: JSON.stringify(userPayload),
+      }]
+    : [
+        {
+          type: 'input_file',
+          filename: file.originalname || 'credit-card-bill.pdf',
+          file_data: `data:application/pdf;base64,${file.buffer.toString('base64')}`,
+        },
+        {
+          type: 'input_text',
+          text: JSON.stringify(userPayload),
+        },
+      ];
+
+  const response = await postOpenAiResponseWithTimeout({
+    model: getOpenAiCcBillMatchModel(),
+    input: [
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt }],
+      },
+      {
+        role: 'user',
+        content: userContent,
+      },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'credit_card_bill_match',
+        strict: true,
+        schema,
+      },
+    },
+  }, config.apiKey, getOpenAiCcBillMatchTimeoutMs());
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(payload?.error?.message || payload?.message || `OpenAI bill match failed with HTTP ${response.status}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const outputText = extractOpenAiOutputText(payload);
+  if (!outputText) {
+    const err = new Error('OpenAI returned an empty bill matching result.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (_err) {
+    const err = new Error('OpenAI returned invalid JSON for bill matching.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const statementRows = (Array.isArray(parsed?.statement_rows) ? parsed.statement_rows : [])
+    .map((row, index) => ({
+      statement_index: Number.isInteger(row?.statement_index) ? row.statement_index : index + 1,
+      txn_date: String(row?.txn_date || '').slice(0, 10),
+      amount: roundCurrencyAmount(row?.amount),
+      description: String(row?.description || '').trim() || 'Statement transaction',
+    }))
+    .filter((row) => row.statement_index > 0 && row.amount > 0 && row.txn_date);
+
+  const statementByIndex = new Map(statementRows.map((row) => [Number(row.statement_index), row]));
+  const appTxnById = new Map(normalizedTxns.map((row) => [Number(row.app_txn_id), row]));
+  const matchedStatementIndexes = new Set();
+  const matchedAppTxnIds = new Set();
+  const matches = [];
+
+  for (const match of (Array.isArray(parsed?.matches) ? parsed.matches : [])) {
+    const statementIndex = Number(match?.statement_index || 0);
+    const appTxnId = Number(match?.app_txn_id || 0);
+    if (!(statementByIndex.has(statementIndex) && appTxnById.has(appTxnId))) continue;
+    if (matchedStatementIndexes.has(statementIndex) || matchedAppTxnIds.has(appTxnId)) continue;
+    matchedStatementIndexes.add(statementIndex);
+    matchedAppTxnIds.add(appTxnId);
+    matches.push({
+      statement_index: statementIndex,
+      confidence: ['high', 'medium', 'low'].includes(String(match?.confidence || '').toLowerCase())
+        ? String(match.confidence).toLowerCase()
+        : 'medium',
+      reason: String(match?.reason || '').trim(),
+      statement: statementByIndex.get(statementIndex),
+      app_transaction: appTxnById.get(appTxnId),
+    });
+  }
+
+  const statementOnly = statementRows.filter((row) => !matchedStatementIndexes.has(Number(row.statement_index)));
+  const appOnly = normalizedTxns.filter((row) => !matchedAppTxnIds.has(Number(row.app_txn_id)));
+  const matchedAmount = matches.reduce((sum, item) => sum + Number(item?.statement?.amount || 0), 0);
+  const statementAmount = statementRows.reduce((sum, item) => sum + Number(item?.amount || 0), 0);
+  const appAmount = normalizedTxns.reduce((sum, item) => sum + Number(item?.amount || 0), 0);
+
+  return {
+    success: true,
+    provider: 'openai',
+    cycle: {
+      id: Number(cycle?.id || 0) || null,
+      cycle_start: String(cycle?.cycle_start || '').slice(0, 10),
+      cycle_end: String(cycle?.cycle_end || '').slice(0, 10),
+      due_date: String(cycle?.due_date || '').slice(0, 10),
+    },
+    summary: {
+      matched_count: matches.length,
+      statement_count: statementRows.length,
+      app_count: normalizedTxns.length,
+      statement_only_count: statementOnly.length,
+      app_only_count: appOnly.length,
+      matched_amount,
+      statement_amount,
+      app_amount,
+    },
+    notes: String(parsed?.notes || '').trim(),
+    matches,
+    statement_only: statementOnly,
+    app_only: appOnly,
+    statement_rows: statementRows,
+  };
+}
+
+let pdfJsLibPromise = null;
+
+async function getPdfJsLib() {
+  if (!pdfJsLibPromise) {
+    pdfJsLibPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
+  }
+  return pdfJsLibPromise;
+}
+
+async function extractPasswordProtectedPdfStatementText(buffer, password = '') {
+  const safePassword = String(password || '').trim();
+  if (!safePassword) {
+    const err = new Error('This PDF is protected. Enter the PDF password to verify it.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const pdfjsLib = await getPdfJsLib();
+  let pdfDocument = null;
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(buffer),
+      password: safePassword,
+      disableWorker: true,
+      isEvalSupported: false,
+      useWorkerFetch: false,
+      stopAtErrors: false,
+    });
+    pdfDocument = await loadingTask.promise;
+  } catch (err) {
+    const errorName = String(err?.name || '');
+    const errorMessage = String(err?.message || '').toLowerCase();
+    if (errorName === 'PasswordException' || errorMessage.includes('password')) {
+      const wrapped = new Error('Could not open this PDF. Please check the password and try again.');
+      wrapped.statusCode = 400;
+      throw wrapped;
+    }
+    const wrapped = new Error(err?.message || 'Could not read this protected PDF.');
+    wrapped.statusCode = 422;
+    throw wrapped;
+  }
+
+  const pages = [];
+  let totalChars = 0;
+  try {
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+      const page = await pdfDocument.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = (Array.isArray(textContent?.items) ? textContent.items : [])
+        .map((item) => String(item?.str || '').trim())
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!pageText) continue;
+      const remainingChars = 120000 - totalChars;
+      if (remainingChars <= 0) break;
+      const clippedText = pageText.length > remainingChars ? pageText.slice(0, remainingChars) : pageText;
+      pages.push({ page_number: pageNumber, text: clippedText });
+      totalChars += clippedText.length;
+      if (totalChars >= 120000) break;
+    }
+  } finally {
+    try { await pdfDocument?.destroy(); } catch (_err) {}
+  }
+
+  if (!pages.length) {
+    const err = new Error('Could not extract readable statement text from this protected PDF.');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  return pages;
+}
+
+async function ensureFeatureAccess(userId, featureKey) {
+  const [user, pages] = await Promise.all([
+    Promise.resolve(pgDb.findUserById(userId)),
+    Promise.resolve(pgDb.getUserAccessiblePages(userId)),
+  ]);
+  if (user?.role === 'admin') return;
+  if ((Array.isArray(pages) ? pages : []).includes(featureKey)) return;
+  const err = new Error('You do not have permission to use this feature.');
+  err.statusCode = 403;
+  throw err;
 }
 
 function normalizeFriendName(name) {
@@ -9292,6 +9640,23 @@ router.post('/cc/cycles/:id/txns', (req, res) => {
     }).catch((err) => { res.status(500).json({ error: err.message }); });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+router.post('/cc/cycles/:id/bill-match', withUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
+    await ensureFeatureAccess(req.session.userId, 'creditcard_bill_match');
+    const cycleData = await Promise.resolve(getBillingDb().getCcCycleById(req.session.userId, req.params.id));
+    if (!cycleData?.cycle) return res.status(404).json({ error: 'Cycle not found' });
+    const result = await matchCreditCardBillPdfWithOpenAi(req.file, {
+      ...cycleData,
+      password: String(req.body?.password || '').trim(),
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not match this bill PDF.' });
+  }
+});
+
 router.put('/cc/cycles/:id', (req, res) => {
   try {
     Promise.resolve(getBillingDb().updateCcCycle(req.session.userId, req.params.id, req.body)).then(() => {

@@ -8925,6 +8925,7 @@ const ALL_PAGES = [
   { key: 'emitracker',  label: 'My EMIs' },
   { key: 'friendemis',  label: 'Friend EMIs' },
   { key: 'creditcards', label: 'Credit Cards' },
+  { key: 'creditcard_bill_match', label: 'Credit Card Bill PDF Verify' },
   { key: 'banks',       label: 'Bank Accounts' },
   { key: 'planner',     label: 'Planner' },
   { key: 'societies',   label: 'Societies' },
@@ -12496,6 +12497,7 @@ let _ccView = 'current'; // 'current' | 'history' | 'monthly' | 'yearly'
 let _ccYearFilter = new Date().getFullYear();
 let _ccMonthlyYear = new Date().getFullYear();
 let _ccHistoryCycles = [];
+let _ccBillMatchState = { cycleId: null, result: null, loading: false };
 
 function _sameId(a, b) {
   return a != null && b != null && String(a) === String(b);
@@ -12780,6 +12782,7 @@ function renderCcHistory(cycles) {
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-l)">
         ${c.status === 'open' ? `<button class="btn btn-s btn-sm" onclick="showAddCycleTxnModal(${c.id}, '${c.cycle_start}', '${c.cycle_end}')">+ Add Transaction</button>` : ''}
         <button class="btn btn-s btn-sm" onclick="showCcExcelImportModal(${c.id}, '${c.cycle_start}', '${c.cycle_end}', ${_ccCard?.default_discount_pct || 0})">Import Excel</button>
+        ${canAccessFeature('creditcard_bill_match') ? `<button class="btn btn-s btn-sm" onclick="showCcBillMatchModal(${c.id})">Verify Bill PDF</button>` : ''}
         <button class="btn btn-sm" style="border:1px solid var(--border)" onclick="showEditCycleModal(${c.id})">${c.status === 'open' ? 'Edit Cycle' : 'Edit / Mark Status'}</button>
         ${isFutureOpen ? `<button class="btn btn-sm" style="border:1px solid var(--red);color:var(--red);background:transparent" onclick="deleteFutureCycle(${c.id})">Delete Cycle</button>` : ''}
       </div>` : '';
@@ -12808,6 +12811,128 @@ function renderCcHistory(cycles) {
   }).join('');
 
   return importBtn + `<div>${rows}</div>`;
+}
+
+function renderCcBillMatchResult(result) {
+  const summary = result?.summary || {};
+  const matches = Array.isArray(result?.matches) ? result.matches : [];
+  const statementOnly = Array.isArray(result?.statement_only) ? result.statement_only : [];
+  const appOnly = Array.isArray(result?.app_only) ? result.app_only : [];
+  const notes = String(result?.notes || '').trim();
+
+  const matchRows = matches.length
+    ? matches.map((item) => `
+        <tr>
+          <td>${fmtDate(item?.statement?.txn_date)}</td>
+          <td>${escHtml(item?.statement?.description || '-')}</td>
+          <td class="td-m">${fmtCur(item?.statement?.amount || 0)}</td>
+          <td>${fmtDate(item?.app_transaction?.txn_date)}</td>
+          <td>${escHtml(item?.app_transaction?.description || '-')}</td>
+          <td class="td-m">${fmtCur(item?.app_transaction?.amount || 0)}</td>
+          <td><span style="font-size:11px;font-weight:700;color:${item?.confidence === 'high' ? 'var(--green)' : item?.confidence === 'low' ? 'var(--amber)' : 'var(--em)'}">${escHtml(String(item?.confidence || 'medium').toUpperCase())}</span><div style="font-size:11px;color:var(--t3);margin-top:2px">${escHtml(item?.reason || '')}</div></td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:16px">No matched transactions found.</td></tr>';
+
+  const statementOnlyRows = statementOnly.length
+    ? statementOnly.map((item) => `
+        <tr>
+          <td>${fmtDate(item.txn_date)}</td>
+          <td>${escHtml(item.description || '-')}</td>
+          <td class="td-m">${fmtCur(item.amount || 0)}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:16px">Everything from the statement found a match.</td></tr>';
+
+  const appOnlyRows = appOnly.length
+    ? appOnly.map((item) => `
+        <tr>
+          <td>${fmtDate(item.txn_date)}</td>
+          <td>${escHtml(item.description || '-')}</td>
+          <td class="td-m">${fmtCur(item.amount || 0)}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:16px">Every app transaction found a statement match.</td></tr>';
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0">
+      <div class="card" style="padding:12px"><div style="font-size:11px;color:var(--t3)">Matched</div><div style="font-size:22px;font-weight:800">${summary.matched_count || 0}</div><div style="font-size:12px;color:var(--t2)">${fmtCur(summary.matched_amount || 0)}</div></div>
+      <div class="card" style="padding:12px"><div style="font-size:11px;color:var(--t3)">Statement Rows</div><div style="font-size:22px;font-weight:800">${summary.statement_count || 0}</div><div style="font-size:12px;color:var(--t2)">${fmtCur(summary.statement_amount || 0)}</div></div>
+      <div class="card" style="padding:12px"><div style="font-size:11px;color:var(--t3)">App Rows</div><div style="font-size:22px;font-weight:800">${summary.app_count || 0}</div><div style="font-size:12px;color:var(--t2)">${fmtCur(summary.app_amount || 0)}</div></div>
+      <div class="card" style="padding:12px"><div style="font-size:11px;color:var(--t3)">Not Matched</div><div style="font-size:22px;font-weight:800">${(summary.statement_only_count || 0) + (summary.app_only_count || 0)}</div><div style="font-size:12px;color:var(--t2)">${summary.statement_only_count || 0} statement · ${summary.app_only_count || 0} app</div></div>
+    </div>
+    ${notes ? `<div style="font-size:12px;color:var(--t2);margin-bottom:12px;background:var(--bg2);border-radius:10px;padding:10px">${escHtml(notes)}</div>` : ''}
+    <div style="font-size:14px;font-weight:700;margin:14px 0 8px">Matched Transactions</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Statement Date</th><th>Statement Detail</th><th class="td-m">Statement Amount</th><th>App Date</th><th>App Detail</th><th class="td-m">App Amount</th><th>Why</th></tr></thead>
+      <tbody>${matchRows}</tbody>
+    </table></div>
+    <div style="font-size:14px;font-weight:700;margin:14px 0 8px">Statement Rows Not Matched</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Detail</th><th class="td-m">Amount</th></tr></thead>
+      <tbody>${statementOnlyRows}</tbody>
+    </table></div>
+    <div style="font-size:14px;font-weight:700;margin:14px 0 8px">App Rows Not Matched</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Detail</th><th class="td-m">Amount</th></tr></thead>
+      <tbody>${appOnlyRows}</tbody>
+    </table></div>
+  `;
+}
+
+function showCcBillMatchModal(cycleId) {
+  _ccBillMatchState = { cycleId, result: null, loading: false };
+  openModal('Verify Credit Card Bill PDF', `
+    <div style="font-size:12px;color:var(--t2);margin-bottom:12px;background:var(--bg2);border-radius:10px;padding:10px">
+      Upload the bill PDF for this billing cycle. AI will extract statement transactions and match them mainly by date and amount, while allowing merchant names to differ.
+    </div>
+    <div class="fg">
+      <label class="fl full">Bill PDF
+        <input type="file" id="ccBillMatchFile" accept="application/pdf,.pdf" class="fi">
+      </label>
+      <label class="fl full">PDF Password (optional)
+        <input type="password" id="ccBillMatchPassword" class="fi" placeholder="Enter password only if the PDF is protected">
+      </label>
+    </div>
+    <div class="fa" style="margin-top:12px">
+      <button class="btn btn-p" id="ccBillMatchBtn" onclick="runCcBillMatch(${Number(cycleId)})">Verify PDF</button>
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>
+    <div id="ccBillMatchResult" style="margin-top:14px"></div>
+  `);
+}
+
+async function runCcBillMatch(cycleId) {
+  const file = document.getElementById('ccBillMatchFile')?.files?.[0];
+  const password = document.getElementById('ccBillMatchPassword')?.value || '';
+  const resultBox = document.getElementById('ccBillMatchResult');
+  const button = document.getElementById('ccBillMatchBtn');
+  if (!file) {
+    toast('Please choose a PDF bill first.', 'warning');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  if (password.trim()) fd.append('password', password.trim());
+  _ccBillMatchState.loading = true;
+  if (button) button.disabled = true;
+  if (resultBox) resultBox.innerHTML = `<div style="color:var(--t3);font-size:13px;padding:10px 0">Checking the bill against app entries...</div>`;
+  try {
+    const response = await fetch(`/api/cc/cycles/${cycleId}/bill-match`, { method: 'POST', body: fd });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      throw new Error(data?.error || `Bill verification failed with HTTP ${response.status}`);
+    }
+    _ccBillMatchState = { cycleId, result: data, loading: false };
+    if (resultBox) resultBox.innerHTML = renderCcBillMatchResult(data);
+    toast(`Bill checked: ${data?.summary?.matched_count || 0} matched`, 'success');
+  } catch (err) {
+    _ccBillMatchState.loading = false;
+    if (resultBox) resultBox.innerHTML = `<div style="color:var(--red);font-size:13px;padding:10px 0">${escHtml(err.message || 'Could not verify this PDF right now.')}</div>`;
+    toast(err.message || 'Could not verify this PDF right now.', 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 // â”€â”€ Cycle CRUD (open/future cycles in billing history) â”€â”€â”€â”€â”€â”€â”€â”€

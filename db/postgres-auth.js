@@ -30,6 +30,7 @@ const ADMIN_ACCESS_PAGES = [
   'emitracker',
   'friendemis',
   'creditcards',
+  'creditcard_bill_match',
   'banks',
   'planner',
   'societies',
