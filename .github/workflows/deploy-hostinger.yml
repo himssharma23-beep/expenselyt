@@ -96,7 +96,16 @@ jobs:
         run: |
           set -e
           echo "Testing SSH to $USERNAME@$HOST:$PORT ..."
-          ssh $SSH_OPTS -p "$PORT" "$USERNAME@$HOST" "echo 'SSH OK'"
+          if ! timeout 10 bash -lc "cat < /dev/null > /dev/tcp/$HOST/$PORT" 2>/dev/null; then
+            echo "TCP connection to $HOST:$PORT failed."
+            echo "This usually means the SSH port is blocked, the server is down, or SSH is not listening on that port."
+            exit 1
+          fi
+          if ! ssh $SSH_OPTS -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -p "$PORT" "$USERNAME@$HOST" "echo 'SSH OK'"; then
+            echo "SSH handshake reached the server, but login failed."
+            echo "Check HOSTINGER_SSH_USER, HOSTINGER_SSH_KEY, and that the public key is installed for that user on the server."
+            exit 1
+          fi
 
       - name: Remote runtime check
         env:
