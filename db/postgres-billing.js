@@ -189,13 +189,46 @@ async function mergeCycleInto(run, userId, sourceCycleId, targetCycleId) {
   return targetId;
 }
 
+async function pruneEmptyCycles(userId, cardId, client, { keepOpen = true } = {}) {
+  const cyclesR = await client.query(
+    `SELECT cy.id, cy.status, COUNT(tx.id)::int AS txn_count
+     FROM cc_cycles cy
+     LEFT JOIN cc_txns tx
+       ON tx.cycle_id = cy.id
+      AND tx.user_id = cy.user_id
+     WHERE cy.user_id = $1
+       AND cy.card_id = $2
+     GROUP BY cy.id, cy.status`,
+    [userId, cardId]
+  );
+
+  for (const cycle of cyclesR.rows) {
+    const txnCount = Number(cycle.txn_count || 0);
+    const isOpen = String(cycle.status) === 'open';
+    if (txnCount > 0) continue;
+    if (keepOpen && isOpen) continue;
+    await client.query(
+      `DELETE FROM cc_cycles
+       WHERE id = $1
+         AND user_id = $2`,
+      [cycle.id, userId]
+    );
+  }
+}
+
 async function collapseOverlappingHistoricalCycles(userId, cardId, card, client) {
   const historyR = await client.query(
-    `SELECT *
+    `SELECT cy.*
      FROM cc_cycles
+     cy
+     LEFT JOIN cc_txns tx
+       ON tx.cycle_id = cy.id
+      AND tx.user_id = cy.user_id
      WHERE user_id = $1
        AND card_id = $2
        AND status != 'open'
+     GROUP BY cy.id
+     HAVING COUNT(tx.id) > 0
      ORDER BY cycle_start ASC, cycle_end ASC, created_at ASC, id ASC`,
     [userId, cardId]
   );
@@ -1002,8 +1035,11 @@ async function repairCreditCardCycles(userId, cardId) {
     const card = cardR.rows[0];
     if (!card) throw new Error('Card not found');
     const txnRepair = await repairCreditCardTxnCyclesOnClient(userId, card, client);
+    await pruneEmptyCycles(userId, card.id, client);
     await rebalanceOpenCycleForCard(userId, card.id, card, client);
+    await pruneEmptyCycles(userId, card.id, client);
     await collapseOverlappingHistoricalCycles(userId, card.id, card, client);
+    await pruneEmptyCycles(userId, card.id, client);
     await autoClosePastCcCycles(userId, card.id, client);
     const currentCycleR = await client.query(
       `SELECT *
