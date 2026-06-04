@@ -3775,9 +3775,64 @@ async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
   const card = context?.card || {};
   const pdfPassword = String(context?.password || '').trim();
   const appTransactions = Array.isArray(context?.txns) ? context.txns : [];
+  const normalizeBillMatchDateValue = (value, fallbackCycle = null) => {
+    if (!value) return '';
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const isoMatch = raw.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    if (isoMatch) return isoMatch[1];
+    const dmy = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    const dayMonthOnly = raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2})$/) || raw.match(/^(\d{1,2})\s+([A-Za-z]{3,9})$/);
+    if (dayMonthOnly && fallbackCycle?.cycle_start && fallbackCycle?.cycle_end) {
+      const monthNames = {
+        january: 1, jan: 1,
+        february: 2, feb: 2,
+        march: 3, mar: 3,
+        april: 4, apr: 4,
+        may: 5,
+        june: 6, jun: 6,
+        july: 7, jul: 7,
+        august: 8, aug: 8,
+        september: 9, sep: 9, sept: 9,
+        october: 10, oct: 10,
+        november: 11, nov: 11,
+        december: 12, dec: 12,
+      };
+      const rawMonthToken = /^[A-Za-z]/.test(dayMonthOnly[1]) ? dayMonthOnly[1] : dayMonthOnly[2];
+      const rawDayToken = /^[A-Za-z]/.test(dayMonthOnly[1]) ? dayMonthOnly[2] : dayMonthOnly[1];
+      const month = monthNames[String(rawMonthToken || '').toLowerCase()] || 0;
+      const day = Number(rawDayToken || 0);
+      if (month > 0 && day > 0) {
+        const startYear = Number(String(fallbackCycle.cycle_start).slice(0, 4));
+        const endYear = Number(String(fallbackCycle.cycle_end).slice(0, 4));
+        const candidates = [startYear, endYear].filter((year, index, arr) => year > 0 && arr.indexOf(year) === index);
+        for (const year of candidates) {
+          const candidate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          if (candidate >= String(fallbackCycle.cycle_start).slice(0, 10) && candidate <= String(fallbackCycle.cycle_end).slice(0, 10)) {
+            return candidate;
+          }
+        }
+      }
+    }
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      const year = parsed.getFullYear();
+      const month = String(parsed.getMonth() + 1).padStart(2, '0');
+      const day = String(parsed.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    return raw.length >= 10 ? raw.slice(0, 10) : raw;
+  };
   const normalizedTxns = appTransactions.map((item) => ({
     app_txn_id: Number(item?.id || 0),
-    txn_date: String(item?.txn_date || '').slice(0, 10),
+    txn_date: normalizeBillMatchDateValue(item?.txn_date, cycle),
     amount: Number(item?.amount || item?.net_amount || 0),
     description: String(item?.description || '').trim(),
   })).filter((item) => item.app_txn_id > 0 && item.amount > 0 && item.txn_date);
@@ -3829,13 +3884,13 @@ async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
 
   const systemPrompt = [
     'You reconcile a credit card bill PDF against existing app transactions for one billing cycle.',
-    pdfPassword
-      ? 'Use the provided extracted statement text from the unlocked PDF as the primary source of truth and extract actual purchase or charge rows from the statement.'
-      : 'Use the uploaded PDF as the primary source of truth and extract actual purchase or charge rows from the statement.',
+    'Use the provided extracted statement text from all pages of the PDF as the primary source of truth and extract actual purchase or charge rows from the statement.',
+    'Read across all provided pages before deciding the final statement row list.',
     'Focus mostly on transaction date and amount. Description similarity is secondary because merchant names may differ between the statement and the app.',
+    'Treat exact date plus exact amount as the strongest possible match signal.',
     'Prefer an exact amount match. A date difference of up to 3 days is acceptable when the amount matches and there is no better candidate.',
     'Match each statement row to at most one app transaction and each app transaction to at most one statement row.',
-    'Ignore statement summary sections, total due, minimum due, opening balance, closing balance, available limit, rewards, fees summary, payment confirmations, EMI summary blocks, and non-transaction boilerplate.',
+    'Ignore statement summary sections, total due, minimum due, opening balance, closing balance, available limit, rewards, fees summary, payment confirmations, EMI summary blocks, MITC pages, offer pages, charts, and non-transaction boilerplate.',
     'Ignore payment received rows, credits, reversals, refunds, and autopay confirmations unless they clearly represent a real purchase transaction the user would have saved as a spend.',
     'Return only rows that belong to the provided billing cycle period.',
     'Do not force a match when amounts differ materially.',
@@ -3843,15 +3898,10 @@ async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
     'Return strict JSON only.',
   ].join(' ');
 
-  let extractedStatementPages = [];
-  if (pdfPassword) {
-    extractedStatementPages = await extractPasswordProtectedPdfStatementText(file.buffer, pdfPassword);
-  }
+  const extractedStatementPages = await extractPdfStatementText(file.buffer, pdfPassword);
 
   const userPayload = {
-    task: pdfPassword
-      ? 'Extract statement transactions from this unlocked statement text and reconcile them with the provided app transactions.'
-      : 'Extract statement transactions from this PDF and reconcile them with the provided app transactions.',
+    task: 'Extract statement transactions from the provided multi-page statement text and reconcile them with the provided app transactions.',
     billing_cycle: {
       cycle_id: Number(cycle?.id || 0) || null,
       cycle_start: String(cycle?.cycle_start || '').slice(0, 10),
@@ -3867,22 +3917,10 @@ async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
     statement_text_pages: extractedStatementPages,
   };
 
-  const userContent = pdfPassword
-    ? [{
-        type: 'input_text',
-        text: JSON.stringify(userPayload),
-      }]
-    : [
-        {
-          type: 'input_file',
-          filename: file.originalname || 'credit-card-bill.pdf',
-          file_data: `data:application/pdf;base64,${file.buffer.toString('base64')}`,
-        },
-        {
-          type: 'input_text',
-          text: JSON.stringify(userPayload),
-        },
-      ];
+  const userContent = [{
+    type: 'input_text',
+    text: JSON.stringify(userPayload),
+  }];
 
   const response = await postOpenAiResponseWithTimeout({
     model: getOpenAiCcBillMatchModel(),
@@ -3932,7 +3970,7 @@ async function matchCreditCardBillPdfWithOpenAi(file, context = {}) {
   const statementRows = (Array.isArray(parsed?.statement_rows) ? parsed.statement_rows : [])
     .map((row, index) => ({
       statement_index: Number.isInteger(row?.statement_index) ? row.statement_index : index + 1,
-      txn_date: String(row?.txn_date || '').slice(0, 10),
+      txn_date: normalizeBillMatchDateValue(row?.txn_date, cycle),
       amount: roundCurrencyAmount(row?.amount),
       description: String(row?.description || '').trim() || 'Statement transaction',
     }))
@@ -4004,20 +4042,14 @@ async function getPdfJsLib() {
   return pdfJsLibPromise;
 }
 
-async function extractPasswordProtectedPdfStatementText(buffer, password = '') {
+async function extractPdfStatementText(buffer, password = '') {
   const safePassword = String(password || '').trim();
-  if (!safePassword) {
-    const err = new Error('This PDF is protected. Enter the PDF password to verify it.');
-    err.statusCode = 400;
-    throw err;
-  }
-
   const pdfjsLib = await getPdfJsLib();
   let pdfDocument = null;
   try {
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
-      password: safePassword,
+      ...(safePassword ? { password: safePassword } : {}),
       disableWorker: true,
       isEvalSupported: false,
       useWorkerFetch: false,
@@ -4028,7 +4060,9 @@ async function extractPasswordProtectedPdfStatementText(buffer, password = '') {
     const errorName = String(err?.name || '');
     const errorMessage = String(err?.message || '').toLowerCase();
     if (errorName === 'PasswordException' || errorMessage.includes('password')) {
-      const wrapped = new Error('Could not open this PDF. Please check the password and try again.');
+      const wrapped = new Error(safePassword
+        ? 'Could not open this PDF. Please check the password and try again.'
+        : 'This PDF is protected. Enter the PDF password to verify it.');
       wrapped.statusCode = 400;
       throw wrapped;
     }
