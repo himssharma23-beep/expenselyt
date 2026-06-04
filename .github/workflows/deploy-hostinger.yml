@@ -54,12 +54,11 @@ jobs:
           PORT="${PORT_VAR:-}"
           if [ -z "$PORT" ]; then PORT="${PORT_SECRET:-}"; fi
           if [ -z "$PORT" ]; then PORT="${EMBEDDED_PORT:-}"; fi
-          if [ -z "$PORT" ]; then PORT="65002"; fi
-          if [ "$PORT" = "22" ]; then
-            echo "WARNING: SSH port 22 is configured, but Hostinger usually uses 65002. Overriding to 65002."
-            PORT="65002"
+          if [ -z "$PORT" ]; then
+            PORT="22"
+            echo "No SSH port configured. Defaulting to server SSH port 22."
           fi
-          echo "Using Hostinger SSH port: $PORT"
+          echo "Using SSH port: $PORT"
           echo "port=$PORT" >> "$GITHUB_OUTPUT"
  
       - name: Add host key
