@@ -25,41 +25,44 @@ jobs:
 
       - name: Resolve SSH Settings
         id: ssh
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USERNAME: ${{ secrets.HOSTINGER_SSH_USER }}
         run: |
-          HOST="${{ secrets.HOSTINGER_HOST }}"
-          USERNAME="${{ secrets.HOSTINGER_SSH_USER }}"
-          PORT="22"
-
           echo "host=$HOST" >> $GITHUB_OUTPUT
           echo "username=$USERNAME" >> $GITHUB_OUTPUT
-          echo "port=$PORT" >> $GITHUB_OUTPUT
+          echo "port=22" >> $GITHUB_OUTPUT
 
       - name: Debug Connection
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
         run: |
-          echo "Host: ${{ steps.ssh.outputs.host }}"
+          echo "Host Length: ${#HOST}"
           echo "User: ${{ steps.ssh.outputs.username }}"
           echo "Port: ${{ steps.ssh.outputs.port }}"
 
       - name: DNS Lookup
         run: |
+          echo "Resolving host..."
           nslookup "${{ steps.ssh.outputs.host }}" || true
           ping -c 4 "${{ steps.ssh.outputs.host }}" || true
 
       - name: Check Port 22
         run: |
-          nc -zv "${{ steps.ssh.outputs.host }}" "${{ steps.ssh.outputs.port }}"
+          echo "Testing TCP connection..."
+          nc -vz "${{ steps.ssh.outputs.host }}" 22
 
       - name: Add Host Key
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H -p "${{ steps.ssh.outputs.port }}" "${{ steps.ssh.outputs.host }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H -p 22 "${{ steps.ssh.outputs.host }}" >> ~/.ssh/known_hosts
 
       - name: Test SSH Login
         run: |
           ssh \
             -o StrictHostKeyChecking=no \
             -o BatchMode=yes \
-            -p "${{ steps.ssh.outputs.port }}" \
+            -p 22 \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
             "echo SSH LOGIN SUCCESS"
 
@@ -67,15 +70,18 @@ jobs:
         run: |
           ssh \
             -o StrictHostKeyChecking=no \
-            -p "${{ steps.ssh.outputs.port }}" \
+            -p 22 \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
             "
+            echo '===== SERVER INFO ====='
             hostname
             whoami
             pwd
-            node -v
-            npm -v
-            pm2 -v
+
+            echo '===== NODE ====='
+            node -v || true
+            npm -v || true
+            pm2 -v || true
             "
 
       - name: Create Release Archive
@@ -85,23 +91,25 @@ jobs:
             --exclude=.github \
             --exclude=node_modules \
             --exclude=.env \
+            --exclude=backups \
+            --exclude=data \
             -czf release.tgz .
 
       - name: Upload Release
         run: |
           scp \
-            -P "${{ steps.ssh.outputs.port }}" \
+            -P 22 \
             release.tgz \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}:/tmp/release.tgz"
 
       - name: Deploy
         run: |
           ssh \
-            -p "${{ steps.ssh.outputs.port }}" \
+            -o StrictHostKeyChecking=no \
+            -p 22 \
             "${{ steps.ssh.outputs.username }}@${{ steps.ssh.outputs.host }}" \
             "
             mkdir -p $APP_DIR
-
             cd $APP_DIR
 
             tar -xzf /tmp/release.tgz
@@ -111,4 +119,6 @@ jobs:
             pm2 restart $APP_NAME || pm2 start npm --name $APP_NAME -- start
 
             rm -f /tmp/release.tgz
+
+            echo 'Deployment completed'
             "
