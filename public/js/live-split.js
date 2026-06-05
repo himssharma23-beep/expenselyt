@@ -351,6 +351,7 @@
       const payerName = String(group?.paid_by || '').trim();
       const payerNameKey = textKey(payerName);
       const selfIsPayer = isLikelySelfPayerForOwnGroup(payerName, splits);
+      let payerHandled = false;
 
       splits.forEach((split) => {
         const friendName = String(split?.friend_name || '').trim();
@@ -410,6 +411,7 @@
           || (linkedFriendNameKey && payerNameKey === linkedFriendNameKey)
           || (fallbackNameKey && payerNameKey === fallbackNameKey)
         );
+        if (splitIsPayer) payerHandled = true;
         if (groupMode === 'settlement') {
           if (selfIsPayer) row.amount = r2(row.amount + n(split.share_amount));
           else if (splitIsPayer) row.amount = r2(row.amount - n(split.share_amount));
@@ -421,6 +423,36 @@
           row.amount = r2(row.amount - selfShare);
         }
       });
+
+      if (!selfIsPayer && selfShare > 0 && payerNameKey && !payerHandled) {
+        const payerFriend = allFriends.find((friend) => {
+          const keys = [
+            textKey(friend?.name),
+            textKey(friend?.linked_user_display_name),
+            textKey(friend?.linked_user_username),
+          ].filter(Boolean);
+          return keys.includes(payerNameKey);
+        }) || null;
+        const payerLinkedId = Number(payerFriend?.linked_user_id || 0);
+        const payerPreferredName = String(
+          payerFriend?.linked_user_display_name
+          || payerFriend?.linked_user_username
+          || payerFriend?.name
+          || payerName
+        ).trim() || payerName;
+        const payerRow = payerLinkedId > 0
+          ? ensureLinkedRow(map, payerLinkedId, payerPreferredName, {
+              friend_id: Number(payerFriend?.id || 0) || null,
+              linked_user_avatar_url: payerFriend?.linked_user_avatar_url || '',
+              linked_user_display_name: payerFriend?.linked_user_display_name || '',
+              linked_user_username: payerFriend?.linked_user_username || '',
+            })
+          : findExistingLinkedRowByName(map, payerName)
+            || ensureRow(map, payerFriend?.name || payerName, {
+              friend_id: Number(payerFriend?.id || 0) || null,
+            });
+        if (payerRow) payerRow.amount = r2(payerRow.amount - selfShare);
+      }
     });
 
     (sharedGroups || []).forEach((group) => {
