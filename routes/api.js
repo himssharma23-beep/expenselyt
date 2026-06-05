@@ -694,6 +694,27 @@ function parseReceiptDateFromText(text) {
   return null;
 }
 
+function receiptDateToEpochDay(value) {
+  const iso = parseReceiptDateFromText(String(value || ''));
+  if (!iso) return null;
+  const stamp = Date.parse(`${iso}T00:00:00Z`);
+  return Number.isFinite(stamp) ? Math.round(stamp / 86400000) : null;
+}
+
+function normalizeReceiptScanDateForContext(value, { referenceDate = '', scanContext = '' } = {}) {
+  const parsed = parseReceiptDateFromText(String(value || '')) || '';
+  const contextKey = String(scanContext || '').trim().toLowerCase();
+  const reference = parseReceiptDateFromText(String(referenceDate || '')) || '';
+  if (contextKey !== 'trip_bill') return parsed;
+  if (!parsed) return reference || '';
+  if (!reference) return parsed;
+  const parsedDay = receiptDateToEpochDay(parsed);
+  const referenceDay = receiptDateToEpochDay(reference);
+  if (parsedDay == null || referenceDay == null) return parsed;
+  if (Math.abs(parsedDay - referenceDay) > 400) return reference;
+  return parsed;
+}
+
 function roundCurrencyAmount(value) {
   return Math.round((Number(value || 0) || 0) * 100) / 100;
 }
@@ -3467,9 +3488,11 @@ async function parseLiveSplitVoiceWithOpenAi({ message, mode = 'split', currentE
   };
 }
 
-async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType = 'image/jpeg') {
+async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType = 'image/jpeg', options = {}) {
   const config = getOpenAiSmartCaptureConfig();
   if (!config.enabled) return null;
+  const scanContext = String(options?.scanContext || '').trim().toLowerCase();
+  const referenceDate = parseReceiptDateFromText(String(options?.referenceDate || '')) || '';
 
   const schema = {
     type: 'object',
@@ -3506,6 +3529,8 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
     'Extract real purchased line items only.',
     'Ignore handwriting, blue pen notes, circles, arrows, totals-side scribbles, desk/background objects, and any second partial receipt visible beside the main receipt.',
     'Ignore member numbers, approval text, card details, references, invoice numbers, auth numbers, store footer text, and summary labels as expense items.',
+    'If a receipt row shows multiple numeric columns such as unit price, quantity, and line total, always use the final rightmost line total as the item amount.',
+    'Never use the unit price column as the returned item amount when a quantity and final line total are present.',
     'When a receipt shows discount lines such as TPD/..., coupon rows, instant savings, promo lines, or negative discount rows, attach that discount to the immediately preceding purchased item.',
     'The returned item amount must always be the final net paid amount after discount, never the original pre-discount shelf amount.',
     'Example: if an item is 21.99 and the next receipt line is 4.50- for that item, return amount 17.49 for that item row.',
@@ -3517,17 +3542,23 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
     'Example: if the receipt shows a short code-like line such as 100%WWSNWCH 7.19 before subtotal, include it as a real item row.',
     'Do not deduplicate repeated items unless they are clearly the same physical printed row repeated by image overlap.',
     'If a later row repeats the same item name and the same amount, keep it again as another purchased line item.',
+    'Do not create duplicate items just because one product description wraps onto a second text line.',
     'Read compact uppercase product-code descriptions carefully, including names that start with numbers or percent signs such as 100%WWSNWCH.',
     'Do not drop the last purchased line item before subtotal just because it is short, abbreviated, or code-like.',
     'Do not invent quantities, categories, or extra metadata not clearly supported by the receipt.',
     'For warehouse receipts like Costco, item descriptions may be abbreviated. Keep the printed description as-is but cleaned.',
     'Return total_amount only for the final receipt total, not subtotal or tax.',
-    'Keep purchase_date in YYYY-MM-DD format. If the exact date is unreadable, infer the most likely full date from the receipt. If still unknown, return an empty string.',
+    'Keep purchase_date in YYYY-MM-DD format.',
+    'If the exact receipt date is unreadable or uncertain, return an empty string instead of guessing.',
+    'Never infer the receipt date from SKU numbers, product codes, batch numbers, barcode text, or quantity text.',
     'Use category only when strongly obvious from the item text, otherwise return an empty string.',
     'Set is_extra to false by default unless the item is clearly non-essential.',
     'Set selected to true for every returned line item.',
     'If you cannot confidently read one character in a compact item code, prefer the closest printed item text instead of dropping the whole purchased line.',
     'If you cannot confidently read individual rows, return the best high-confidence rows only rather than guessing.',
+    scanContext === 'trip_bill'
+      ? 'This receipt is being turned into multiple Live Split trip rows. Be especially strict about using the rightmost final line total and avoid guessing an old or unrelated receipt date.'
+      : '',
   ].join(' ');
 
   const content = [
@@ -3535,6 +3566,8 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
       type: 'input_text',
       text: JSON.stringify({
         ocr_text: String(ocrText || ''),
+        scan_context: scanContext || 'expense',
+        reference_date: referenceDate || '',
       }),
     },
   ];
@@ -3587,9 +3620,12 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
 
   const draft = {
     merchant: String(parsed?.merchant || '').trim() || 'Scanned receipt',
-    purchase_date: parseReceiptDateFromText(String(parsed?.purchase_date || '')) || '',
+    purchase_date: normalizeReceiptScanDateForContext(parsed?.purchase_date, { referenceDate, scanContext }),
     total_amount: normalizeOcrAmount(parsed?.total_amount),
-    items: sanitizeReceiptItems(parsed?.items, parseReceiptDateFromText(String(parsed?.purchase_date || '')) || ''),
+    items: sanitizeReceiptItems(
+      parsed?.items,
+      normalizeReceiptScanDateForContext(parsed?.purchase_date, { referenceDate, scanContext }) || ''
+    ),
     raw_text: '',
   };
   if (!Array.isArray(draft?.items) || !draft.items.length) {
@@ -3600,11 +3636,13 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
   return draft;
 }
 
-async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
+async function mergeReceiptDraftPagesWithOpenAi(drafts = [], options = {}) {
   const config = getOpenAiSmartCaptureConfig();
   if (!config.enabled) return null;
   const pages = (Array.isArray(drafts) ? drafts : []).filter(Boolean);
   if (!pages.length) return null;
+  const scanContext = String(options?.scanContext || '').trim().toLowerCase();
+  const referenceDate = parseReceiptDateFromText(String(options?.referenceDate || '')) || '';
 
   const schema = {
     type: 'object',
@@ -3639,12 +3677,17 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
     'Return one combined receipt draft.',
     'Remove duplicate line items that appear on more than one page.',
     'Preserve distinct repeated purchases only when the item name, quantity context, or amount indicates they are truly separate bill rows.',
+    'If a row has unit price, quantity, and final total, keep the final rightmost total as the amount.',
     'If the exact same item name and amount appears twice on the same page draft, keep both rows.',
     'Do not collapse legitimate repeated lines like RAW CASHEWS, COTTAGE CHSE, KS GRK YGRT, or LIMES 3 LB when they are separate purchases.',
     'Keep merchant and purchase date if visible across pages.',
+    'If the receipt date is uncertain, return an empty string instead of guessing.',
     'Prefer the highest-confidence combined interpretation of the bill.',
     'Keep selected=true for kept rows.',
     'Do not invent rows that are not supported by the provided drafts.',
+    scanContext === 'trip_bill'
+      ? 'This merged result is for trip bill splitting, so do not guess an old year from product text and keep line totals strict.'
+      : '',
   ].join(' ');
 
   const response = await postOpenAiResponseWithTimeout({
@@ -3693,7 +3736,7 @@ async function mergeReceiptDraftPagesWithOpenAi(drafts = []) {
   } catch (_err) {
     throw new Error('OpenAI returned invalid JSON for receipt merge.');
   }
-  const purchaseDate = parseReceiptDateFromText(String(parsed?.purchase_date || '')) || '';
+  const purchaseDate = normalizeReceiptScanDateForContext(parsed?.purchase_date, { referenceDate, scanContext }) || '';
   return {
     merchant: String(parsed?.merchant || '').trim() || 'Scanned receipt',
     purchase_date: purchaseDate,
@@ -3727,7 +3770,8 @@ async function scanReceiptFile(file, options = {}) {
     aiDraft = await parseReceiptDraftWithOpenAi(
       '',
       file.buffer,
-      String(file.mimetype || 'image/jpeg')
+      String(file.mimetype || 'image/jpeg'),
+      options
     );
   } catch (err) {
     const wrapped = new Error(err?.message || 'AI receipt parsing failed');
@@ -4801,7 +4845,10 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
   try {
-    const result = await scanReceiptFile(req.file);
+    const result = await scanReceiptFile(req.file, {
+      referenceDate: req.body?.reference_date || '',
+      scanContext: req.body?.scan_context || '',
+    });
     res.json(result);
   } catch (err) {
     console.error('[expenses/scan-image]', err);
@@ -4813,16 +4860,18 @@ router.post('/expenses/scan-images-batch', upload.array('files', 8), async (req,
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: 'No images uploaded' });
+    const referenceDate = req.body?.reference_date || '';
+    const scanContext = req.body?.scan_context || '';
 
     const pageResults = [];
     for (const file of files) {
-      pageResults.push(await scanReceiptFile(file));
+      pageResults.push(await scanReceiptFile(file, { referenceDate, scanContext }));
     }
 
     const pageDrafts = pageResults.map((entry) => entry?.draft).filter(Boolean);
     let mergedDraft = pageDrafts[0] || null;
     if (pageDrafts.length > 1) {
-      mergedDraft = await mergeReceiptDraftPagesWithOpenAi(pageDrafts);
+      mergedDraft = await mergeReceiptDraftPagesWithOpenAi(pageDrafts, { referenceDate, scanContext });
     }
     if (!mergedDraft) {
       const err = new Error('AI could not extract any reliable expense rows from these receipts.');

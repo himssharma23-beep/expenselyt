@@ -52,6 +52,7 @@
     showCompletedTrips: false,
     tripCreate: null,
     tripManage: null,
+    tripBulkEdit: null,
     voiceRecorder: null,
     voiceStream: null,
     voiceChunks: [],
@@ -715,6 +716,8 @@
       name: '',
       start_date: todayLocalIso(),
       end_date: '',
+      bulk_date: todayLocalIso(),
+      paid_by: 'You',
       show_add_to_expense_option: true,
       selected: new Set(),
       scan_files: [],
@@ -2419,10 +2422,8 @@
               ? `<div style="font-size:11px;font-weight:700;color:var(--green);padding:6px 10px;border-radius:999px;background:#edfbf3;border:1px solid #cdeeda">Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}</div>`
               : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}</button>`}
             <button class="btn btn-g btn-sm" onclick="liveSplitToggleTripSplitView(${tid})">${showItemSplits ? 'Hide Each Split' : 'Show Each Split'}</button>
+            ${trip.is_owner ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenTripBulkEdit(${tid})">Bulk Edit Rows</button>` : ''}
             <button class="btn btn-s btn-sm" onclick="liveSplitDownloadTripPdf(${tid})">Trip PDF</button>
-            <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
-            </button>
             <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
             </button>
@@ -3802,6 +3803,15 @@
       .filter(Boolean);
   }
 
+  function tripCreatePayerOptions(form) {
+    return [
+      'You',
+      ...tripCreateSelectedFriends(form)
+        .map((friend) => String(friend?.name || '').trim())
+        .filter(Boolean),
+    ].filter((name, index, arr) => arr.findIndex((item) => textKey(item) === textKey(name)) === index);
+  }
+
   async function rebuildTripReceiptScanFromFiles(nextFiles = [], { nextTripName = '' } = {}) {
     const form = state.tripCreate;
     if (!form) return;
@@ -3817,6 +3827,8 @@
     }
     const fd = new FormData();
     nextFiles.forEach((file) => fd.append('files', file));
+    fd.append('reference_date', String(form.bulk_date || form.start_date || todayLocalIso()));
+    fd.append('scan_context', 'trip_bill');
     const response = await fetch('/api/expenses/scan-images-batch', { method: 'POST', body: fd });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload?.error || payload?.message || `HTTP ${response.status}`);
@@ -4092,6 +4104,18 @@
     renderTripCreateModal();
   }
 
+  function applyTripCreateMetaToRowsWeb({ dateValue = null } = {}) {
+    const form = state.tripCreate;
+    if (!form) return;
+    const nextDate = dateValue ? toLocalIsoDate(dateValue, form.start_date || todayLocalIso()) : '';
+    if (nextDate) {
+      form.bulk_date = nextDate;
+      form.scan_items = (form.scan_items || []).map((item) => ({ ...item, purchase_date: nextDate }));
+      form.manual_items = (form.manual_items || []).map((item) => ({ ...item, purchase_date: nextDate }));
+    }
+    rerenderTripCreateModalPreservingUi();
+  }
+
   function addTripManualItemWeb() {
     const form = state.tripCreate;
     if (!form) return;
@@ -4169,6 +4193,28 @@
         <label class="fl">End Date (optional)
           <input class="fi" type="date" value="${escHtml(form.end_date || '')}" onchange="liveSplitTripField('end_date', this.value)">
         </label>
+      </div>
+      <div style="margin-top:10px;padding:14px;border:1px solid #d8deea;border-radius:14px;background:linear-gradient(180deg,#f8fbff 0%,#f4faf7 100%)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:220px">
+            <div style="font-size:14px;font-weight:800;color:var(--t1)">Apply To All Trip Entries</div>
+            <div style="font-size:12px;color:var(--t2);margin-top:3px">Choose one payer and one bill date that should be used for every row created from this receipt or manual list.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="badge" style="background:#fff;color:#35518f">Paid by ${escHtml(form.paid_by || 'You')}</span>
+            <span class="badge" style="background:#fff;color:#145a3c">${escHtml(form.bulk_date || form.start_date || todayLocalIso())}</span>
+          </div>
+        </div>
+        <div class="fg" style="margin-top:10px">
+          <label class="fl">Paid By
+            <select class="fi" onchange="liveSplitTripBulkPaidBy(this.value)">
+              ${tripCreatePayerOptions(form).map((name) => `<option value="${escHtml(name)}" ${textKey(form.paid_by || 'You') === textKey(name) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">Entry Date For All
+            <input class="fi" type="date" value="${escHtml(form.bulk_date || form.start_date || todayLocalIso())}" onchange="liveSplitTripBulkDate(this.value)">
+          </label>
+        </div>
       </div>
       <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
         <label class="fc" style="align-items:flex-start">
@@ -4513,6 +4559,8 @@
       return;
     }
     const selectedScannedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
+    const appliedBulkDate = toLocalIsoDate(form.bulk_date || form.start_date, todayLocalIso());
+    const appliedPaidBy = String(form.paid_by || 'You').trim() || 'You';
     const manualRowsToSave = (form.manual_items || [])
       .filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0)
       .map((item) => normalizeTripManualRowSplitState({
@@ -4608,10 +4656,10 @@
           }
 
           await persistLiveSplitEntry({
-            divide_date: toLocalIsoDate(row?.purchase_date || form.start_date, todayLocalIso()),
+            divide_date: appliedBulkDate || toLocalIsoDate(row?.purchase_date || form.start_date, todayLocalIso()),
             details: String(row?.item_name || '').trim(),
-            paid_by: 'You',
-            paid_by_key: 'self',
+            paid_by: appliedPaidBy,
+            paid_by_key: textKey(appliedPaidBy) === 'you' ? 'self' : '',
             total_amount: amountValue,
             split_mode: splitModeValue,
             trip_id: createdTripId,
@@ -4639,6 +4687,114 @@
       } else {
         toast(error?.message || 'Could not create live split trip', 'error');
       }
+    }
+  }
+
+  function openTripBulkEditModal(tripId) {
+    const tid = Number(tripId || 0);
+    const trip = (state.liveTrips || []).find((item) => Number(item.id) === tid);
+    if (!trip || !trip.is_owner) {
+      toast('Only trip owner can bulk edit trip rows', 'warning');
+      return;
+    }
+    state.tripBulkEdit = {
+      trip_id: tid,
+      paid_by: 'You',
+      divide_date: toLocalIsoDate(trip.latest_divide_date || trip.start_date, todayLocalIso()),
+    };
+    renderTripBulkEditModal();
+  }
+
+  function renderTripBulkEditModal() {
+    const form = state.tripBulkEdit;
+    if (!form) return;
+    const trip = (state.liveTrips || []).find((item) => Number(item.id) === Number(form.trip_id));
+    if (!trip) return;
+    const payerOptions = [
+      'You',
+      ...(trip.members || [])
+        .filter((member) => textKey(member?.member_name || '') !== 'you')
+        .map((member) => String(member?.member_name || '').trim())
+        .filter(Boolean),
+    ].filter((name, index, arr) => arr.findIndex((item) => textKey(item) === textKey(name)) === index);
+    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip.id));
+    openModal(`Bulk Edit - ${escHtml(trip.name || 'Trip')}`, `
+      <div style="display:grid;gap:12px">
+        <div style="padding:14px;border:1px solid #d8deea;border-radius:14px;background:linear-gradient(180deg,#f8fbff 0%,#f4faf7 100%)">
+          <div style="font-size:15px;font-weight:900;color:var(--t1)">Update All Trip Rows</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:4px">This updates every saved trip entry in this Live Split trip with one payer and one date. Split shares and amounts stay unchanged.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <span class="badge" style="background:#fff;color:#35518f">${tripGroups.length} rows</span>
+            <span class="badge" style="background:#fff;color:#145a3c">${fmtCur(trip.total_amount || 0)} total</span>
+          </div>
+        </div>
+        <div class="fg">
+          <label class="fl">Paid By
+            <select class="fi" onchange="liveSplitTripBulkEditField('paid_by', this.value)">
+              ${payerOptions.map((name) => `<option value="${escHtml(name)}" ${textKey(form.paid_by || 'You') === textKey(name) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="fl">Date For All Rows
+            <input class="fi" type="date" value="${escHtml(form.divide_date || trip.start_date || todayLocalIso())}" onchange="liveSplitTripBulkEditField('divide_date', this.value)">
+          </label>
+        </div>
+      </div>
+      <div class="fa" style="margin-top:14px">
+        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-p" ${state.tripActionBusy ? 'disabled' : ''} onclick="liveSplitTripBulkEditSave()">${state.tripActionBusy ? liveSplitBusyLabel('Saving...') : 'Apply To All Rows'}</button>
+      </div>
+    `);
+  }
+
+  async function saveTripBulkEditModal() {
+    const form = state.tripBulkEdit;
+    if (!form) return;
+    const trip = (state.liveTrips || []).find((item) => Number(item.id) === Number(form.trip_id));
+    if (!trip || !trip.is_owner) {
+      toast('Trip not found', 'error');
+      return;
+    }
+    const divideDate = toLocalIsoDate(form.divide_date, trip.start_date || todayLocalIso());
+    const paidBy = String(form.paid_by || 'You').trim() || 'You';
+    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip.id));
+    if (!tripGroups.length) {
+      toast('No trip rows found to update', 'warning');
+      return;
+    }
+    try {
+      state.tripActionBusy = Number(trip.id);
+      renderTripBulkEditModal();
+      for (const group of tripGroups) {
+        const result = await api(`/api/live-split/groups/${Number(group.id)}`, {
+          method: 'PUT',
+          body: {
+            divide_date: divideDate,
+            details: String(group?.details || group?.heading || 'Split expense').trim(),
+            paid_by: paidBy,
+            total_amount: Number(group?.total_amount || 0),
+            split_mode: String(group?.split_mode || 'equal'),
+            trip_id: Number(group?.trip_id || 0) || null,
+            heading: String(group?.heading || group?.details || '').trim() || null,
+            splits: Array.isArray(group?.splits) ? group.splits.map((split) => ({
+              friend_id: Number(split?.friend_id || 0),
+              friend_name: String(split?.friend_name || '').trim(),
+              share_amount: Number(split?.share_amount || 0),
+            })) : [],
+            allow_duplicate: true,
+          },
+        });
+        if (!result || result.error) throw new Error(result?.error || 'Could not bulk update trip rows');
+      }
+      state.tripActionBusy = false;
+      state.tripBulkEdit = null;
+      closeModal();
+      await fetchData();
+      await openTripDetails(trip.id);
+      toast(`Updated ${tripGroups.length} trip row${tripGroups.length === 1 ? '' : 's'}`, 'success');
+    } catch (error) {
+      state.tripActionBusy = false;
+      if (state.tripBulkEdit) renderTripBulkEditModal();
+      toast(error?.message || 'Could not bulk update trip rows', 'error');
     }
   }
 
@@ -5766,6 +5922,21 @@
     state.tripCreate.show_add_to_expense_option = !!checked;
     renderTripCreateModal();
   };
+  window.liveSplitTripBulkEditField = function liveSplitTripBulkEditField(field, value) {
+    if (!state.tripBulkEdit) return;
+    state.tripBulkEdit[field] = value || '';
+  };
+  window.liveSplitOpenTripBulkEdit = openTripBulkEditModal;
+  window.liveSplitTripBulkEditSave = saveTripBulkEditModal;
+  window.liveSplitTripBulkPaidBy = function liveSplitTripBulkPaidBy(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.paid_by = String(value || 'You').trim() || 'You';
+    rerenderTripCreateModalPreservingUi();
+  };
+  window.liveSplitTripBulkDate = function liveSplitTripBulkDate(value) {
+    if (!state.tripCreate) return;
+    applyTripCreateMetaToRowsWeb({ dateValue: value });
+  };
   window.liveSplitTripToggleMember = function liveSplitTripToggleMember(friendId) {
     if (!state.tripCreate) return;
     syncTripCreateDraftFromDom();
@@ -5777,6 +5948,10 @@
     state.tripCreate.scan_items = (state.tripCreate.scan_items || []).map((item) => normalizeTripScanRowSplitState(item, state.tripCreate));
     state.tripCreate.manual_items = normalizeTripAssignmentsForSelectedFriends(state.tripCreate.manual_items, selectedIds);
     state.tripCreate.manual_items = (state.tripCreate.manual_items || []).map((item) => normalizeTripManualRowSplitState(item, state.tripCreate));
+    const payerOptions = tripCreatePayerOptions(state.tripCreate);
+    if (!payerOptions.some((name) => textKey(name) === textKey(state.tripCreate.paid_by || 'You'))) {
+      state.tripCreate.paid_by = 'You';
+    }
     renderTripCreateModal();
   };
   window.liveSplitTripScanPick = liveSplitTriggerTripScanPick;
