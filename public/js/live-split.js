@@ -223,9 +223,32 @@
     if (isCurrentUserPayer(payer)) return true;
     const payerKey = textKey(payer);
     if (!payerKey) return false;
+    const knownFriendMatch = (state.friends || []).some((friend) => {
+      const keys = [
+        textKey(friend?.name),
+        textKey(friend?.linked_user_display_name),
+        textKey(friend?.linked_user_username),
+      ].filter(Boolean);
+      return keys.includes(payerKey);
+    });
+    if (knownFriendMatch) return false;
     const hasMatchInParticipants = (splits || []).some((split) => textKey(split?.friend_name) === payerKey);
     // If payer isn't one of split participants, treat it as owner/self alias.
     return !hasMatchInParticipants;
+  }
+
+  function resolveTripBulkEditDefaults(trip) {
+    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip?.id || 0));
+    const latestGroup = [...tripGroups]
+      .sort((a, b) => {
+        const dateCmp = String(b?.divide_date || '').localeCompare(String(a?.divide_date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      })[0] || null;
+    return {
+      paid_by: String(latestGroup?.paid_by || 'You').trim() || 'You',
+      divide_date: toLocalIsoDate(latestGroup?.divide_date || trip?.latest_divide_date || trip?.start_date, todayLocalIso()),
+    };
   }
 
   function ensureRow(map, name, extra = {}) {
@@ -1691,6 +1714,10 @@
         const selfPayer = isLikelySelfPayerForOwnGroup(payer, splits);
         const totalFriends = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
         const selfShare = r2(total - totalFriends);
+        const payerAlreadyTracked = selfPayer || splits.some((split) => textKey(split?.friend_name) === payerKey);
+        const extraPayerParticipant = !selfPayer && payerKey && !payerAlreadyTracked
+          ? [{ name: payer, share: 0, paid: true, contextOnly: true }]
+          : [];
         return {
           key: `t-${group?.id || ''}-${group?.divide_date || ''}`,
           group_id: Number(group?.id) || null,
@@ -1705,6 +1732,7 @@
               share: r2(split?.share_amount),
               paid: textKey(split?.friend_name) === payerKey,
             })),
+            ...extraPayerParticipant,
           ].filter((item) => item.name),
         };
       })
@@ -4697,10 +4725,11 @@
       toast('Only trip owner can bulk edit trip rows', 'warning');
       return;
     }
+    const defaults = resolveTripBulkEditDefaults(trip);
     state.tripBulkEdit = {
       trip_id: tid,
-      paid_by: 'You',
-      divide_date: toLocalIsoDate(trip.latest_divide_date || trip.start_date, todayLocalIso()),
+      paid_by: defaults.paid_by,
+      divide_date: defaults.divide_date,
     };
     renderTripBulkEditModal();
   }
