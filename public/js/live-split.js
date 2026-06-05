@@ -1428,6 +1428,8 @@
       const payer = String(group?.paid_by || '').trim();
       const selfPayer = isLikelySelfPayerForOwnGroup(payer, splits);
       const payerKey = textKey(payer);
+      const rowIsNamedPayer = !!payerKey && payerKey === rowKey;
+      let payerHandled = false;
       let delta = 0;
       let involved = false;
       splits.forEach((split) => {
@@ -1450,6 +1452,7 @@
           || (rowLinkedUserId > 0 && splitLinkedUserId > 0 && rowLinkedUserId === splitLinkedUserId);
         if (matchesRow) {
           involved = true;
+          if (payerKey && (payerKey === friendName.toLowerCase() || payerKey === rowKey)) payerHandled = true;
           if (groupMode === 'settlement') {
             if (selfPayer) delta = r2(delta + n(split.share_amount));
             else if (payerKey && (payerKey === friendName.toLowerCase() || payerKey === rowKey)) delta = r2(delta - n(split.share_amount));
@@ -1459,8 +1462,13 @@
           else if (payerKey && (payerKey === friendName.toLowerCase() || payerKey === rowKey) && selfShare > 0) delta = r2(delta - selfShare);
         }
       });
+      if (!selfPayer && rowIsNamedPayer && selfShare > 0 && !payerHandled) {
+        involved = true;
+        delta = r2(delta - selfShare);
+      }
       if (payerKey === rowKey) involved = true;
       if (involved) {
+        const payerAlreadyTracked = selfPayer || splits.some((split) => textKey(split?.friend_name) === payerKey);
         const participants = groupMode === 'settlement'
           ? buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer)
           : [
@@ -1470,6 +1478,7 @@
                 share: r2(split?.share_amount),
                 paid: textKey(split?.friend_name) === payerKey,
               })),
+              ...(!selfPayer && payerKey && !payerAlreadyTracked ? [{ name: payer, share: 0, paid: true, contextOnly: true }] : []),
             ].filter((item) => item.name);
         events.push({
           key: `g-${group?.id || ''}-${group?.divide_date || ''}-${group?.details || ''}`,
