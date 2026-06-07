@@ -2457,9 +2457,9 @@
         : [];
       if (!participants.length) return '';
       return `
-        <div style="margin-top:8px;padding:8px 10px;border:1px dashed #d8e5dd;border-radius:10px;background:#fbfdfb">
-          <div style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Each split</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <div class="ls-trip-inline-splits" style="margin-top:8px;padding:8px 10px;border:1px dashed #d8e5dd;border-radius:10px;background:#fbfdfb">
+          <div class="ls-trip-inline-split-kicker" style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Each split</div>
+          <div class="ls-trip-inline-split-chips" style="display:flex;flex-wrap:wrap;gap:6px">
             ${participants.map((p) => {
               const share = r2(p?.share);
               const isPayer = !!p?.paid;
@@ -2469,7 +2469,7 @@
               const label = contextOnly
                 ? `${escHtml(p.name)} · ${fmtCur(share)} in split`
                 : `${escHtml(p.name)} · ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
-              return `<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:${bg};color:${tone};font-size:11px;font-weight:600;line-height:1.2">${label}</span>`;
+              return `<span class="ls-trip-inline-split-chip" style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:${bg};color:${tone};font-size:11px;font-weight:600;line-height:1.2">${label}</span>`;
             }).join('')}
           </div>
         </div>
@@ -2480,34 +2480,42 @@
     window.__modalClassName = 'modal-wide live-split-detail-modal';
     window.__modalOverlayClassName = 'live-split-detail-overlay';
     openModal(`Trip - ${escHtml(trip.name || 'Trip')}`, `
-      <div class="live-split-modal-shell" style="display:grid;gap:10px">
-        <div class="live-split-modal-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <div style="font-size:13px;color:var(--t2)">
+      <div class="live-split-modal-shell ls-trip-detail-shell" style="display:grid;gap:10px">
+        <div class="live-split-modal-top ls-trip-detail-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div class="ls-trip-top-meta" style="font-size:13px;color:var(--t2)">
             <b style="color:${statusTone};text-transform:capitalize">${escHtml(status)}</b>
             | ${fmtCur(trip.total_amount || 0)} | ${(trip.members || []).length} members | ${Number(trip.expense_count || 0)} expenses
           </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div class="ls-trip-top-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
             ${trip.added_to_expense
-              ? `<div style="font-size:11px;font-weight:700;color:var(--green);padding:6px 10px;border-radius:999px;background:#edfbf3;border:1px solid #cdeeda">Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}</div>`
-              : `<button class="btn btn-s btn-sm" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}</button>`}
-            <button class="btn btn-g btn-sm" onclick="liveSplitToggleTripSplitView(${tid})">${showItemSplits ? 'Hide Each Split' : 'Show Each Split'}</button>
-            ${trip.is_owner ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenTripBulkEdit(${tid})">Bulk Edit Rows</button>` : ''}
-            <button class="btn btn-s btn-sm" onclick="liveSplitDownloadTripPdf(${tid})">Trip PDF</button>
+              ? `<span class="ls-trip-toolbar-pill" title="Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}" aria-label="Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 4v5c0 4.2-2.7 8-7 9-4.3-1-7-4.8-7-9V7l7-4z"/></svg>
+                </span>`
+              : `<button class="live-split-icon-btn soft" title="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" aria-label="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M12 9v6M9 12h6"/></svg>
+                </button>`}
+            <button class="live-split-icon-btn soft" title="${showItemSplits ? 'Hide Each Split' : 'Show Each Split'}" aria-label="${showItemSplits ? 'Hide Each Split' : 'Show Each Split'}" onclick="liveSplitToggleTripSplitView(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h7M4 12h16M13 17h7"/><circle cx="14" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+            </button>
+            ${trip.is_owner ? `<button class="live-split-icon-btn soft" title="Bulk Edit Rows" aria-label="Bulk Edit Rows" onclick="liveSplitOpenTripBulkEdit(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M4 12h7M4 17h12"/><path d="M16.5 5.5l2 2"/><path d="M14 8l5-5 2 2-5 5-3 1z"/></svg>
+            </button>` : ''}
+            <button class="live-split-icon-btn soft" title="Trip PDF" aria-label="Trip PDF" onclick="liveSplitDownloadTripPdf(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v13H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 15h8M8 18h5"/></svg>
+            </button>
             <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
             </button>
             <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="liveSplitUseTrip(${tid})">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
             </button>
+            ${trip.is_owner ? `<button class="live-split-icon-btn danger" title="Delete Trip" aria-label="Delete Trip" onclick="liveSplitDeleteTrip(${tid})">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>
+            </button>` : ''}
           </div>
         </div>
-        ${trip.is_owner ? `
-          <div style="display:flex;justify-content:flex-end">
-            <button class="btn btn-g btn-sm" onclick="liveSplitDeleteTrip(${tid})">Delete Trip</button>
-          </div>
-        ` : ''}
         ${memberBalanceChips.length ? `
-          <div class="live-split-summary-chips" style="display:flex;flex-wrap:wrap;gap:6px">
+          <div class="live-split-summary-chips ls-trip-balance-strip" style="display:flex;flex-wrap:wrap;gap:6px">
             ${memberBalanceChips.map((item) => {
               const amount = r2(item.amount);
               const tone = amount > 0 ? 'var(--green)' : amount < 0 ? 'var(--red)' : 'var(--t3)';
@@ -2521,7 +2529,7 @@
           </div>
         ` : ''}
         ${memberSummary.length ? `
-          <div class="live-split-member-grid" style="display:flex;flex-wrap:wrap;gap:8px">
+          <div class="live-split-member-grid ls-trip-member-grid" style="display:flex;flex-wrap:wrap;gap:8px">
             ${memberSummary.map((m) => {
               const net = r2(m.paid - m.share);
               const netColor = net > 0.005 ? 'var(--green)' : net < -0.005 ? 'var(--red)' : 'var(--t3)';
@@ -2547,15 +2555,15 @@
             }).join('')}
           </div>
         ` : ''}
-        <div>
+        <div class="ls-trip-month-stack">
           ${events.length ? grouped.map(([month, monthData]) => `
-            <div style="margin-bottom:10px">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0">
-                <div style="font-size:14px;font-weight:800;color:var(--t1)">${escHtml(month)}</div>
-                <div style="font-size:13px;font-weight:800;color:var(--t1);text-align:right">${fmtCur(monthData.total)}</div>
+            <div class="ls-trip-month-card" style="margin-bottom:10px">
+              <div class="ls-trip-month-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0">
+                <div class="ls-trip-month-title" style="font-size:14px;font-weight:800;color:var(--t1)">${escHtml(month)}</div>
+                <div class="ls-trip-month-total" style="font-size:13px;font-weight:800;color:var(--t1);text-align:right">${fmtCur(monthData.total)}</div>
               </div>
-              <div class="live-split-table-wrap ls-desktop-event-wrap" style="border-radius:12px;border:1px solid var(--border);background:var(--white);overflow:hidden">
-                <table class="live-split-event-table" style="min-width:0;table-layout:fixed;width:100%">
+              <div class="live-split-table-wrap ls-desktop-event-wrap ls-trip-event-wrap" style="border-radius:12px;border:1px solid var(--border);background:var(--white);overflow:hidden">
+                <table class="live-split-event-table ls-trip-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
                   <tbody>
                     ${monthData.events.map((event) => {
@@ -2572,9 +2580,9 @@
                         </div>
                       ` : '<span style="font-size:11px;color:var(--t3)">-</span>';
                       return `
-                        <tr>
-                          <td class="live-split-date-col" style="cursor:pointer" onclick="${openCall}">${escHtml(shortDate(event.date))}</td>
-                          <td class="live-split-details-col" style="cursor:pointer" onclick="${openCall}">
+                        <tr class="ls-trip-event-row">
+                          <td class="live-split-date-col ls-trip-date-col" style="cursor:pointer" onclick="${openCall}">${escHtml(shortDate(event.date))}</td>
+                          <td class="live-split-details-col ls-trip-details-col" style="cursor:pointer" onclick="${openCall}">
                             <div style="display:flex;width:100%;align-items:flex-start;justify-content:space-between;gap:10px">
                               <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap">${fmtCur(event.total)}</div>
@@ -2589,7 +2597,7 @@
                           <td class="td-m live-split-action-col" onclick="event.stopPropagation()">
                             ${actionHtml}
                           </td>
-                          <td class="td-m live-split-amount-col" style="color:var(--t1);cursor:pointer" onclick="${openCall}">${fmtCur(event.total)}</td>
+                          <td class="td-m live-split-amount-col ls-trip-amount-col" style="color:var(--t1);cursor:pointer" onclick="${openCall}">${fmtCur(event.total)}</td>
                         </tr>
                       `;
                     }).join('')}
@@ -2611,7 +2619,7 @@
                     </div>
                   ` : '<span style="font-size:11px;color:var(--t3)">-</span>';
                   return `
-                    <div class="ls-mobile-event-card" onclick="${openCall}">
+                    <div class="ls-mobile-event-card ls-trip-mobile-card" onclick="${openCall}">
                       <div class="ls-mobile-event-head">
                         <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
                         <div class="ls-mobile-event-amount">${fmtCur(event.total)}</div>
