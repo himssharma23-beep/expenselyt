@@ -34,7 +34,7 @@ function tenantLocalDateValue(date) {
 }
 
 function tenantCurrentMonthKey() {
-  return new Date().toISOString().slice(0, 7);
+  return typeof currentMonthStr === 'function' ? currentMonthStr() : '';
 }
 
 function tenantSharedRoomInvoiceForMonth(tenant, invoiceMonth, { excludeTenantId = null } = {}) {
@@ -79,10 +79,10 @@ function tenantMonthLabel(monthKey) {
 function tenantPreviousMonthKey(monthKey) {
   const raw = String(monthKey || '').trim();
   if (!/^\d{4}-\d{2}$/.test(raw)) return '';
-  const date = new Date(`${raw}-01T00:00:00Z`);
+  const date = new Date(`${raw}-01T00:00:00`);
   if (Number.isNaN(date.getTime())) return '';
-  date.setUTCMonth(date.getUTCMonth() - 1);
-  return date.toISOString().slice(0, 7);
+  date.setMonth(date.getMonth() - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function tenantCarryForwardPendingItems(tenant, targetMonthKey) {

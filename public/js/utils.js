@@ -19,7 +19,7 @@ const REGION_CURRENCY_MAP = {
   IN: 'INR', US: 'USD', GB: 'GBP', AE: 'AED', AU: 'AUD', CA: 'CAD', SG: 'SGD',
   JP: 'JPY', CN: 'CNY', DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR',
 };
-window.__currencyPrefs = { currencyCode: 'INR', localeCode: 'en-IN' };
+window.__currencyPrefs = { currencyCode: 'INR', localeCode: 'en-IN', timeZone: null };
 const MOJIBAKE_REPLACEMENTS = [
   ['Ã¢Å½â„¢', ''],
   ['âŽ™', ''],
@@ -142,7 +142,44 @@ function getYears() {
   return Array.from({length: y - 2016}, (_, i) => y + 1 - i);
 }
 
-function todayStr() { return new Date().toISOString().split('T')[0]; }
+function pad2(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function dateOnlyFromDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function dateOnlyFromValue(value) {
+  if (!value && value !== 0) return '';
+  if (value instanceof Date) return dateOnlyFromDate(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return dateOnlyFromDate(new Date(value));
+  if (typeof value === 'object') {
+    const year = Number(value.year ?? value.y);
+    const month = Number(value.month ?? value.m);
+    const day = Number(value.day ?? value.d);
+    if (year && month && day) return `${String(year).padStart(4, '0')}-${pad2(month)}-${pad2(day)}`;
+    if (value.date != null) return dateOnlyFromValue(value.date);
+    if (value.value != null) return dateOnlyFromValue(value.value);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : dateOnlyFromDate(parsed);
+}
+
+function monthKeyFromValue(value) {
+  const dateOnly = dateOnlyFromValue(value || new Date());
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? dateOnly.slice(0, 7) : '';
+}
+
+function todayStr() { return dateOnlyFromDate(new Date()); }
+function currentMonthStr() { return monthKeyFromValue(new Date()); }
 
 function normalizeLocaleCode(locale, currencyCode = 'INR') {
   const cleaned = String(locale || '').trim().replace(/_/g, '-');
@@ -215,7 +252,8 @@ function setCurrencyPrefs(source) {
   const fallback = detectCurrencyPrefs();
   const currencyCode = normalizeCurrencyCode(source?.currency_code || source?.currencyCode) || fallback.currencyCode;
   const localeCode = normalizeLocaleCode(source?.locale_code || source?.localeCode, currencyCode);
-  window.__currencyPrefs = { currencyCode, localeCode };
+  const timeZone = String(source?.time_zone || source?.timeZone || fallback.timeZone || '').trim() || null;
+  window.__currencyPrefs = { currencyCode, localeCode, timeZone };
   return window.__currencyPrefs;
 }
 
@@ -241,14 +279,15 @@ function fmtDate(d) {
   if (!d) return "";
   const raw = String(d).trim();
   let dt;
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
-  if (m) {
-    dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  } else {
-    dt = new Date(raw);
-  }
+  const dateOnly = dateOnlyFromValue(raw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) {
+    const [year, month, day] = dateOnly.split('-').map(Number);
+    dt = new Date(year, month - 1, day);
+  } else dt = new Date(raw);
   if (Number.isNaN(dt.getTime())) return raw;
-  return dt.toLocaleDateString(window.__currencyPrefs.localeCode || "en-IN", { day:"2-digit", month:"short", year:"numeric" });
+  const formatOptions = { day:"2-digit", month:"short", year:"numeric" };
+  if (window.__currencyPrefs?.timeZone && !/^\d{4}-\d{2}-\d{2}$/.test(dateOnly || '')) formatOptions.timeZone = window.__currencyPrefs.timeZone;
+  return dt.toLocaleDateString(window.__currencyPrefs.localeCode || "en-IN", formatOptions);
 }
 
 function fmtCur(n) {
@@ -298,8 +337,10 @@ function balColorLight(n) { return n < 0 ? '#FF8A8A' : n > 0 ? '#7EEAB0' : '#fff
 // ─── API Helper ──────────────────────────────────────────────
 async function api(url, opts = {}) {
   try {
+    const detectedTimeZone = window.__currencyPrefs?.timeZone || detectCurrencyPrefs().timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const detectedLocale = window.__currencyPrefs?.localeCode || navigator.language || Intl.DateTimeFormat().resolvedOptions().locale || 'en-IN';
     const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': detectedTimeZone, 'X-Client-Locale': detectedLocale, ...opts.headers },
       ...opts,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });

@@ -1,6 +1,6 @@
 (function () {
   window.__petrolDivideLoaded = true;
-  let petrolMonth = new Date().toISOString().slice(0, 7);
+  let petrolMonth = typeof currentMonthStr === 'function' ? currentMonthStr() : `${todayStr().slice(0, 7)}`;
   let petrolData = null;
   let petrolMonths = [];
   let monthOpened = false;
@@ -435,7 +435,7 @@
     }).join('');
 
     const { min: minDate, max: maxDate } = monthBounds(petrolMonth);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = typeof todayStr === 'function' ? todayStr() : '';
     const defaultDate = today.slice(0, 7) === petrolMonth ? today : minDate;
     const pickedDate = entry ? toDateInputValue(entry.entry_date, petrolMonth) : defaultDate;
     const dateVal = String(pickedDate || '').slice(0, 7) === String(petrolMonth) ? pickedDate : defaultDate;
@@ -476,7 +476,7 @@
   async function petrolSaveEntryFromModal() {
     try {
       const dateRaw = document.getElementById('petrolEntryDate')?.value || '';
-      const entryDate = toApiDateValue(dateRaw, petrolMonth) || new Date().toISOString().slice(0, 10);
+      const entryDate = toApiDateValue(dateRaw, petrolMonth) || (typeof todayStr === 'function' ? todayStr() : '');
       if (String(entryDate).slice(0, 7) !== String(petrolMonth)) {
         return toast(`Date must be in ${petrolMonth}`, 'warning');
       }
@@ -680,7 +680,7 @@
   function petrolOpenShareModal(mode = 'real') {
     petrolShareMode = String(mode || 'real').toLowerCase() === 'fake' ? 'fake' : 'real';
     petrolShareUrl = '';
-    const today = new Date().toISOString().slice(0, 10);
+    const today = typeof todayStr === 'function' ? todayStr() : '';
     openModal('Generate Share Link', `
       <div class="fg">
         <label class="fl">What to share

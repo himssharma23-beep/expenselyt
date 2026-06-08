@@ -459,7 +459,7 @@ let selectedFriend = null;
 let _societiesList = [];
 let _selectedSocietyId = null;
 let _societyDetail = null;
-let _societyMonth = new Date().toISOString().slice(0, 7);
+let _societyMonth = currentMonthStr();
 let _societiesLoading = false;
 let _societyMemberFilter = 'all';
 let _societyMemberSearch = '';
@@ -502,35 +502,16 @@ function validateFriendNameInput(name) {
 }
 
 function normalizeInputDate(value) {
+  if (typeof dateOnlyFromValue === 'function') {
+    const normalized = dateOnlyFromValue(value);
+    if (normalized) return normalized;
+  }
   if (!value) return '';
   const str = String(value).trim();
-  if (!str) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) return str.slice(0, 10);
-  const dmy = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
-  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
-  const parsed = new Date(str);
-  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-  return str.length >= 10 ? str.slice(0, 10) : str;
+  return /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : (str.length >= 10 ? str.slice(0, 10) : str);
 }
 
 function normalizeTxnDateValue(value) {
-  if (!value) return '';
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
-  }
-  if (typeof value === 'object') {
-    const year = Number(value.year ?? value.y);
-    const month = Number(value.month ?? value.m);
-    const day = Number(value.day ?? value.d);
-    if (year && month && day) {
-      return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    }
-    if (value.date != null) return normalizeTxnDateValue(value.date);
-    if (value.value != null) return normalizeTxnDateValue(value.value);
-  }
   return normalizeInputDate(value);
 }
 
@@ -7299,9 +7280,8 @@ function tripStartsInLabel(startDate) {
   if (Number.isNaN(start.getTime()) || Number.isNaN(current.getTime())) return '';
   const diff = Math.round((start.getTime() - current.getTime()) / 86400000);
   if (diff < 0) return '';
-  const inclusiveDays = diff + 1;
-  if (inclusiveDays <= 0) return '';
-  return inclusiveDays === 1 ? 'Starts in 1 day' : `Starts in ${inclusiveDays} days`;
+  if (diff <= 0) return 'Starts today';
+  return diff === 1 ? 'Starts in 1 day' : `Starts in ${diff} days`;
 }
 
 function canEditTripExpensesByStatus(status) {
@@ -8769,7 +8749,7 @@ async function showFriendsShareModal() {
     ? '<div style="font-size:12px;color:var(--t3);padding:8px 0">No share links yet.</div>'
     : links.map(l => {
         const url = `${location.origin}/s/${l.token}`;
-        const expired = l.expires_at && l.expires_at < new Date().toISOString().split('T')[0];
+        const expired = l.expires_at && l.expires_at < todayStr();
         return `<div style="border:1px solid var(--br);border-radius:10px;padding:12px;margin-bottom:10px;font-size:12px${expired ? ';opacity:0.5' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
             <div style="color:var(--em);word-break:break-all;line-height:1.5">${url}</div>
@@ -11211,7 +11191,7 @@ let _emiSearch = '';
 let _emiRecords = [];
 let _emiFiltered = [];
 let _emiExpandedId = null;
-let _emiMonth = new Date().toISOString().slice(0, 7);
+let _emiMonth = currentMonthStr();
 let _emiMonthlySummary = null;
 
 let _friendEmiFilter = 'all';
@@ -11326,7 +11306,7 @@ function showAddFriendEmiModal() {
     const s = String(val);
     return s.slice(0, 10);
   };
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   openModal('Add Friend EMI', `
     <div class="fg">
       <label class="fl full">Friend's Name
@@ -11449,7 +11429,7 @@ function renderEmiMonthlySummary() {
 function buildEmiMonthlySummaryHtml() {
   const s = _emiMonthlySummary;
   if (!s) return '';
-  const isCurrentMonth = _emiMonth === new Date().toISOString().slice(0, 7);
+  const isCurrentMonth = _emiMonth === currentMonthStr();
   const remaining = Math.round((s.totalDue - s.totalPaid) * 100) / 100;
   const pct = s.totalDue > 0 ? Math.round(s.totalPaid / s.totalDue * 100) : 0;
 
@@ -12152,7 +12132,7 @@ function renderEmiInstallments(r) {
     if (!val) return '-';
     return String(val).slice(0, 10);
   };
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   const rows = r.installments.map(inst => {
     const dueDate = shortDate(inst.due_date);
     const isPaid = inst.paid_amount > 0;
@@ -12229,7 +12209,7 @@ async function reRenderEmiCard(id) {
 }
 
 async function showActivateModal(id) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   const isFriend = currentTab === 'friendemis';
   if (!isFriend && !_expenseCategories.length) await loadExpenseCategories();
   const expensesSection = isFriend ? '' :
@@ -12266,7 +12246,7 @@ async function doActivateEmiTracker(id) {
 }
 
 function showPayInstallmentModal(instId, emiAmt, emiId) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   showModal('<div class="modal-title">Mark Installment Paid</div>' +
     '<div class="fg">' +
     '<label class="fl">Amount Paid (&#8377;)<input class="fi" type="number" id="payAmt" value="' + emiAmt + '" step="0.01"></label>' +
@@ -12828,7 +12808,7 @@ function renderCcHistory(cycles) {
 
   if (!cycles.length) return importBtn + `<div style="color:var(--t3);text-align:center;padding:40px">No billing history yet.<br><span style="font-size:13px">Use the import button above to add past billing cycle totals.</span></div>`;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
 
   const rows = cycles.map(c => {
     const statusColor = c.status === 'paid' || c.status === 'closed' ? 'var(--green)' : c.status === 'partial' ? 'var(--amber)' : 'var(--red)';
@@ -14775,7 +14755,7 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
 }
 
 function showPlannerEmiPayModal(instId, emiAmount) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   const defaultBank = _bankAccounts.find(a => a.is_default);
   const bankOpts = _bankAccounts.map(a =>
     '<option value="' + a.id + '"' + (a.is_default ? ' selected' : '') + '>' +
@@ -15605,7 +15585,7 @@ async function renderTrackerDetail() {
   const entryMap = {};
   entries.forEach(e => { entryMap[e.entry_date] = e; });
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayStr();
   const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
   const currentMonthKey = `${_trackerYear}-${String(_trackerMonth).padStart(2, '0')}`;
   const isCurrentMonth = currentMonthKey === today.slice(0, 7);
@@ -17218,7 +17198,7 @@ async function renderTrackerDetail() {
   const entryMap = {};
   entries.forEach((e) => { entryMap[e.entry_date] = e; });
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayStr();
   const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
   const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
   const actualCurrentMonthKey = today.slice(0, 7);
@@ -21361,7 +21341,7 @@ async function renderTrackerDetail() {
     if (key) entryMap[key] = e;
   });
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayStr();
   const daysInMonth = new Date(_trackerYear, _trackerMonth, 0).getDate();
   const currentMonthKey = trackerMonthKey(_trackerYear, _trackerMonth);
   const actualCurrentMonthKey = today.slice(0, 7);
