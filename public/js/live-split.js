@@ -604,7 +604,17 @@
         }
       });
 
-    return [...map.values()];
+    return reconcileVisibleLiveSplitRows([...map.values()]);
+  }
+
+  function reconcileVisibleLiveSplitRows(rows = []) {
+    return (rows || []).map((row) => {
+      const computedAmount = r2(buildRowEvents(row).reduce((sum, event) => sum + n(event?.delta), 0));
+      if (Math.abs(computedAmount - n(row?.amount)) > 0.004) {
+        return { ...row, amount: computedAmount };
+      }
+      return { ...row, amount: r2(row?.amount) };
+    });
   }
 
   function canDeleteLiveSplitRow(row) {

@@ -59,6 +59,12 @@ function normalizeOptionalText(value, maxLength = 80) {
   return normalized;
 }
 
+function normalizeOptionalEmoji(value, maxLength = 12) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
+}
+
 function normalizeAmount(value, label = 'Amount') {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) throw validationError(`${label} must be greater than 0`);
@@ -134,6 +140,21 @@ function r2(value) {
   return Math.round(num(value) * 100) / 100;
 }
 
+const DEFAULT_EXPENSE_CATEGORY_LIBRARY = [
+  { name: 'Food', icon: '🍜', subcategories: ['Lunch', 'Dinner', 'Eating out', 'Beverages'] },
+  { name: 'Social Life', icon: '🧑‍🤝‍🧑', subcategories: ['Friend', 'Fellowship', 'Alumni', 'Dues'] },
+  { name: 'Pets', icon: '🐶', subcategories: ['Food', 'Vet', 'Accessories', 'Grooming'] },
+  { name: 'Transport', icon: '🚕', subcategories: ['Bus', 'Subway', 'Taxi', 'Car'] },
+  { name: 'Culture', icon: '🖼️', subcategories: ['Books', 'Music', 'Apps', 'Movies'] },
+  { name: 'Household', icon: '🪑', subcategories: ['Appliances', 'Furniture', 'Kitchen', 'Toiletries'] },
+  { name: 'Apparel', icon: '🧥', subcategories: ['Clothing', 'Fashion', 'Shoes', 'Laundry'] },
+  { name: 'Beauty', icon: '💄', subcategories: ['Cosmetics', 'Makeup', 'Accessories', 'Salon'] },
+  { name: 'Health', icon: '🧘', subcategories: ['Healthy', 'Yoga', 'Hospital', 'Medicine'] },
+  { name: 'Education', icon: '📙', subcategories: ['Schooling', 'Textbooks', 'School supplies', 'Courses'] },
+  { name: 'Gift', icon: '🎁', subcategories: ['Birthday', 'Festival', 'Return gift', 'Charity'] },
+  { name: 'Other', icon: '📦', subcategories: [] },
+];
+
 function liveSplitTextKey(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -158,6 +179,378 @@ function liveSplitEnsureRow(map, name, extra = {}) {
     map.set(key, { key, name: String(name || '').trim(), amount: 0, linked_user_id: null, friend_id: null, ...extra });
   }
   return map.get(key);
+}
+
+let expenseCategorySchemaEnsured = false;
+
+async function ensureExpenseCategoryTables() {
+  if (expenseCategorySchemaEnsured) return;
+  await query(`
+    CREATE TABLE IF NOT EXISTS expense_categories (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      icon TEXT,
+      is_global BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS expense_subcategories (
+      id BIGSERIAL PRIMARY KEY,
+      category_id BIGINT NOT NULL REFERENCES expense_categories(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
+    )`);
+  await query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS subcategory TEXT`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_expense_categories_visible ON expense_categories(user_id, is_global, deleted_at)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_expense_subcategories_category ON expense_subcategories(category_id, deleted_at)`);
+  for (const item of DEFAULT_EXPENSE_CATEGORY_LIBRARY) {
+    const existing = await query(
+      `SELECT id
+       FROM expense_categories
+       WHERE user_id IS NULL
+         AND is_global = TRUE
+         AND deleted_at IS NULL
+         AND lower(name) = lower($1)
+       LIMIT 1`,
+      [item.name]
+    );
+    let categoryId = existing.rows[0]?.id ? Number(existing.rows[0].id) : 0;
+    if (!categoryId) {
+      const inserted = await query(
+        `INSERT INTO expense_categories (user_id, name, icon, is_global)
+         VALUES (NULL, $1, $2, TRUE)
+         RETURNING id`,
+        [item.name, normalizeOptionalEmoji(item.icon)]
+      );
+      categoryId = Number(inserted.rows[0].id);
+    } else {
+      await query(
+        `UPDATE expense_categories
+         SET icon = COALESCE($2, icon),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [categoryId, normalizeOptionalEmoji(item.icon)]
+      );
+    }
+    for (const sub of item.subcategories || []) {
+      const subExisting = await query(
+        `SELECT id
+         FROM expense_subcategories
+         WHERE category_id = $1
+           AND deleted_at IS NULL
+           AND lower(name) = lower($2)
+         LIMIT 1`,
+        [categoryId, sub]
+      );
+      if (!subExisting.rows[0]) {
+        await query(
+          `INSERT INTO expense_subcategories (category_id, name)
+           VALUES ($1, $2)`,
+          [categoryId, sub]
+        );
+      }
+    }
+  }
+  expenseCategorySchemaEnsured = true;
+}
+
+async function getExpenseCategoryVisibleRows(userId) {
+  await ensureExpenseCategoryTables();
+  const categoryResult = await query(
+    `SELECT id,
+            user_id,
+            name,
+            icon,
+            is_global,
+            created_at,
+            updated_at
+     FROM expense_categories
+     WHERE deleted_at IS NULL
+       AND (is_global = TRUE OR user_id = $1)
+     ORDER BY is_global DESC, lower(name), id`,
+    [userId]
+  );
+  const categoryIds = categoryResult.rows.map((row) => Number(row.id)).filter(Boolean);
+  let subcategoryRows = [];
+  if (categoryIds.length) {
+    const subResult = await query(
+      `SELECT id, category_id, name, created_at, updated_at
+       FROM expense_subcategories
+       WHERE deleted_at IS NULL
+         AND category_id = ANY($1::bigint[])
+       ORDER BY lower(name), id`,
+      [categoryIds]
+    );
+    subcategoryRows = subResult.rows;
+  }
+  const subByCategory = new Map();
+  subcategoryRows.forEach((row) => {
+    const key = Number(row.category_id);
+    if (!subByCategory.has(key)) subByCategory.set(key, []);
+    subByCategory.get(key).push({
+      id: Number(row.id),
+      category_id: key,
+      name: String(row.name || '').trim(),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      can_edit: true,
+      can_delete: true,
+    });
+  });
+  return categoryResult.rows.map((row) => {
+    const id = Number(row.id);
+    return {
+      id,
+      user_id: row.user_id ? Number(row.user_id) : null,
+      name: String(row.name || '').trim(),
+      icon: row.icon || '',
+      is_global: !!row.is_global,
+      is_default: !!row.is_global,
+      is_custom: !row.is_global,
+      can_edit: !row.is_global,
+      can_delete: !row.is_global,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      subcategories: subByCategory.get(id) || [],
+    };
+  });
+}
+
+async function getExpenseCategoryLibrary(userId) {
+  const visible = await getExpenseCategoryVisibleRows(userId);
+  const legacyResult = await query(
+    `SELECT DISTINCT category
+     FROM expenses
+     WHERE user_id = $1
+       AND category IS NOT NULL
+       AND btrim(category) <> ''
+       AND deleted_at IS NULL
+     ORDER BY category`,
+    [userId]
+  );
+  const visibleKeys = new Set(visible.map((row) => String(row.name || '').trim().toLowerCase()));
+  const legacy = legacyResult.rows
+    .map((row) => String(row.category || '').trim())
+    .filter(Boolean)
+    .filter((value) => !visibleKeys.has(value.toLowerCase()))
+    .map((value, index) => ({
+      id: `legacy:${index}:${value.toLowerCase()}`,
+      user_id: userId,
+      name: value,
+      icon: '📝',
+      is_global: false,
+      is_default: false,
+      is_custom: false,
+      is_legacy: true,
+      can_edit: false,
+      can_delete: false,
+      subcategories: [],
+    }));
+  const categories = [...new Set([...visible.map((row) => row.name), ...legacy.map((row) => row.name)])];
+  return {
+    categories,
+    library: [...visible, ...legacy],
+  };
+}
+
+async function createExpenseCategory(userId, data) {
+  await ensureExpenseCategoryTables();
+  const name = normalizeText(data?.name, 'Category name', 80);
+  const icon = normalizeOptionalEmoji(data?.icon);
+  const existing = await query(
+    `SELECT id
+     FROM expense_categories
+     WHERE deleted_at IS NULL
+       AND (is_global = TRUE OR user_id = $1)
+       AND lower(name) = lower($2)
+     LIMIT 1`,
+    [userId, name]
+  );
+  if (existing.rows[0]) throw duplicateError('A category with this name already exists');
+  await query(
+    `INSERT INTO expense_categories (user_id, name, icon, is_global)
+     VALUES ($1, $2, $3, FALSE)`,
+    [userId, name, icon]
+  );
+  return getExpenseCategoryLibrary(userId);
+}
+
+async function updateExpenseCategory(userId, categoryId, data) {
+  await ensureExpenseCategoryTables();
+  const current = await query(
+    `SELECT *
+     FROM expense_categories
+     WHERE id = $1
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [categoryId]
+  );
+  const row = current.rows[0];
+  if (!row) throw validationError('Category not found');
+  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can edit only your own categories');
+  const name = data?.name !== undefined ? normalizeText(data.name, 'Category name', 80) : row.name;
+  const icon = data?.icon !== undefined ? normalizeOptionalEmoji(data.icon) : row.icon;
+  const conflict = await query(
+    `SELECT id
+     FROM expense_categories
+     WHERE id <> $1
+       AND deleted_at IS NULL
+       AND (is_global = TRUE OR user_id = $2)
+       AND lower(name) = lower($3)
+     LIMIT 1`,
+    [categoryId, userId, name]
+  );
+  if (conflict.rows[0]) throw duplicateError('A category with this name already exists');
+  await query(
+    `UPDATE expense_categories
+     SET name = $1,
+         icon = $2,
+         updated_at = NOW()
+     WHERE id = $3`,
+    [name, icon, categoryId]
+  );
+  return getExpenseCategoryLibrary(userId);
+}
+
+async function deleteExpenseCategory(userId, categoryId) {
+  await ensureExpenseCategoryTables();
+  const current = await query(
+    `SELECT *
+     FROM expense_categories
+     WHERE id = $1
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [categoryId]
+  );
+  const row = current.rows[0];
+  if (!row) throw validationError('Category not found');
+  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can delete only your own categories');
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE expense_subcategories
+       SET deleted_at = NOW(),
+           updated_at = NOW()
+       WHERE category_id = $1
+         AND deleted_at IS NULL`,
+      [categoryId]
+    );
+    await client.query(
+      `UPDATE expense_categories
+       SET deleted_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [categoryId]
+    );
+  });
+  return getExpenseCategoryLibrary(userId);
+}
+
+async function createExpenseSubcategory(userId, categoryId, data) {
+  await ensureExpenseCategoryTables();
+  const categoryResult = await query(
+    `SELECT *
+     FROM expense_categories
+     WHERE id = $1
+       AND deleted_at IS NULL
+       AND (is_global = TRUE OR user_id = $2)
+     LIMIT 1`,
+    [categoryId, userId]
+  );
+  const category = categoryResult.rows[0];
+  if (!category) throw validationError('Category not found');
+  if (category.is_global && Number(category.user_id || 0) !== Number(userId)) {
+    throw validationError('Create a custom category if you want to manage its subcategories');
+  }
+  const name = normalizeText(data?.name, 'Subcategory name', 80);
+  const existing = await query(
+    `SELECT id
+     FROM expense_subcategories
+     WHERE category_id = $1
+       AND deleted_at IS NULL
+       AND lower(name) = lower($2)
+     LIMIT 1`,
+    [categoryId, name]
+  );
+  if (existing.rows[0]) throw duplicateError('A subcategory with this name already exists');
+  await query(
+    `INSERT INTO expense_subcategories (category_id, name)
+     VALUES ($1, $2)`,
+    [categoryId, name]
+  );
+  return getExpenseCategoryLibrary(userId);
+}
+
+async function updateExpenseSubcategory(userId, subcategoryId, data) {
+  await ensureExpenseCategoryTables();
+  const current = await query(
+    `SELECT sc.id,
+            sc.category_id,
+            sc.name,
+            c.user_id,
+            c.is_global
+     FROM expense_subcategories sc
+     JOIN expense_categories c ON c.id = sc.category_id
+     WHERE sc.id = $1
+       AND sc.deleted_at IS NULL
+       AND c.deleted_at IS NULL
+     LIMIT 1`,
+    [subcategoryId]
+  );
+  const row = current.rows[0];
+  if (!row) throw validationError('Subcategory not found');
+  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can edit only your own subcategories');
+  const name = normalizeText(data?.name, 'Subcategory name', 80);
+  const conflict = await query(
+    `SELECT id
+     FROM expense_subcategories
+     WHERE id <> $1
+       AND category_id = $2
+       AND deleted_at IS NULL
+       AND lower(name) = lower($3)
+     LIMIT 1`,
+    [subcategoryId, row.category_id, name]
+  );
+  if (conflict.rows[0]) throw duplicateError('A subcategory with this name already exists');
+  await query(
+    `UPDATE expense_subcategories
+     SET name = $1,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [name, subcategoryId]
+  );
+  return getExpenseCategoryLibrary(userId);
+}
+
+async function deleteExpenseSubcategory(userId, subcategoryId) {
+  await ensureExpenseCategoryTables();
+  const current = await query(
+    `SELECT sc.id,
+            c.user_id,
+            c.is_global
+     FROM expense_subcategories sc
+     JOIN expense_categories c ON c.id = sc.category_id
+     WHERE sc.id = $1
+       AND sc.deleted_at IS NULL
+       AND c.deleted_at IS NULL
+     LIMIT 1`,
+    [subcategoryId]
+  );
+  const row = current.rows[0];
+  if (!row) throw validationError('Subcategory not found');
+  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can delete only your own subcategories');
+  await query(
+    `UPDATE expense_subcategories
+     SET deleted_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [subcategoryId]
+  );
+  return getExpenseCategoryLibrary(userId);
 }
 
 function liveSplitEnsureLinkedRow(map, linkedUserId, name, extra = {}) {
@@ -206,6 +599,7 @@ function liveSplitFindLinkedFriendByName(friends = [], friendName = '') {
 function liveSplitIsLikelySelfPayerForOwnGroup(payer, splits = []) {
   const payerKey = liveSplitTextKey(payer);
   if (!payerKey) return false;
+  if (payerKey === 'you') return true;
   const hasMatchInParticipants = (splits || []).some((split) => liveSplitTextKey(split?.friend_name) === payerKey);
   return !hasMatchInParticipants;
 }
@@ -751,7 +1145,7 @@ async function getExpenses(userId, filters = {}) {
   }
   if (filters.search) {
     params.push(`%${filters.search}%`);
-    where.push(`(item_name ILIKE $${params.length} OR COALESCE(category, '') ILIKE $${params.length})`);
+    where.push(`(item_name ILIKE $${params.length} OR COALESCE(category, '') ILIKE $${params.length} OR COALESCE(subcategory, '') ILIKE $${params.length})`);
   }
   if (filters.spendType === 'extra') where.push('is_extra = TRUE');
   if (filters.spendType === 'fair') where.push('is_extra = FALSE');
@@ -779,28 +1173,23 @@ async function getExpenseById(userId, id) {
 }
 
 async function getExpenseCategories(userId) {
-  const result = await query(
-    `SELECT DISTINCT category
-     FROM expenses
-     WHERE user_id = $1 AND category IS NOT NULL AND btrim(category) <> '' AND deleted_at IS NULL
-     ORDER BY category`,
-    [userId]
-  );
-  return result.rows.map((row) => String(row.category || '').trim()).filter(Boolean);
+  const library = await getExpenseCategoryLibrary(userId);
+  return library.categories;
 }
 
 async function addExpense(userId, data) {
   return withTransaction(async (client) => {
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
     const category = normalizeOptionalText(data.category, 80);
+    const subcategory = normalizeOptionalText(data.subcategory, 80);
     const amount = normalizeAmount(data.amount);
     const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
     const bankAccountId = normalizeBankAccountId(data.bank_account_id);
     const result = await client.query(
-      `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO expenses (user_id, item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [userId, itemName, category, amount, purchaseDate, !!data.is_extra, bankAccountId]
+      [userId, itemName, category, subcategory, amount, purchaseDate, !!data.is_extra, bankAccountId]
     );
     if (bankAccountId) {
       await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client);
@@ -815,6 +1204,7 @@ async function updateExpense(userId, id, data) {
     if (!current) throw validationError('Expense not found');
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
     const category = normalizeOptionalText(data.category, 80);
+    const subcategory = normalizeOptionalText(data.subcategory, 80);
     const nextAmount = normalizeAmount(data.amount);
     const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
     const nextBankAccountId = normalizeBankAccountId(data.bank_account_id);
@@ -826,13 +1216,14 @@ async function updateExpense(userId, id, data) {
       `UPDATE expenses
        SET item_name = $1,
            category = $2,
-           amount = $3,
-           purchase_date = $4,
-           is_extra = $5,
-           bank_account_id = $6,
+           subcategory = $3,
+           amount = $4,
+           purchase_date = $5,
+           is_extra = $6,
+           bank_account_id = $7,
            updated_at = NOW()
-       WHERE id = $7 AND user_id = $8`,
-      [itemName, category, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
+       WHERE id = $8 AND user_id = $9`,
+      [itemName, category, subcategory, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
     );
   });
 }
@@ -859,10 +1250,11 @@ async function bulkAddExpenses(userId, rows) {
     for (const row of rows) {
      if (row.item_name && row.amount > 0) {
         const category = normalizeOptionalText(row.category, 80);
+        const subcategory = normalizeOptionalText(row.subcategory, 80);
         await client.query(
-          `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [userId, row.item_name, category, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
+          `INSERT INTO expenses (user_id, item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [userId, row.item_name, category, subcategory, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
         );
         count++;
       }
@@ -6808,11 +7200,18 @@ module.exports = {
   computeLiveSplitDashboardSummary,
   getExpenses,
   getExpenseCategories,
+  getExpenseCategoryLibrary,
   getExpenseById,
   addExpense,
   updateExpense,
   deleteExpense,
   bulkAddExpenses,
+  createExpenseCategory,
+  updateExpenseCategory,
+  deleteExpenseCategory,
+  createExpenseSubcategory,
+  updateExpenseSubcategory,
+  deleteExpenseSubcategory,
   getFriends,
   addFriend,
   updateFriend,

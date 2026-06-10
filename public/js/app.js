@@ -14,6 +14,7 @@ let dashFilters = { year: new Date().getFullYear() };
 let expFilters = { year: new Date().getFullYear(), month: new Date().getMonth(), search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
 let _expenseCache = [];
 let _expenseCategories = [];
+let _expenseCategoryLibrary = [];
 let _activeExpenseForm = null;
 let _editingExpCcTxnId = null;
 let _editingExpCcLink = null;
@@ -25,6 +26,7 @@ let _expenseVoiceContext = 'expense';
 let _expenseVoiceBatch = [];
 let _expenseVoiceIgnoreNextResult = false;
 let _expenseCategoryHideTimer = null;
+let _expenseCategoryPickerState = { open: false, manage: false, category: '', subcategory: '', expanded: null, editor: null, standalone: false };
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
 let _expenseScanCommonBankId = '';
@@ -59,7 +61,354 @@ function cleanMojibakeText(value) {
 async function loadExpenseCategories() {
   const data = await api('/api/expenses/categories');
   _expenseCategories = (data?.categories || []).filter(Boolean);
+  _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
   return _expenseCategories;
+}
+
+function expenseCategoryDisplayText(category, subcategory = '') {
+  const cat = String(category || '').trim();
+  const sub = String(subcategory || '').trim();
+  if (cat && sub) return `${cat} / ${sub}`;
+  return cat || sub || '';
+}
+
+function syncExpenseCategoryInputs() {
+  const categoryInput = document.getElementById('eCategory');
+  const subcategoryInput = document.getElementById('eSubcategory');
+  const summary = document.getElementById('expenseCategorySummary');
+  if (categoryInput) categoryInput.value = _expenseCategoryPickerState.category || '';
+  if (subcategoryInput) subcategoryInput.value = _expenseCategoryPickerState.subcategory || '';
+  if (summary) {
+    const text = expenseCategoryDisplayText(_expenseCategoryPickerState.category, _expenseCategoryPickerState.subcategory);
+    summary.innerHTML = text
+      ? `<span style="font-weight:700;color:var(--t1)">${escHtml(text)}</span>`
+      : `<span style="color:var(--t3)">Choose a category and optional subcategory</span>`;
+  }
+}
+
+function selectedExpenseCategoryMeta() {
+  const categoryName = String(_expenseCategoryPickerState.category || '').trim().toLowerCase();
+  return (_expenseCategoryLibrary || []).find((item) => String(item?.name || '').trim().toLowerCase() === categoryName) || null;
+}
+
+function renderExpenseCategoryPickerField(category = '', subcategory = '') {
+  _expenseCategoryPickerState = {
+    ..._expenseCategoryPickerState,
+    open: false,
+    manage: false,
+    category: String(category || '').trim(),
+    subcategory: String(subcategory || '').trim(),
+    expanded: null,
+    editor: null,
+    standalone: false,
+  };
+  return `
+    <div style="display:grid;gap:10px">
+      <input type="hidden" id="eCategory" value="${escHtml(_expenseCategoryPickerState.category)}">
+      <input type="hidden" id="eSubcategory" value="${escHtml(_expenseCategoryPickerState.subcategory)}">
+      <button
+        type="button"
+        onclick="toggleExpenseCategoryPanel()"
+        style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;cursor:pointer"
+      >
+        <span id="expenseCategorySummary">${expenseCategoryDisplayText(category, subcategory)
+          ? `<span style="font-weight:700;color:var(--t1)">${escHtml(expenseCategoryDisplayText(category, subcategory))}</span>`
+          : `<span style="color:var(--t3)">Choose a category and optional subcategory</span>`}</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12px;color:var(--t2)">Browse</span>
+          <span style="font-size:18px;color:var(--t3)">${_expenseCategoryPickerState.open ? '&uarr;' : '&darr;'}</span>
+        </span>
+      </button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-s btn-sm" onclick="toggleExpenseCategoryManager()">${_expenseCategoryPickerState.manage ? 'Back To Picker' : 'Manage Categories'}</button>
+        <button type="button" class="btn btn-g btn-sm" onclick="showExpenseCategoriesManager()">Open Full Manager</button>
+        ${expenseCategoryDisplayText(category, subcategory) ? `<button type="button" class="btn btn-g btn-sm" onclick="clearExpenseCategorySelection()">Clear</button>` : ''}
+      </div>
+      <div id="expenseCategoryPanelWrap" style="display:none"></div>
+    </div>`;
+}
+
+function renderExpenseCategoryEditor(editor, category = null, subcategory = null) {
+  if (!editor) return '';
+  const isSub = editor.type.includes('subcategory');
+  const title = editor.type.endsWith('add')
+    ? (isSub ? 'Add subcategory' : 'Add category')
+    : (isSub ? 'Edit subcategory' : 'Edit category');
+  return `
+    <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff">
+      <div style="font-size:12px;font-weight:800;color:var(--em);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">${title}</div>
+      <div style="display:grid;gap:10px;grid-template-columns:${isSub ? '1fr auto auto' : '1fr 84px auto auto'};align-items:end">
+        <label class="fl" style="margin:0">Name<input class="fi" id="expenseCategoryEditorName" value="${escHtml(editor.name || '')}" maxlength="80" placeholder="${isSub ? 'Lunch' : 'Food'}"></label>
+        ${isSub ? '' : `<label class="fl" style="margin:0">Icon<input class="fi" id="expenseCategoryEditorIcon" value="${escHtml(editor.icon || '')}" maxlength="12" placeholder="🍜"></label>`}
+        <button type="button" class="btn btn-p btn-sm" onclick="saveExpenseCategoryEditor()">${editor.type.endsWith('add') ? 'Add' : 'Save'}</button>
+        <button type="button" class="btn btn-g btn-sm" onclick="cancelExpenseCategoryEditor()">Cancel</button>
+      </div>
+      ${(category || subcategory) ? `<div style="margin-top:8px;font-size:12px;color:var(--t2)">${category ? `Category: <strong>${escHtml(category.name)}</strong>` : ''}${subcategory ? ` &middot; Editing <strong>${escHtml(subcategory.name)}</strong>` : ''}</div>` : ''}
+    </div>`;
+}
+
+function renderExpenseCategoryManagerHtml(standalone = false) {
+  const editor = _expenseCategoryPickerState.editor;
+  return `
+    <div class="expense-cat-manager ${standalone ? 'standalone' : ''}">
+      <div class="expense-cat-manager-shell">
+        <div class="expense-cat-manager-top">
+          <div>
+            <div class="expense-cat-manager-title">${standalone ? 'Manage Categories' : 'Expense Categories'}</div>
+            <div class="expense-cat-manager-sub">Global defaults are visible to everyone. Custom categories belong only to you.</div>
+          </div>
+          <div class="expense-cat-manager-top-actions">
+            <button type="button" class="btn btn-s btn-sm expense-cat-add-btn" onclick="beginAddExpenseCategory()">+ Add Category</button>
+            ${standalone ? '' : `<button type="button" class="btn btn-g btn-sm expense-cat-switch-btn" onclick="toggleExpenseCategoryManager()">Back</button>`}
+          </div>
+        </div>
+        ${editor && editor.type === 'category-add' ? `<div class="expense-cat-editor-wrap">${renderExpenseCategoryEditor(editor)}</div>` : ''}
+        <div class="expense-cat-list">
+          ${(_expenseCategoryLibrary || []).map((category) => {
+            const catEditor = editor && editor.type === 'category-edit' && Number(editor.categoryId) === Number(category.id) ? renderExpenseCategoryEditor(editor, category) : '';
+            const subAddEditor = editor && editor.type === 'subcategory-add' && Number(editor.categoryId) === Number(category.id) ? renderExpenseCategoryEditor(editor, category) : '';
+            const expanded = Number(_expenseCategoryPickerState.expanded || 0) === Number(category.id);
+            return `
+              <div class="expense-cat-card">
+                <div class="expense-cat-card-head">
+                  <div class="expense-cat-card-main">
+                    <div class="expense-cat-card-icon">${escHtml(category.icon || '📦')}</div>
+                    <div>
+                      <div class="expense-cat-card-name">${escHtml(category.name)}</div>
+                      <div class="expense-cat-card-meta">${category.is_global ? 'Default for all users' : 'Visible only to you'}${category.subcategories?.length ? ` · ${category.subcategories.length} subcategories` : ''}</div>
+                    </div>
+                  </div>
+                  <div class="expense-cat-card-actions">
+                    ${category.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginEditExpenseCategory(${Number(category.id)})">Edit</button>` : ''}
+                    ${category.can_delete ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="removeExpenseCategory(${Number(category.id)})">Delete</button>` : ''}
+                    ${category.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginAddExpenseSubcategory(${Number(category.id)})">+ Sub</button>` : ''}
+                    <button type="button" class="btn btn-g btn-sm expense-cat-chevron-btn" onclick="toggleExpenseCategoryExpanded(${Number(category.id)})">${expanded ? '&uarr;' : '&darr;'}</button>
+                  </div>
+                </div>
+                ${catEditor ? `<div class="expense-cat-editor-wrap">${catEditor}</div>` : ''}
+                ${expanded ? `
+                  <div class="expense-cat-card-body">
+                    ${subAddEditor ? `<div class="expense-cat-editor-wrap">${subAddEditor}</div>` : ''}
+                    <div class="expense-cat-sub-list">
+                      ${(category.subcategories || []).length
+                        ? category.subcategories.map((sub) => {
+                            const subEditor = editor && editor.type === 'subcategory-edit' && Number(editor.subcategoryId) === Number(sub.id)
+                              ? renderExpenseCategoryEditor(editor, category, sub)
+                              : '';
+                            return `
+                              <div class="expense-cat-sub-row">
+                                <div class="expense-cat-sub-row-top">
+                                  <div class="expense-cat-sub-name">${escHtml(sub.name)}</div>
+                                  <div class="expense-cat-sub-actions">
+                                    ${sub.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginEditExpenseSubcategory(${Number(category.id)}, ${Number(sub.id)})">Edit</button>` : ''}
+                                    ${sub.can_delete ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="removeExpenseSubcategory(${Number(sub.id)})">Delete</button>` : ''}
+                                  </div>
+                                </div>
+                                ${subEditor ? `<div class="expense-cat-editor-wrap">${subEditor}</div>` : ''}
+                              </div>`;
+                          }).join('')
+                        : `<div class="expense-cat-empty">No subcategories yet.</div>`}
+                    </div>
+                  </div>` : ''}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderExpenseCategoryPickerHtml() {
+  const activeCategory = selectedExpenseCategoryMeta();
+  return `
+    <div style="padding:14px;border:1px solid var(--line);border-radius:18px;background:#fbfcfd">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <div style="font-size:14px;font-weight:800;color:var(--t1)">Category</div>
+          <div style="font-size:12px;color:var(--t2)">Choose a main category, then an optional subcategory.</div>
+        </div>
+        <button type="button" class="btn btn-s btn-sm" onclick="toggleExpenseCategoryManager()">Manage</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+        ${(_expenseCategoryLibrary || []).map((item) => {
+          const isActive = String(item.name || '').trim().toLowerCase() === String(_expenseCategoryPickerState.category || '').trim().toLowerCase();
+          return `
+            <button
+              type="button"
+              onclick="pickExpenseCategory(${JSON.stringify(item.name || '')})"
+              style="padding:12px 10px;border-radius:14px;border:1px solid ${isActive ? 'rgba(20,90,60,.28)' : 'var(--line)'};background:${isActive ? 'linear-gradient(180deg,#eef8f1 0%,#e4f3ea 100%)' : '#fff'};text-align:left;cursor:pointer"
+            >
+              <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(item.icon || '📦')} ${escHtml(item.name)}</div>
+              <div style="margin-top:4px;font-size:11px;color:var(--t2)">${item.subcategories?.length ? `${item.subcategories.length} subcategories` : item.is_global ? 'Default' : 'Custom'}</div>
+            </button>`;
+        }).join('')}
+      </div>
+      ${activeCategory ? `
+        <div style="margin-top:14px;padding:14px;border-radius:16px;background:#fff;border:1px solid var(--line)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:15px;font-weight:800;color:var(--t1)">${escHtml(activeCategory.icon || '📦')} ${escHtml(activeCategory.name)}</div>
+              <div style="font-size:12px;color:var(--t2);margin-top:3px">Subcategory is optional.</div>
+            </div>
+            ${_expenseCategoryPickerState.subcategory ? `<button type="button" class="btn btn-g btn-sm" onclick="pickExpenseCategory(${JSON.stringify(activeCategory.name)}, '')">Clear subcategory</button>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+            ${(activeCategory.subcategories || []).length
+              ? activeCategory.subcategories.map((sub) => {
+                  const activeSub = String(sub.name || '').trim().toLowerCase() === String(_expenseCategoryPickerState.subcategory || '').trim().toLowerCase();
+                  return `<button type="button" class="chip ${activeSub ? 'active' : ''}" onclick="pickExpenseCategory(${JSON.stringify(activeCategory.name)}, ${JSON.stringify(sub.name)})">${escHtml(sub.name)}</button>`;
+                }).join('')
+              : `<span style="font-size:12px;color:var(--t3)">No subcategories yet.</span>`}
+          </div>
+        </div>` : ''}
+    </div>`;
+}
+
+function renderExpenseCategoryPanel() {
+  const wrap = document.getElementById(_expenseCategoryPickerState.standalone ? 'expenseCategoryStandaloneManager' : 'expenseCategoryPanelWrap');
+  if (!wrap) return;
+  wrap.style.display = '';
+  wrap.innerHTML = _expenseCategoryPickerState.manage
+    ? renderExpenseCategoryManagerHtml(_expenseCategoryPickerState.standalone)
+    : renderExpenseCategoryPickerHtml();
+  syncExpenseCategoryInputs();
+}
+
+function toggleExpenseCategoryPanel(forceOpen = null) {
+  _expenseCategoryPickerState.standalone = false;
+  _expenseCategoryPickerState.open = forceOpen == null ? !_expenseCategoryPickerState.open : !!forceOpen;
+  const wrap = document.getElementById('expenseCategoryPanelWrap');
+  if (!wrap) return;
+  wrap.style.display = _expenseCategoryPickerState.open ? '' : 'none';
+  if (_expenseCategoryPickerState.open) renderExpenseCategoryPanel();
+  syncExpenseCategoryInputs();
+}
+
+function toggleExpenseCategoryManager(force = null) {
+  _expenseCategoryPickerState.manage = force == null ? !_expenseCategoryPickerState.manage : !!force;
+  _expenseCategoryPickerState.open = true;
+  _expenseCategoryPickerState.editor = null;
+  renderExpenseCategoryPanel();
+}
+
+function toggleExpenseCategoryExpanded(categoryId) {
+  _expenseCategoryPickerState.expanded = Number(_expenseCategoryPickerState.expanded || 0) === Number(categoryId) ? null : Number(categoryId);
+  renderExpenseCategoryPanel();
+}
+
+function pickExpenseCategory(category, subcategory = '') {
+  _expenseCategoryPickerState.category = String(category || '').trim();
+  _expenseCategoryPickerState.subcategory = String(subcategory || '').trim();
+  syncExpenseCategoryInputs();
+  renderExpenseCategoryPanel();
+}
+
+function clearExpenseCategorySelection() {
+  _expenseCategoryPickerState.category = '';
+  _expenseCategoryPickerState.subcategory = '';
+  syncExpenseCategoryInputs();
+  renderExpenseCategoryPanel();
+}
+
+function beginAddExpenseCategory() {
+  _expenseCategoryPickerState.editor = { type: 'category-add', name: '', icon: '' };
+  renderExpenseCategoryPanel();
+}
+
+function beginEditExpenseCategory(categoryId) {
+  const category = (_expenseCategoryLibrary || []).find((item) => Number(item.id) === Number(categoryId));
+  if (!category) return;
+  _expenseCategoryPickerState.editor = { type: 'category-edit', categoryId: Number(categoryId), name: category.name || '', icon: category.icon || '' };
+  renderExpenseCategoryPanel();
+}
+
+function beginAddExpenseSubcategory(categoryId) {
+  _expenseCategoryPickerState.editor = { type: 'subcategory-add', categoryId: Number(categoryId), name: '' };
+  renderExpenseCategoryPanel();
+}
+
+function beginEditExpenseSubcategory(categoryId, subcategoryId) {
+  const category = (_expenseCategoryLibrary || []).find((item) => Number(item.id) === Number(categoryId));
+  const sub = (category?.subcategories || []).find((item) => Number(item.id) === Number(subcategoryId));
+  if (!category || !sub) return;
+  _expenseCategoryPickerState.editor = { type: 'subcategory-edit', categoryId: Number(categoryId), subcategoryId: Number(subcategoryId), name: sub.name || '' };
+  renderExpenseCategoryPanel();
+}
+
+function cancelExpenseCategoryEditor() {
+  _expenseCategoryPickerState.editor = null;
+  renderExpenseCategoryPanel();
+}
+
+async function saveExpenseCategoryEditor() {
+  const editor = _expenseCategoryPickerState.editor;
+  if (!editor) return;
+  const name = document.getElementById('expenseCategoryEditorName')?.value?.trim() || '';
+  const icon = document.getElementById('expenseCategoryEditorIcon')?.value?.trim() || '';
+  if (!name) { toast('Please enter a name', 'warning'); return; }
+  try {
+    let data = null;
+    if (editor.type === 'category-add') data = await api('/api/expenses/categories', { method: 'POST', body: { name, icon } });
+    if (editor.type === 'category-edit') data = await api(`/api/expenses/categories/${editor.categoryId}`, { method: 'PUT', body: { name, icon } });
+    if (editor.type === 'subcategory-add') data = await api(`/api/expenses/categories/${editor.categoryId}/subcategories`, { method: 'POST', body: { name } });
+    if (editor.type === 'subcategory-edit') data = await api(`/api/expenses/subcategories/${editor.subcategoryId}`, { method: 'PUT', body: { name } });
+    _expenseCategories = (data?.categories || []).filter(Boolean);
+    _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
+    _expenseCategoryPickerState.editor = null;
+    toast(editor.type.endsWith('add') ? 'Saved' : 'Updated', 'success');
+    renderExpenseCategoryPanel();
+  } catch (err) {
+    toast(err.message || 'Could not save category', 'error');
+  }
+}
+
+async function removeExpenseCategory(categoryId) {
+  if (!confirm('Delete this category and its subcategories?')) return;
+  const selectedCategoryName = String(_expenseCategoryPickerState.category || '').trim().toLowerCase();
+  try {
+    const data = await api(`/api/expenses/categories/${categoryId}`, { method: 'DELETE' });
+    _expenseCategories = (data?.categories || []).filter(Boolean);
+    _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
+    const removedStillVisible = (_expenseCategoryLibrary || []).some((item) => Number(item.id) === Number(categoryId) || String(item.name || '').trim().toLowerCase() === selectedCategoryName);
+    if (selectedCategoryName && !removedStillVisible) clearExpenseCategorySelection();
+    toast('Category deleted', 'success');
+    renderExpenseCategoryPanel();
+  } catch (err) {
+    toast(err.message || 'Could not delete category', 'error');
+  }
+}
+
+async function removeExpenseSubcategory(subcategoryId) {
+  if (!confirm('Delete this subcategory?')) return;
+  const currentName = String(_expenseCategoryPickerState.subcategory || '').trim().toLowerCase();
+  try {
+    const data = await api(`/api/expenses/subcategories/${subcategoryId}`, { method: 'DELETE' });
+    _expenseCategories = (data?.categories || []).filter(Boolean);
+    _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
+    if (currentName) {
+      _expenseCategoryPickerState.subcategory = '';
+    }
+    toast('Subcategory deleted', 'success');
+    renderExpenseCategoryPanel();
+  } catch (err) {
+    toast(err.message || 'Could not delete subcategory', 'error');
+  }
+}
+
+function showExpenseCategoriesManager() {
+  _expenseCategoryPickerState = {
+    ..._expenseCategoryPickerState,
+    open: true,
+    manage: true,
+    standalone: true,
+    expanded: _expenseCategoryPickerState.expanded || null,
+    editor: null,
+  };
+  openModal('Manage Categories', `
+    <div id="expenseCategoryStandaloneManager"></div>
+    <div class="fa">
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>`);
+  renderExpenseCategoryPanel();
 }
 
 function expenseCategoryDatalistHtml(selected = '') {
@@ -1398,6 +1747,7 @@ async function loadExpenses() {
 
   const expenseMoreItems = [
     canAccessFeature('expense_scan') ? `<button class="expense-more-item" onclick="showExpenseScanModal()">Scan Image</button>` : '',
+    `<button class="expense-more-item" onclick="showExpenseCategoriesManager()">Manage Categories</button>`,
     `<button class="expense-more-item" onclick="showImportForm()">Import CSV</button>`,
     `<button class="expense-more-item" onclick="showExcelImport()">Import Excel</button>`,
   ].filter(Boolean).join('');
@@ -1447,6 +1797,7 @@ async function loadExpenses() {
           </div>
           <div class="expense-toolbar-actions">
             <button class="btn btn-p btn-sm" onclick="showExpenseForm()">+ Add</button>
+            <button class="btn btn-s btn-sm" onclick="showExpenseCategoriesManager()">Categories</button>
             <details class="expense-more-menu">
               <summary class="btn btn-s btn-sm">More</summary>
               <div class="expense-more-popover">
@@ -1472,7 +1823,7 @@ async function loadExpenses() {
             ${pageList.map(e => `<tr>
               <td>${fmtDate(e.purchase_date)}</td>
               <td>${e.item_name}</td>
-              <td>${e.category ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(e.category)}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
+              <td>${expenseCategoryDisplayText(e.category, e.subcategory) ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(expenseCategoryDisplayText(e.category, e.subcategory))}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
               <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
               <td><span class="badge ${e.is_extra?'b-extra':'b-fair'}">${e.is_extra?'Extra':'Fair'}</span></td>
               <td><button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button></td>
@@ -1533,7 +1884,7 @@ async function showExpenseForm(id) {
   _expenseVoiceBusy = false;
   _expenseVoiceBatch = [];
   window._editingExpenseVoiceForm = !!id;
-  let e = { item_name: '', category: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
+  let e = { item_name: '', category: '', subcategory: '', amount: '', purchase_date: todayStr(), is_extra: false, bank_account_id: null };
   if (id) {
     const cached = _findExpenseById(id);
     if (cached) e = { ...e, ...cached };
@@ -1578,7 +1929,7 @@ async function showExpenseForm(id) {
     <div class="fg">
       <label class="fl">Date<input class="fi" type="date" id="eDate" value="${normalizeInputDate(e.purchase_date) || todayStr()}"></label>
       <label class="fl">Item Name<input class="fi" id="eName" value="${escHtml(e.item_name || '')}" placeholder="e.g. Groceries..." autofocus></label>
-      <label class="fl">Category${expenseCategoryDatalistHtml(e.category || '')}</label>
+      <label class="fl">Category${renderExpenseCategoryPickerField(e.category || '', e.subcategory || '')}</label>
       <label class="fl">Amount (&#8377;)<input class="fi" type="number" step="0.01" id="eAmount" value="${e.amount}" placeholder="0.00" oninput="ccLinkPreview()"></label>
       <label class="fc"><input type="checkbox" id="eExtra" ${e.is_extra?'checked':''}><span>Is Extra (non-essential)</span></label>
       <label class="fl full">Deduct From Bank<select class="fi" id="eBank">${bankOpts}</select></label>
@@ -1612,6 +1963,7 @@ async function showExpenseForm(id) {
     setExpenseEntryMode('expense');
     updateIncomeBankPreview();
   }
+  syncExpenseCategoryInputs();
   bindModalSubmit(() => saveExpense(id || null));
   updateExpenseVoiceFormVisibility();
 }
@@ -1700,6 +2052,7 @@ async function saveExpense(id) {
   const body = {
     item_name: document.getElementById('eName').value.trim() || original?.item_name || '',
     category: document.getElementById('eCategory')?.value.trim() || null,
+    subcategory: document.getElementById('eSubcategory')?.value.trim() || null,
     amount: document.getElementById('eAmount').value || String(original?.amount ?? ''),
     purchase_date: document.getElementById('eDate').value || normalizeInputDate(original?.purchase_date) || '',
     is_extra: document.getElementById('eExtra').checked,
@@ -1716,6 +2069,7 @@ async function saveExpense(id) {
           body: {
             item_name: String(entry?.item_name || entry?.merchant || '').trim(),
             category: String(entry?.category || '').trim() || null,
+            subcategory: String(entry?.subcategory || '').trim() || null,
             amount: entryAmount,
             purchase_date: String(entry?.purchase_date || '').slice(0, 10) || todayStr(),
             is_extra: !!entry?.is_extra,
@@ -1743,6 +2097,7 @@ async function saveExpense(id) {
     return;
   }
   if (body.category && body.category.length > 80) { toast('Category must be 80 characters or fewer', 'warning'); return; }
+  if (body.subcategory && body.subcategory.length > 80) { toast('Subcategory must be 80 characters or fewer', 'warning'); return; }
   if (!body.item_name || !body.amount || !body.purchase_date) { toast('Please fill all fields', 'warning'); return; }
   const amountValue = parseFloat(body.amount);
   if (!Number.isFinite(amountValue) || amountValue <= 0) { toast('Amount must be greater than 0', 'warning'); return; }

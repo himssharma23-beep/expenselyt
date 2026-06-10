@@ -4789,19 +4789,77 @@ router.get('/expenses', async (req, res) => {
 
 router.get('/expenses/categories', async (req, res) => {
   try {
-    const categories = await Promise.resolve(getCoreDb().getExpenseCategories(req.session.userId));
-    res.json({ categories });
+    const coreDb = getCoreDb();
+    const [categories, libraryPayload] = await Promise.all([
+      Promise.resolve(coreDb.getExpenseCategories(req.session.userId)),
+      Promise.resolve(coreDb.getExpenseCategoryLibrary(req.session.userId)),
+    ]);
+    res.json({ categories, library: libraryPayload?.library || [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/expenses/categories', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().createExpenseCategory(req.session.userId, req.body || {}));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/expenses/categories/:id', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().updateExpenseCategory(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/expenses/categories/:id', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().deleteExpenseCategory(req.session.userId, req.params.id));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/expenses/categories/:id/subcategories', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().createExpenseSubcategory(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.put('/expenses/subcategories/:id', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().updateExpenseSubcategory(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/expenses/subcategories/:id', async (req, res) => {
+  try {
+    const payload = await Promise.resolve(getCoreDb().deleteExpenseSubcategory(req.session.userId, req.params.id));
+    res.json({ success: true, categories: payload?.categories || [], library: payload?.library || [] });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 router.post('/expenses', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, category, amount, purchase_date, is_extra, bank_account_id } = req.body;
+    const { item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id } = req.body;
     if (!item_name || !amount || !purchase_date) return res.status(400).json({ error: 'Missing fields' });
-    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, category, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
+    const id = await Promise.resolve(coreDb.addExpense(req.session.userId, { item_name, category, subcategory, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4821,8 +4879,8 @@ router.get('/expenses/:id', async (req, res) => {
 router.put('/expenses/:id', async (req, res) => {
   try {
     const coreDb = getCoreDb();
-    const { item_name, category, amount, purchase_date, is_extra, bank_account_id } = req.body;
-    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, category, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
+    const { item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id } = req.body;
+    await Promise.resolve(coreDb.updateExpense(req.session.userId, req.params.id, { item_name, category, subcategory, amount: parseFloat(amount), purchase_date, is_extra, bank_account_id }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

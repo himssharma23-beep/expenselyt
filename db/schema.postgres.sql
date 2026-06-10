@@ -1168,6 +1168,27 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS subcategory TEXT;
+CREATE TABLE IF NOT EXISTS expense_categories (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  icon TEXT,
+  is_global BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS expense_subcategories (
+  id BIGSERIAL PRIMARY KEY,
+  category_id BIGINT NOT NULL REFERENCES expense_categories(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_expense_categories_visible ON expense_categories(user_id, is_global, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_expense_subcategories_category ON expense_subcategories(category_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_ai_query_logs_user_created_at ON ai_query_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_query_logs_intent_created_at ON ai_query_logs(detected_intent, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_training_examples_active ON ai_training_examples(is_active, updated_at DESC);
