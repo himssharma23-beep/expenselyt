@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { query, withTransaction } = require('./postgres');
+const pgBillingDb = require('./postgres-billing');
 
 function num(value) {
   return Number(value || 0);
@@ -35,6 +36,20 @@ function duplicateError(message) {
 function normalizeBankAccountId(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeCardId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeDiscountPercent(value, fallback = 0) {
+  if (value === '' || value == null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    throw validationError('Card discount must be between 0 and 100');
+  }
+  return parsed;
 }
 
 function normalizeDateValue(value, label = 'Date') {
@@ -200,11 +215,13 @@ async function ensureExpenseCategoryTables() {
     CREATE TABLE IF NOT EXISTS expense_subcategories (
       id BIGSERIAL PRIMARY KEY,
       category_id BIGINT NOT NULL REFERENCES expense_categories(id) ON DELETE CASCADE,
+      user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       deleted_at TIMESTAMPTZ
     )`);
+  await query(`ALTER TABLE expense_subcategories ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE`);
   await query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS subcategory TEXT`);
   await query(`CREATE INDEX IF NOT EXISTS idx_expense_categories_visible ON expense_categories(user_id, is_global, deleted_at)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_expense_subcategories_category ON expense_subcategories(category_id, deleted_at)`);
@@ -242,6 +259,7 @@ async function ensureExpenseCategoryTables() {
         `SELECT id
          FROM expense_subcategories
          WHERE category_id = $1
+           AND user_id IS NULL
            AND deleted_at IS NULL
            AND lower(name) = lower($2)
          LIMIT 1`,
@@ -249,8 +267,8 @@ async function ensureExpenseCategoryTables() {
       );
       if (!subExisting.rows[0]) {
         await query(
-          `INSERT INTO expense_subcategories (category_id, name)
-           VALUES ($1, $2)`,
+          `INSERT INTO expense_subcategories (category_id, user_id, name)
+           VALUES ($1, NULL, $2)`,
           [categoryId, sub]
         );
       }
@@ -279,12 +297,13 @@ async function getExpenseCategoryVisibleRows(userId) {
   let subcategoryRows = [];
   if (categoryIds.length) {
     const subResult = await query(
-      `SELECT id, category_id, name, created_at, updated_at
+      `SELECT id, category_id, user_id, name, created_at, updated_at
        FROM expense_subcategories
        WHERE deleted_at IS NULL
          AND category_id = ANY($1::bigint[])
+         AND (user_id IS NULL OR user_id = $2)
        ORDER BY lower(name), id`,
-      [categoryIds]
+      [categoryIds, userId]
     );
     subcategoryRows = subResult.rows;
   }
@@ -295,11 +314,13 @@ async function getExpenseCategoryVisibleRows(userId) {
     subByCategory.get(key).push({
       id: Number(row.id),
       category_id: key,
+      user_id: row.user_id ? Number(row.user_id) : null,
       name: String(row.name || '').trim(),
       created_at: row.created_at,
       updated_at: row.updated_at,
-      can_edit: true,
-      can_delete: true,
+      is_global: !row.user_id,
+      can_edit: Number(row.user_id || 0) === Number(userId),
+      can_delete: Number(row.user_id || 0) === Number(userId),
     });
   });
   return categoryResult.rows.map((row) => {
@@ -314,6 +335,7 @@ async function getExpenseCategoryVisibleRows(userId) {
       is_custom: !row.is_global,
       can_edit: !row.is_global,
       can_delete: !row.is_global,
+      can_add_subcategories: true,
       created_at: row.created_at,
       updated_at: row.updated_at,
       subcategories: subByCategory.get(id) || [],
@@ -349,6 +371,7 @@ async function getExpenseCategoryLibrary(userId) {
       is_legacy: true,
       can_edit: false,
       can_delete: false,
+      can_add_subcategories: true,
       subcategories: [],
     }));
   const categories = [...new Set([...visible.map((row) => row.name), ...legacy.map((row) => row.name)])];
@@ -463,24 +486,22 @@ async function createExpenseSubcategory(userId, categoryId, data) {
   );
   const category = categoryResult.rows[0];
   if (!category) throw validationError('Category not found');
-  if (category.is_global && Number(category.user_id || 0) !== Number(userId)) {
-    throw validationError('Create a custom category if you want to manage its subcategories');
-  }
   const name = normalizeText(data?.name, 'Subcategory name', 80);
   const existing = await query(
     `SELECT id
      FROM expense_subcategories
      WHERE category_id = $1
+       AND (user_id IS NULL OR user_id = $3)
        AND deleted_at IS NULL
        AND lower(name) = lower($2)
      LIMIT 1`,
-    [categoryId, name]
+    [categoryId, name, userId]
   );
   if (existing.rows[0]) throw duplicateError('A subcategory with this name already exists');
   await query(
-    `INSERT INTO expense_subcategories (category_id, name)
-     VALUES ($1, $2)`,
-    [categoryId, name]
+    `INSERT INTO expense_subcategories (category_id, user_id, name)
+     VALUES ($1, $2, $3)`,
+    [categoryId, category.is_global ? userId : userId, name]
   );
   return getExpenseCategoryLibrary(userId);
 }
@@ -490,6 +511,7 @@ async function updateExpenseSubcategory(userId, subcategoryId, data) {
   const current = await query(
     `SELECT sc.id,
             sc.category_id,
+            sc.user_id AS subcategory_user_id,
             sc.name,
             c.user_id,
             c.is_global
@@ -503,17 +525,18 @@ async function updateExpenseSubcategory(userId, subcategoryId, data) {
   );
   const row = current.rows[0];
   if (!row) throw validationError('Subcategory not found');
-  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can edit only your own subcategories');
+  if (Number(row.subcategory_user_id || 0) !== Number(userId)) throw validationError('You can edit only your own subcategories');
   const name = normalizeText(data?.name, 'Subcategory name', 80);
   const conflict = await query(
     `SELECT id
      FROM expense_subcategories
      WHERE id <> $1
        AND category_id = $2
+       AND (user_id IS NULL OR user_id = $4)
        AND deleted_at IS NULL
        AND lower(name) = lower($3)
      LIMIT 1`,
-    [subcategoryId, row.category_id, name]
+    [subcategoryId, row.category_id, name, userId]
   );
   if (conflict.rows[0]) throw duplicateError('A subcategory with this name already exists');
   await query(
@@ -531,7 +554,8 @@ async function deleteExpenseSubcategory(userId, subcategoryId) {
   const current = await query(
     `SELECT sc.id,
             c.user_id,
-            c.is_global
+            c.is_global,
+            sc.user_id AS subcategory_user_id
      FROM expense_subcategories sc
      JOIN expense_categories c ON c.id = sc.category_id
      WHERE sc.id = $1
@@ -542,7 +566,7 @@ async function deleteExpenseSubcategory(userId, subcategoryId) {
   );
   const row = current.rows[0];
   if (!row) throw validationError('Subcategory not found');
-  if (row.is_global || Number(row.user_id) !== Number(userId)) throw validationError('You can delete only your own subcategories');
+  if (Number(row.subcategory_user_id || 0) !== Number(userId)) throw validationError('You can delete only your own subcategories');
   await query(
     `UPDATE expense_subcategories
      SET deleted_at = NOW(),
@@ -1160,8 +1184,9 @@ async function getExpenses(userId, filters = {}) {
   return result.rows.map((row) => ({ ...row, amount: num(row.amount) }));
 }
 
-async function getExpenseById(userId, id) {
-  const result = await query(
+async function getExpenseById(userId, id, client = null) {
+  const run = client || { query };
+  const result = await run.query(
     `SELECT *
      FROM expenses
      WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
@@ -1178,7 +1203,7 @@ async function getExpenseCategories(userId) {
 }
 
 async function addExpense(userId, data) {
-  return withTransaction(async (client) => {
+  const executor = async (client) => {
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
     const category = normalizeOptionalText(data.category, 80);
     const subcategory = normalizeOptionalText(data.subcategory, 80);
@@ -1186,21 +1211,23 @@ async function addExpense(userId, data) {
     const purchaseDate = normalizeDateValue(data.purchase_date, 'Purchase date');
     const bankAccountId = normalizeBankAccountId(data.bank_account_id);
     const result = await client.query(
-      `INSERT INTO expenses (user_id, item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO expenses (user_id, item_name, category, subcategory, amount, purchase_date, is_extra, bank_account_id, source, source_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
-      [userId, itemName, category, subcategory, amount, purchaseDate, !!data.is_extra, bankAccountId]
+      [userId, itemName, category, subcategory, amount, purchaseDate, !!data.is_extra, bankAccountId, data.source || null, data.source_id || null]
     );
     if (bankAccountId) {
       await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client);
     }
     return Number(result.rows[0].id);
-  });
+  };
+  const client = arguments[2] || null;
+  return client ? executor(client) : withTransaction(executor);
 }
 
 async function updateExpense(userId, id, data) {
-  await withTransaction(async (client) => {
-    const current = await getExpenseById(userId, id);
+  const executor = async (client) => {
+    const current = await getExpenseById(userId, id, client);
     if (!current) throw validationError('Expense not found');
     const itemName = normalizeText(data.item_name, 'Expense name', 160);
     const category = normalizeOptionalText(data.category, 80);
@@ -1221,16 +1248,20 @@ async function updateExpense(userId, id, data) {
            purchase_date = $5,
            is_extra = $6,
            bank_account_id = $7,
+           source = COALESCE($8, source),
+           source_id = COALESCE($9, source_id),
            updated_at = NOW()
-       WHERE id = $8 AND user_id = $9`,
-      [itemName, category, subcategory, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, id, userId]
+       WHERE id = $10 AND user_id = $11`,
+      [itemName, category, subcategory, nextAmount, purchaseDate, !!data.is_extra, nextBankAccountId, data.source || null, data.source_id || null, id, userId]
     );
-  });
+  };
+  const client = arguments[3] || null;
+  return client ? executor(client) : withTransaction(executor);
 }
 
 async function deleteExpense(userId, id) {
-  await withTransaction(async (client) => {
-    const current = await getExpenseById(userId, id);
+  const executor = async (client) => {
+    const current = await getExpenseById(userId, id, client);
     if (!current) return;
     if (normalizeBankAccountId(current.bank_account_id)) {
       await adjustBankBalance(userId, current.bank_account_id, Math.abs(num(current.amount)), client);
@@ -1241,7 +1272,9 @@ async function deleteExpense(userId, id) {
        WHERE id = $2 AND user_id = $1`,
       [userId, id]
     );
-  });
+  };
+  const client = arguments[2] || null;
+  return client ? executor(client) : withTransaction(executor);
 }
 
 async function bulkAddExpenses(userId, rows) {
@@ -6847,8 +6880,18 @@ async function updateSchoolKid(userId, kidId, data = {}) {
 
 async function deleteSchoolKid(userId, kidId) {
   await ensureSchoolKidTables();
-  const result = await query('DELETE FROM school_kids WHERE id = $1 AND user_id = $2', [kidId, userId]);
-  return result.rowCount > 0;
+  return withTransaction(async (client) => {
+    const expenseIdsR = await client.query(
+      `SELECT e.id
+       FROM school_kid_expenses e
+       INNER JOIN school_kids k ON k.id = e.kid_id
+       WHERE e.kid_id = $1 AND k.user_id = $2`,
+      [kidId, userId]
+    );
+    await removeSchoolKidExpenseLedgerLinks(userId, expenseIdsR.rows.map((row) => Number(row.id)), client);
+    const result = await client.query('DELETE FROM school_kids WHERE id = $1 AND user_id = $2', [kidId, userId]);
+    return result.rowCount > 0;
+  });
 }
 
 async function addSchoolKidClass(userId, kidId, data = {}) {
@@ -6908,8 +6951,198 @@ async function updateSchoolKidClass(userId, kidId, classId, data = {}) {
 async function deleteSchoolKidClass(userId, kidId, classId) {
   const current = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
   if (!current) throw validationError('Class not found');
-  const result = await query('DELETE FROM school_kid_classes WHERE id = $1 AND kid_id = $2', [classId, kidId]);
-  return result.rowCount > 0;
+  return withTransaction(async (client) => {
+    const expenseIdsR = await client.query(
+      `SELECT id
+       FROM school_kid_expenses
+       WHERE kid_id = $1 AND class_id = $2`,
+      [kidId, classId]
+    );
+    await removeSchoolKidExpenseLedgerLinks(userId, expenseIdsR.rows.map((row) => Number(row.id)), client);
+    const result = await client.query('DELETE FROM school_kid_classes WHERE id = $1 AND kid_id = $2', [classId, kidId]);
+    return result.rowCount > 0;
+  });
+}
+
+const SCHOOL_KID_EXPENSE_SOURCE = 'school_kid_expense';
+
+async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
+  const result = await client.query(
+    `SELECT id, category, subcategory, is_extra, bank_account_id
+     FROM expenses
+     WHERE user_id = $1
+       AND source = $2
+       AND source_id = $3
+       AND deleted_at IS NULL
+     ORDER BY id DESC`,
+    [userId, SCHOOL_KID_EXPENSE_SOURCE, sourceId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    category: row.category || '',
+    subcategory: row.subcategory || '',
+    is_extra: !!row.is_extra,
+    bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+  }));
+}
+
+async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, client) {
+  const linkedExpenseRows = await listLinkedExpenseRowsBySource(userId, schoolExpense.id, client);
+  const linkedExpenseRow = linkedExpenseRows[0] || null;
+  const linkedCcTxn = await pgBillingDb.getCcTxnBySource(userId, SCHOOL_KID_EXPENSE_SOURCE, schoolExpense.id, client);
+  const addToExpense = input.add_to_expense !== undefined
+    ? !!input.add_to_expense
+    : !!(linkedExpenseRow || linkedCcTxn);
+  const bankAccountId = input.bank_account_id !== undefined
+    ? normalizeBankAccountId(input.bank_account_id)
+    : (linkedCcTxn?.id ? null : normalizeBankAccountId(linkedExpenseRow?.bank_account_id));
+  const cardId = input.card_id !== undefined
+    ? normalizeCardId(input.card_id)
+    : normalizeCardId(linkedCcTxn?.card_id);
+  const expenseType = input.expense_type !== undefined
+    ? (String(input.expense_type || 'fair').trim().toLowerCase() === 'extra' ? 'extra' : 'fair')
+    : (linkedExpenseRow?.is_extra ? 'extra' : 'fair');
+  const cardDiscountPct = input.card_discount_pct !== undefined
+    ? normalizeDiscountPercent(input.card_discount_pct, 0)
+    : num(linkedCcTxn?.discount_pct);
+  if (bankAccountId && cardId) throw validationError('Choose either a bank or a card for add to expense');
+
+  if (!addToExpense) {
+    if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+    for (const linkedExpense of linkedExpenseRows) {
+      await deleteExpense(userId, linkedExpense.id, client);
+    }
+    return;
+  }
+
+  const expensePayload = {
+    item_name: schoolExpense.item_name,
+    category: input.category !== undefined
+      ? (normalizeOptionalText(input.category, 80) || 'Education')
+      : (linkedExpenseRow?.category || 'Education'),
+    subcategory: input.subcategory !== undefined
+      ? normalizeOptionalText(input.subcategory, 80)
+      : (linkedExpenseRow?.subcategory || 'School Kids'),
+    amount: schoolExpense.amount,
+    purchase_date: schoolExpense.expense_date,
+    is_extra: expenseType === 'extra',
+    bank_account_id: cardId ? null : bankAccountId,
+    source: SCHOOL_KID_EXPENSE_SOURCE,
+    source_id: schoolExpense.id,
+  };
+
+  if (linkedExpenseRow?.id) await updateExpense(userId, linkedExpenseRow.id, expensePayload, client);
+  else await addExpense(userId, expensePayload, client);
+
+  for (const extraExpense of linkedExpenseRows.slice(1)) {
+    await deleteExpense(userId, extraExpense.id, client);
+  }
+
+  if (!cardId) {
+    if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+    return;
+  }
+
+  if (linkedCcTxn?.id && Number(linkedCcTxn.card_id || 0) === cardId) {
+    await pgBillingDb.updateCcTxn(userId, linkedCcTxn.id, {
+      txn_date: schoolExpense.expense_date,
+      description: schoolExpense.item_name,
+      amount: schoolExpense.amount,
+      discount_pct: cardDiscountPct,
+    }, client);
+    return;
+  }
+
+  if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+  await pgBillingDb.addCcTxn(userId, {
+    card_id: cardId,
+    txn_date: schoolExpense.expense_date,
+    description: schoolExpense.item_name,
+    amount: schoolExpense.amount,
+    discount_pct: cardDiscountPct,
+    source: SCHOOL_KID_EXPENSE_SOURCE,
+    source_id: schoolExpense.id,
+  }, client);
+}
+
+async function removeSchoolKidExpenseLedgerLinks(userId, expenseIds = [], client) {
+  const normalized = [...new Set((expenseIds || []).map((value) => Number(value)).filter((value) => value > 0))];
+  for (const expenseId of normalized) {
+    const linkedCcTxn = await pgBillingDb.getCcTxnBySource(userId, SCHOOL_KID_EXPENSE_SOURCE, expenseId, client);
+    if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+    const linkedExpenseIds = await listLinkedExpenseRowsBySource(userId, expenseId, client);
+    for (const linkedExpense of linkedExpenseIds) {
+      await deleteExpense(userId, linkedExpense.id, client);
+    }
+  }
+}
+
+async function getSchoolKidExpenseLedgerMeta(userId, expenseIds = []) {
+  const normalized = [...new Set((expenseIds || []).map((value) => Number(value)).filter((value) => value > 0))];
+  if (!normalized.length) return new Map();
+  const [expenseLinksR, cardLinksR] = await Promise.all([
+    query(
+      `SELECT DISTINCT ON (source_id)
+          source_id,
+          id,
+          is_extra,
+          bank_account_id
+       FROM expenses
+       WHERE user_id = $1
+         AND source = $2
+         AND source_id = ANY($3::bigint[])
+         AND deleted_at IS NULL
+       ORDER BY source_id, id DESC`,
+      [userId, SCHOOL_KID_EXPENSE_SOURCE, normalized]
+    ),
+    query(
+      `SELECT DISTINCT ON (source_id)
+          source_id,
+          id,
+          card_id,
+          discount_pct
+       FROM cc_txns
+       WHERE user_id = $1
+         AND source = $2
+         AND source_id = ANY($3::bigint[])
+       ORDER BY source_id, id DESC`,
+      [userId, SCHOOL_KID_EXPENSE_SOURCE, normalized]
+    ),
+  ]);
+  const meta = new Map();
+  for (const row of expenseLinksR.rows || []) {
+    meta.set(Number(row.source_id), {
+      add_to_expense: true,
+      expense_entry_id: Number(row.id),
+      category: row.category || 'Education',
+      subcategory: row.subcategory || 'School Kids',
+      expense_type: row.is_extra ? 'extra' : 'fair',
+      bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+      card_id: null,
+      card_discount_pct: 0,
+      cc_txn_id: null,
+    });
+  }
+  for (const row of cardLinksR.rows || []) {
+    const key = Number(row.source_id);
+    const current = meta.get(key) || {
+      add_to_expense: true,
+      expense_entry_id: null,
+      category: 'Education',
+      subcategory: 'School Kids',
+      expense_type: 'fair',
+      bank_account_id: null,
+      card_id: null,
+      card_discount_pct: 0,
+      cc_txn_id: null,
+    };
+    current.card_id = row.card_id != null ? Number(row.card_id) : null;
+    current.card_discount_pct = num(row.discount_pct);
+    current.cc_txn_id = Number(row.id);
+    current.bank_account_id = null;
+    meta.set(key, current);
+  }
+  return meta;
 }
 
 async function addSchoolKidExpense(userId, kidId, data = {}) {
@@ -6918,20 +7151,24 @@ async function addSchoolKidExpense(userId, kidId, data = {}) {
   const classId = Number(data.class_id || 0);
   const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
   if (!classRow) throw validationError('Class not found');
-  const result = await query(
-    `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
-     RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
-    [
-      kidId,
-      classId,
-      normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
-      normalizeText(data.item_name, 'Expense item', 160),
-      normalizeAmount(data.amount, 'Expense amount'),
-      normalizeOptionalText(data.notes, 500),
-    ]
-  );
-  return result.rows[0];
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
+      [
+        kidId,
+        classId,
+        normalizeDateValue(data.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
+        normalizeText(data.item_name, 'Expense item', 160),
+        normalizeAmount(data.amount, 'Expense amount'),
+        normalizeOptionalText(data.notes, 500),
+      ]
+    );
+    const expense = result.rows[0];
+    await syncSchoolKidExpenseLedger(userId, expense, data, client);
+    return expense;
+  });
 }
 
 async function updateSchoolKidExpense(userId, kidId, expenseId, data = {}) {
@@ -6950,61 +7187,77 @@ async function updateSchoolKidExpense(userId, kidId, expenseId, data = {}) {
   const classId = data.class_id !== undefined ? Number(data.class_id || 0) : Number(current.class_id);
   const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
   if (!classRow) throw validationError('Class not found');
-  const result = await query(
-    `UPDATE school_kid_expenses
-     SET class_id = $1,
-         expense_date = $2,
-         item_name = $3,
-         amount = $4,
-         notes = $5,
-         updated_at = NOW()
-     WHERE id = $6 AND kid_id = $7
-     RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
-    [
-      classId,
-      data.expense_date !== undefined ? normalizeDateValue(data.expense_date, 'Expense date') : current.expense_date,
-      data.item_name !== undefined ? normalizeText(data.item_name, 'Expense item', 160) : current.item_name,
-      data.amount !== undefined ? normalizeAmount(data.amount, 'Expense amount') : num(current.amount),
-      data.notes !== undefined ? normalizeOptionalText(data.notes, 500) : current.notes,
-      expenseId,
-      kidId,
-    ]
-  );
-  return result.rows[0] || null;
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE school_kid_expenses
+       SET class_id = $1,
+           expense_date = $2,
+           item_name = $3,
+           amount = $4,
+           notes = $5,
+           updated_at = NOW()
+       WHERE id = $6 AND kid_id = $7
+       RETURNING id, kid_id, class_id, expense_date, item_name, amount, notes, created_at, updated_at`,
+      [
+        classId,
+        data.expense_date !== undefined ? normalizeDateValue(data.expense_date, 'Expense date') : current.expense_date,
+        data.item_name !== undefined ? normalizeText(data.item_name, 'Expense item', 160) : current.item_name,
+        data.amount !== undefined ? normalizeAmount(data.amount, 'Expense amount') : num(current.amount),
+        data.notes !== undefined ? normalizeOptionalText(data.notes, 500) : current.notes,
+        expenseId,
+        kidId,
+      ]
+    );
+    const expense = result.rows[0] || null;
+    if (expense) await syncSchoolKidExpenseLedger(userId, expense, data, client);
+    return expense;
+  });
 }
 
 async function deleteSchoolKidExpense(userId, kidId, expenseId) {
   const kid = await getSchoolKidOwnedByUser(userId, kidId);
   if (!kid) throw validationError('Kid not found');
-  const result = await query(
-    `DELETE FROM school_kid_expenses
-     WHERE id = $1 AND kid_id = $2`,
-    [expenseId, kidId]
-  );
-  return result.rowCount > 0;
+  return withTransaction(async (client) => {
+    await removeSchoolKidExpenseLedgerLinks(userId, [expenseId], client);
+    const result = await client.query(
+      `DELETE FROM school_kid_expenses
+       WHERE id = $1 AND kid_id = $2`,
+      [expenseId, kidId]
+    );
+    return result.rowCount > 0;
+  });
 }
 
 async function replaceSchoolKidClassExpenses(userId, kidId, classId, expenses = []) {
   const classRow = await getSchoolKidClassOwnedByUser(userId, kidId, classId);
   if (!classRow) throw validationError('Class not found');
-  await query('DELETE FROM school_kid_expenses WHERE kid_id = $1 AND class_id = $2', [kidId, classId]);
-  let inserted = 0;
-  for (const item of expenses) {
-    await query(
-      `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-      [
-        kidId,
-        classId,
-        normalizeDateValue(item.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
-        normalizeText(item.item_name, 'Expense item', 160),
-        normalizeAmount(item.amount, 'Expense amount'),
-        normalizeOptionalText(item.notes, 500),
-      ]
+  return withTransaction(async (client) => {
+    const existingR = await client.query(
+      `SELECT id
+       FROM school_kid_expenses
+       WHERE kid_id = $1 AND class_id = $2`,
+      [kidId, classId]
     );
-    inserted++;
-  }
-  return { success: true, inserted };
+    await removeSchoolKidExpenseLedgerLinks(userId, existingR.rows.map((row) => Number(row.id)), client);
+    await client.query('DELETE FROM school_kid_expenses WHERE kid_id = $1 AND class_id = $2', [kidId, classId]);
+    let inserted = 0;
+    for (const item of expenses) {
+      await client.query(
+        `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [
+          kidId,
+          classId,
+          normalizeDateValue(item.expense_date || new Date().toISOString().slice(0, 10), 'Expense date'),
+          normalizeText(item.item_name, 'Expense item', 160),
+          normalizeAmount(item.amount, 'Expense amount'),
+          normalizeOptionalText(item.notes, 500),
+        ]
+      );
+      inserted++;
+    }
+    return { success: true, inserted };
+  });
 }
 
 async function getSchoolKidsOverview(userId) {
@@ -7071,10 +7324,23 @@ async function getSchoolKidsOverview(userId) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));
+  const expenseLedgerMeta = await getSchoolKidExpenseLedgerMeta(userId, expenses.map((row) => row.id));
   const expensesByClass = new Map();
   expenses.forEach((expense) => {
+    const ledger = expenseLedgerMeta.get(expense.id);
     const list = expensesByClass.get(expense.class_id) || [];
-    list.push(expense);
+    list.push({
+      ...expense,
+      add_to_expense: !!ledger?.add_to_expense,
+      expense_entry_id: ledger?.expense_entry_id || null,
+      category: ledger?.category || 'Education',
+      subcategory: ledger?.subcategory || 'School Kids',
+      expense_type: ledger?.expense_type || 'fair',
+      bank_account_id: ledger?.bank_account_id || null,
+      card_id: ledger?.card_id || null,
+      card_discount_pct: ledger?.card_discount_pct || 0,
+      cc_txn_id: ledger?.cc_txn_id || null,
+    });
     expensesByClass.set(expense.class_id, list);
   });
   const enrichedClassRows = sortSchoolKidClassRows(classRows.map((row) => {
@@ -7151,8 +7417,22 @@ async function getSchoolKidDetail(userId, kidId) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));
+  const expenseLedgerMeta = await getSchoolKidExpenseLedgerMeta(userId, expenses.map((row) => row.id));
+  const enrichedExpenses = expenses.map((expense) => {
+    const ledger = expenseLedgerMeta.get(expense.id);
+    return {
+      ...expense,
+      add_to_expense: !!ledger?.add_to_expense,
+      expense_entry_id: ledger?.expense_entry_id || null,
+      expense_type: ledger?.expense_type || 'fair',
+      bank_account_id: ledger?.bank_account_id || null,
+      card_id: ledger?.card_id || null,
+      card_discount_pct: ledger?.card_discount_pct || 0,
+      cc_txn_id: ledger?.cc_txn_id || null,
+    };
+  });
   const expensesByClass = new Map();
-  expenses.forEach((expense) => {
+  enrichedExpenses.forEach((expense) => {
     const list = expensesByClass.get(expense.class_id) || [];
     list.push(expense);
     expensesByClass.set(expense.class_id, list);
@@ -7189,7 +7469,7 @@ async function getSchoolKidDetail(userId, kidId) {
       updated_at: kid.updated_at,
     },
     classes: classRows,
-    expenses,
+    expenses: enrichedExpenses,
     total_expense: classRows.reduce((sum, row) => Math.round((sum + num(row.total_expense)) * 100) / 100, 0),
     school_options: [...new Set(classRows.map((row) => row.school_name).filter(Boolean))],
     year_options: [...new Set(classRows.map((row) => row.academic_year).filter(Boolean))].sort((a, b) => parseAcademicYearStart(a) - parseAcademicYearStart(b)),

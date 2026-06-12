@@ -27,9 +27,18 @@ let _expenseVoiceBatch = [];
 let _expenseVoiceIgnoreNextResult = false;
 let _expenseCategoryHideTimer = null;
 let _expenseCategoryPickerState = { open: false, manage: false, category: '', subcategory: '', expanded: null, editor: null, standalone: false };
+let _expenseCategoryManagerScrollTop = 0;
 let _expenseScanDraft = null;
 let _expenseScanSaving = false;
 let _expenseScanCommonBankId = '';
+
+const EXPENSE_CATEGORY_ACTION_ICONS = {
+  edit: '&#9998;',
+  delete: '&#128465;',
+  addSub: '&#65291;',
+  expand: '&#8595;',
+  collapse: '&#8593;',
+};
 let _expenseScanCommonDate = '';
 let _expenseScanCommonChargeMode = 'none';
 let _expenseScanCommonCardId = '';
@@ -58,6 +67,10 @@ function cleanMojibakeText(value) {
     .trim();
 }
 
+function toJsArg(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
 async function loadExpenseCategories() {
   const data = await api('/api/expenses/categories');
   _expenseCategories = (data?.categories || []).filter(Boolean);
@@ -76,8 +89,10 @@ function syncExpenseCategoryInputs() {
   const categoryInput = document.getElementById('eCategory');
   const subcategoryInput = document.getElementById('eSubcategory');
   const summary = document.getElementById('expenseCategorySummary');
+  const trigger = document.querySelector('.expense-cat-picker-trigger');
   if (categoryInput) categoryInput.value = _expenseCategoryPickerState.category || '';
   if (subcategoryInput) subcategoryInput.value = _expenseCategoryPickerState.subcategory || '';
+  if (trigger) trigger.setAttribute('aria-expanded', _expenseCategoryPickerState.open ? 'true' : 'false');
   if (summary) {
     const text = expenseCategoryDisplayText(_expenseCategoryPickerState.category, _expenseCategoryPickerState.subcategory);
     summary.innerHTML = text
@@ -89,6 +104,57 @@ function syncExpenseCategoryInputs() {
 function selectedExpenseCategoryMeta() {
   const categoryName = String(_expenseCategoryPickerState.category || '').trim().toLowerCase();
   return (_expenseCategoryLibrary || []).find((item) => String(item?.name || '').trim().toLowerCase() === categoryName) || null;
+}
+
+const EXPENSE_CATEGORY_ICON_PRESETS = [
+  { icon: '🍜', words: ['food', 'dining', 'meal', 'lunch', 'dinner', 'restaurant', 'eat', 'snack', 'beverage'] },
+  { icon: '☕', words: ['coffee', 'tea', 'cafe', 'drink'] },
+  { icon: '🧑‍🤝‍🧑', words: ['social', 'friend', 'friends', 'community', 'life', 'network'] },
+  { icon: '🎉', words: ['party', 'celebration', 'event', 'fun'] },
+  { icon: '🐶', words: ['pet', 'pets', 'dog', 'cat', 'animal'] },
+  { icon: '🚕', words: ['transport', 'travel', 'taxi', 'bus', 'car', 'fuel', 'petrol', 'metro', 'train'] },
+  { icon: '✈️', words: ['flight', 'trip', 'vacation', 'tour', 'holiday'] },
+  { icon: '🏠', words: ['house', 'home', 'household', 'rent', 'furniture', 'kitchen'] },
+  { icon: '🧥', words: ['apparel', 'clothing', 'fashion', 'laundry', 'shoe', 'shoes'] },
+  { icon: '💄', words: ['beauty', 'cosmetic', 'makeup', 'salon', 'skincare'] },
+  { icon: '🧘', words: ['health', 'fitness', 'wellness', 'yoga', 'hospital', 'medicine', 'medical'] },
+  { icon: '📚', words: ['education', 'study', 'school', 'college', 'book', 'course', 'learning'] },
+  { icon: '🎁', words: ['gift', 'gifts', 'present', 'donation', 'charity'] },
+  { icon: '🖼️', words: ['culture', 'art', 'music', 'movie', 'cinema', 'book', 'books'] },
+  { icon: '💼', words: ['office', 'work', 'business', 'job'] },
+  { icon: '📱', words: ['mobile', 'phone', 'app', 'internet', 'subscription', 'software'] },
+  { icon: '💡', words: ['bill', 'electricity', 'utility', 'utilities'] },
+  { icon: '🛒', words: ['grocery', 'groceries', 'shopping', 'mart', 'store'] },
+  { icon: '💰', words: ['investment', 'saving', 'salary', 'income', 'money'] },
+  { icon: '📦', words: ['other', 'misc', 'miscellaneous', 'general'] },
+];
+
+function suggestExpenseCategoryIcon(name = '') {
+  const raw = String(name || '').trim().toLowerCase();
+  if (!raw) return '📦';
+  const match = EXPENSE_CATEGORY_ICON_PRESETS.find((preset) => preset.words.some((word) => raw.includes(word)));
+  return match?.icon || '📦';
+}
+
+function expenseCategoryEditorIconOptions(name = '', currentIcon = '') {
+  const raw = String(name || '').trim().toLowerCase();
+  const matches = EXPENSE_CATEGORY_ICON_PRESETS
+    .filter((preset) => !raw || preset.words.some((word) => raw.includes(word)))
+    .map((preset) => preset.icon);
+  const suggested = suggestExpenseCategoryIcon(name);
+  return [...new Set([suggested, currentIcon || '', ...matches, '📦', '🛒', '🍜', '🏠', '💼', '🎁'])].filter(Boolean).slice(0, 8);
+}
+
+function renderExpenseCategoryEditorIconOptions(name = '', currentIcon = '') {
+  const selected = String(currentIcon || '').trim();
+  return expenseCategoryEditorIconOptions(name, currentIcon).map((icon) => `
+    <button
+      type="button"
+      class="btn btn-g btn-sm"
+      onclick='selectExpenseCategoryEditorIcon(${toJsArg(icon)})'
+      style="min-width:42px;height:38px;padding:0;border-radius:12px;${selected === icon ? 'border-color:var(--green);box-shadow:0 0 0 2px rgba(29,110,70,.12);' : ''}"
+      title="Use ${icon}"
+    >${escHtml(icon)}</button>`).join('');
 }
 
 function renderExpenseCategoryPickerField(category = '', subcategory = '') {
@@ -103,28 +169,25 @@ function renderExpenseCategoryPickerField(category = '', subcategory = '') {
     standalone: false,
   };
   return `
-    <div style="display:grid;gap:10px">
+    <div class="expense-cat-picker-field">
       <input type="hidden" id="eCategory" value="${escHtml(_expenseCategoryPickerState.category)}">
       <input type="hidden" id="eSubcategory" value="${escHtml(_expenseCategoryPickerState.subcategory)}">
       <button
         type="button"
+        class="expense-cat-picker-trigger"
         onclick="toggleExpenseCategoryPanel()"
-        style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;cursor:pointer"
+        aria-haspopup="dialog"
+        aria-expanded="${_expenseCategoryPickerState.open ? 'true' : 'false'}"
       >
         <span id="expenseCategorySummary">${expenseCategoryDisplayText(category, subcategory)
           ? `<span style="font-weight:700;color:var(--t1)">${escHtml(expenseCategoryDisplayText(category, subcategory))}</span>`
           : `<span style="color:var(--t3)">Choose a category and optional subcategory</span>`}</span>
-        <span style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:12px;color:var(--t2)">Browse</span>
-          <span style="font-size:18px;color:var(--t3)">${_expenseCategoryPickerState.open ? '&uarr;' : '&darr;'}</span>
+        <span class="expense-cat-picker-trigger-meta">
+          <span class="expense-cat-picker-trigger-label">Browse</span>
+          <span class="expense-cat-picker-trigger-caret">${_expenseCategoryPickerState.open ? '&uarr;' : '&darr;'}</span>
         </span>
       </button>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="button" class="btn btn-s btn-sm" onclick="toggleExpenseCategoryManager()">${_expenseCategoryPickerState.manage ? 'Back To Picker' : 'Manage Categories'}</button>
-        <button type="button" class="btn btn-g btn-sm" onclick="showExpenseCategoriesManager()">Open Full Manager</button>
-        ${expenseCategoryDisplayText(category, subcategory) ? `<button type="button" class="btn btn-g btn-sm" onclick="clearExpenseCategorySelection()">Clear</button>` : ''}
-      </div>
-      <div id="expenseCategoryPanelWrap" style="display:none"></div>
+      <div id="expenseCategoryPanelWrap" class="expense-cat-picker-popover" style="display:none"></div>
     </div>`;
 }
 
@@ -134,15 +197,49 @@ function renderExpenseCategoryEditor(editor, category = null, subcategory = null
   const title = editor.type.endsWith('add')
     ? (isSub ? 'Add subcategory' : 'Add category')
     : (isSub ? 'Edit subcategory' : 'Edit category');
+  const currentIcon = String(editor.icon || suggestExpenseCategoryIcon(editor.name || '')).trim() || '📦';
+  const isInlineEdit = editor.type.endsWith('edit');
+  if (isInlineEdit) {
+    return `
+      <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(29,110,70,.16);border-radius:14px;background:linear-gradient(180deg,#fcfffd 0%,#f5fbf7 100%)">
+        <div style="display:grid;gap:10px;grid-template-columns:${isSub ? 'minmax(0,1fr) auto auto' : 'minmax(0,1fr) 74px auto auto'};align-items:end">
+          <label class="fl" style="margin:0">
+            <span style="font-size:11px;font-weight:800;color:var(--em);text-transform:uppercase;letter-spacing:.06em">${isSub ? 'Subcategory' : 'Category'}</span>
+            <input class="fi" id="expenseCategoryEditorName" value="${escHtml(editor.name || '')}" maxlength="80" placeholder="${isSub ? 'Lunch' : 'Food'}" oninput="expenseCategoryEditorNameChanged(this.value)">
+          </label>
+          ${isSub ? '' : `
+            <label class="fl" style="margin:0">
+              <span style="font-size:11px;font-weight:800;color:var(--em);text-transform:uppercase;letter-spacing:.06em">Icon</span>
+              <input class="fi" id="expenseCategoryEditorIcon" value="${escHtml(currentIcon)}" maxlength="12" placeholder="🍜" oninput="expenseCategoryEditorIconChanged(this.value)" style="text-align:center;padding-left:8px;padding-right:8px">
+            </label>`}
+          <button type="button" class="btn btn-p btn-sm" onclick="saveExpenseCategoryEditor()">Save</button>
+          <button type="button" class="btn btn-g btn-sm" onclick="cancelExpenseCategoryEditor()">Cancel</button>
+        </div>
+        ${isSub ? '' : `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <div id="expenseCategoryEditorIconPreview" style="display:flex;align-items:center;justify-content:center;width:40px;height:34px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:20px">${escHtml(currentIcon)}</div>
+            <div id="expenseCategoryEditorIconOptions" style="display:flex;gap:6px;flex-wrap:wrap">${renderExpenseCategoryEditorIconOptions(editor.name || '', currentIcon)}</div>
+          </div>`}
+        ${editor.error ? `<div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(220,38,38,.15);border-radius:10px;background:#fff5f5;color:#b91c1c;font-size:12px;font-weight:600">${escHtml(editor.error)}</div>` : ''}
+        ${(category || subcategory) ? `<div style="margin-top:8px;font-size:11px;color:var(--t2)">${category ? `Inside <strong>${escHtml(category.name)}</strong>` : ''}${subcategory ? `Editing <strong>${escHtml(subcategory.name)}</strong>` : ''}</div>` : ''}
+      </div>`;
+  }
   return `
     <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff">
       <div style="font-size:12px;font-weight:800;color:var(--em);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">${title}</div>
       <div style="display:grid;gap:10px;grid-template-columns:${isSub ? '1fr auto auto' : '1fr 84px auto auto'};align-items:end">
-        <label class="fl" style="margin:0">Name<input class="fi" id="expenseCategoryEditorName" value="${escHtml(editor.name || '')}" maxlength="80" placeholder="${isSub ? 'Lunch' : 'Food'}"></label>
-        ${isSub ? '' : `<label class="fl" style="margin:0">Icon<input class="fi" id="expenseCategoryEditorIcon" value="${escHtml(editor.icon || '')}" maxlength="12" placeholder="🍜"></label>`}
+        <label class="fl" style="margin:0">Name<input class="fi" id="expenseCategoryEditorName" value="${escHtml(editor.name || '')}" maxlength="80" placeholder="${isSub ? 'Lunch' : 'Food'}" oninput="expenseCategoryEditorNameChanged(this.value)"></label>
+        ${isSub ? '' : `<label class="fl" style="margin:0">Icon<input class="fi" id="expenseCategoryEditorIcon" value="${escHtml(currentIcon)}" maxlength="12" placeholder="🍜" oninput="expenseCategoryEditorIconChanged(this.value)"></label>`}
         <button type="button" class="btn btn-p btn-sm" onclick="saveExpenseCategoryEditor()">${editor.type.endsWith('add') ? 'Add' : 'Save'}</button>
         <button type="button" class="btn btn-g btn-sm" onclick="cancelExpenseCategoryEditor()">Cancel</button>
       </div>
+      ${isSub ? '' : `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+          <div id="expenseCategoryEditorIconPreview" style="display:flex;align-items:center;justify-content:center;width:46px;height:40px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;font-size:22px">${escHtml(currentIcon)}</div>
+          <div style="font-size:12px;color:var(--t2);min-width:120px">Auto-suggested from name. You can still change it.</div>
+          <div id="expenseCategoryEditorIconOptions" style="display:flex;gap:8px;flex-wrap:wrap">${renderExpenseCategoryEditorIconOptions(editor.name || '', currentIcon)}</div>
+        </div>`}
+      ${editor.error ? `<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(220,38,38,.15);border-radius:12px;background:#fff5f5;color:#b91c1c;font-size:12px;font-weight:600">${escHtml(editor.error)}</div>` : ''}
       ${(category || subcategory) ? `<div style="margin-top:8px;font-size:12px;color:var(--t2)">${category ? `Category: <strong>${escHtml(category.name)}</strong>` : ''}${subcategory ? ` &middot; Editing <strong>${escHtml(subcategory.name)}</strong>` : ''}</div>` : ''}
     </div>`;
 }
@@ -150,11 +247,11 @@ function renderExpenseCategoryEditor(editor, category = null, subcategory = null
 function renderExpenseCategoryManagerHtml(standalone = false) {
   const editor = _expenseCategoryPickerState.editor;
   return `
-    <div class="expense-cat-manager ${standalone ? 'standalone' : ''}">
+    <div class="expense-cat-manager ${standalone ? 'is-standalone' : ''}">
       <div class="expense-cat-manager-shell">
         <div class="expense-cat-manager-top">
           <div>
-            <div class="expense-cat-manager-title">${standalone ? 'Manage Categories' : 'Expense Categories'}</div>
+            <div class="expense-cat-manager-title">${standalone ? 'Organize your category library' : 'Expense Categories'}</div>
             <div class="expense-cat-manager-sub">Global defaults are visible to everyone. Custom categories belong only to you.</div>
           </div>
           <div class="expense-cat-manager-top-actions">
@@ -165,24 +262,28 @@ function renderExpenseCategoryManagerHtml(standalone = false) {
         ${editor && editor.type === 'category-add' ? `<div class="expense-cat-editor-wrap">${renderExpenseCategoryEditor(editor)}</div>` : ''}
         <div class="expense-cat-list">
           ${(_expenseCategoryLibrary || []).map((category) => {
-            const catEditor = editor && editor.type === 'category-edit' && Number(editor.categoryId) === Number(category.id) ? renderExpenseCategoryEditor(editor, category) : '';
-            const subAddEditor = editor && editor.type === 'subcategory-add' && Number(editor.categoryId) === Number(category.id) ? renderExpenseCategoryEditor(editor, category) : '';
-            const expanded = Number(_expenseCategoryPickerState.expanded || 0) === Number(category.id);
+            const categoryKey = String(category.id);
+            const catEditor = editor && editor.type === 'category-edit' && String(editor.categoryId) === categoryKey ? renderExpenseCategoryEditor(editor, category) : '';
+            const subAddEditor = editor && editor.type === 'subcategory-add' && String(editor.categoryId) === categoryKey ? renderExpenseCategoryEditor(editor, category) : '';
+            const expanded = String(_expenseCategoryPickerState.expanded || '') === categoryKey;
             return `
               <div class="expense-cat-card">
                 <div class="expense-cat-card-head">
                   <div class="expense-cat-card-main">
                     <div class="expense-cat-card-icon">${escHtml(category.icon || '📦')}</div>
                     <div>
-                      <div class="expense-cat-card-name">${escHtml(category.name)}</div>
-                      <div class="expense-cat-card-meta">${category.is_global ? 'Default for all users' : 'Visible only to you'}${category.subcategories?.length ? ` · ${category.subcategories.length} subcategories` : ''}</div>
+                      <div class="expense-cat-card-name-row">
+                        <div class="expense-cat-card-name">${escHtml(category.name)}</div>
+                        <span class="expense-cat-badge ${category.is_global ? 'is-default' : 'is-custom'}">${category.is_global ? 'Default' : 'Yours'}</span>
+                      </div>
+                      <div class="expense-cat-card-meta">${category.is_global ? 'Available to everyone' : 'Visible only to you'}${category.subcategories?.length ? ` · ${category.subcategories.length} subcategories` : ''}</div>
                     </div>
                   </div>
                   <div class="expense-cat-card-actions">
-                    ${category.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginEditExpenseCategory(${Number(category.id)})">Edit</button>` : ''}
-                    ${category.can_delete ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="removeExpenseCategory(${Number(category.id)})">Delete</button>` : ''}
-                    ${category.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginAddExpenseSubcategory(${Number(category.id)})">+ Sub</button>` : ''}
-                    <button type="button" class="btn btn-g btn-sm expense-cat-chevron-btn" onclick="toggleExpenseCategoryExpanded(${Number(category.id)})">${expanded ? '&uarr;' : '&darr;'}</button>
+                    ${category.can_edit ? `<button type="button" class="expense-cat-icon-btn" title="Edit category" aria-label="Edit category" onclick='beginEditExpenseCategory(${toJsArg(categoryKey)})'><span class="expense-cat-icon-glyph">${EXPENSE_CATEGORY_ACTION_ICONS.edit}</span></button>` : ''}
+                    ${category.can_delete ? `<button type="button" class="expense-cat-icon-btn danger" title="Delete category" aria-label="Delete category" onclick='removeExpenseCategory(${toJsArg(categoryKey)})'><span class="expense-cat-icon-glyph">${EXPENSE_CATEGORY_ACTION_ICONS.delete}</span></button>` : ''}
+                    ${category.can_add_subcategories ? `<button type="button" class="expense-cat-icon-btn" title="Add subcategory" aria-label="Add subcategory" onclick='beginAddExpenseSubcategory(${toJsArg(categoryKey)})'><span class="expense-cat-icon-glyph">${EXPENSE_CATEGORY_ACTION_ICONS.addSub}</span></button>` : ''}
+                    <button type="button" class="expense-cat-icon-btn expense-cat-chevron-btn" title="${expanded ? 'Collapse subcategories' : 'Expand subcategories'}" aria-label="${expanded ? 'Collapse subcategories' : 'Expand subcategories'}" onclick='toggleExpenseCategoryExpanded(${toJsArg(categoryKey)})'><span class="expense-cat-icon-glyph">${expanded ? EXPENSE_CATEGORY_ACTION_ICONS.collapse : EXPENSE_CATEGORY_ACTION_ICONS.expand}</span></button>
                   </div>
                 </div>
                 ${catEditor ? `<div class="expense-cat-editor-wrap">${catEditor}</div>` : ''}
@@ -200,8 +301,9 @@ function renderExpenseCategoryManagerHtml(standalone = false) {
                                 <div class="expense-cat-sub-row-top">
                                   <div class="expense-cat-sub-name">${escHtml(sub.name)}</div>
                                   <div class="expense-cat-sub-actions">
-                                    ${sub.can_edit ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="beginEditExpenseSubcategory(${Number(category.id)}, ${Number(sub.id)})">Edit</button>` : ''}
-                                    ${sub.can_delete ? `<button type="button" class="btn btn-g btn-sm expense-cat-card-btn" onclick="removeExpenseSubcategory(${Number(sub.id)})">Delete</button>` : ''}
+                                    <span class="expense-cat-badge ${sub.is_global ? 'is-default' : 'is-custom'}">${sub.is_global ? 'Default' : 'Yours'}</span>
+                                    ${sub.can_edit ? `<button type="button" class="expense-cat-icon-btn" title="Edit subcategory" aria-label="Edit subcategory" onclick="beginEditExpenseSubcategory(${Number(category.id)}, ${Number(sub.id)})"><span class="expense-cat-icon-glyph">${EXPENSE_CATEGORY_ACTION_ICONS.edit}</span></button>` : ''}
+                                    ${sub.can_delete ? `<button type="button" class="expense-cat-icon-btn danger" title="Delete subcategory" aria-label="Delete subcategory" onclick="removeExpenseSubcategory(${Number(sub.id)})"><span class="expense-cat-icon-glyph">${EXPENSE_CATEGORY_ACTION_ICONS.delete}</span></button>` : ''}
                                   </div>
                                 </div>
                                 ${subEditor ? `<div class="expense-cat-editor-wrap">${subEditor}</div>` : ''}
@@ -234,7 +336,7 @@ function renderExpenseCategoryPickerHtml() {
           return `
             <button
               type="button"
-              onclick="pickExpenseCategory(${JSON.stringify(item.name || '')})"
+              onclick='pickExpenseCategory(${toJsArg(item.name || "")})'
               style="padding:12px 10px;border-radius:14px;border:1px solid ${isActive ? 'rgba(20,90,60,.28)' : 'var(--line)'};background:${isActive ? 'linear-gradient(180deg,#eef8f1 0%,#e4f3ea 100%)' : '#fff'};text-align:left;cursor:pointer"
             >
               <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(item.icon || '📦')} ${escHtml(item.name)}</div>
@@ -249,13 +351,13 @@ function renderExpenseCategoryPickerHtml() {
               <div style="font-size:15px;font-weight:800;color:var(--t1)">${escHtml(activeCategory.icon || '📦')} ${escHtml(activeCategory.name)}</div>
               <div style="font-size:12px;color:var(--t2);margin-top:3px">Subcategory is optional.</div>
             </div>
-            ${_expenseCategoryPickerState.subcategory ? `<button type="button" class="btn btn-g btn-sm" onclick="pickExpenseCategory(${JSON.stringify(activeCategory.name)}, '')">Clear subcategory</button>` : ''}
+            ${_expenseCategoryPickerState.subcategory ? `<button type="button" class="btn btn-g btn-sm" onclick='pickExpenseCategory(${toJsArg(activeCategory.name)}, "")'>Clear subcategory</button>` : ''}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
             ${(activeCategory.subcategories || []).length
               ? activeCategory.subcategories.map((sub) => {
                   const activeSub = String(sub.name || '').trim().toLowerCase() === String(_expenseCategoryPickerState.subcategory || '').trim().toLowerCase();
-                  return `<button type="button" class="chip ${activeSub ? 'active' : ''}" onclick="pickExpenseCategory(${JSON.stringify(activeCategory.name)}, ${JSON.stringify(sub.name)})">${escHtml(sub.name)}</button>`;
+                  return `<button type="button" class="chip ${activeSub ? 'active' : ''}" onclick='pickExpenseCategory(${toJsArg(activeCategory.name)}, ${toJsArg(sub.name)})'>${escHtml(sub.name)}</button>`;
                 }).join('')
               : `<span style="font-size:12px;color:var(--t3)">No subcategories yet.</span>`}
           </div>
@@ -263,23 +365,83 @@ function renderExpenseCategoryPickerHtml() {
     </div>`;
 }
 
+function renderExpenseCategoryPopupHtml() {
+  const activeCategory = selectedExpenseCategoryMeta();
+  return `
+    <div class="expense-cat-picker-sheet">
+      <div class="expense-cat-picker-sheet-head">
+        <div>
+          <div class="expense-cat-picker-sheet-title">Choose category</div>
+          <div class="expense-cat-picker-sheet-sub">Pick a main category, then an optional subcategory.</div>
+        </div>
+        <button type="button" class="expense-cat-picker-close" onclick="toggleExpenseCategoryPanel(false)" aria-label="Close category picker">&times;</button>
+      </div>
+      <div class="expense-cat-picker-grid">
+        ${(_expenseCategoryLibrary || []).map((item) => {
+          const isActive = String(item.name || '').trim().toLowerCase() === String(_expenseCategoryPickerState.category || '').trim().toLowerCase();
+          const subcategories = Array.isArray(item.subcategories) ? item.subcategories : [];
+          return `
+            <div class="expense-cat-picker-card ${isActive ? 'active' : ''}">
+              <button
+                type="button"
+                class="expense-cat-picker-card-trigger"
+                onclick='pickExpenseCategory(${toJsArg(item.name || "")}, "", ${subcategories.length ? 'false' : 'true'})'
+              >
+                <div class="expense-cat-picker-card-name">${escHtml(item.icon || '📦')} ${escHtml(item.name)}</div>
+                <div class="expense-cat-picker-card-meta">${subcategories.length ? `${subcategories.length} subcategories` : item.is_global ? 'Default category' : 'Custom category'}</div>
+              </button>
+              ${isActive ? `
+                <div class="expense-cat-picker-inline-subsheet">
+                  <div class="expense-cat-picker-inline-subhead">
+                    <span class="expense-cat-picker-inline-label">Subcategory</span>
+                    <div class="expense-cat-picker-inline-actions">
+                      ${_expenseCategoryPickerState.subcategory ? `<button type="button" class="btn btn-g btn-sm" onclick='pickExpenseCategory(${toJsArg(item.name || "")}, "", false)'>Clear</button>` : ''}
+                      <button type="button" class="btn btn-s btn-sm" onclick='pickExpenseCategory(${toJsArg(item.name || "")}, ${toJsArg(_expenseCategoryPickerState.subcategory || "")}, true)'>Done</button>
+                    </div>
+                  </div>
+                  <div class="expense-cat-picker-chip-row compact">
+                    ${subcategories.length
+                      ? subcategories.map((sub) => {
+                          const activeSub = String(sub.name || '').trim().toLowerCase() === String(_expenseCategoryPickerState.subcategory || '').trim().toLowerCase();
+                          return `<button type="button" class="chip ${activeSub ? 'active' : ''}" onclick='pickExpenseCategory(${toJsArg(item.name || "")}, ${toJsArg(sub.name)}, true)'>${escHtml(sub.name)}</button>`;
+                        }).join('')
+                      : `<span class="expense-cat-picker-empty">No subcategories yet. Use the category only.</span>`}
+                  </div>
+                </div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+      <div class="expense-cat-picker-sheet-footer">
+        <button type="button" class="btn btn-g btn-sm" onclick="showExpenseCategoriesManager()">Manage Categories</button>
+        ${expenseCategoryDisplayText(_expenseCategoryPickerState.category, _expenseCategoryPickerState.subcategory) ? `<button type="button" class="btn btn-g btn-sm" onclick="clearExpenseCategorySelection();toggleExpenseCategoryPanel(false)">Clear</button>` : ''}
+      </div>
+    </div>`;
+}
+
 function renderExpenseCategoryPanel() {
   const wrap = document.getElementById(_expenseCategoryPickerState.standalone ? 'expenseCategoryStandaloneManager' : 'expenseCategoryPanelWrap');
   if (!wrap) return;
+  const existingList = wrap.querySelector('.expense-cat-list');
+  if (existingList) _expenseCategoryManagerScrollTop = existingList.scrollTop || 0;
   wrap.style.display = '';
   wrap.innerHTML = _expenseCategoryPickerState.manage
     ? renderExpenseCategoryManagerHtml(_expenseCategoryPickerState.standalone)
-    : renderExpenseCategoryPickerHtml();
+    : renderExpenseCategoryPopupHtml();
+  const nextList = wrap.querySelector('.expense-cat-list');
+  if (nextList && _expenseCategoryPickerState.manage) nextList.scrollTop = _expenseCategoryManagerScrollTop;
   syncExpenseCategoryInputs();
 }
 
-function toggleExpenseCategoryPanel(forceOpen = null) {
+async function toggleExpenseCategoryPanel(forceOpen = null) {
   _expenseCategoryPickerState.standalone = false;
   _expenseCategoryPickerState.open = forceOpen == null ? !_expenseCategoryPickerState.open : !!forceOpen;
   const wrap = document.getElementById('expenseCategoryPanelWrap');
   if (!wrap) return;
   wrap.style.display = _expenseCategoryPickerState.open ? '' : 'none';
-  if (_expenseCategoryPickerState.open) renderExpenseCategoryPanel();
+  if (_expenseCategoryPickerState.open) {
+    if (!_expenseCategoryLibrary.length) await loadExpenseCategories();
+    renderExpenseCategoryPanel();
+  }
   syncExpenseCategoryInputs();
 }
 
@@ -291,14 +453,20 @@ function toggleExpenseCategoryManager(force = null) {
 }
 
 function toggleExpenseCategoryExpanded(categoryId) {
-  _expenseCategoryPickerState.expanded = Number(_expenseCategoryPickerState.expanded || 0) === Number(categoryId) ? null : Number(categoryId);
+  _expenseCategoryPickerState.expanded = String(_expenseCategoryPickerState.expanded || '') === String(categoryId || '') ? null : String(categoryId || '');
   renderExpenseCategoryPanel();
 }
 
-function pickExpenseCategory(category, subcategory = '') {
+function pickExpenseCategory(category, subcategory = '', closePicker = false) {
   _expenseCategoryPickerState.category = String(category || '').trim();
   _expenseCategoryPickerState.subcategory = String(subcategory || '').trim();
   syncExpenseCategoryInputs();
+  if (closePicker) {
+    _expenseCategoryPickerState.open = false;
+    const wrap = document.getElementById('expenseCategoryPanelWrap');
+    if (wrap) wrap.style.display = 'none';
+    return;
+  }
   renderExpenseCategoryPanel();
 }
 
@@ -310,27 +478,51 @@ function clearExpenseCategorySelection() {
 }
 
 function beginAddExpenseCategory() {
-  _expenseCategoryPickerState.editor = { type: 'category-add', name: '', icon: '' };
+  _expenseCategoryPickerState.editor = { type: 'category-add', name: '', icon: '', error: '' };
   renderExpenseCategoryPanel();
 }
 
 function beginEditExpenseCategory(categoryId) {
-  const category = (_expenseCategoryLibrary || []).find((item) => Number(item.id) === Number(categoryId));
+  const category = (_expenseCategoryLibrary || []).find((item) => String(item.id) === String(categoryId));
   if (!category) return;
-  _expenseCategoryPickerState.editor = { type: 'category-edit', categoryId: Number(categoryId), name: category.name || '', icon: category.icon || '' };
+  _expenseCategoryPickerState.expanded = String(category.id || '');
+  _expenseCategoryPickerState.editor = { type: 'category-edit', categoryId: String(category.id), name: category.name || '', icon: category.icon || '', error: '' };
   renderExpenseCategoryPanel();
 }
 
-function beginAddExpenseSubcategory(categoryId) {
-  _expenseCategoryPickerState.editor = { type: 'subcategory-add', categoryId: Number(categoryId), name: '' };
-  renderExpenseCategoryPanel();
+async function ensureEditableExpenseCategoryId(categoryId) {
+  const category = (_expenseCategoryLibrary || []).find((item) => String(item.id) === String(categoryId));
+  if (!category) return null;
+  if (!category.is_legacy) return String(category.id);
+  const data = await api('/api/expenses/categories', {
+    method: 'POST',
+    body: { name: category.name, icon: suggestExpenseCategoryIcon(category.name) },
+  });
+  if (!data || data.success === false) throw new Error(data?.error || 'Could not prepare this category');
+  _expenseCategories = (data?.categories || []).filter(Boolean);
+  _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
+  const nextCategory = (_expenseCategoryLibrary || []).find((item) => String(item.name || '').trim().toLowerCase() === String(category.name || '').trim().toLowerCase() && !item.is_legacy);
+  return nextCategory ? String(nextCategory.id) : null;
+}
+
+async function beginAddExpenseSubcategory(categoryId) {
+  try {
+    const resolvedCategoryId = await ensureEditableExpenseCategoryId(categoryId);
+    if (!resolvedCategoryId) return;
+    _expenseCategoryPickerState.expanded = String(resolvedCategoryId);
+    _expenseCategoryPickerState.editor = { type: 'subcategory-add', categoryId: String(resolvedCategoryId), name: '', error: '' };
+    renderExpenseCategoryPanel();
+  } catch (err) {
+    toast(err?.message || 'Could not open subcategory editor', 'error');
+  }
 }
 
 function beginEditExpenseSubcategory(categoryId, subcategoryId) {
-  const category = (_expenseCategoryLibrary || []).find((item) => Number(item.id) === Number(categoryId));
+  const category = (_expenseCategoryLibrary || []).find((item) => String(item.id) === String(categoryId));
   const sub = (category?.subcategories || []).find((item) => Number(item.id) === Number(subcategoryId));
   if (!category || !sub) return;
-  _expenseCategoryPickerState.editor = { type: 'subcategory-edit', categoryId: Number(categoryId), subcategoryId: Number(subcategoryId), name: sub.name || '' };
+  _expenseCategoryPickerState.expanded = String(category.id || '');
+  _expenseCategoryPickerState.editor = { type: 'subcategory-edit', categoryId: String(category.id), subcategoryId: Number(subcategoryId), name: sub.name || '', error: '' };
   renderExpenseCategoryPanel();
 }
 
@@ -339,25 +531,88 @@ function cancelExpenseCategoryEditor() {
   renderExpenseCategoryPanel();
 }
 
+function expenseCategoryEditorNameChanged(value) {
+  const editor = _expenseCategoryPickerState.editor;
+  if (!editor) return;
+  const nextName = String(value || '');
+  const suggested = suggestExpenseCategoryIcon(nextName);
+  const iconInput = document.getElementById('expenseCategoryEditorIcon');
+  const preview = document.getElementById('expenseCategoryEditorIconPreview');
+  const options = document.getElementById('expenseCategoryEditorIconOptions');
+  const currentIcon = String(iconInput?.value || editor.icon || '').trim();
+  const previousAuto = String(editor.auto_icon || '').trim();
+  let nextIcon = currentIcon;
+  if (!editor.type.includes('subcategory') && (!currentIcon || currentIcon === previousAuto)) {
+    nextIcon = suggested;
+    if (iconInput) iconInput.value = suggested;
+  }
+  _expenseCategoryPickerState.editor = { ...editor, name: nextName, icon: nextIcon, auto_icon: suggested };
+  if (preview) preview.textContent = nextIcon || suggested || '📦';
+  if (options && !editor.type.includes('subcategory')) {
+    options.innerHTML = renderExpenseCategoryEditorIconOptions(nextName, nextIcon || suggested);
+  }
+}
+
+function expenseCategoryEditorIconChanged(value) {
+  const editor = _expenseCategoryPickerState.editor;
+  if (!editor) return;
+  const nextIcon = String(value || '').trim();
+  const preview = document.getElementById('expenseCategoryEditorIconPreview');
+  const options = document.getElementById('expenseCategoryEditorIconOptions');
+  _expenseCategoryPickerState.editor = { ...editor, icon: nextIcon };
+  if (preview) preview.textContent = nextIcon || '📦';
+  if (options && !editor.type.includes('subcategory')) {
+    options.innerHTML = renderExpenseCategoryEditorIconOptions(editor.name || '', nextIcon);
+  }
+}
+
+function selectExpenseCategoryEditorIcon(icon) {
+  const iconInput = document.getElementById('expenseCategoryEditorIcon');
+  if (iconInput) iconInput.value = String(icon || '');
+  expenseCategoryEditorIconChanged(icon);
+}
+
 async function saveExpenseCategoryEditor() {
   const editor = _expenseCategoryPickerState.editor;
   if (!editor) return;
   const name = document.getElementById('expenseCategoryEditorName')?.value?.trim() || '';
   const icon = document.getElementById('expenseCategoryEditorIcon')?.value?.trim() || '';
-  if (!name) { toast('Please enter a name', 'warning'); return; }
+  if (!name) {
+    _expenseCategoryPickerState.editor = { ...editor, name, icon, error: 'Please enter a name.' };
+    renderExpenseCategoryPanel();
+    return;
+  }
   try {
     let data = null;
     if (editor.type === 'category-add') data = await api('/api/expenses/categories', { method: 'POST', body: { name, icon } });
     if (editor.type === 'category-edit') data = await api(`/api/expenses/categories/${editor.categoryId}`, { method: 'PUT', body: { name, icon } });
     if (editor.type === 'subcategory-add') data = await api(`/api/expenses/categories/${editor.categoryId}/subcategories`, { method: 'POST', body: { name } });
     if (editor.type === 'subcategory-edit') data = await api(`/api/expenses/subcategories/${editor.subcategoryId}`, { method: 'PUT', body: { name } });
+    if (!data || data.success === false) {
+      const rawMessage = String(data?.error || 'Could not save category').trim();
+      _expenseCategoryPickerState.editor = {
+        ...editor,
+        name,
+        icon,
+        error: /already exists/i.test(rawMessage) ? rawMessage : 'Could not save category.',
+      };
+      renderExpenseCategoryPanel();
+      return;
+    }
     _expenseCategories = (data?.categories || []).filter(Boolean);
     _expenseCategoryLibrary = Array.isArray(data?.library) ? data.library : [];
     _expenseCategoryPickerState.editor = null;
     toast(editor.type.endsWith('add') ? 'Saved' : 'Updated', 'success');
     renderExpenseCategoryPanel();
   } catch (err) {
-    toast(err.message || 'Could not save category', 'error');
+    const rawMessage = String(err?.message || 'Could not save category').trim();
+    _expenseCategoryPickerState.editor = {
+      ...editor,
+      name,
+      icon,
+      error: /already exists/i.test(rawMessage) ? rawMessage : 'Could not save category.',
+    };
+    renderExpenseCategoryPanel();
   }
 }
 
@@ -394,7 +649,7 @@ async function removeExpenseSubcategory(subcategoryId) {
   }
 }
 
-function showExpenseCategoriesManager() {
+async function showExpenseCategoriesManager() {
   _expenseCategoryPickerState = {
     ..._expenseCategoryPickerState,
     open: true,
@@ -408,7 +663,18 @@ function showExpenseCategoriesManager() {
     <div class="fa">
       <button class="btn btn-g" onclick="closeModal()">Close</button>
     </div>`);
-  renderExpenseCategoryPanel();
+  const wrap = document.getElementById('expenseCategoryStandaloneManager');
+  if (wrap) {
+    wrap.innerHTML = `<div style="padding:16px;color:var(--t2);font-size:14px">Loading categories...</div>`;
+  }
+  try {
+    if (!_expenseCategoryLibrary.length) await loadExpenseCategories();
+    renderExpenseCategoryPanel();
+  } catch (err) {
+    if (wrap) {
+      wrap.innerHTML = `<div style="padding:16px;color:var(--red);font-size:14px">${escHtml(err?.message || 'Could not load categories')}</div>`;
+    }
+  }
 }
 
 function expenseCategoryDatalistHtml(selected = '') {
@@ -14281,6 +14547,7 @@ async function loadBankAccounts() {
     _fixedDeposits = fixedDepositData?.fixed_deposits || [];
     _fixedDepositPeople = fixedDepositData?.people || [];
     _fixedDepositTotals = fixedDepositData?.totals || { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+    _fixedDepositPage = 1;
     renderBankAccounts();
   } catch (error) {
     console.error('loadBankAccounts failed', error);
@@ -14288,6 +14555,7 @@ async function loadBankAccounts() {
     _fixedDeposits = [];
     _fixedDepositPeople = [];
     _fixedDepositTotals = { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+    _fixedDepositPage = 1;
     document.getElementById('main').innerHTML = '<div class="tab-content"><div style="color:var(--em);padding:40px;text-align:center">Could not load bank accounts.</div></div>';
   }
 }
@@ -14406,6 +14674,7 @@ function renderBankAccountsPageView() {
       </div>`;
 
   const fdRows = fixedDepositFilteredRows();
+  const fdPageState = fixedDepositPageState(fdRows);
   const fdTotals = fdRows.reduce((acc, item) => {
     acc.amount_deposited += Number(item.amount_deposited || 0);
     acc.maturity_amount += Number(item.maturity_amount || 0);
@@ -15843,6 +16112,7 @@ let _fixedDepositPersonFilter = 'all';
 let _fixedDepositStatusFilter = 'all';
 let _fixedDepositExpiryMonthFilter = '';
 let _fixedDepositNumberSearch = '';
+let _fixedDepositPage = 1;
 let _selectedBankFixedDepositId = null;
 let _showBankFixedDepositsPanel = false;
 let _fixedDepositImportState = { preview: [], count: 0, skipped: 0, fileName: '', file: null };
@@ -17083,8 +17353,20 @@ function expenseBucketEntryReminderLabel(entry) {
 function expenseBucketEntryRepeatLabel(entry) {
   if (!entry?.auto_add_enabled || !entry?.is_template) return 'Manual';
   if (String(entry.auto_add_frequency || '') === 'daily') return 'Auto daily';
+  if (String(entry.auto_add_frequency || '') === 'monthly') {
+    const interval = Math.max(1, parseInt(entry.auto_add_interval_months, 10) || 1);
+    if (interval === 12) return `Yearly Â· day ${Number(entry.auto_add_day || 1)}`;
+    if (interval !== 1) return `Every ${interval} months Â· day ${Number(entry.auto_add_day || 1)}`;
+  }
   if (String(entry.auto_add_frequency || '') === 'monthly') return `Monthly · day ${Number(entry.auto_add_day || 1)}`;
   return 'Manual';
+}
+
+function expenseBucketAutoFrequencyOptionValue(entry) {
+  const frequency = String(entry?.auto_add_frequency || 'monthly');
+  if (frequency === 'daily') return 'daily';
+  const interval = Math.max(1, parseInt(entry?.auto_add_interval_months, 10) || 1);
+  return interval === 1 ? 'monthly' : `monthly:${interval}`;
 }
 
 function toggleExpenseBucketAutoFields() {
@@ -17092,7 +17374,8 @@ function toggleExpenseBucketAutoFields() {
   const wrap = document.getElementById('ebEntryAutoFields');
   if (wrap) wrap.style.display = enabled ? '' : 'none';
   const dayWrap = document.getElementById('ebEntryAutoDayWrap');
-  if (dayWrap) dayWrap.style.display = enabled && (document.getElementById('ebEntryAutoFrequency')?.value === 'monthly') ? '' : 'none';
+  const autoFrequencyValue = document.getElementById('ebEntryAutoFrequency')?.value || 'monthly';
+  if (dayWrap) dayWrap.style.display = enabled && autoFrequencyValue !== 'daily' ? '' : 'none';
 }
 
 function toggleExpenseBucketReminderFields() {
@@ -17181,7 +17464,7 @@ async function renderExpenseBucketGrid() {
   const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
     .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
     .join('');
-  const fdTableRows = fdRows.length ? fdRows.map((item) => `
+  const fdTableRows = fdRows.length ? fdPageState.pageRows.map((item) => `
       <tr>
         <td style="padding:6px 8px;width:94px">
           <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
@@ -17304,6 +17587,7 @@ async function renderExpenseBucketGrid() {
             <tbody>${fdTableRows}</tbody>
           </table>
         </div>
+        ${fixedDepositPaginationHtml(fdPageState)}
       </div>`;
     repairMojibakeInNode(document.getElementById('main'));
     return;
@@ -17804,7 +18088,7 @@ async function showExpenseBucketEntryModal(bucketId, entryId = null) {
     entry = (entriesData?.entries || []).find((item) => String(item.id) === String(entryId)) || null;
   }
   const autoAddEnabled = !!entry?.auto_add_enabled;
-  const autoFrequency = String(entry?.auto_add_frequency || 'monthly');
+  const autoFrequency = expenseBucketAutoFrequencyOptionValue(entry);
   openModal(entryId ? 'Edit Bucket Expense' : 'Add Bucket Expense', `
     <div class="fg">
       <label class="fl full">Expense Name *<input class="fi" id="ebEntryName" value="${escHtml(entry?.name || '')}" placeholder="e.g. SIP instalment, premium, fee, contribution" maxlength="120"></label>
@@ -17821,9 +18105,13 @@ async function showExpenseBucketEntryModal(bucketId, entryId = null) {
         <div class="fg">
           <label class="fl">Frequency<select class="fi" id="ebEntryAutoFrequency" onchange="toggleExpenseBucketAutoFields()">
             <option value="daily" ${autoFrequency === 'daily' ? 'selected' : ''}>Every day</option>
-            <option value="monthly" ${autoFrequency !== 'daily' ? 'selected' : ''}>Every month</option>
+            <option value="monthly" ${autoFrequency === 'monthly' ? 'selected' : ''}>Every month</option>
+            <option value="monthly:2" ${autoFrequency === 'monthly:2' ? 'selected' : ''}>Every 2 months</option>
+            <option value="monthly:3" ${autoFrequency === 'monthly:3' ? 'selected' : ''}>Every 3 months</option>
+            <option value="monthly:6" ${autoFrequency === 'monthly:6' ? 'selected' : ''}>Every 6 months</option>
+            <option value="monthly:12" ${autoFrequency === 'monthly:12' ? 'selected' : ''}>Yearly</option>
           </select></label>
-          <label class="fl" id="ebEntryAutoDayWrap" style="${autoFrequency === 'monthly' ? '' : 'display:none'}">Monthly Date (1-28)<input class="fi" type="number" id="ebEntryAutoDay" min="1" max="28" value="${entry?.auto_add_day || 1}"></label>
+          <label class="fl" id="ebEntryAutoDayWrap" style="${autoFrequency !== 'daily' ? '' : 'display:none'}">Monthly Date (1-28)<input class="fi" type="number" id="ebEntryAutoDay" min="1" max="28" value="${entry?.auto_add_day || 1}"></label>
         </div>
         <div style="font-size:12px;color:var(--t3);margin-top:8px">Editing a recurring template updates only future auto-added entries. Existing past rows keep their old amount.</div>
       </div>
@@ -17862,7 +18150,11 @@ async function saveExpenseBucketEntry(bucketId, entryId = null) {
   if (!name) { toast('Expense name is required', 'warning'); return; }
   if (!Number.isFinite(amount) || amount <= 0) { toast('Amount must be greater than 0', 'warning'); return; }
   const auto_add_enabled = document.getElementById('ebEntryAutoAdd')?.checked ? 1 : 0;
-  const auto_add_frequency = auto_add_enabled ? (document.getElementById('ebEntryAutoFrequency')?.value || 'monthly') : 'none';
+  const autoFrequencyValue = auto_add_enabled ? (document.getElementById('ebEntryAutoFrequency')?.value || 'monthly') : 'none';
+  const auto_add_frequency = auto_add_enabled ? (autoFrequencyValue === 'daily' ? 'daily' : 'monthly') : 'none';
+  const auto_add_interval_months = auto_add_frequency === 'monthly'
+    ? Math.max(1, parseInt(String(autoFrequencyValue).split(':')[1], 10) || 1)
+    : 1;
   const body = {
     name,
     entry_type: document.getElementById('ebEntryType')?.value.trim() || null,
@@ -17870,6 +18162,7 @@ async function saveExpenseBucketEntry(bucketId, entryId = null) {
     amount,
     auto_add_enabled,
     auto_add_frequency,
+    auto_add_interval_months,
     auto_add_day: auto_add_enabled && auto_add_frequency === 'monthly' ? (parseInt(document.getElementById('ebEntryAutoDay')?.value, 10) || 1) : null,
     reminder_enabled: document.getElementById('ebReminderEnabled')?.checked ? 1 : 0,
     reminder_days_before: parseInt(document.getElementById('ebReminderDaysBefore')?.value, 10) || 0,
@@ -18039,6 +18332,38 @@ function fixedDepositFilteredRows() {
     if (!aDate && bDate) return 1;
     return String(a?.fd_number || '').localeCompare(String(b?.fd_number || ''));
   });
+}
+
+function fixedDepositPageState(rows = []) {
+  const pageSize = 10;
+  const totalRows = Array.isArray(rows) ? rows.length : 0;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const currentPage = Math.min(Math.max(1, parseInt(_fixedDepositPage, 10) || 1), totalPages);
+  _fixedDepositPage = currentPage;
+  const startIndex = totalRows ? (currentPage - 1) * pageSize : 0;
+  const endIndex = totalRows ? Math.min(startIndex + pageSize, totalRows) : 0;
+  return {
+    pageSize,
+    totalRows,
+    totalPages,
+    currentPage,
+    startIndex,
+    endIndex,
+    pageRows: rows.slice(startIndex, endIndex),
+  };
+}
+
+function fixedDepositPaginationHtml(pageState) {
+  if (!pageState || pageState.totalRows <= pageState.pageSize) return '';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+      <div style="font-size:12px;color:var(--t3)">Showing ${pageState.startIndex + 1}-${pageState.endIndex} of ${pageState.totalRows} fixed deposits</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-s btn-sm" onclick="setFixedDepositPage(${pageState.currentPage - 1})" ${pageState.currentPage <= 1 ? 'disabled' : ''}>Prev</button>
+        <div style="font-size:12px;color:var(--t2)">Page ${pageState.currentPage} of ${pageState.totalPages}</div>
+        <button class="btn btn-s btn-sm" onclick="setFixedDepositPage(${pageState.currentPage + 1})" ${pageState.currentPage >= pageState.totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>`;
 }
 
 function fixedDepositDurationParts(source = {}) {
@@ -18264,24 +18589,34 @@ function recalculateFixedDepositFields(source = 'general') {
 
 function setFixedDepositPersonFilter(value) {
   _fixedDepositPersonFilter = String(value || 'all');
+  _fixedDepositPage = 1;
   if (currentTab === 'banks') renderBankAccounts();
   else renderTrackerGrid();
 }
 
 function setFixedDepositStatusFilter(value) {
   _fixedDepositStatusFilter = String(value || 'all');
+  _fixedDepositPage = 1;
   if (currentTab === 'banks') renderBankAccounts();
   else renderTrackerGrid();
 }
 
 function setFixedDepositExpiryMonthFilter(value) {
   _fixedDepositExpiryMonthFilter = String(value || '').trim();
+  _fixedDepositPage = 1;
   if (currentTab === 'banks') renderBankAccounts();
   else renderTrackerGrid();
 }
 
 function setFixedDepositNumberSearch(value) {
   _fixedDepositNumberSearch = String(value || '');
+  _fixedDepositPage = 1;
+  if (currentTab === 'banks') renderBankAccounts();
+  else renderTrackerGrid();
+}
+
+function setFixedDepositPage(page) {
+  _fixedDepositPage = Math.max(1, parseInt(page, 10) || 1);
   if (currentTab === 'banks') renderBankAccounts();
   else renderTrackerGrid();
 }
@@ -18301,6 +18636,7 @@ function toggleBankFixedDepositsPanel(force = null) {
 
 function renderFixedDepositsGrid() {
   const rows = fixedDepositFilteredRows();
+  const pageState = fixedDepositPageState(rows);
   const totals = rows.reduce((acc, item) => {
     acc.amount_deposited += Number(item.amount_deposited || 0);
     acc.maturity_amount += Number(item.maturity_amount || 0);
@@ -18313,7 +18649,7 @@ function renderFixedDepositsGrid() {
   const peopleOptions = ['all', ...(_fixedDepositPeople || [])]
     .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
     .join('');
-  const tableRows = rows.length ? rows.map((item) => `
+  const tableRows = rows.length ? pageState.pageRows.map((item) => `
     <tr>
       <td style="padding:6px 8px;width:94px">
         <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">
@@ -18380,6 +18716,7 @@ function renderFixedDepositsGrid() {
           <tbody>${tableRows}</tbody>
         </table>
       </div>
+      ${fixedDepositPaginationHtml(pageState)}
     </div>`;
   repairMojibakeInNode(document.getElementById('main'));
 }
@@ -18843,7 +19180,8 @@ function renderBankAccounts() {
         </tr></thead>
         <tbody>${fdTableRows}</tbody>
       </table>
-    </div>`;
+    </div>
+    ${fixedDepositPaginationHtml(fdPageState)}`;
   const fdTile = `
     <div class="bank-card" style="cursor:pointer" onclick="toggleBankFixedDepositsPanel(true)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
@@ -20951,13 +21289,53 @@ async function deleteSchoolKidClass(classId) {
   await loadSchoolKids();
 }
 
-function showSchoolKidExpenseModal(expenseId = null, classId = null) {
+function schoolKidExpenseBankOptionsHtml(selectedValue = '') {
+  return `<option value="">-- Do not deduct from bank --</option>${(_bankAccounts || []).map((account) => `<option value="${account.id}" ${String(selectedValue || '') === String(account.id) ? 'selected' : ''}>${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''}${account.is_default ? ' (Default)' : ''}</option>`).join('')}`;
+}
+
+function schoolKidExpenseCardOptionsHtml(selectedValue = '') {
+  return `<option value="">-- Select credit card --</option>${(_ccCards || []).map((card) => `<option value="${card.id}" data-disc="${Number(card.default_discount_pct || 0)}" ${String(selectedValue || '') === String(card.id) ? 'selected' : ''}>${escHtml(card.card_name)} (${escHtml(card.bank_name)} **${escHtml(card.last4)})</option>`).join('')}`;
+}
+
+function toggleSchoolKidExpenseLedgerFields() {
+  const addToExpense = !!document.getElementById('schoolKidExpenseAddToExpense')?.checked;
+  const paymentMode = document.getElementById('schoolKidExpensePaymentMode')?.value || 'none';
+  const ledgerSection = document.getElementById('schoolKidExpenseLedgerSection');
+  const bankRow = document.getElementById('schoolKidExpenseBankRow');
+  const cardRow = document.getElementById('schoolKidExpenseCardRow');
+  if (ledgerSection) ledgerSection.style.display = addToExpense ? '' : 'none';
+  if (bankRow) bankRow.style.display = addToExpense && paymentMode === 'bank' ? '' : 'none';
+  if (cardRow) cardRow.style.display = addToExpense && paymentMode === 'card' ? '' : 'none';
+}
+
+function schoolKidExpenseCardChanged() {
+  const cardSelect = document.getElementById('schoolKidExpenseCard');
+  const discountInput = document.getElementById('schoolKidExpenseCardDiscount');
+  if (!cardSelect || !discountInput) return;
+  const selectedOption = cardSelect.options[cardSelect.selectedIndex];
+  if (!selectedOption) return;
+  if (!discountInput.value && selectedOption.dataset.disc != null) {
+    discountInput.value = selectedOption.dataset.disc;
+  }
+}
+
+async function showSchoolKidExpenseModal(expenseId = null, classId = null) {
   if (!_selectedSchoolKidId) return;
   const classes = _schoolKidDetail?.classes || [];
   if (!classes.length) { toast('Add a school/class first.', 'warning'); return; }
+  if (!_expenseCategories.length) {
+    try { await loadExpenseCategories(); } catch (_) {}
+  }
+  if (!_bankAccounts.length) {
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+  }
+  await getCcCardsForForm();
   const expense = expenseId ? ((_schoolKidDetail?.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
   const selectedClassId = classId || expense.class_id || _selectedSchoolKidClassId || classes[0]?.id;
   const classOptions = classes.map((row) => `<option value="${Number(row.id)}" ${String(row.id) === String(selectedClassId) ? 'selected' : ''}>${escHtml(row.school_name)} · ${escHtml(formatAcademicYear(row.academic_year))} · ${escHtml(row.class_label)}</option>`).join('');
+  const addToExpense = !!expense.add_to_expense;
+  const paymentMode = expense.card_id ? 'card' : expense.bank_account_id ? 'bank' : 'none';
   openModal(expenseId ? 'Edit School Expense' : 'Add School Expense', `
     <div class="fg">
       <label class="fl full">Class *
@@ -20967,24 +21345,69 @@ function showSchoolKidExpenseModal(expenseId = null, classId = null) {
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="schoolKidExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
       <label class="fl full">Thing *<input class="fi" id="schoolKidExpenseItem" value="${escHtml(expense.item_name || '')}" placeholder="e.g. Registration fees, Books, Bus fees"></label>
       <label class="fl full">Notes<textarea class="fi" rows="4" id="schoolKidExpenseNotes" placeholder="Optional notes">${escHtml(expense.notes || '')}</textarea></label>
+      <label class="fc full"><input type="checkbox" id="schoolKidExpenseAddToExpense" ${addToExpense ? 'checked' : ''} onchange="toggleSchoolKidExpenseLedgerFields()"><span>Add this school expense to main expenses</span></label>
+    </div>
+    <div id="schoolKidExpenseLedgerSection" style="${addToExpense ? '' : 'display:none'};margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:14px;background:#f8fbf9">
+      <div class="fg">
+        <label class="fl">Expense Type
+          <select class="fi" id="schoolKidExpenseType">
+            <option value="fair" ${String(expense.expense_type || 'fair') === 'fair' ? 'selected' : ''}>Fair / Regular</option>
+            <option value="extra" ${String(expense.expense_type || '') === 'extra' ? 'selected' : ''}>Extra / Non-essential</option>
+          </select>
+        </label>
+        <label class="fl">Category
+          <input class="fi" id="schoolKidExpenseCategory" list="schoolKidExpenseCategoryList" value="${escHtml(expense.category || 'Education')}" placeholder="e.g. Education">
+          <datalist id="schoolKidExpenseCategoryList">${(_expenseCategories || []).map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+        </label>
+        <label class="fl">Payment Mode
+          <select class="fi" id="schoolKidExpensePaymentMode" onchange="toggleSchoolKidExpenseLedgerFields()">
+            <option value="none" ${paymentMode === 'none' ? 'selected' : ''}>Only add to expenses</option>
+            <option value="bank" ${paymentMode === 'bank' ? 'selected' : ''}>Deduct from bank</option>
+            <option value="card" ${paymentMode === 'card' ? 'selected' : ''}>Charge to credit card</option>
+          </select>
+        </label>
+        <label class="fl full" id="schoolKidExpenseBankRow" style="${addToExpense && paymentMode === 'bank' ? '' : 'display:none'}">Bank Account
+          <select class="fi" id="schoolKidExpenseBank">${schoolKidExpenseBankOptionsHtml(expense.bank_account_id || '')}</select>
+        </label>
+        <div class="full" id="schoolKidExpenseCardRow" style="${addToExpense && paymentMode === 'card' ? '' : 'display:none'}">
+          <div class="fg">
+            <label class="fl">Credit Card
+              <select class="fi" id="schoolKidExpenseCard" onchange="schoolKidExpenseCardChanged()">${schoolKidExpenseCardOptionsHtml(expense.card_id || '')}</select>
+            </label>
+            <label class="fl">Discount %
+              <input class="fi" type="number" min="0" max="100" step="0.1" id="schoolKidExpenseCardDiscount" value="${escHtml(String(expense.card_discount_pct || 0))}">
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="saveSchoolKidExpense(${expenseId || 'null'})">${expenseId ? 'Update Expense' : 'Add Expense'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
   bindModalSubmit(() => saveSchoolKidExpense(expenseId));
+  toggleSchoolKidExpenseLedgerFields();
 }
 
 async function saveSchoolKidExpense(expenseId = null) {
   if (!_selectedSchoolKidId) return;
+  const addToExpense = !!document.getElementById('schoolKidExpenseAddToExpense')?.checked;
+  const paymentMode = document.getElementById('schoolKidExpensePaymentMode')?.value || 'none';
   const body = {
     class_id: Number(document.getElementById('schoolKidExpenseClass')?.value || 0),
     expense_date: document.getElementById('schoolKidExpenseDate')?.value || todayStr(),
     item_name: document.getElementById('schoolKidExpenseItem')?.value?.trim() || '',
     amount: Number(document.getElementById('schoolKidExpenseAmount')?.value || 0),
     notes: document.getElementById('schoolKidExpenseNotes')?.value?.trim() || '',
+    add_to_expense: addToExpense,
+    expense_type: document.getElementById('schoolKidExpenseType')?.value || 'fair',
+    category: addToExpense ? (document.getElementById('schoolKidExpenseCategory')?.value?.trim() || 'Education') : '',
+    bank_account_id: addToExpense && paymentMode === 'bank' ? (parseInt(document.getElementById('schoolKidExpenseBank')?.value || '', 10) || null) : null,
+    card_id: addToExpense && paymentMode === 'card' ? (parseInt(document.getElementById('schoolKidExpenseCard')?.value || '', 10) || null) : null,
+    card_discount_pct: addToExpense && paymentMode === 'card' ? (parseFloat(document.getElementById('schoolKidExpenseCardDiscount')?.value || '0') || 0) : 0,
   };
   if (!(body.class_id > 0) || !body.item_name || !(body.amount > 0)) { toast('Class, thing, and amount are required', 'warning'); return; }
+  if (addToExpense && paymentMode === 'card' && !body.card_id) { toast('Please choose a credit card', 'warning'); return; }
   const result = expenseId
     ? await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses/${Number(expenseId)}`, { method: 'PUT', body })
     : await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses`, { method: 'POST', body });
@@ -21638,6 +22061,7 @@ async function loadTracker() {
   _fixedDeposits = fixedDepositData?.fixed_deposits || [];
   _fixedDepositPeople = fixedDepositData?.people || [];
   _fixedDepositTotals = fixedDepositData?.totals || { amount_deposited: 0, maturity_amount: 0, interest_amount: 0, count: 0, ongoing: 0, expired: 0 };
+  _fixedDepositPage = 1;
   if (_trackerViewMode === 'bucket' && _selectedExpenseBucketId && _expenseBuckets.find((bucket) => String(bucket.id) === String(_selectedExpenseBucketId))) {
     await renderExpenseBucketDetail();
   } else if (_selectedTrackerId && _trackers.find((t) => String(t.id) === String(_selectedTrackerId))) {

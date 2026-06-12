@@ -811,7 +811,7 @@ async function getCreditCards(userId) {
 }
 
 async function addCcTxn(userId, txn) {
-  return withTransaction(async (client) => {
+  const executor = async (client) => {
     const cardR = await client.query('SELECT * FROM credit_cards WHERE id = $1 AND user_id = $2 LIMIT 1', [txn.card_id, userId]);
     const card = cardR.rows[0];
     if (!card) throw new Error('Card not found');
@@ -829,7 +829,9 @@ async function addCcTxn(userId, txn) {
     );
     await updateCycleTotals(cycle.id, client);
     return Number(result.rows[0].id);
-  });
+  };
+  const client = arguments[2] || null;
+  return client ? executor(client) : withTransaction(executor);
 }
 
 async function getCcCurrentCycle(userId, cardId) {
@@ -1160,28 +1162,32 @@ async function repairCreditCardCycles(userId, cardId) {
 }
 
 async function updateCcTxn(userId, id, txn) {
-  const existingR = await query('SELECT * FROM cc_txns WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
+  const client = arguments[3] || null;
+  const run = client || { query };
+  const existingR = await run.query('SELECT * FROM cc_txns WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
   const existing = existingR.rows[0];
   if (!existing) throw new Error('Transaction not found');
   const discPct = txn.discount_pct != null ? parseFloat(txn.discount_pct) : num(existing.discount_pct);
   const amount = txn.amount != null ? parseFloat(txn.amount) : num(existing.amount);
   const discAmt = roundMoney(amount * discPct / 100);
   const netAmt = roundMoney(amount);
-  await query(
+  await run.query(
     `UPDATE cc_txns
      SET txn_date = $1, description = $2, amount = $3, discount_pct = $4, discount_amount = $5, net_amount = $6
      WHERE id = $7 AND user_id = $8`,
     [txn.txn_date || existing.txn_date, txn.description || existing.description, amount, discPct, discAmt, netAmt, id, userId]
   );
-  if (existing.cycle_id) await updateCycleTotals(existing.cycle_id);
+  if (existing.cycle_id) await updateCycleTotals(existing.cycle_id, client);
 }
 
 async function deleteCcTxn(userId, id) {
-  const txnR = await query('SELECT * FROM cc_txns WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
+  const client = arguments[2] || null;
+  const run = client || { query };
+  const txnR = await run.query('SELECT * FROM cc_txns WHERE id = $1 AND user_id = $2 LIMIT 1', [id, userId]);
   const txn = txnR.rows[0];
   if (!txn) return;
-  await query('DELETE FROM cc_txns WHERE id = $1 AND user_id = $2', [id, userId]);
-  if (txn.cycle_id) await updateCycleTotals(txn.cycle_id);
+  await run.query('DELETE FROM cc_txns WHERE id = $1 AND user_id = $2', [id, userId]);
+  if (txn.cycle_id) await updateCycleTotals(txn.cycle_id, client);
 }
 
 async function addCcTxnToCycle(userId, cycleId, txn) {
@@ -1349,7 +1355,9 @@ async function importHistoricalCycles(userId, cardId, rows) {
 }
 
 async function getCcTxnBySource(userId, source, sourceId) {
-  const result = await query(
+  const client = arguments[3] || null;
+  const run = client || { query };
+  const result = await run.query(
     `SELECT id, card_id, discount_pct FROM cc_txns WHERE user_id = $1 AND source = $2 AND source_id = $3 LIMIT 1`,
     [userId, source, sourceId]
   );

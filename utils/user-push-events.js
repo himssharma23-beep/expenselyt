@@ -90,14 +90,16 @@ async function createAndSendUserNotification(user, payload = {}) {
         type: created.type,
         ...(created.data || {}),
       };
-      await sendExpoPushNotifications(devices.map((device) => ({
+      const delivery = await sendExpoPushNotifications(devices.map((device) => ({
         to: device.token,
         title: created.title,
         body: created.body,
         badge: unreadCount,
         data: messageData,
       })));
-      await pgAuth.markUserNotificationPushed(user.id, created.id);
+      if ((delivery.results || []).some((result) => result?.success)) {
+        await pgAuth.markUserNotificationPushed(user.id, created.id);
+      }
     }
   }
   return created;

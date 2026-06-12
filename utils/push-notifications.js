@@ -168,19 +168,49 @@ async function sendViaFcm(messages) {
 }
 
 async function sendExpoPushNotifications(messages = []) {
-  const normalized = (Array.isArray(messages) ? messages : []).map((entry) => {
-    const to = String(entry.to || '').trim();
-    if (!to) return null;
-    const base = normalizeMessagePayload(entry);
-    const extraMeta = entry.meta && typeof entry.meta === 'object' ? entry.meta : {};
-    return {
-      meta: {
-        ...extraMeta,
-        to,
-        user_id: entry.user_id != null ? Number(entry.user_id) : null,
-        notification_id: entry.notification_id != null ? Number(entry.notification_id) : null,
-        platform: String(entry.platform || '').trim().toLowerCase() || null,
-      },
+  const normalized = [];
+  const results = [];
+
+  for (const entry of (Array.isArray(messages) ? messages : [])) {
+    const to = String(entry?.to || '').trim();
+    const extraMeta = entry?.meta && typeof entry.meta === 'object' ? entry.meta : {};
+    const meta = {
+      ...extraMeta,
+      to: to || null,
+      user_id: entry?.user_id != null ? Number(entry.user_id) : null,
+      notification_id: entry?.notification_id != null ? Number(entry.notification_id) : null,
+      platform: String(entry?.platform || '').trim().toLowerCase() || null,
+    };
+
+    if (!to) {
+      results.push({
+        provider: 'validation',
+        success: false,
+        provider_message_id: null,
+        error: 'Missing device token',
+        response: {},
+        meta,
+      });
+      continue;
+    }
+
+    let base;
+    try {
+      base = normalizeMessagePayload(entry);
+    } catch (err) {
+      results.push({
+        provider: 'validation',
+        success: false,
+        provider_message_id: null,
+        error: err?.message || 'Invalid notification payload',
+        response: {},
+        meta,
+      });
+      continue;
+    }
+
+    normalized.push({
+      meta,
       message: {
         to,
         title: base.title,
@@ -190,23 +220,57 @@ async function sendExpoPushNotifications(messages = []) {
         sound: 'default',
         priority: 'high',
       },
-    };
-  }).filter(Boolean);
+    });
+  }
 
   if (!normalized.length) {
-    return { ok: true, sent: 0, errors: [], tickets: [], receipts: [] };
+    return { ok: results.length === 0, sent: 0, errors: results.map((item) => item.error).filter(Boolean), tickets: [], receipts: [], results };
   }
 
   // Route by token type: FCM tokens go directly, Expo tokens go via Expo relay
   const fcmMessages = normalized.filter((m) => !isExpoPushToken(m.meta.to));
   const expoMessages = normalized.filter((m) => isExpoPushToken(m.meta.to));
 
-  const [fcmResult, expoResult] = await Promise.all([
+  const [fcmSettled, expoSettled] = await Promise.allSettled([
     sendViaFcm(fcmMessages),
     sendViaExpo(expoMessages),
   ]);
 
-  const allErrors = [...(fcmResult.errors || []), ...(expoResult.errors || [])];
+  const fcmResult = fcmSettled.status === 'fulfilled'
+    ? fcmSettled.value
+    : {
+        sent: 0,
+        errors: [fcmSettled.reason?.message || 'FCM send failed'],
+        results: fcmMessages.map((item) => ({
+          provider: 'fcm',
+          success: false,
+          provider_message_id: null,
+          error: fcmSettled.reason?.message || 'FCM send failed',
+          response: {},
+          meta: item.meta,
+        })),
+      };
+  const expoResult = expoSettled.status === 'fulfilled'
+    ? expoSettled.value
+    : {
+        sent: 0,
+        errors: [expoSettled.reason?.message || 'Expo send failed'],
+        tickets: [],
+        results: expoMessages.map((item) => ({
+          provider: 'expo',
+          success: false,
+          provider_message_id: null,
+          error: expoSettled.reason?.message || 'Expo send failed',
+          response: {},
+          meta: item.meta,
+        })),
+      };
+
+  const allErrors = [
+    ...results.map((item) => item.error).filter(Boolean),
+    ...(fcmResult.errors || []),
+    ...(expoResult.errors || []),
+  ];
   const totalSent = (fcmResult.sent || 0) + (expoResult.sent || 0);
 
   return {
@@ -215,7 +279,7 @@ async function sendExpoPushNotifications(messages = []) {
     errors: allErrors,
     tickets: expoResult.tickets || [],
     receipts: [],
-    results: [...(fcmResult.results || []), ...(expoResult.results || [])],
+    results: [...results, ...(fcmResult.results || []), ...(expoResult.results || [])],
   };
 }
 
