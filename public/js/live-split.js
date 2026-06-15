@@ -451,6 +451,15 @@
     const rowLinkedUserId = Number(row?.linked_user_id || 0);
     const rowFriendId = Number(row?.friend_id || 0);
     const aliases = new Set([String(row?.name || '').trim()].filter(Boolean));
+    const friendMatch = (state.friends || []).find((friend) => (
+      (rowLinkedUserId > 0 && Number(friend?.linked_user_id || 0) === rowLinkedUserId)
+      || (rowFriendId > 0 && Number(friend?.id || 0) === rowFriendId)
+      || namesMatchLoosely(friend?.name || friend?.linked_user_display_name || friend?.linked_user_username || '', row?.name || '')
+    )) || null;
+    [friendMatch?.name, friendMatch?.linked_user_display_name, friendMatch?.linked_user_username].forEach((value) => {
+      const safe = String(value || '').trim();
+      if (safe) aliases.add(safe);
+    });
     const firstGroup = Array.isArray(trip?.groups) && trip.groups.length ? trip.groups[0] : null;
     const ownerName = String(firstGroup?.owner_name || firstGroup?.owner_username || '').trim();
     if (rowLinkedUserId > 0 && Number(trip?.user_id || 0) > 0 && rowLinkedUserId === Number(trip.user_id) && ownerName) aliases.add(ownerName);
@@ -467,22 +476,36 @@
   }
 
   function computeCanonicalTripPairDeltaForRow(row, trip = {}) {
-    const events = buildCanonicalTripEventsFromLedger(trip);
     const viewerAliases = buildTripPersonAliasesForViewer(trip);
     const rowAliases = buildTripPersonAliasesForRow(row, trip);
     let delta = 0;
-    events.forEach((event) => {
-      const participants = Array.isArray(event?.participants) ? event.participants : [];
-      const viewerParticipant = participants.find((participant) => (
-        [...viewerAliases].some((alias) => namesMatchLoosely(participant?.name, alias))
-      )) || null;
-      const rowParticipant = participants.find((participant) => (
-        [...rowAliases].some((alias) => namesMatchLoosely(participant?.name, alias))
-      )) || null;
+    (Array.isArray(trip?.groups) ? trip.groups : []).forEach((group) => {
+      const participants = buildCanonicalTripLedgerParticipants(group);
+      const viewerParticipant = participants.find((participant) => {
+        const linkedId = Number(participant?.linked_user_id || 0);
+        if (Number(window._currentUser?.id || 0) > 0 && linkedId > 0 && linkedId === Number(window._currentUser?.id || 0)) return true;
+        if (Number(window._currentUser?.id || 0) > 0 && Number(group?.user_id || 0) === Number(window._currentUser?.id || 0) && linkedId > 0 && linkedId === Number(group?.user_id || 0)) return true;
+        return [...viewerAliases].some((alias) => namesMatchLoosely(participant?.name, alias));
+      }) || null;
+      const rowParticipant = participants.find((participant) => {
+        const linkedId = Number(participant?.linked_user_id || 0);
+        const friendId = Number(participant?.friend_id || 0);
+        if (Number(row?.linked_user_id || 0) > 0 && linkedId > 0 && Number(row.linked_user_id) === linkedId) return true;
+        if (Number(row?.friend_id || 0) > 0 && friendId > 0 && Number(row.friend_id) === friendId) return true;
+        return [...rowAliases].some((alias) => namesMatchLoosely(participant?.name, alias));
+      }) || null;
       if (!viewerParticipant || !rowParticipant) return;
       if (namesMatchLoosely(viewerParticipant?.name, rowParticipant?.name)) return;
-      if (viewerParticipant.paid) delta = r2(delta + n(rowParticipant.share));
-      else if (rowParticipant.paid) delta = r2(delta - n(viewerParticipant.share));
+      const payerName = canonicalTripPayerName(group);
+      const payerParticipant = participants.find((participant) => namesMatchLoosely(participant?.name, payerName)) || null;
+      const groupMode = String(group?.split_mode || '').trim().toLowerCase();
+      if (groupMode === 'settlement') {
+        if (payerParticipant && namesMatchLoosely(payerParticipant?.name, viewerParticipant?.name)) delta = r2(delta + n(rowParticipant.share));
+        else if (payerParticipant && namesMatchLoosely(payerParticipant?.name, rowParticipant?.name)) delta = r2(delta - n(viewerParticipant.share));
+        return;
+      }
+      if (payerParticipant && namesMatchLoosely(payerParticipant?.name, viewerParticipant?.name)) delta = r2(delta + n(rowParticipant.share));
+      else if (payerParticipant && namesMatchLoosely(payerParticipant?.name, rowParticipant?.name)) delta = r2(delta - n(viewerParticipant.share));
     });
     return delta;
   }
