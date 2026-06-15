@@ -16826,6 +16826,7 @@ function renderBankAccounts() {
       </div>`;
 
   const fdRows = fixedDepositFilteredRows();
+  const fdPageState = fixedDepositPageState(fdRows);
   const fdTotals = fdRows.reduce((acc, item) => {
     acc.amount_deposited += Number(item.amount_deposited || 0);
     acc.maturity_amount += Number(item.maturity_amount || 0);
@@ -17452,6 +17453,7 @@ async function renderExpenseBucketGrid() {
   return;
 
   const fdRows = fixedDepositFilteredRows();
+  const fdPageState = fixedDepositPageState(fdRows);
   const fdTotals = fdRows.reduce((acc, item) => {
     acc.amount_deposited += Number(item.amount_deposited || 0);
     acc.maturity_amount += Number(item.maturity_amount || 0);
@@ -19041,6 +19043,7 @@ function renderBankAccounts() {
       </div>`;
 
   const fdRows = fixedDepositFilteredRows();
+  const fdPageState = fixedDepositPageState(fdRows);
   const fdTotals = fdRows.reduce((acc, item) => {
     acc.amount_deposited += Number(item.amount_deposited || 0);
     acc.maturity_amount += Number(item.maturity_amount || 0);
@@ -19053,7 +19056,7 @@ function renderBankAccounts() {
   const fdPeopleOptions = ['all', ...(_fixedDepositPeople || [])]
     .map((person) => `<option value="${escHtml(person)}" ${String(person) === String(_fixedDepositPersonFilter) ? 'selected' : ''}>${escHtml(person === 'all' ? 'All people' : person)}</option>`)
     .join('');
-  const fdTableRows = fdRows.length ? fdRows.map((item) => `
+  const fdTableRows = fdRows.length ? fdPageState.pageRows.map((item) => `
       <tr>
         <td style="padding:6px 8px;width:94px">
           <div style="display:flex;gap:2px;justify-content:flex-start;white-space:nowrap">

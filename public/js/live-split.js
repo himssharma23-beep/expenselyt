@@ -237,6 +237,109 @@
     return !hasMatchInParticipants;
   }
 
+  function participantMatchesViewer(participant, fallbackName = '') {
+    if (!participant) return false;
+    const meId = Number(window._currentUser?.id || 0);
+    const participantLinkedId = Number(participant?.linked_user_id || 0);
+    if (meId > 0 && participantLinkedId > 0 && participantLinkedId === meId) return true;
+    const viewerKeys = currentUserNameKeys();
+    const participantKeys = [participant?.name, fallbackName].map(textKey).filter(Boolean);
+    return participantKeys.some((key) => viewerKeys.includes(key));
+  }
+
+  function findSharedGroupSelfParticipant(participants, group) {
+    const list = Array.isArray(participants) ? participants : [];
+    if (!list.length) return null;
+    const meId = Number(window._currentUser?.id || 0);
+    const ownerUserId = Number(group?.owner_user_id || 0);
+    const targetUserId = Number(group?.target_user_id || 0);
+    const targetFriendId = Number(group?.friend_id || 0);
+    const targetNameNorm = normalizePersonName(group?.friend_name || '');
+    if (meId > 0) {
+      const byViewerId = list.find((participant) => Number(participant?.linked_user_id || 0) === meId);
+      if (byViewerId) return byViewerId;
+    }
+    if (targetUserId > 0) {
+      const byTargetUser = list.find((participant) => Number(participant?.linked_user_id || 0) === targetUserId);
+      if (byTargetUser) return byTargetUser;
+    }
+    if (targetFriendId > 0) {
+      const byFriendId = list.find((participant) => Number(participant?.friend_id || 0) === targetFriendId);
+      if (byFriendId) return byFriendId;
+    }
+    if (targetNameNorm) {
+      const byName = list.find((participant) => {
+        const nameNorm = normalizePersonName(participant?.name || '');
+        if (!nameNorm) return false;
+        return nameNorm === targetNameNorm
+          || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(targetNameNorm));
+      });
+      if (byName) return byName;
+    }
+    if (meId > 0 && ownerUserId > 0 && ownerUserId === meId) {
+      const ownerParticipant = list.find((participant) => Number(participant?.linked_user_id || 0) === ownerUserId);
+      if (ownerParticipant) return ownerParticipant;
+    }
+    return list.find((participant) => participantMatchesViewer(participant, group?.friend_name || '')) || null;
+  }
+
+  function resolveSharedGroupContext(group) {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = r2(group?.total_amount);
+    const groupMode = String(group?.split_mode || '').trim().toLowerCase();
+    const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
+    const ownerUserId = Number(group?.owner_user_id || 0);
+    const sumSplit = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
+    const ownerShare = r2(total - sumSplit);
+    const participants = [
+      {
+        key: `owner:${ownerUserId || textKey(ownerName)}`,
+        name: ownerName,
+        share: ownerShare,
+        linked_user_id: ownerUserId > 0 ? ownerUserId : null,
+        friend_id: null,
+      },
+      ...splits.map((split, index) => ({
+        key: `split:${Number(split?.id || 0) || index + 1}`,
+        name: String(split?.friend_name || '').trim(),
+        share: r2(split?.share_amount),
+        linked_user_id: Number(split?.linked_user_id || 0) || null,
+        friend_id: Number(split?.friend_id || 0) || null,
+      })),
+    ].filter((participant) => participant.name);
+    if (!participants.length) return null;
+    const selfParticipant = findSharedGroupSelfParticipant(participants, group);
+    if (!selfParticipant) return null;
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payerName = isYouLabel(payerRaw) ? ownerName : payerRaw;
+    const payerNorm = normalizePersonName(payerName);
+    const payerParticipant = participants.find((participant) => {
+      const nameNorm = normalizePersonName(participant?.name || '');
+      if (!nameNorm || !payerNorm) return false;
+      return nameNorm === payerNorm
+        || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(payerNorm));
+    }) || null;
+    return {
+      total,
+      groupMode,
+      ownerName,
+      ownerUserId,
+      ownerKey: `owner:${ownerUserId || textKey(ownerName)}`,
+      participants,
+      selfParticipant,
+      payerName,
+      payerParticipant,
+      selfShare: r2(selfParticipant.share),
+      selfIsPayer: !!(payerParticipant && payerParticipant.key === selfParticipant.key),
+    };
+  }
+
+  function sharedParticipantDisplayName(participant, selfParticipant) {
+    if (!participant) return '';
+    if (selfParticipant && participant.key === selfParticipant.key) return 'You';
+    return String(participant?.name || '').trim();
+  }
+
   function resolveTripBulkEditDefaults(trip) {
     const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip?.id || 0));
     const latestGroup = [...tripGroups]
@@ -456,61 +559,10 @@
     });
 
     (sharedGroups || []).forEach((group) => {
-      const splits = Array.isArray(group?.splits) ? group.splits : [];
-      const total = r2(group?.total_amount);
-      const groupMode = String(group?.split_mode || '').trim().toLowerCase();
-      const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
-      const ownerUserId = Number(group?.owner_user_id || 0);
-      const meId = Number(group?.target_user_id || window._currentUser?.id || 0);
-      const sumSplit = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
-      const ownerShare = r2(total - sumSplit);
-      const participants = [
-        {
-          key: `owner:${ownerUserId || textKey(ownerName)}`,
-          name: ownerName,
-          share: ownerShare,
-          linked_user_id: ownerUserId > 0 ? ownerUserId : null,
-          friend_id: null,
-        },
-        ...splits.map((split, index) => ({
-          key: `split:${Number(split?.id || 0) || index + 1}`,
-          name: String(split?.friend_name || '').trim(),
-          share: r2(split?.share_amount),
-          linked_user_id: Number(split?.linked_user_id || 0) || null,
-          friend_id: Number(split?.friend_id || 0) || null,
-        })),
-      ].filter((participant) => participant.name);
-
-      if (!participants.length) return;
-
-      const targetNameNorm = normalizePersonName(group?.friend_name || '');
-      let selfParticipant = null;
-      if (meId > 0) selfParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === meId) || null;
-      if (!selfParticipant && Number(group?.friend_id || 0) > 0) {
-        selfParticipant = participants.find((participant) => Number(participant?.friend_id || 0) === Number(group.friend_id)) || null;
-      }
-      if (!selfParticipant && targetNameNorm) {
-        selfParticipant = participants.find((participant) => {
-          const nameNorm = normalizePersonName(participant?.name || '');
-          if (!nameNorm) return false;
-          return nameNorm === targetNameNorm
-            || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(targetNameNorm));
-        }) || null;
-      }
-      if (!selfParticipant && meId > 0 && ownerUserId > 0 && ownerUserId === meId) selfParticipant = participants[0];
-      if (!selfParticipant) return;
-
-      const payerRaw = String(group?.paid_by || '').trim();
-      const payer = isYouLabel(payerRaw) ? ownerName : payerRaw;
-      const payerNorm = normalizePersonName(payer);
-      const payerParticipant = participants.find((participant) => {
-        const nameNorm = normalizePersonName(participant?.name || '');
-        if (!nameNorm || !payerNorm) return false;
-        return nameNorm === payerNorm
-          || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(payerNorm));
-      }) || null;
-      const selfShare = r2(selfParticipant.share);
-      const selfIsPayer = !!(payerParticipant && payerParticipant.key === selfParticipant.key);
+      const context = resolveSharedGroupContext(group);
+      if (!context) return;
+      const { groupMode, participants, selfParticipant, payerParticipant, selfShare, selfIsPayer } = context;
+      const meId = Number(window._currentUser?.id || 0);
 
       participants.forEach((participant) => {
         if (participant.key === selfParticipant.key) return;
@@ -1508,60 +1560,9 @@
     });
 
     (state.sharedGroups || []).forEach((group) => {
-      const splits = Array.isArray(group?.splits) ? group.splits : [];
-      const total = r2(group?.total_amount);
-      const groupMode = String(group?.split_mode || '').trim().toLowerCase();
-      const ownerName = String(group?.owner_name || 'Owner').trim();
-      const ownerUserId = Number(group?.owner_user_id || 0);
-      const meId = Number(group?.target_user_id || window._currentUser?.id || 0);
-      const sumSplit = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
-      const ownerShare = r2(total - sumSplit);
-      const participants = [
-        {
-          key: `owner:${ownerUserId || textKey(ownerName)}`,
-          name: ownerName,
-          share: ownerShare,
-          linked_user_id: ownerUserId > 0 ? ownerUserId : null,
-          friend_id: null,
-        },
-        ...splits.map((split, index) => ({
-          key: `split:${Number(split?.id || 0) || index + 1}`,
-          name: String(split?.friend_name || '').trim(),
-          share: r2(split?.share_amount),
-          linked_user_id: Number(split?.linked_user_id || 0) || null,
-          friend_id: Number(split?.friend_id || 0) || null,
-        })),
-      ].filter((participant) => participant.name);
-      if (!participants.length) return;
-
-      const targetNameNorm = normalizePersonName(group?.friend_name || '');
-      let selfParticipant = null;
-      if (meId > 0) selfParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === meId) || null;
-      if (!selfParticipant && Number(group?.friend_id || 0) > 0) {
-        selfParticipant = participants.find((participant) => Number(participant?.friend_id || 0) === Number(group.friend_id)) || null;
-      }
-      if (!selfParticipant && targetNameNorm) {
-        selfParticipant = participants.find((participant) => {
-          const nameNorm = normalizePersonName(participant?.name || '');
-          if (!nameNorm) return false;
-          return nameNorm === targetNameNorm
-            || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(targetNameNorm));
-        }) || null;
-      }
-      if (!selfParticipant && meId > 0 && ownerUserId > 0 && ownerUserId === meId) selfParticipant = participants[0];
-      if (!selfParticipant) return;
-
-      const payerRaw = String(group?.paid_by || '').trim();
-      const payer = isYouLabel(payerRaw) ? ownerName : payerRaw;
-      const payerNorm = normalizePersonName(payer);
-      const payerParticipant = participants.find((participant) => {
-        const nameNorm = normalizePersonName(participant?.name || '');
-        if (!nameNorm || !payerNorm) return false;
-        return nameNorm === payerNorm
-          || (firstNameToken(nameNorm) && firstNameToken(nameNorm) === firstNameToken(payerNorm));
-      }) || null;
-      const selfShare = r2(selfParticipant.share);
-      const selfIsPayer = !!(payerParticipant && payerParticipant.key === selfParticipant.key);
+      const context = resolveSharedGroupContext(group);
+      if (!context) return;
+      const { total, groupMode, participants, selfParticipant, payerName, payerParticipant, selfShare, selfIsPayer } = context;
 
       const rowParticipant = participants.find((participant) => {
         const participantNameNorm = normalizePersonName(participant?.name || '');
@@ -1589,11 +1590,14 @@
         delta = r2(0 - selfShare);
       }
 
-      const ownerKey = `owner:${ownerUserId || textKey(ownerName)}`;
       const eventParticipants = groupMode === 'settlement'
-        ? buildSettlementParticipantsForSharedGroup(participants, ownerKey, payerParticipant, rowParticipant, total)
+        ? buildSettlementParticipantsForSharedGroup(participants, context.ownerKey, payerParticipant, rowParticipant, total)
+          .map((participant) => ({
+            ...participant,
+            name: participantMatchesViewer(participant, group?.friend_name || '') ? 'You' : participant.name,
+          }))
         : participants.map((participant) => ({
-            name: participant.name,
+            name: sharedParticipantDisplayName(participant, selfParticipant),
             share: r2(participant.share),
             paid: !!(payerParticipant && payerParticipant.key === participant.key),
             contextOnly: participant.key !== selfParticipant.key && participant.key !== rowParticipant.key,
@@ -1606,7 +1610,7 @@
           trip_id: Number(group?.trip_id || 0) > 0 ? Number(group?.trip_id) : null,
           date: toLocalIsoDate(group?.divide_date),
           details: String(group?.details || group?.heading || 'Shared split').trim(),
-          payer: payer || ownerName || '-',
+          payer: sharedParticipantDisplayName(payerParticipant, selfParticipant) || payerName || '-',
           total,
           delta,
           my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
@@ -1713,51 +1717,24 @@
         const total = r2(group?.total_amount);
         const isSharedRow = Number(group?.owner_user_id || 0) > 0 && Number(group?.target_user_id || 0) > 0;
         if (isSharedRow) {
-          const targetName = String(group?.friend_name || '').trim();
-          const ownerName = String(group?.owner_name || 'Owner').trim() || 'Owner';
-          const meId = Number(window._currentUser?.id || 0);
-          const selfKeys = currentUserNameKeys();
-          const ownerIsSelf = (meId > 0 && Number(group?.owner_user_id || 0) === meId)
-            || (!!textKey(ownerName) && selfKeys.includes(textKey(ownerName)));
-          const targetIsSelf = (meId > 0 && Number(group?.target_user_id || 0) === meId)
-            || (!!textKey(targetName) && selfKeys.includes(textKey(targetName)));
-          const ownerLabel = ownerIsSelf ? 'You' : ownerName;
-          const targetLabel = targetIsSelf ? 'You' : targetName;
-          let targetShare = r2(group?.friend_share_amount);
-          if (!(targetShare > 0)) {
-            const byName = splits.find((split) => String(split?.friend_name || '').trim().toLowerCase() === targetName.toLowerCase());
-            if (byName) targetShare = r2(byName?.share_amount);
-          }
-          const splitSum = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
-          const ownerShare = r2(total - splitSum);
-          const payerRaw = String(group?.paid_by || '').trim();
-          const payer = isYouLabel(payerRaw) ? ownerName : (payerRaw || ownerName);
-          const payerKey = textKey(payer);
-          const payerOwner = !!payerKey && payerKey === textKey(ownerName);
-          const payerTarget = !!payerKey && payerKey === textKey(targetName);
-          const extraParticipants = splits
-            .map((split) => ({
-              name: (Number(split?.linked_user_id || 0) > 0 && meId > 0 && Number(split?.linked_user_id || 0) === meId)
-                ? 'You'
-                : String(split?.friend_name || '').trim(),
-              share: r2(split?.share_amount),
-              paid: textKey(split?.friend_name) === payerKey,
-              contextOnly: true,
+          const context = resolveSharedGroupContext(group);
+          if (!context) return null;
+          const extraParticipants = context.participants
+            .map((participant) => ({
+              name: sharedParticipantDisplayName(participant, context.selfParticipant),
+              share: r2(participant.share),
+              paid: !!(context.payerParticipant && context.payerParticipant.key === participant.key),
+              contextOnly: participant.key !== context.selfParticipant.key,
             }))
-            .filter((item) => item.name && item.name !== ownerLabel && item.name !== targetLabel)
-            .filter((item, index, arr) => arr.findIndex((v) => v.name.toLowerCase() === item.name.toLowerCase()) === index);
+            .filter((item, index, arr) => item.name && arr.findIndex((v) => v.name.toLowerCase() === item.name.toLowerCase()) === index);
           return {
             key: `t-${group?.id || ''}-${group?.divide_date || ''}`,
             group_id: Number(group?.id) || null,
             date: toLocalIsoDate(group?.divide_date),
             details: String(group?.details || group?.heading || 'Split expense').trim(),
-            payer,
-            total,
-            participants: [
-              { name: ownerLabel, share: ownerShare, paid: payerOwner },
-              { name: targetLabel, share: targetShare, paid: payerTarget },
-              ...extraParticipants,
-            ].filter((item) => item.name),
+            payer: sharedParticipantDisplayName(context.payerParticipant, context.selfParticipant) || context.payerName || '-',
+            total: context.total,
+            participants: extraParticipants,
           };
         }
         const payer = String(group?.paid_by || group?.owner_name || '').trim() || '-';
@@ -2079,36 +2056,69 @@
         const detail = await api(`/api/live-split/groups/${numericToken}`);
         const groupFromId = detail?.group || null;
         if (groupFromId) {
-          const splits = Array.isArray(groupFromId?.splits) ? groupFromId.splits : [];
-          const total = r2(groupFromId?.total_amount);
-          const totalFriends = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
-          const selfShare = r2(total - totalFriends);
-          const payer = String(groupFromId?.paid_by || '').trim();
-          const groupMode = String(groupFromId?.split_mode || '').trim().toLowerCase();
-          const payerKey = textKey(payer);
-          const selfPayer = isLikelySelfPayerForOwnGroup(payer, splits);
-          event = {
-            key: `g-${groupFromId?.id || ''}-${groupFromId?.divide_date || ''}-${groupFromId?.details || ''}`,
-            group_id: Number(groupFromId?.id) || numericToken,
-            date: toLocalIsoDate(groupFromId?.divide_date),
-            details: String(groupFromId?.details || groupFromId?.heading || 'Split expense').trim(),
-            payer: payer || '-',
-            total,
-            delta: 0,
-            my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
-            split_mode: groupMode || 'equal',
-            added_to_expense: !!groupFromId?.added_to_expense,
-            participants: groupMode === 'settlement'
-              ? buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer)
-              : [
-                  { name: 'You', share: selfShare, paid: selfPayer },
-                  ...splits.map((split) => ({
-                    name: String(split?.friend_name || '').trim(),
-                    share: r2(split?.share_amount),
-                    paid: textKey(split?.friend_name) === payerKey,
-                  })),
-                ].filter((item) => item.name),
-          };
+          const sharedContext = !groupFromId?.is_owner ? resolveSharedGroupContext(groupFromId) : null;
+          if (sharedContext) {
+            event = {
+              key: `g-${groupFromId?.id || ''}-${groupFromId?.divide_date || ''}-${groupFromId?.details || ''}`,
+              group_id: Number(groupFromId?.id) || numericToken,
+              date: toLocalIsoDate(groupFromId?.divide_date),
+              details: String(groupFromId?.details || groupFromId?.heading || 'Split expense').trim(),
+              payer: sharedParticipantDisplayName(sharedContext.payerParticipant, sharedContext.selfParticipant) || sharedContext.payerName || '-',
+              total: sharedContext.total,
+              delta: 0,
+              my_share_amount: sharedContext.groupMode === 'settlement' ? 0 : sharedContext.selfShare,
+              split_mode: sharedContext.groupMode || 'equal',
+              added_to_expense: !!groupFromId?.added_to_expense,
+              participants: sharedContext.groupMode === 'settlement'
+                ? buildSettlementParticipantsForSharedGroup(
+                    sharedContext.participants,
+                    sharedContext.ownerKey,
+                    sharedContext.payerParticipant,
+                    sharedContext.selfParticipant,
+                    sharedContext.total
+                  ).map((participant) => ({
+                    ...participant,
+                    name: participantMatchesViewer(participant, groupFromId?.friend_name || '') ? 'You' : participant.name,
+                  }))
+                : sharedContext.participants.map((participant) => ({
+                    name: sharedParticipantDisplayName(participant, sharedContext.selfParticipant),
+                    share: r2(participant.share),
+                    paid: !!(sharedContext.payerParticipant && sharedContext.payerParticipant.key === participant.key),
+                    contextOnly: participant.key !== sharedContext.selfParticipant.key,
+                  })).filter((item) => item.name),
+            };
+          } else {
+            const splits = Array.isArray(groupFromId?.splits) ? groupFromId.splits : [];
+            const total = r2(groupFromId?.total_amount);
+            const totalFriends = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
+            const selfShare = r2(total - totalFriends);
+            const payer = String(groupFromId?.paid_by || '').trim();
+            const groupMode = String(groupFromId?.split_mode || '').trim().toLowerCase();
+            const payerKey = textKey(payer);
+            const selfPayer = isLikelySelfPayerForOwnGroup(payer, splits);
+            event = {
+              key: `g-${groupFromId?.id || ''}-${groupFromId?.divide_date || ''}-${groupFromId?.details || ''}`,
+              group_id: Number(groupFromId?.id) || numericToken,
+              date: toLocalIsoDate(groupFromId?.divide_date),
+              details: String(groupFromId?.details || groupFromId?.heading || 'Split expense').trim(),
+              payer: payer || '-',
+              total,
+              delta: 0,
+              my_share_amount: groupMode === 'settlement' ? 0 : selfShare,
+              split_mode: groupMode || 'equal',
+              added_to_expense: !!groupFromId?.added_to_expense,
+              participants: groupMode === 'settlement'
+                ? buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer)
+                : [
+                    { name: 'You', share: selfShare, paid: selfPayer },
+                    ...splits.map((split) => ({
+                      name: String(split?.friend_name || '').trim(),
+                      share: r2(split?.share_amount),
+                      paid: textKey(split?.friend_name) === payerKey,
+                    })),
+                  ].filter((item) => item.name),
+            };
+          }
         }
       } catch (_) {
         // ignore and fall through to not-found return
@@ -2156,10 +2166,9 @@
             <tbody>
               ${(event.participants || []).map((p) => {
     const meName = String(window?._currentUser?.display_name || window?._currentUser?.username || 'You').trim();
-    const sharedOwnerName = !group?.is_owner ? String(group?.owner_name || '').trim() : '';
     const rawName = String(p?.name || '').trim();
     const displayName = rawName.toLowerCase() === 'you'
-      ? (sharedOwnerName || meName || rawName)
+      ? (meName || rawName)
       : rawName;
     const exists = rawName.toLowerCase() === 'you' || (state.friends || []).some((friend) => String(friend?.name || '').trim().toLowerCase() === String(displayName || '').trim().toLowerCase());
     const encodedName = encodeURIComponent(String(displayName || '').trim());
@@ -2180,10 +2189,9 @@
         <div class="ls-expense-participant-list">
           ${(event.participants || []).map((p) => {
     const meName = String(window?._currentUser?.display_name || window?._currentUser?.username || 'You').trim();
-    const sharedOwnerName = !group?.is_owner ? String(group?.owner_name || '').trim() : '';
     const rawName = String(p?.name || '').trim();
     const displayName = rawName.toLowerCase() === 'you'
-      ? (sharedOwnerName || meName || rawName)
+      ? (meName || rawName)
       : rawName;
     const exists = rawName.toLowerCase() === 'you' || (state.friends || []).some((friend) => String(friend?.name || '').trim().toLowerCase() === String(displayName || '').trim().toLowerCase());
     const encodedName = encodeURIComponent(String(displayName || '').trim());
