@@ -3123,6 +3123,8 @@ async function getReceivedLiveSplitShares(userId) {
      ON CONFLICT (group_id, target_user_id)
      DO UPDATE SET friend_id = EXCLUDED.friend_id,
                    shared_by_user_id = EXCLUDED.shared_by_user_id,
+                   owner_hidden_at = NULL,
+                   target_hidden_at = NULL,
                    updated_at = NOW()`;
   try {
     await query(shareHydrationSql, [userId]);

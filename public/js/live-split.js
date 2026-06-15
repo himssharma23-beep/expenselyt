@@ -1562,11 +1562,23 @@
     (state.sharedGroups || []).forEach((group) => {
       const context = resolveSharedGroupContext(group);
       if (!context) return;
-      const { total, groupMode, participants, selfParticipant, payerName, payerParticipant, selfShare, selfIsPayer } = context;
+      const { total, groupMode, participants, selfParticipant, payerName, payerParticipant, selfShare, selfIsPayer, ownerKey, ownerName, ownerUserId } = context;
+      const rowNameNorm = normalizePersonName(rowName);
+      const ownerNameNorm = normalizePersonName(ownerName || '');
+      const ownerParticipant = participants.find((participant) => (
+        String(participant?.key || '') === String(ownerKey || '')
+        || (Number(ownerUserId || 0) > 0 && Number(participant?.linked_user_id || 0) === Number(ownerUserId || 0))
+      )) || null;
+      const rowMatchesOwner = !!ownerParticipant && (
+        (rowLinkedUserId > 0 && Number(ownerUserId || 0) > 0 && rowLinkedUserId === Number(ownerUserId || 0))
+        || (rowNameNorm && ownerNameNorm && (
+          rowNameNorm === ownerNameNorm
+          || (firstNameToken(rowNameNorm) && firstNameToken(rowNameNorm) === firstNameToken(ownerNameNorm))
+        ))
+      );
 
-      const rowParticipant = participants.find((participant) => {
+      const rowParticipant = (rowMatchesOwner ? ownerParticipant : null) || participants.find((participant) => {
         const participantNameNorm = normalizePersonName(participant?.name || '');
-        const rowNameNorm = normalizePersonName(rowName);
         const matchesByName = participantNameNorm && rowNameNorm && (
           participantNameNorm === rowNameNorm
           || (firstNameToken(participantNameNorm) && firstNameToken(participantNameNorm) === firstNameToken(rowNameNorm))
