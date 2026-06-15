@@ -1720,7 +1720,17 @@ async function getLiveSplitTrips(userId) {
        CASE WHEN t.user_id = $1 THEN TRUE ELSE FALSE END AS is_owner
      FROM live_split_trips t
      LEFT JOIN live_split_trip_members m ON m.trip_id = t.id AND m.target_user_id = $1
-     WHERE t.user_id = $1 OR m.target_user_id IS NOT NULL
+     WHERE t.user_id = $1
+        OR m.target_user_id IS NOT NULL
+        OR EXISTS (
+          SELECT 1
+          FROM live_split_groups g
+          JOIN live_split_group_shares share ON share.group_id = g.id
+          WHERE g.trip_id = t.id
+            AND share.target_user_id = $1
+            AND share.owner_hidden_at IS NULL
+            AND share.target_hidden_at IS NULL
+        )
      ORDER BY t.start_date DESC, t.id DESC`,
     [userId]
   );
