@@ -1572,11 +1572,122 @@ async function getLiveSplitTripAccessRow(client, userId, tripId) {
            WHERE m.trip_id = t.id
              AND m.target_user_id = $1
          )
+         OR EXISTS (
+           SELECT 1
+           FROM live_split_groups g
+           JOIN live_split_group_shares share ON share.group_id = g.id
+           WHERE g.trip_id = t.id
+             AND share.target_user_id = $1
+             AND share.owner_hidden_at IS NULL
+             AND share.target_hidden_at IS NULL
+         )
        )
      LIMIT 1`,
     [uid, tid]
   );
   return result.rows[0] || null;
+}
+
+async function getLiveSplitTripLedgerForUser(userId, tripId) {
+  const uid = Number(userId || 0);
+  const tid = Number(tripId || 0);
+  if (!(uid > 0) || !(tid > 0)) return null;
+
+  const trip = await getLiveSplitTripAccessRow({ query }, uid, tid);
+  if (!trip) return null;
+
+  const [membersResult, groupsResult] = await Promise.all([
+    query(
+      `SELECT m.*, u.avatar_url AS linked_user_avatar_url
+       FROM live_split_trip_members m
+       LEFT JOIN users u ON u.id = m.target_user_id AND u.deleted_at IS NULL
+       WHERE m.trip_id = $1
+       ORDER BY m.id`,
+      [tid]
+    ),
+    query(
+      `SELECT
+         g.*,
+         owner.display_name AS owner_name,
+         owner.username AS owner_username,
+         owner.avatar_url AS owner_avatar_url,
+         COALESCE(
+           json_agg(
+             json_build_object(
+               'id', s.id,
+               'friend_id', s.friend_id,
+               'friend_name', s.friend_name,
+               'linked_user_id', NULLIF(f.linked_user_id, g.user_id),
+               'share_amount', s.share_amount,
+               'is_paid', s.is_paid
+             )
+             ORDER BY s.id
+           ) FILTER (WHERE s.id IS NOT NULL),
+           '[]'::json
+         ) AS splits
+       FROM live_split_groups g
+       JOIN users owner ON owner.id = g.user_id
+       LEFT JOIN live_split_splits s ON s.group_id = g.id
+       LEFT JOIN live_split_friends f ON f.id = s.friend_id
+       WHERE g.trip_id = $1
+       GROUP BY g.id, owner.display_name, owner.username, owner.avatar_url
+       ORDER BY g.divide_date DESC, g.id DESC`,
+      [tid]
+    ),
+  ]);
+
+  const stats = await getLiveSplitTripExpenseStats({ query }, tid, uid);
+  const normalizeSplits = (raw) => {
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  return {
+    ...trip,
+    id: Number(trip.id),
+    user_id: Number(trip.user_id),
+    is_owner: bool(trip.is_owner),
+    status: normalizeLiveSplitTripStatus(trip.status),
+    show_add_to_expense_option: bool(trip.show_add_to_expense_option),
+    members: (membersResult.rows || []).map((member) => ({
+      ...member,
+      id: Number(member.id),
+      trip_id: Number(member.trip_id),
+      friend_id: member.friend_id ? Number(member.friend_id) : null,
+      target_user_id: member.target_user_id ? Number(member.target_user_id) : null,
+      is_locked: bool(member.is_locked),
+    })),
+    expense_count: Number(stats.expense_count || 0),
+    settlement_count: Number(stats.settlement_count || 0),
+    total_amount: num(stats.total_amount),
+    my_share_amount: num(stats.my_share_amount),
+    latest_divide_date: stats.latest_divide_date || null,
+    groups: (groupsResult.rows || []).map((row) => ({
+      ...row,
+      id: Number(row.id),
+      user_id: Number(row.user_id),
+      trip_id: row.trip_id ? Number(row.trip_id) : null,
+      total_amount: num(row.total_amount),
+      owner_added_to_expense: bool(row.owner_added_to_expense),
+      splits: normalizeSplits(row.splits).map((split) => ({
+        ...split,
+        id: Number(split.id),
+        friend_id: split.friend_id ? Number(split.friend_id) : null,
+        linked_user_id: split.linked_user_id ? Number(split.linked_user_id) : null,
+        share_amount: num(split.share_amount),
+        is_paid: bool(split.is_paid),
+      })),
+    })),
+  };
 }
 
 async function normalizeLiveSplitTripMembersForOwner(client, ownerUserId, members = []) {
@@ -7516,6 +7627,7 @@ module.exports = {
   linkLiveSplitFriendToUser,
   deleteLiveSplitFriend,
   getLiveSplitTrips,
+  getLiveSplitTripLedgerForUser,
   createLiveSplitTrip,
   updateLiveSplitTrip,
   deleteLiveSplitTrip,

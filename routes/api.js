@@ -7004,6 +7004,16 @@ router.get('/live-split/trips', async (req, res) => {
   }
 });
 
+router.get('/live-split/trips/:id(\\d+)/ledger', async (req, res) => {
+  try {
+    const trip = await Promise.resolve(getCoreDb().getLiveSplitTripLedgerForUser(req.session.userId, req.params.id));
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+    res.json({ trip });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.post('/live-split/trips', async (req, res) => {
   try {
     const id = await Promise.resolve(

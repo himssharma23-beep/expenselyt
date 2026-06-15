@@ -59,6 +59,7 @@
     voiceBusy: false,
     voiceIgnoreNextResult: false,
     voiceMode: 'split',
+    tripLedgerCache: {},
   };
 
   function n(v) {
@@ -338,6 +339,101 @@
     if (!participant) return '';
     if (selfParticipant && participant.key === selfParticipant.key) return 'You';
     return String(participant?.name || '').trim();
+  }
+
+  function canonicalLiveSplitName(value, fallback = '') {
+    const raw = String(value || '').trim();
+    if (raw) return raw;
+    return String(fallback || '').trim();
+  }
+
+  function namesMatchLoosely(a, b) {
+    const aNorm = normalizePersonName(a || '');
+    const bNorm = normalizePersonName(b || '');
+    if (!aNorm || !bNorm) return false;
+    return aNorm === bNorm
+      || (firstNameToken(aNorm) && firstNameToken(aNorm) === firstNameToken(bNorm));
+  }
+
+  function canonicalTripPayerName(group) {
+    const ownerName = canonicalLiveSplitName(group?.owner_name || group?.owner_username || 'Owner', 'Owner');
+    const payerRaw = String(group?.paid_by || '').trim();
+    if (isYouLabel(payerRaw)) return ownerName;
+    return canonicalLiveSplitName(payerRaw, ownerName);
+  }
+
+  function buildCanonicalTripParticipants(group) {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = r2(group?.total_amount);
+    const ownerName = canonicalLiveSplitName(group?.owner_name || group?.owner_username || 'Owner', 'Owner');
+    const ownerShareBase = r2(splits.reduce((sum, split) => sum + n(split?.share_amount), 0));
+    const ownerShare = String(group?.split_mode || '').trim().toLowerCase() === 'settlement'
+      ? (ownerShareBase || total)
+      : r2(total - ownerShareBase);
+    const payerName = canonicalTripPayerName(group);
+    const participants = [
+      { name: ownerName, share: ownerShare, paid: namesMatchLoosely(ownerName, payerName) },
+      ...splits.map((split) => ({
+        name: canonicalLiveSplitName(split?.friend_name),
+        share: r2(split?.share_amount),
+        paid: namesMatchLoosely(split?.friend_name, payerName),
+      })),
+    ].filter((participant) => participant.name);
+    const payerTracked = participants.some((participant) => participant.paid);
+    if (!payerTracked && payerName) {
+      participants.push({ name: payerName, share: 0, paid: true, contextOnly: true });
+    }
+    return participants.filter((participant, index, arr) => (
+      arr.findIndex((item) => namesMatchLoosely(item.name, participant.name)) === index
+    ));
+  }
+
+  function buildCanonicalTripEventsFromLedger(trip = {}) {
+    return (Array.isArray(trip?.groups) ? trip.groups : [])
+      .map((group) => ({
+        key: `trip-ledger-${group?.id || ''}-${group?.divide_date || ''}`,
+        group_id: Number(group?.id) || null,
+        date: toLocalIsoDate(group?.divide_date),
+        details: String(group?.details || group?.heading || 'Split expense').trim(),
+        payer: canonicalTripPayerName(group) || '-',
+        total: r2(group?.total_amount),
+        participants: buildCanonicalTripParticipants(group),
+      }))
+      .sort((a, b) => {
+        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return Number(b.group_id || 0) - Number(a.group_id || 0);
+      });
+  }
+
+  function buildCanonicalTripMemberBalances(events = []) {
+    const map = new Map();
+    (events || []).forEach((event) => {
+      (Array.isArray(event?.participants) ? event.participants : []).forEach((participant) => {
+        const name = String(participant?.name || '').trim();
+        if (!name) return;
+        const key = normalizePersonName(name);
+        if (!key) return;
+        const current = map.get(key) || { name, amount: 0 };
+        current.amount = r2(current.amount + (participant?.paid ? n(event?.total) : 0) - n(participant?.share));
+        map.set(key, current);
+      });
+    });
+    return [...map.values()]
+      .filter((item) => Math.abs(n(item?.amount)) > 0.005)
+      .sort((a, b) => Math.abs(n(b?.amount)) - Math.abs(n(a?.amount)));
+  }
+
+  async function fetchTripLedger(tripId, force = false) {
+    const tid = Number(tripId || 0);
+    if (!(tid > 0)) return null;
+    if (!force && state.tripLedgerCache[tid]) return state.tripLedgerCache[tid];
+    const result = await api(`/api/live-split/trips/${tid}/ledger`);
+    if (!result || result.error || !result.trip) {
+      throw new Error(result?.error || 'Could not load trip details');
+    }
+    state.tripLedgerCache[tid] = result.trip;
+    return result.trip;
   }
 
   function resolveTripBulkEditDefaults(trip) {
@@ -2454,14 +2550,21 @@
   async function openTripDetails(tripId) {
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return;
-    const trip = (state.liveTrips || []).find((item) => Number(item.id) === tid);
+    const tripMeta = (state.liveTrips || []).find((item) => Number(item.id) === tid) || null;
+    let trip = tripMeta;
     if (!trip) {
       toast('Trip not found', 'warning');
       return;
     }
+    try {
+      trip = await fetchTripLedger(tid, true);
+    } catch (error) {
+      toast(error?.message || 'Could not load trip details', 'error');
+      return;
+    }
     state.activeTripDetail = tid;
-    const events = buildTripEvents(tid);
-    const memberBalances = computeTripMemberBalances(tid);
+    const events = buildCanonicalTripEventsFromLedger(trip);
+    const memberBalances = buildCanonicalTripMemberBalances(events);
     const grouped = groupEventsByMonth(events, (event) => event.total);
     // Build per-member paid/share summary from events
     const memberSummaryMap = {};
@@ -2549,7 +2652,7 @@
             ${memberBalanceChips.map((item) => {
               const amount = r2(item.amount);
               const tone = amount > 0 ? 'var(--green)' : amount < 0 ? 'var(--red)' : 'var(--t3)';
-              const status = amount > 0 ? 'owes you' : amount < 0 ? 'you owe' : 'settled';
+              const status = amount > 0 ? 'gets' : amount < 0 ? 'owes' : 'settled';
               return `
                 <div style="padding:5px 10px;border:1px solid var(--border);border-radius:999px;background:#fff;font-size:12px;color:var(--t2)">
                   <b style="color:var(--t1)">${escHtml(item.name || 'Friend')}</b> <span style="color:${tone}">${escHtml(status)} ${fmtCur(Math.abs(amount))}</span>
@@ -2679,7 +2782,8 @@
   async function liveSplitDownloadTripPdf(tripId) {
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return;
-    const trip = (state.liveTrips || []).find((item) => Number(item.id) === tid);
+    const tripMeta = (state.liveTrips || []).find((item) => Number(item.id) === tid) || null;
+    let trip = tripMeta;
     if (!trip) {
       toast('Trip not found', 'warning');
       return;
@@ -2689,7 +2793,14 @@
       return;
     }
 
-    const events = buildTripEvents(tid);
+    try {
+      trip = await fetchTripLedger(tid, true);
+    } catch (error) {
+      toast(error?.message || 'Could not load trip details', 'error');
+      return;
+    }
+
+    const events = buildCanonicalTripEventsFromLedger(trip);
     const memberSummaryMap = {};
     events.forEach((event) => {
       (event.participants || []).forEach((p) => {
