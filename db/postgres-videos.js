@@ -1611,9 +1611,7 @@ async function listVideoLibrary(userId = null) {
       return {
         id: encodeCatalogFileToken(file.id),
         progress_key: progressKey,
-        title: effectiveMediaType === 'series'
-          ? (file.episode_label || prettyVideoTitle(file.filename))
-          : item.display_title,
+        title: prettyVideoTitle(file.filename),
       catalog_title: item.display_title,
       filename: file.filename,
       folder: item.folder_name || item.folder_relative_path || 'Root',
