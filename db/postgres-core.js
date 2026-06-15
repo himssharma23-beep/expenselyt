@@ -1651,6 +1651,159 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     return [];
   };
 
+  const textKey = (value) => String(value || '').trim().toLowerCase();
+  const normalizeName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const firstNameToken = (value) => normalizeName(value).split(' ')[0] || '';
+  const namesMatch = (a, b) => {
+    const aNorm = normalizeName(a);
+    const bNorm = normalizeName(b);
+    if (!aNorm || !bNorm) return false;
+    return aNorm === bNorm || (firstNameToken(aNorm) && firstNameToken(aNorm) === firstNameToken(bNorm));
+  };
+  const normalizeMembers = (membersResult.rows || []).map((member) => ({
+    ...member,
+    id: Number(member.id),
+    trip_id: Number(member.trip_id),
+    friend_id: member.friend_id ? Number(member.friend_id) : null,
+    target_user_id: member.target_user_id ? Number(member.target_user_id) : null,
+    is_locked: bool(member.is_locked),
+  }));
+  const normalizedGroups = (groupsResult.rows || []).map((row) => ({
+    ...row,
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    trip_id: row.trip_id ? Number(row.trip_id) : null,
+    total_amount: num(row.total_amount),
+    owner_added_to_expense: bool(row.owner_added_to_expense),
+    splits: normalizeSplits(row.splits).map((split) => ({
+      ...split,
+      id: Number(split.id),
+      friend_id: split.friend_id ? Number(split.friend_id) : null,
+      linked_user_id: split.linked_user_id ? Number(split.linked_user_id) : null,
+      share_amount: num(split.share_amount),
+      is_paid: bool(split.is_paid),
+    })),
+  }));
+
+  const pairBalanceMap = new Map();
+  const ensurePairBalance = (participant) => {
+    const linkedUserId = Number(participant?.linked_user_id || 0);
+    const friendId = Number(participant?.friend_id || 0);
+    const name = String(participant?.name || '').trim();
+    const key = linkedUserId > 0 ? `u:${linkedUserId}` : friendId > 0 ? `f:${friendId}` : `n:${normalizeName(name)}`;
+    if (!pairBalanceMap.has(key)) {
+      pairBalanceMap.set(key, {
+        key,
+        name,
+        linked_user_id: linkedUserId > 0 ? linkedUserId : null,
+        friend_id: friendId > 0 ? friendId : null,
+        amount: 0,
+      });
+    }
+    return pairBalanceMap.get(key);
+  };
+
+  normalizedGroups.forEach((group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = num(group?.total_amount);
+    const splitMode = String(group?.split_mode || '').trim().toLowerCase();
+    const ownerName = String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner';
+    const ownerUserId = Number(group?.user_id || 0);
+    const sumSplit = splits.reduce((sum, split) => sum + num(split?.share_amount), 0);
+    const ownerShare = splitMode === 'settlement' ? (sumSplit || total) : (total - sumSplit);
+    const participants = [
+      { name: ownerName, linked_user_id: ownerUserId > 0 ? ownerUserId : null, friend_id: null, share: num(ownerShare) },
+      ...splits.map((split) => ({
+        name: String(split?.friend_name || '').trim(),
+        linked_user_id: Number(split?.linked_user_id || 0) > 0 ? Number(split.linked_user_id) : null,
+        friend_id: Number(split?.friend_id || 0) > 0 ? Number(split.friend_id) : null,
+        share: num(split?.share_amount),
+      })),
+    ].filter((participant) => participant.name);
+    const viewerParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === uid)
+      || (ownerUserId === uid ? participants[0] : null)
+      || (() => {
+        const member = normalizeMembers.find((item) => Number(item?.target_user_id || 0) === uid) || null;
+        if (!member) return null;
+        return participants.find((participant) => namesMatch(participant?.name, member?.member_name || member?.name || '')) || null;
+      })();
+    if (!viewerParticipant) return;
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payerName = textKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerParticipant = participants.find((participant) => namesMatch(participant?.name, payerName)) || null;
+    if (!payerParticipant) return;
+
+    participants.forEach((participant) => {
+      if (participant === viewerParticipant) return;
+      let delta = 0;
+      if (splitMode === 'settlement') {
+        if (payerParticipant === viewerParticipant) delta = num(participant.share);
+        else if (payerParticipant === participant) delta = 0 - num(viewerParticipant.share);
+      } else {
+        if (payerParticipant === viewerParticipant) delta = num(participant.share);
+        else if (payerParticipant === participant) delta = 0 - num(viewerParticipant.share);
+      }
+      if (Math.abs(delta) <= 0.0001) return;
+      const balance = ensurePairBalance(participant);
+      balance.amount = Math.round((balance.amount + delta) * 100) / 100;
+    });
+  });
+
+  const pairBalances = [...pairBalanceMap.values()]
+    .filter((item) => Math.abs(num(item?.amount)) > 0.0001)
+    .sort((a, b) => Math.abs(num(b?.amount)) - Math.abs(num(a?.amount)));
+  const memberBalanceMap = new Map();
+  const ensureMemberBalance = (participant) => {
+    const linkedUserId = Number(participant?.linked_user_id || 0);
+    const friendId = Number(participant?.friend_id || 0);
+    const name = String(participant?.name || '').trim();
+    const key = linkedUserId > 0 ? `u:${linkedUserId}` : friendId > 0 ? `f:${friendId}` : `n:${normalizeName(name)}`;
+    if (!memberBalanceMap.has(key)) {
+      memberBalanceMap.set(key, {
+        key,
+        name,
+        linked_user_id: linkedUserId > 0 ? linkedUserId : null,
+        friend_id: friendId > 0 ? friendId : null,
+        paid: 0,
+        share: 0,
+        amount: 0,
+      });
+    }
+    return memberBalanceMap.get(key);
+  };
+  normalizedGroups.forEach((group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = num(group?.total_amount);
+    const splitMode = String(group?.split_mode || '').trim().toLowerCase();
+    const ownerName = String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner';
+    const ownerUserId = Number(group?.user_id || 0);
+    const sumSplit = splits.reduce((sum, split) => sum + num(split?.share_amount), 0);
+    const ownerShare = splitMode === 'settlement' ? (sumSplit || total) : (total - sumSplit);
+    const participants = [
+      { name: ownerName, linked_user_id: ownerUserId > 0 ? ownerUserId : null, friend_id: null, share: num(ownerShare) },
+      ...splits.map((split) => ({
+        name: String(split?.friend_name || '').trim(),
+        linked_user_id: Number(split?.linked_user_id || 0) > 0 ? Number(split.linked_user_id) : null,
+        friend_id: Number(split?.friend_id || 0) > 0 ? Number(split.friend_id) : null,
+        share: num(split?.share_amount),
+      })),
+    ].filter((participant) => participant.name);
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payerName = textKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerParticipant = participants.find((participant) => namesMatch(participant?.name, payerName)) || null;
+    participants.forEach((participant) => {
+      const balance = ensureMemberBalance(participant);
+      balance.share = Math.round((balance.share + num(participant.share)) * 100) / 100;
+      if (payerParticipant && participant === payerParticipant) {
+        balance.paid = Math.round((balance.paid + total) * 100) / 100;
+      }
+    });
+  });
+  const memberBalances = [...memberBalanceMap.values()]
+    .map((item) => ({ ...item, amount: Math.round((num(item.paid) - num(item.share)) * 100) / 100 }))
+    .filter((item) => Math.abs(num(item?.amount)) > 0.0001)
+    .sort((a, b) => Math.abs(num(b?.amount)) - Math.abs(num(a?.amount)));
+
   return {
     ...trip,
     id: Number(trip.id),
@@ -1658,35 +1811,15 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     is_owner: bool(trip.is_owner),
     status: normalizeLiveSplitTripStatus(trip.status),
     show_add_to_expense_option: bool(trip.show_add_to_expense_option),
-    members: (membersResult.rows || []).map((member) => ({
-      ...member,
-      id: Number(member.id),
-      trip_id: Number(member.trip_id),
-      friend_id: member.friend_id ? Number(member.friend_id) : null,
-      target_user_id: member.target_user_id ? Number(member.target_user_id) : null,
-      is_locked: bool(member.is_locked),
-    })),
+    members: normalizeMembers,
     expense_count: Number(stats.expense_count || 0),
     settlement_count: Number(stats.settlement_count || 0),
     total_amount: num(stats.total_amount),
     my_share_amount: num(stats.my_share_amount),
     latest_divide_date: stats.latest_divide_date || null,
-    groups: (groupsResult.rows || []).map((row) => ({
-      ...row,
-      id: Number(row.id),
-      user_id: Number(row.user_id),
-      trip_id: row.trip_id ? Number(row.trip_id) : null,
-      total_amount: num(row.total_amount),
-      owner_added_to_expense: bool(row.owner_added_to_expense),
-      splits: normalizeSplits(row.splits).map((split) => ({
-        ...split,
-        id: Number(split.id),
-        friend_id: split.friend_id ? Number(split.friend_id) : null,
-        linked_user_id: split.linked_user_id ? Number(split.linked_user_id) : null,
-        share_amount: num(split.share_amount),
-        is_paid: bool(split.is_paid),
-      })),
-    })),
+    member_balances: memberBalances,
+    pair_balances: pairBalances,
+    groups: normalizedGroups,
   };
 }
 

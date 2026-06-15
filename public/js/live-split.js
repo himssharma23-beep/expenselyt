@@ -476,6 +476,26 @@
   }
 
   function computeCanonicalTripPairDeltaForRow(row, trip = {}) {
+    const pairBalances = Array.isArray(trip?.pair_balances) ? trip.pair_balances : [];
+    const rowLinkedUserId = Number(row?.linked_user_id || 0);
+    const rowFriendId = Number(row?.friend_id || 0);
+    const directMatch = pairBalances.find((item) => (
+      (rowLinkedUserId > 0 && Number(item?.linked_user_id || 0) === rowLinkedUserId)
+      || (rowFriendId > 0 && Number(item?.friend_id || 0) === rowFriendId)
+    )) || null;
+    if (directMatch) return r2(directMatch.amount);
+    const nameMatch = pairBalances.find((item) => namesMatchLoosely(item?.name, row?.name || '')) || null;
+    if (nameMatch) return r2(nameMatch.amount);
+
+    const memberBalances = Array.isArray(trip?.member_balances) ? trip.member_balances : [];
+    const directMemberMatch = memberBalances.find((item) => (
+      (rowLinkedUserId > 0 && Number(item?.linked_user_id || 0) === rowLinkedUserId)
+      || (rowFriendId > 0 && Number(item?.friend_id || 0) === rowFriendId)
+    )) || null;
+    if (directMemberMatch) return r2(directMemberMatch.amount);
+    const nameMemberMatch = memberBalances.find((item) => namesMatchLoosely(item?.name, row?.name || '')) || null;
+    if (nameMemberMatch) return r2(nameMemberMatch.amount);
+
     const viewerAliases = buildTripPersonAliasesForViewer(trip);
     const rowAliases = buildTripPersonAliasesForRow(row, trip);
     let delta = 0;
