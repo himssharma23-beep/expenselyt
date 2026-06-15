@@ -8986,6 +8986,53 @@ router.post('/admin/users/:id/restore', requireAdmin, async (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+router.post('/admin/users/:id/impersonate', requireAdmin, async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.id || 0);
+    const adminUserId = Number(req.session.userId || 0);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'Valid user id is required.' });
+    }
+    if (targetUserId === adminUserId) {
+      return res.status(400).json({ error: 'You are already logged in as this account.' });
+    }
+
+    const [adminUser, targetUser] = await Promise.all([
+      Promise.resolve(pgDb.findUserById(adminUserId)),
+      Promise.resolve(pgDb.findUserById(targetUserId)),
+    ]);
+
+    if (!adminUser || adminUser.role !== 'admin' || !adminUser.is_active) {
+      return res.status(403).json({ error: 'Admin access required.' });
+    }
+    if (!targetUser || !targetUser.is_active || targetUser.deleted_at) {
+      return res.status(404).json({ error: 'Target user is not available for impersonation.' });
+    }
+
+    const authTag = await Promise.resolve(pgDb.getUserAuthTag(targetUserId));
+    if (!authTag) {
+      return res.status(400).json({ error: 'Target user session state is unavailable.' });
+    }
+
+    req.session.impersonation = {
+      original_admin_user_id: adminUser.id,
+      original_admin_display_name: adminUser.display_name || '',
+      target_user_id: targetUser.id,
+      target_user_display_name: targetUser.display_name || '',
+      started_at: new Date().toISOString(),
+    };
+    req.session.userId = targetUser.id;
+    req.session.displayName = targetUser.display_name;
+    req.session.authTag = authTag;
+    req.session.authTransport = 'web';
+    delete req.session.mobileSessionId;
+    delete req.session.clientPlatform;
+
+    res.json({ success: true, redirect: '/' });
+  }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 router.post('/admin/users/:id/set-password', requireAdmin, async (req, res) => {
   try {
     const { password } = req.body;

@@ -178,6 +178,21 @@ function touchWebSessionState(req) {
   };
 }
 
+function buildImpersonationState(session = {}) {
+  const source = session?.impersonation;
+  const adminUserId = Number(source?.original_admin_user_id || 0);
+  const targetUserId = Number(source?.target_user_id || 0);
+  if (!adminUserId || !targetUserId) return null;
+  return {
+    active: true,
+    admin_user_id: adminUserId,
+    admin_display_name: String(source?.original_admin_display_name || ''),
+    target_user_id: targetUserId,
+    target_display_name: String(source?.target_user_display_name || ''),
+    started_at: source?.started_at || null,
+  };
+}
+
 async function issueAuthToken(req, userId, displayName, authTag) {
   const transport = getAuthTransport(req);
   if (transport === 'mobile') {
@@ -714,7 +729,42 @@ router.get('/api/auth/me', requireAuth, async (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   const user = await pgDb.findUserById(req.session.userId);
   if (!user) return res.status(401).json({ error: 'User not found' });
-  res.json(user);
+  res.json({
+    ...user,
+    impersonation: buildImpersonationState(req.session),
+  });
+});
+
+router.post('/api/auth/impersonation/stop', requireAuth, async (req, res) => {
+  try {
+    const impersonation = buildImpersonationState(req.session);
+    if (!impersonation?.active) {
+      return res.status(400).json({ error: 'No active impersonation session.' });
+    }
+
+    const adminUser = await pgDb.findUserById(impersonation.admin_user_id);
+    if (!adminUser || !adminUser.is_active || adminUser.role !== 'admin') {
+      return res.status(401).json({ error: 'Original admin account is no longer available.' });
+    }
+
+    const authTag = await pgDb.getUserAuthTag(adminUser.id);
+    if (!authTag) {
+      return res.status(401).json({ error: 'Original admin session is no longer valid.' });
+    }
+
+    req.session.userId = adminUser.id;
+    req.session.displayName = adminUser.display_name;
+    req.session.authTag = authTag;
+    req.session.authTransport = 'web';
+    delete req.session.mobileSessionId;
+    delete req.session.clientPlatform;
+    delete req.session.impersonation;
+    touchWebSessionState(req);
+
+    res.json({ success: true, redirect: '/' });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not stop impersonation' });
+  }
 });
 
 router.get('/api/auth/sessions', requireAuth, async (req, res) => {

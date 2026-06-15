@@ -1175,6 +1175,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       _currentUser = user;
       if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
       renderUserBox();
+      renderImpersonationBanner();
     }
     if (access && !access.error) {
       _userRole = access.role || 'user';
@@ -1255,6 +1256,29 @@ function renderUserBox() {
     </div>`;
 }
 
+function renderImpersonationBanner() {
+  const mount = document.getElementById('impersonationBannerMount');
+  if (!mount) return;
+  const state = _currentUser?.impersonation;
+  if (!state?.active) {
+    mount.innerHTML = '';
+    return;
+  }
+  const viewingName = String(_currentUser?.display_name || state.target_display_name || 'this user');
+  const adminName = String(state.admin_display_name || 'admin');
+  mount.innerHTML = `
+    <div class="impersonation-banner" role="status" aria-live="polite">
+      <div class="impersonation-banner-copy">
+        <div class="impersonation-banner-kicker">Admin impersonation active</div>
+        <div class="impersonation-banner-title">Viewing as ${escHtml(viewingName)}</div>
+        <div class="impersonation-banner-text">Changes made here affect this user account. Signed in from admin account ${escHtml(adminName)}.</div>
+      </div>
+      <div class="impersonation-banner-actions">
+        <button class="btn btn-p btn-sm" type="button" onclick="stopImpersonation()">Return to admin</button>
+      </div>
+    </div>`;
+}
+
 async function refreshCurrentUser() {
   const user = await api('/api/auth/me');
   if (user) {
@@ -1262,8 +1286,18 @@ async function refreshCurrentUser() {
     _currentUserId = user.id || null;
     if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
     renderUserBox();
+    renderImpersonationBanner();
   }
   return user;
+}
+
+async function stopImpersonation() {
+  const result = await api('/api/auth/impersonation/stop', { method: 'POST' });
+  if (!result?.success) {
+    toast(result?.error || 'Could not return to the admin account', 'error');
+    return;
+  }
+  window.location.href = result.redirect || '/';
 }
 
 function getAppUpdateDismissKey(version) {
@@ -10724,6 +10758,7 @@ function _renderAdminUserCard(u) {
   const activeBadge = `<span class="admin-user-status" style="color:${statusColor};background:${u.deleted_at ? 'var(--red-l)' : u.is_active ? 'var(--green-l)' : 'var(--border-l)'}">${statusText}</span>`;
   const safeDisplayName = (u.display_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const safeMobile = (u.mobile || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const canImpersonate = !u.deleted_at && !!u.is_active && Number(u.id || 0) !== Number(_currentUserId || 0);
   const auditText = `
     <div class="admin-user-audit">
       <div><span>Created</span><strong>${shortAuditDate(u.created_at)}</strong></div>
@@ -10760,6 +10795,7 @@ function _renderAdminUserCard(u) {
     ${auditText}
     <div class="admin-user-actions">
       <button class="btn btn-s btn-sm" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0},${u.deleted_at ? 1 : 0})">Edit</button>
+      ${canImpersonate ? `<button class="btn btn-p btn-sm" onclick="adminImpersonateUser(${u.id},'${safeDisplayName}')">Impersonate</button>` : ''}
       <button class="btn btn-s btn-sm" onclick="adminGenOtp(${u.id})">OTP</button>
       <button class="btn btn-s btn-sm" onclick="adminResetLink(${u.id})">Reset Link</button>
       ${u.deleted_at
@@ -11016,6 +11052,16 @@ async function adminRestoreUser(id) {
 }
 
 // â”€â”€ Plans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function adminImpersonateUser(id, displayName) {
+  if (!await confirmDialog(`Log in as ${displayName || 'this user'}? You can return to your admin account from the banner after the switch.`)) return;
+  const result = await api(`/api/admin/users/${id}/impersonate`, { method: 'POST' });
+  if (!result?.success) {
+    toast(result?.error || 'Could not impersonate this user', 'error');
+    return;
+  }
+  window.location.href = result.redirect || '/';
+}
+
 async function loadAdminPlans() {
   const data = await api('/api/admin/plans');
   const plans = data?.plans || [];
@@ -17395,6 +17441,7 @@ function renderTrackerToolbar(extraActions = '') {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn ${_trackerViewMode === 'daily' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='daily';_selectedExpenseBucketId=null;renderTrackerGrid()">Daily Trackers</button>
           <button class="btn ${_trackerViewMode === 'bucket' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='bucket';_selectedTrackerId=null;renderTrackerGrid()">Expense Buckets</button>
+          <button class="btn ${_trackerViewMode === 'fd' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='fd';_selectedTrackerId=null;_selectedExpenseBucketId=null;renderTrackerGrid()">Fixed Deposits</button>
           ${extraActions}
         </div>
       </div>`;
@@ -22003,6 +22050,7 @@ async function doHabitImport(trackerId) {
 
 async function renderTrackerGrid() {
   if (_trackerViewMode === 'bucket') return renderExpenseBucketGrid();
+  if (_trackerViewMode === 'fd') return renderFixedDepositsGrid();
   const cards = _trackers.length ? _trackers.map((t) => `
     <div class="cc-tile tracker-tile" data-tracker-id="${t.id}" onclick="openTrackerDetail(${t.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openTrackerDetail(${t.id}); }">
       <div class="cc-tile-header">
