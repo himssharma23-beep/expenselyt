@@ -424,6 +424,42 @@
       .sort((a, b) => Math.abs(n(b?.amount)) - Math.abs(n(a?.amount)));
   }
 
+  function findCanonicalTripMemberBalanceForRow(row, trip = {}) {
+    const events = buildCanonicalTripEventsFromLedger(trip);
+    const balances = buildCanonicalTripMemberBalances(events);
+    const rowNameNorm = normalizePersonName(row?.name || '');
+    const members = Array.isArray(trip?.members) ? trip.members : [];
+    const memberTargetIds = new Set(members.map((member) => Number(member?.target_user_id || 0)).filter((id) => id > 0));
+    const memberFriendIds = new Set(members.map((member) => Number(member?.friend_id || 0)).filter((id) => id > 0));
+    const rowLinkedUserId = Number(row?.linked_user_id || 0);
+    const rowFriendId = Number(row?.friend_id || 0);
+    const ownerUserId = Number(trip?.user_id || 0);
+    const ownerName = normalizePersonName(trip?.owner_name || trip?.owner_username || '');
+
+    if (rowLinkedUserId > 0 && ownerUserId > 0 && rowLinkedUserId === ownerUserId) {
+      return balances.find((item) => namesMatchLoosely(item?.name, trip?.owner_name || trip?.owner_username || '')) || null;
+    }
+    if (rowNameNorm && ownerName && (
+      rowNameNorm === ownerName
+      || (firstNameToken(rowNameNorm) && firstNameToken(rowNameNorm) === firstNameToken(ownerName))
+    )) {
+      return balances.find((item) => namesMatchLoosely(item?.name, trip?.owner_name || trip?.owner_username || '')) || null;
+    }
+    if (rowLinkedUserId > 0 && memberTargetIds.has(rowLinkedUserId)) {
+      const matchedMember = members.find((member) => Number(member?.target_user_id || 0) === rowLinkedUserId) || null;
+      if (matchedMember) {
+        return balances.find((item) => namesMatchLoosely(item?.name, matchedMember?.member_name || matchedMember?.name || '')) || null;
+      }
+    }
+    if (rowFriendId > 0 && memberFriendIds.has(rowFriendId)) {
+      const matchedMember = members.find((member) => Number(member?.friend_id || 0) === rowFriendId) || null;
+      if (matchedMember) {
+        return balances.find((item) => namesMatchLoosely(item?.name, matchedMember?.member_name || matchedMember?.name || '')) || null;
+      }
+    }
+    return balances.find((item) => namesMatchLoosely(item?.name, row?.name || '')) || null;
+  }
+
   function buildCanonicalTripLedgerParticipants(group = {}) {
     const splits = Array.isArray(group?.splits) ? group.splits : [];
     const total = r2(group?.total_amount);
@@ -1842,7 +1878,8 @@
       let expenseCount = Number(trip.expense_count || 0);
       let latestDate = toLocalIsoDate(trip.date, todayLocalIso());
       if (cachedLedger && Array.isArray(cachedLedger.groups)) {
-        delta = r2(cachedLedger.groups.reduce((sum, group) => sum + n(computeTripLedgerDeltaForRow(row, group) || 0), 0));
+        const matchedBalance = findCanonicalTripMemberBalanceForRow(row, cachedLedger);
+        if (matchedBalance) delta = r2(matchedBalance.amount);
         expenseCount = cachedLedger.groups.length;
         latestDate = cachedLedger.latest_divide_date
           ? toLocalIsoDate(cachedLedger.latest_divide_date, latestDate)
