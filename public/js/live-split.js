@@ -424,27 +424,67 @@
       .sort((a, b) => Math.abs(n(b?.amount)) - Math.abs(n(a?.amount)));
   }
 
-  function findCanonicalTripMemberBalanceForRow(row, trip = {}) {
+  function buildTripPersonAliasesForViewer(trip = {}) {
+    const aliases = new Set();
+    const meId = Number(window._currentUser?.id || 0);
     const events = buildCanonicalTripEventsFromLedger(trip);
-    const balances = buildCanonicalTripMemberBalances(events);
-    const rowLinkedUserId = Number(row?.linked_user_id || 0);
-    const rowFriendId = Number(row?.friend_id || 0);
-    const candidateNames = new Set([String(row?.name || '').trim()].filter(Boolean));
-    (Array.isArray(trip?.groups) ? trip.groups : []).forEach((group) => {
-      buildCanonicalTripLedgerParticipants(group).forEach((participant) => {
-        const linkedUserId = Number(participant?.linked_user_id || 0);
-        const friendId = Number(participant?.friend_id || 0);
-        const matches = (rowLinkedUserId > 0 && linkedUserId > 0 && rowLinkedUserId === linkedUserId)
-          || (rowFriendId > 0 && friendId > 0 && rowFriendId === friendId)
-          || namesMatchLoosely(participant?.name, row?.name || '');
-        if (matches) candidateNames.add(String(participant?.name || '').trim());
+    const firstGroup = Array.isArray(trip?.groups) && trip.groups.length ? trip.groups[0] : null;
+    const ownerName = String(firstGroup?.owner_name || firstGroup?.owner_username || '').trim();
+    if (meId > 0 && Number(trip?.user_id || 0) === meId && ownerName) aliases.add(ownerName);
+    (Array.isArray(trip?.members) ? trip.members : []).forEach((member) => {
+      if (meId > 0 && Number(member?.target_user_id || 0) === meId) {
+        const name = String(member?.member_name || member?.name || '').trim();
+        if (name && !isYouLabel(name)) aliases.add(name);
+      }
+    });
+    currentUserNameKeys().forEach((key) => {
+      events.forEach((event) => {
+        (event.participants || []).forEach((participant) => {
+          if (textKey(participant?.name) === key) aliases.add(String(participant?.name || '').trim());
+        });
       });
     });
-    for (const candidateName of candidateNames) {
-      const matched = balances.find((item) => namesMatchLoosely(item?.name, candidateName));
-      if (matched) return matched;
-    }
-    return null;
+    return aliases;
+  }
+
+  function buildTripPersonAliasesForRow(row, trip = {}) {
+    const rowLinkedUserId = Number(row?.linked_user_id || 0);
+    const rowFriendId = Number(row?.friend_id || 0);
+    const aliases = new Set([String(row?.name || '').trim()].filter(Boolean));
+    const firstGroup = Array.isArray(trip?.groups) && trip.groups.length ? trip.groups[0] : null;
+    const ownerName = String(firstGroup?.owner_name || firstGroup?.owner_username || '').trim();
+    if (rowLinkedUserId > 0 && Number(trip?.user_id || 0) > 0 && rowLinkedUserId === Number(trip.user_id) && ownerName) aliases.add(ownerName);
+    (Array.isArray(trip?.members) ? trip.members : []).forEach((member) => {
+      const matches = (rowLinkedUserId > 0 && Number(member?.target_user_id || 0) > 0 && rowLinkedUserId === Number(member.target_user_id))
+        || (rowFriendId > 0 && Number(member?.friend_id || 0) > 0 && rowFriendId === Number(member.friend_id))
+        || namesMatchLoosely(member?.member_name || member?.name || '', row?.name || '');
+      if (matches) {
+        const name = String(member?.member_name || member?.name || '').trim();
+        if (name && !isYouLabel(name)) aliases.add(name);
+      }
+    });
+    return aliases;
+  }
+
+  function computeCanonicalTripPairDeltaForRow(row, trip = {}) {
+    const events = buildCanonicalTripEventsFromLedger(trip);
+    const viewerAliases = buildTripPersonAliasesForViewer(trip);
+    const rowAliases = buildTripPersonAliasesForRow(row, trip);
+    let delta = 0;
+    events.forEach((event) => {
+      const participants = Array.isArray(event?.participants) ? event.participants : [];
+      const viewerParticipant = participants.find((participant) => (
+        [...viewerAliases].some((alias) => namesMatchLoosely(participant?.name, alias))
+      )) || null;
+      const rowParticipant = participants.find((participant) => (
+        [...rowAliases].some((alias) => namesMatchLoosely(participant?.name, alias))
+      )) || null;
+      if (!viewerParticipant || !rowParticipant) return;
+      if (namesMatchLoosely(viewerParticipant?.name, rowParticipant?.name)) return;
+      if (viewerParticipant.paid) delta = r2(delta + n(rowParticipant.share));
+      else if (rowParticipant.paid) delta = r2(delta - n(viewerParticipant.share));
+    });
+    return delta;
   }
 
   function buildCanonicalTripLedgerParticipants(group = {}) {
@@ -1865,8 +1905,7 @@
       let expenseCount = Number(trip.expense_count || 0);
       let latestDate = toLocalIsoDate(trip.date, todayLocalIso());
       if (cachedLedger && Array.isArray(cachedLedger.groups)) {
-        const matchedBalance = findCanonicalTripMemberBalanceForRow(row, cachedLedger);
-        if (matchedBalance) delta = r2(0 - matchedBalance.amount);
+        delta = computeCanonicalTripPairDeltaForRow(row, cachedLedger);
         expenseCount = cachedLedger.groups.length;
         latestDate = cachedLedger.latest_divide_date
           ? toLocalIsoDate(cachedLedger.latest_divide_date, latestDate)
