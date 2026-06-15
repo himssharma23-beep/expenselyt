@@ -1684,6 +1684,37 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
       is_paid: bool(split.is_paid),
     })),
   }));
+  const buildTripLedgerParticipants = (group) => {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = num(group?.total_amount);
+    const splitMode = String(group?.split_mode || '').trim().toLowerCase();
+    const ownerName = String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner';
+    const ownerUserId = Number(group?.user_id || 0);
+    const sumSplit = splits.reduce((sum, split) => sum + num(split?.share_amount), 0);
+    const ownerShare = splitMode === 'settlement' ? (sumSplit || total) : (total - sumSplit);
+    const participants = [
+      { name: ownerName, linked_user_id: ownerUserId > 0 ? ownerUserId : null, friend_id: null, share: num(ownerShare) },
+      ...splits.map((split) => ({
+        name: String(split?.friend_name || '').trim(),
+        linked_user_id: Number(split?.linked_user_id || 0) > 0 ? Number(split.linked_user_id) : null,
+        friend_id: Number(split?.friend_id || 0) > 0 ? Number(split.friend_id) : null,
+        share: num(split?.share_amount),
+      })),
+    ].filter((participant) => participant.name);
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payerName = textKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerExists = participants.some((participant) => namesMatch(participant?.name, payerName));
+    if (!payerExists && payerName) {
+      const payerMember = normalizeMembers.find((member) => namesMatch(member?.member_name || member?.name || '', payerName)) || null;
+      participants.push({
+        name: payerName,
+        linked_user_id: Number(payerMember?.target_user_id || 0) > 0 ? Number(payerMember.target_user_id) : null,
+        friend_id: Number(payerMember?.friend_id || 0) > 0 ? Number(payerMember.friend_id) : null,
+        share: 0,
+      });
+    }
+    return participants;
+  };
 
   const pairBalanceMap = new Map();
   const ensurePairBalance = (participant) => {
@@ -1704,22 +1735,9 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
   };
 
   normalizedGroups.forEach((group) => {
-    const splits = Array.isArray(group?.splits) ? group.splits : [];
-    const total = num(group?.total_amount);
     const splitMode = String(group?.split_mode || '').trim().toLowerCase();
-    const ownerName = String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner';
     const ownerUserId = Number(group?.user_id || 0);
-    const sumSplit = splits.reduce((sum, split) => sum + num(split?.share_amount), 0);
-    const ownerShare = splitMode === 'settlement' ? (sumSplit || total) : (total - sumSplit);
-    const participants = [
-      { name: ownerName, linked_user_id: ownerUserId > 0 ? ownerUserId : null, friend_id: null, share: num(ownerShare) },
-      ...splits.map((split) => ({
-        name: String(split?.friend_name || '').trim(),
-        linked_user_id: Number(split?.linked_user_id || 0) > 0 ? Number(split.linked_user_id) : null,
-        friend_id: Number(split?.friend_id || 0) > 0 ? Number(split.friend_id) : null,
-        share: num(split?.share_amount),
-      })),
-    ].filter((participant) => participant.name);
+    const participants = buildTripLedgerParticipants(group);
     const viewerParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === uid)
       || (ownerUserId === uid ? participants[0] : null)
       || (() => {
@@ -1729,7 +1747,7 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
       })();
     if (!viewerParticipant) return;
     const payerRaw = String(group?.paid_by || '').trim();
-    const payerName = textKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerName = textKey(payerRaw) === 'you' ? String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner' : payerRaw;
     const payerParticipant = participants.find((participant) => namesMatch(participant?.name, payerName)) || null;
     if (!payerParticipant) return;
 
@@ -1772,24 +1790,10 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     return memberBalanceMap.get(key);
   };
   normalizedGroups.forEach((group) => {
-    const splits = Array.isArray(group?.splits) ? group.splits : [];
     const total = num(group?.total_amount);
-    const splitMode = String(group?.split_mode || '').trim().toLowerCase();
-    const ownerName = String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner';
-    const ownerUserId = Number(group?.user_id || 0);
-    const sumSplit = splits.reduce((sum, split) => sum + num(split?.share_amount), 0);
-    const ownerShare = splitMode === 'settlement' ? (sumSplit || total) : (total - sumSplit);
-    const participants = [
-      { name: ownerName, linked_user_id: ownerUserId > 0 ? ownerUserId : null, friend_id: null, share: num(ownerShare) },
-      ...splits.map((split) => ({
-        name: String(split?.friend_name || '').trim(),
-        linked_user_id: Number(split?.linked_user_id || 0) > 0 ? Number(split.linked_user_id) : null,
-        friend_id: Number(split?.friend_id || 0) > 0 ? Number(split.friend_id) : null,
-        share: num(split?.share_amount),
-      })),
-    ].filter((participant) => participant.name);
+    const participants = buildTripLedgerParticipants(group);
     const payerRaw = String(group?.paid_by || '').trim();
-    const payerName = textKey(payerRaw) === 'you' ? ownerName : payerRaw;
+    const payerName = textKey(payerRaw) === 'you' ? String(group?.owner_name || group?.owner_username || 'Owner').trim() || 'Owner' : payerRaw;
     const payerParticipant = participants.find((participant) => namesMatch(participant?.name, payerName)) || null;
     participants.forEach((participant) => {
       const balance = ensureMemberBalance(participant);
@@ -2999,12 +3003,30 @@ async function assertLiveSplitTripParticipants(client, tripId, normalizedSplits 
 
 async function syncSingleLiveSplitGroupShares(client, ownerUserId, groupId, friendIds = []) {
   const participantRows = await client.query(
-    `SELECT DISTINCT s.friend_id, f.linked_user_id
-     FROM live_split_splits s
-     JOIN live_split_friends f ON f.id = s.friend_id
-     WHERE s.group_id = $1
-       AND f.user_id = $2
-       AND f.deleted_at IS NULL`,
+    `SELECT DISTINCT relation.friend_id, relation.linked_user_id
+     FROM (
+       SELECT s.friend_id, f.linked_user_id
+       FROM live_split_splits s
+       JOIN live_split_friends f ON f.id = s.friend_id
+       WHERE s.group_id = $1
+         AND f.user_id = $2
+         AND f.deleted_at IS NULL
+       UNION
+       SELECT f.id AS friend_id, f.linked_user_id
+       FROM live_split_groups g
+       JOIN live_split_friends f
+         ON f.user_id = g.user_id
+        AND f.deleted_at IS NULL
+        AND f.linked_user_id IS NOT NULL
+        AND f.linked_user_id <> g.user_id
+       WHERE g.id = $1
+         AND g.user_id = $2
+         AND (
+           lower(trim(f.name)) = lower(trim(COALESCE(g.paid_by, '')))
+           OR split_part(regexp_replace(lower(trim(f.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+              = split_part(regexp_replace(lower(trim(COALESCE(g.paid_by, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+         )
+     ) relation`,
     [groupId, ownerUserId]
   );
   const participantMap = new Map();
@@ -3256,12 +3278,30 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
     const groupIds = groups.map((row) => Number(row.id));
 
     const participantsR = await client.query(
-      `SELECT DISTINCT s.group_id, s.friend_id, f.linked_user_id
-       FROM live_split_splits s
-       JOIN live_split_friends f ON f.id = s.friend_id
-       WHERE s.group_id = ANY($1::bigint[])
-         AND f.user_id = $2
-         AND f.deleted_at IS NULL`,
+      `SELECT DISTINCT relation.group_id, relation.friend_id, relation.linked_user_id
+       FROM (
+         SELECT s.group_id, s.friend_id, f.linked_user_id
+         FROM live_split_splits s
+         JOIN live_split_friends f ON f.id = s.friend_id
+         WHERE s.group_id = ANY($1::bigint[])
+           AND f.user_id = $2
+           AND f.deleted_at IS NULL
+         UNION
+         SELECT g.id AS group_id, f.id AS friend_id, f.linked_user_id
+         FROM live_split_groups g
+         JOIN live_split_friends f
+           ON f.user_id = g.user_id
+          AND f.deleted_at IS NULL
+          AND f.linked_user_id IS NOT NULL
+          AND f.linked_user_id <> g.user_id
+         WHERE g.id = ANY($1::bigint[])
+           AND g.user_id = $2
+           AND (
+             lower(trim(f.name)) = lower(trim(COALESCE(g.paid_by, '')))
+             OR split_part(regexp_replace(lower(trim(f.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+                = split_part(regexp_replace(lower(trim(COALESCE(g.paid_by, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+           )
+       ) relation`,
       [groupIds, userId]
     );
     const participantMap = new Map();
@@ -3320,23 +3360,46 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
 
 async function getReceivedLiveSplitShares(userId) {
   const ownerRowsR = await query(
-    `SELECT DISTINCT g.user_id
-     FROM live_split_groups g
-     JOIN live_split_splits s ON s.group_id = g.id
-     LEFT JOIN live_split_friends f
-       ON f.id = s.friend_id
-      AND f.user_id = g.user_id
-     LEFT JOIN live_split_friends f2
-       ON f2.user_id = g.user_id
-      AND f2.deleted_at IS NULL
-      AND f2.linked_user_id = $1::bigint
-      AND (
-        lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
-        OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
-           = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
-      )
-     WHERE COALESCE(NULLIF(f.linked_user_id, g.user_id), 0) = $1::bigint
-        OR f2.id IS NOT NULL`,
+    `WITH share_candidates AS (
+       SELECT
+         g.id AS group_id,
+         g.user_id,
+         COALESCE(f2.id, f.id, s.friend_id) AS friend_id,
+         COALESCE(NULLIF(f.linked_user_id, g.user_id), NULLIF(f2.linked_user_id, g.user_id), 0) AS linked_user_id
+       FROM live_split_groups g
+       JOIN live_split_splits s ON s.group_id = g.id
+       LEFT JOIN live_split_friends f
+         ON f.id = s.friend_id
+        AND f.user_id = g.user_id
+        AND f.deleted_at IS NULL
+       LEFT JOIN live_split_friends f2
+         ON f2.user_id = g.user_id
+        AND f2.deleted_at IS NULL
+        AND f2.linked_user_id = $1::bigint
+        AND (
+          lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
+          OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+             = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+        )
+       UNION
+       SELECT
+         g.id AS group_id,
+         g.user_id,
+         f.id AS friend_id,
+         COALESCE(NULLIF(f.linked_user_id, g.user_id), 0) AS linked_user_id
+       FROM live_split_groups g
+       JOIN live_split_friends f
+         ON f.user_id = g.user_id
+        AND f.deleted_at IS NULL
+        AND f.linked_user_id = $1::bigint
+       WHERE
+         lower(trim(f.name)) = lower(trim(COALESCE(g.paid_by, '')))
+         OR split_part(regexp_replace(lower(trim(f.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+            = split_part(regexp_replace(lower(trim(COALESCE(g.paid_by, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+     )
+     SELECT DISTINCT user_id
+     FROM share_candidates
+     WHERE linked_user_id = $1::bigint`,
     [userId]
   );
   for (const row of (ownerRowsR.rows || [])) {
@@ -3346,34 +3409,53 @@ async function getReceivedLiveSplitShares(userId) {
 
   const shareHydrationSql = `INSERT INTO live_split_group_shares (group_id, owner_user_id, friend_id, target_user_id, shared_by_user_id)
      SELECT DISTINCT
-       g.id,
-       g.user_id,
-       COALESCE(f2.id, f.id, s.friend_id) AS friend_id,
+       candidate.group_id,
+       candidate.owner_user_id,
+       candidate.friend_id,
        $1::bigint AS target_user_id,
-       g.user_id AS shared_by_user_id
-     FROM live_split_groups g
-     JOIN live_split_splits s ON s.group_id = g.id
-     LEFT JOIN live_split_friends f
-       ON f.id = s.friend_id
-      AND f.user_id = g.user_id
-      AND f.deleted_at IS NULL
-     LEFT JOIN live_split_friends f2
-       ON f2.user_id = g.user_id
-      AND f2.deleted_at IS NULL
-      AND f2.linked_user_id = $1::bigint
-      AND (
-        lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
-        OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
-           = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
-      )
+       candidate.owner_user_id AS shared_by_user_id
+     FROM (
+       SELECT
+         g.id AS group_id,
+         g.user_id AS owner_user_id,
+         COALESCE(f2.id, f.id, s.friend_id) AS friend_id,
+         COALESCE(NULLIF(f.linked_user_id, g.user_id), NULLIF(f2.linked_user_id, g.user_id), 0) AS linked_user_id
+       FROM live_split_groups g
+       JOIN live_split_splits s ON s.group_id = g.id
+       LEFT JOIN live_split_friends f
+         ON f.id = s.friend_id
+        AND f.user_id = g.user_id
+        AND f.deleted_at IS NULL
+       LEFT JOIN live_split_friends f2
+         ON f2.user_id = g.user_id
+        AND f2.deleted_at IS NULL
+        AND f2.linked_user_id = $1::bigint
+        AND (
+          lower(trim(f2.name)) = lower(trim(COALESCE(s.friend_name, '')))
+          OR split_part(regexp_replace(lower(trim(f2.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+             = split_part(regexp_replace(lower(trim(COALESCE(s.friend_name, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+        )
+       UNION
+       SELECT
+         g.id AS group_id,
+         g.user_id AS owner_user_id,
+         f.id AS friend_id,
+         COALESCE(NULLIF(f.linked_user_id, g.user_id), 0) AS linked_user_id
+       FROM live_split_groups g
+       JOIN live_split_friends f
+         ON f.user_id = g.user_id
+        AND f.deleted_at IS NULL
+        AND f.linked_user_id = $1::bigint
+       WHERE
+         lower(trim(f.name)) = lower(trim(COALESCE(g.paid_by, '')))
+         OR split_part(regexp_replace(lower(trim(f.name)), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+            = split_part(regexp_replace(lower(trim(COALESCE(g.paid_by, ''))), '[^a-z0-9 ]', ' ', 'g'), ' ', 1)
+     ) candidate
      LEFT JOIN live_split_group_shares gs
-       ON gs.group_id = g.id
+       ON gs.group_id = candidate.group_id
       AND gs.target_user_id = $1::bigint
      WHERE gs.id IS NULL
-       AND (
-         COALESCE(NULLIF(f.linked_user_id, g.user_id), 0) = $1::bigint
-         OR f2.id IS NOT NULL
-       )
+       AND candidate.linked_user_id = $1::bigint
      ON CONFLICT (group_id, target_user_id)
      DO UPDATE SET friend_id = EXCLUDED.friend_id,
                    shared_by_user_id = EXCLUDED.shared_by_user_id,
@@ -3412,6 +3494,7 @@ async function getReceivedLiveSplitShares(userId) {
     ...row,
     owner_user_id: Number(row.owner_user_id),
     friend_id: Number(row.friend_id),
+    friend_linked_user_id: row.friend_linked_user_id ? Number(row.friend_linked_user_id) : null,
     target_user_id: Number(row.target_user_id),
     trip_id: row.trip_id ? Number(row.trip_id) : null,
     total_amount: num(row.total_amount),
@@ -3444,8 +3527,9 @@ async function getReceivedLiveSplitShares(userId) {
          share.friend_id,
          share.target_user_id,
          share.added_to_expense,
-         fs.friend_name,
-         fs.share_amount AS friend_share_amount,
+         COALESCE(fs.friend_name, share_friend.name) AS friend_name,
+         COALESCE(fs.share_amount, 0) AS friend_share_amount,
+         NULLIF(share_friend.linked_user_id, g.user_id) AS friend_linked_user_id,
          COALESCE(
            json_agg(
              json_build_object(
@@ -3493,12 +3577,14 @@ async function getReceivedLiveSplitShares(userId) {
        LEFT JOIN live_split_splits fs
          ON fs.group_id = g.id
         AND fs.friend_id = share.friend_id
+       LEFT JOIN live_split_friends share_friend
+         ON share_friend.id = share.friend_id
        LEFT JOIN live_split_splits s ON s.group_id = g.id
        LEFT JOIN live_split_friends lf ON lf.id = s.friend_id
        WHERE share.target_user_id = $1
          AND share.owner_hidden_at IS NULL
          AND share.target_hidden_at IS NULL
-       GROUP BY g.id, owner.id, owner.display_name, share.friend_id, share.target_user_id, fs.friend_name, fs.share_amount
+       GROUP BY g.id, owner.id, owner.display_name, share.friend_id, share.target_user_id, share.added_to_expense, fs.friend_name, fs.share_amount, share_friend.name, share_friend.linked_user_id
        ORDER BY g.divide_date DESC, g.id DESC`,
       [userId]
     );
@@ -3521,8 +3607,9 @@ async function getReceivedLiveSplitShares(userId) {
          share.friend_id,
          share.target_user_id,
          share.added_to_expense,
-         fs.friend_name,
-         fs.share_amount AS friend_share_amount,
+         COALESCE(fs.friend_name, share_friend.name) AS friend_name,
+         COALESCE(fs.share_amount, 0) AS friend_share_amount,
+         NULLIF(share_friend.linked_user_id, g.user_id) AS friend_linked_user_id,
          '[]'::json AS splits
        FROM live_split_group_shares share
        JOIN live_split_groups g ON g.id = share.group_id
@@ -3530,6 +3617,8 @@ async function getReceivedLiveSplitShares(userId) {
        LEFT JOIN live_split_splits fs
          ON fs.group_id = g.id
         AND fs.friend_id = share.friend_id
+       LEFT JOIN live_split_friends share_friend
+         ON share_friend.id = share.friend_id
        WHERE share.target_user_id = $1
          AND share.owner_hidden_at IS NULL
          AND share.target_hidden_at IS NULL

@@ -292,6 +292,9 @@
     const ownerUserId = Number(group?.owner_user_id || 0);
     const sumSplit = r2(splits.reduce((sum, split) => sum + n(split.share_amount), 0));
     const ownerShare = r2(total - sumSplit);
+    const payerRaw = String(group?.paid_by || '').trim();
+    const payerName = isYouLabel(payerRaw) ? ownerName : payerRaw;
+    const payerNorm = normalizePersonName(payerName);
     const participants = [
       {
         key: `owner:${ownerUserId || textKey(ownerName)}`,
@@ -308,12 +311,37 @@
         friend_id: Number(split?.friend_id || 0) || null,
       })),
     ].filter((participant) => participant.name);
+    const sharedFriendName = String(group?.friend_name || '').trim();
+    const sharedFriendLinkedUserId = Number(group?.friend_linked_user_id || group?.target_user_id || 0);
+    const sharedFriendId = Number(group?.friend_id || 0);
+    const sharedFriendNorm = normalizePersonName(sharedFriendName);
+    const rawFriendShare = r2(group?.friend_share_amount);
+    let sharedFriendShare = rawFriendShare;
+    if (!splits.length && Math.abs(sharedFriendShare) < 0.005 && sharedFriendNorm) {
+      const friendIsPayer = !!payerNorm && (
+        sharedFriendNorm === payerNorm
+        || (firstNameToken(sharedFriendNorm) && firstNameToken(sharedFriendNorm) === firstNameToken(payerNorm))
+      );
+      sharedFriendShare = friendIsPayer ? 0 : ownerShare;
+    }
+    const hasSharedFriendParticipant = participants.some((participant) => (
+      (sharedFriendLinkedUserId > 0 && Number(participant?.linked_user_id || 0) === sharedFriendLinkedUserId)
+      || (sharedFriendId > 0 && Number(participant?.friend_id || 0) === sharedFriendId)
+      || (sharedFriendNorm && normalizePersonName(participant?.name || '') === sharedFriendNorm)
+    ));
+    const isPayerOnlySharedGroup = !splits.length && (sharedFriendName || sharedFriendLinkedUserId > 0 || sharedFriendId > 0);
+    if (!hasSharedFriendParticipant && (sharedFriendName || sharedFriendLinkedUserId > 0 || sharedFriendId > 0)) {
+      participants.push({
+        key: `shared:${sharedFriendLinkedUserId || sharedFriendId || textKey(sharedFriendName)}`,
+        name: sharedFriendName || 'You',
+        share: sharedFriendShare,
+        linked_user_id: sharedFriendLinkedUserId > 0 ? sharedFriendLinkedUserId : null,
+        friend_id: sharedFriendId > 0 ? sharedFriendId : null,
+      });
+    }
     if (!participants.length) return null;
     const selfParticipant = findSharedGroupSelfParticipant(participants, group);
     if (!selfParticipant) return null;
-    const payerRaw = String(group?.paid_by || '').trim();
-    const payerName = isYouLabel(payerRaw) ? ownerName : payerRaw;
-    const payerNorm = normalizePersonName(payerName);
     const payerParticipant = participants.find((participant) => {
       const nameNorm = normalizePersonName(participant?.name || '');
       if (!nameNorm || !payerNorm) return false;
@@ -332,6 +360,7 @@
       payerParticipant,
       selfShare: r2(selfParticipant.share),
       selfIsPayer: !!(payerParticipant && payerParticipant.key === selfParticipant.key),
+      isPayerOnlySharedGroup,
     };
   }
 
@@ -487,15 +516,6 @@
     const nameMatch = pairBalances.find((item) => namesMatchLoosely(item?.name, row?.name || '')) || null;
     if (nameMatch) return r2(nameMatch.amount);
 
-    const memberBalances = Array.isArray(trip?.member_balances) ? trip.member_balances : [];
-    const directMemberMatch = memberBalances.find((item) => (
-      (rowLinkedUserId > 0 && Number(item?.linked_user_id || 0) === rowLinkedUserId)
-      || (rowFriendId > 0 && Number(item?.friend_id || 0) === rowFriendId)
-    )) || null;
-    if (directMemberMatch) return r2(directMemberMatch.amount);
-    const nameMemberMatch = memberBalances.find((item) => namesMatchLoosely(item?.name, row?.name || '')) || null;
-    if (nameMemberMatch) return r2(nameMemberMatch.amount);
-
     const viewerAliases = buildTripPersonAliasesForViewer(trip);
     const rowAliases = buildTripPersonAliasesForRow(row, trip);
     let delta = 0;
@@ -539,7 +559,7 @@
     const ownerShare = String(group?.split_mode || '').trim().toLowerCase() === 'settlement'
       ? (ownerShareBase || total)
       : r2(total - ownerShareBase);
-    return [
+    const participants = [
       {
         key: `owner:${ownerUserId || textKey(ownerName)}`,
         name: ownerName,
@@ -555,6 +575,21 @@
         friend_id: Number(split?.friend_id || 0) || null,
       })),
     ].filter((participant) => participant.name);
+    const payerName = canonicalTripPayerName(group);
+    const payerExists = participants.some((participant) => namesMatchLoosely(participant?.name, payerName));
+    if (!payerExists && payerName) {
+      const payerMember = (Array.isArray(state.liveTrips) ? state.liveTrips : [])
+        .find((trip) => Number(trip?.id || 0) === Number(group?.trip_id || 0))
+        ?.members?.find((member) => namesMatchLoosely(member?.member_name || member?.name || '', payerName)) || null;
+      participants.push({
+        key: `payer:${textKey(payerName)}`,
+        name: payerName,
+        share: 0,
+        linked_user_id: Number(payerMember?.target_user_id || 0) || null,
+        friend_id: Number(payerMember?.friend_id || 0) || null,
+      });
+    }
+    return participants;
   }
 
   function findTripLedgerViewerParticipant(participants = [], group = {}) {
@@ -854,7 +889,7 @@
     (sharedGroups || []).forEach((group) => {
       const context = resolveSharedGroupContext(group);
       if (!context) return;
-      const { groupMode, participants, selfParticipant, payerParticipant, selfShare, selfIsPayer } = context;
+      const { groupMode, participants, selfParticipant, payerParticipant, selfShare, selfIsPayer, isPayerOnlySharedGroup, ownerKey, total } = context;
       const meId = Number(window._currentUser?.id || 0);
 
       participants.forEach((participant) => {
@@ -889,6 +924,12 @@
             delta = selfShare;
           } else if (payerParticipant && payerParticipant.key === participant.key && selfShare > 0) {
             delta = r2(0 - selfShare);
+          }
+        } else if (isPayerOnlySharedGroup) {
+          if (selfIsPayer && participant.key === ownerKey) {
+            delta = total;
+          } else if (!selfIsPayer && payerParticipant && payerParticipant.key === participant.key) {
+            delta = r2(0 - total);
           }
         } else if (selfIsPayer) {
           delta = r2(participant.share);
@@ -1855,7 +1896,7 @@
     (state.sharedGroups || []).forEach((group) => {
       const context = resolveSharedGroupContext(group);
       if (!context) return;
-      const { total, groupMode, participants, selfParticipant, payerName, payerParticipant, selfShare, selfIsPayer, ownerKey, ownerName, ownerUserId } = context;
+      const { total, groupMode, participants, selfParticipant, payerName, payerParticipant, selfShare, selfIsPayer, ownerKey, ownerName, ownerUserId, isPayerOnlySharedGroup } = context;
       const rowNameNorm = normalizePersonName(rowName);
       const ownerNameNorm = normalizePersonName(ownerName || '');
       const ownerParticipant = participants.find((participant) => (
@@ -1888,6 +1929,12 @@
           delta = selfShare;
         } else if (payerParticipant && payerParticipant.key === rowParticipant.key && selfShare > 0) {
           delta = r2(0 - selfShare);
+        }
+      } else if (isPayerOnlySharedGroup) {
+        if (selfIsPayer && ownerParticipant && rowParticipant.key === ownerParticipant.key) {
+          delta = total;
+        } else if (!selfIsPayer && payerParticipant && payerParticipant.key === rowParticipant.key) {
+          delta = r2(0 - total);
         }
       } else if (selfIsPayer) {
         delta = r2(rowParticipant.share);
