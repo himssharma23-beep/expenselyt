@@ -424,6 +424,97 @@
       .sort((a, b) => Math.abs(n(b?.amount)) - Math.abs(n(a?.amount)));
   }
 
+  function buildCanonicalTripLedgerParticipants(group = {}) {
+    const splits = Array.isArray(group?.splits) ? group.splits : [];
+    const total = r2(group?.total_amount);
+    const ownerName = canonicalLiveSplitName(group?.owner_name || group?.owner_username || 'Owner', 'Owner');
+    const ownerUserId = Number(group?.owner_user_id || group?.user_id || 0);
+    const ownerShareBase = r2(splits.reduce((sum, split) => sum + n(split?.share_amount), 0));
+    const ownerShare = String(group?.split_mode || '').trim().toLowerCase() === 'settlement'
+      ? (ownerShareBase || total)
+      : r2(total - ownerShareBase);
+    return [
+      {
+        key: `owner:${ownerUserId || textKey(ownerName)}`,
+        name: ownerName,
+        share: ownerShare,
+        linked_user_id: ownerUserId > 0 ? ownerUserId : null,
+        friend_id: null,
+      },
+      ...splits.map((split, index) => ({
+        key: `split:${Number(split?.id || 0) || index + 1}`,
+        name: canonicalLiveSplitName(split?.friend_name),
+        share: r2(split?.share_amount),
+        linked_user_id: Number(split?.linked_user_id || 0) || null,
+        friend_id: Number(split?.friend_id || 0) || null,
+      })),
+    ].filter((participant) => participant.name);
+  }
+
+  function findTripLedgerViewerParticipant(participants = [], group = {}) {
+    const meId = Number(window._currentUser?.id || 0);
+    const ownerUserId = Number(group?.owner_user_id || group?.user_id || 0);
+    if (meId > 0) {
+      const direct = participants.find((participant) => Number(participant?.linked_user_id || 0) === meId);
+      if (direct) return direct;
+      if (ownerUserId > 0 && ownerUserId === meId) {
+        const ownerParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === ownerUserId);
+        if (ownerParticipant) return ownerParticipant;
+      }
+    }
+    const viewerKeys = currentUserNameKeys();
+    return participants.find((participant) => viewerKeys.includes(textKey(participant?.name))) || null;
+  }
+
+  function findTripLedgerRowParticipant(row, participants = [], group = {}) {
+    const rowNameNorm = normalizePersonName(row?.name || '');
+    const rowFriendId = Number(row?.friend_id || 0);
+    const rowLinkedUserId = Number(row?.linked_user_id || 0);
+    const ownerUserId = Number(group?.owner_user_id || group?.user_id || 0);
+    const ownerNameNorm = normalizePersonName(group?.owner_name || group?.owner_username || '');
+    const ownerParticipant = participants.find((participant) => Number(participant?.linked_user_id || 0) === ownerUserId) || null;
+    const rowMatchesOwner = !!ownerParticipant && (
+      (rowLinkedUserId > 0 && ownerUserId > 0 && rowLinkedUserId === ownerUserId)
+      || (rowNameNorm && ownerNameNorm && (
+        rowNameNorm === ownerNameNorm
+        || (firstNameToken(rowNameNorm) && firstNameToken(rowNameNorm) === firstNameToken(ownerNameNorm))
+      ))
+    );
+    if (rowMatchesOwner) return ownerParticipant;
+    return participants.find((participant) => {
+      const participantNameNorm = normalizePersonName(participant?.name || '');
+      const matchesByName = participantNameNorm && rowNameNorm && (
+        participantNameNorm === rowNameNorm
+        || (firstNameToken(participantNameNorm) && firstNameToken(participantNameNorm) === firstNameToken(rowNameNorm))
+      );
+      return matchesByName
+        || (rowFriendId > 0 && Number(participant?.friend_id || 0) > 0 && rowFriendId === Number(participant.friend_id))
+        || (rowLinkedUserId > 0 && Number(participant?.linked_user_id || 0) > 0 && rowLinkedUserId === Number(participant.linked_user_id));
+    }) || null;
+  }
+
+  function computeTripLedgerDeltaForRow(row, group = {}) {
+    const participants = buildCanonicalTripLedgerParticipants(group);
+    if (!participants.length) return null;
+    const selfParticipant = findTripLedgerViewerParticipant(participants, group);
+    if (!selfParticipant) return null;
+    const rowParticipant = findTripLedgerRowParticipant(row, participants, group);
+    if (!rowParticipant || rowParticipant.key === selfParticipant.key) return null;
+    const groupMode = String(group?.split_mode || '').trim().toLowerCase();
+    const selfShare = r2(selfParticipant.share);
+    const payerName = canonicalTripPayerName(group);
+    const payerParticipant = participants.find((participant) => namesMatchLoosely(participant?.name, payerName)) || null;
+    const selfIsPayer = !!(payerParticipant && payerParticipant.key === selfParticipant.key);
+    if (groupMode === 'settlement') {
+      if (selfIsPayer && selfShare > 0) return selfShare;
+      if (payerParticipant && payerParticipant.key === rowParticipant.key && selfShare > 0) return r2(0 - selfShare);
+      return 0;
+    }
+    if (selfIsPayer) return r2(rowParticipant.share);
+    if (payerParticipant && payerParticipant.key === rowParticipant.key && selfShare > 0) return r2(0 - selfShare);
+    return 0;
+  }
+
   async function fetchTripLedger(tripId, force = false) {
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return null;
@@ -1746,18 +1837,32 @@
     });
     const tripSummaryEvents = [...tripBuckets.values()].map((trip) => {
       const tripMeta = (state.liveTrips || []).find((item) => Number(item.id) === Number(trip.trip_id));
+      const cachedLedger = state.tripLedgerCache?.[Number(trip.trip_id)] || null;
+      let delta = r2(trip.delta);
+      let expenseCount = Number(trip.expense_count || 0);
+      let latestDate = toLocalIsoDate(trip.date, todayLocalIso());
+      if (cachedLedger && Array.isArray(cachedLedger.groups)) {
+        delta = r2(cachedLedger.groups.reduce((sum, group) => sum + n(computeTripLedgerDeltaForRow(row, group) || 0), 0));
+        expenseCount = cachedLedger.groups.length;
+        latestDate = cachedLedger.latest_divide_date
+          ? toLocalIsoDate(cachedLedger.latest_divide_date, latestDate)
+          : cachedLedger.groups.reduce((maxDate, group) => {
+              const nextDate = toLocalIsoDate(group?.divide_date, '');
+              return nextDate > maxDate ? nextDate : maxDate;
+            }, latestDate);
+      }
       return {
         key: `trip-summary-${trip.trip_id}`,
         type: 'trip_summary',
         trip_id: Number(trip.trip_id),
         group_id: null,
-        date: toLocalIsoDate(trip.date, todayLocalIso()),
+        date: latestDate,
         details: `Trip: ${String(tripMeta?.name || `#${trip.trip_id}`).trim()}`,
         payer: '-',
-        total: r2(Math.abs(n(trip.delta))),
-        delta: r2(trip.delta),
+        total: r2(Math.abs(delta)),
+        delta,
         my_share_amount: r2(Number(tripMeta?.my_share_amount || 0)),
-        expense_count: Number(trip.expense_count || 0),
+        expense_count: expenseCount,
         added_to_expense: !!tripMeta?.added_to_expense,
         participants: [],
       };
@@ -2349,6 +2454,15 @@
     let friendActivities = [];
     const rowRefToken = encodeURIComponent(String(row?.key || refToken || rowFriendId || ''));
     let events = buildRowEvents(row);
+    const loadTripLedgersForRowEvents = async (items = []) => {
+      const tripIds = [...new Set(
+        (items || [])
+          .filter((event) => String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0)
+          .map((event) => Number(event.trip_id))
+      )];
+      if (!tripIds.length) return;
+      await Promise.all(tripIds.map((tripId) => fetchTripLedger(tripId, true).catch(() => null)));
+    };
     if (!events.length) {
       try {
         const sharedData = await api(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
@@ -2365,6 +2479,9 @@
         // keep existing state and show current details fallback
       }
     }
+    await loadTripLedgersForRowEvents(events);
+    events = buildRowEvents(row);
+    const computedRowAmount = r2(events.reduce((sum, event) => sum + n(event?.delta), 0));
     if (rowFriendId > 0) {
       try {
         const activityData = await api(`/api/live-split/friends/${rowFriendId}/activity`);
@@ -2379,7 +2496,7 @@
     openModal(`Live Split - ${escHtml(row.name)}`, `
       <div class="live-split-modal-shell" style="display:grid;gap:10px">
         <div class="live-split-modal-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <div style="font-size:13px;color:var(--t2)">Current balance: <b style="color:${row.amount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(row.amount)}</b></div>
+          <div style="font-size:13px;color:var(--t2)">Current balance: <b style="color:${computedRowAmount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(computedRowAmount)}</b></div>
           <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="${rowFriendId > 0 ? `liveSplitOpenCreateForFriend(${rowFriendId})` : 'liveSplitOpenCreate()'}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
           </button>
