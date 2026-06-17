@@ -35,6 +35,7 @@ let _videoJsAssetsPromise = null;
 let _videoJsPlayer = null;
 let _videoPlaybackUiAnchorSeconds = 0;
 let _videoPlaybackUiAnchorStartedAtMs = 0;
+let _videoSeekRequestId = 0;
 const VIDEO_AUDIO_PREFS_STORAGE_KEY = 'videoLibraryAudioTrackPrefs';
 
 function videoControlIcon(kind) {
@@ -276,9 +277,10 @@ function videoLibrarySubtitleTracks(video) {
   return subtitles.map((subtitle) => `
     <track
       src="${escHtml(`/api/videos/subtitles/${encodeURIComponent(subtitle.id)}`)}"
-      kind="captions"
+      kind="subtitles"
       srclang="${escHtml(subtitle.srclang || 'en')}"
       label="${escHtml(subtitle.label || 'Subtitles')}"
+      data-subtitle-id="${escHtml(String(subtitle.id || ''))}"
     >`).join('');
 }
 
@@ -336,15 +338,6 @@ function guessVideoMimeType(video) {
 
 function getPlayableVideoSource(video, audioTrackId = '') {
   const normalizedAudioTrackId = String(audioTrackId || '').trim();
-  if (!normalizedAudioTrackId) {
-    const mobileUrl = buildVideoMobileStreamUrl(video);
-    if (mobileUrl) {
-      return {
-        src: mobileUrl,
-        type: 'video/mp4',
-      };
-    }
-  }
   const directStreamUrl = buildVideoStreamUrl(video, normalizedAudioTrackId);
   if (directStreamUrl) {
     return {
@@ -545,21 +538,39 @@ function setVideoPlayerPlaybackRate(value) {
   if (player) player.playbackRate = rate;
 }
 
-function setVideoPlayerCurrentTime(value) {
+function setVideoPlayerCurrentTime(value, options = {}) {
   const time = Math.max(0, Number(value || 0));
-  const instance = getVideoLibraryPlayerInstance();
-  if (instance && typeof instance.currentTime === 'function') {
-    try { instance.currentTime(time); } catch (_err) {}
+  const retry = options?.retry !== false;
+  const requestId = ++_videoSeekRequestId;
+  const applySeek = (attempt = 0) => {
+    if (requestId !== _videoSeekRequestId) return;
+    const player = getVideoLibraryPlayer();
     const activeVideo = videoLibrarySelectedVideo();
+    const instance = getVideoLibraryPlayerInstance();
+    if (instance && typeof instance.currentTime === 'function') {
+      try { instance.currentTime(time); } catch (_err) {}
+      if (videoUsesHlsPlayback(activeVideo, _selectedVideoAudioTrackId)) setVideoPlaybackUiAnchor(time);
+      return;
+    }
+    if (player) {
+      try {
+        if (typeof player.fastSeek === 'function' && time > 0) player.fastSeek(time);
+        else player.currentTime = time;
+      } catch (_err) {
+        try { player.currentTime = time; } catch (_err2) {}
+      }
+    }
     if (videoUsesHlsPlayback(activeVideo, _selectedVideoAudioTrackId)) setVideoPlaybackUiAnchor(time);
-    return;
-  }
-  const player = getVideoLibraryPlayer();
-  if (player) {
-    try { player.currentTime = time; } catch (_err) {}
-  }
-  const activeVideo = videoLibrarySelectedVideo();
-  if (videoUsesHlsPlayback(activeVideo, _selectedVideoAudioTrackId)) setVideoPlaybackUiAnchor(time);
+    if (!retry || !player || attempt >= 8) return;
+    setTimeout(() => {
+      if (requestId !== _videoSeekRequestId) return;
+      const current = videoPlayerCurrentSeconds(player, activeVideo);
+      if (Math.abs(current - time) <= 1.25) return;
+      applySeek(attempt + 1);
+    }, 140);
+  };
+
+  applySeek(0);
 }
 
 function videoPlayerPlay() {
@@ -809,32 +820,54 @@ function loadAltAudioAt(video, startSeconds, autoplay = true) {
 
 function setVideoSubtitle(value) {
   _selectedVideoSubtitleId = String(value || '');
+  const applySelectedSubtitleTrack = (attempt = 0) => {
+    const player = getVideoLibraryPlayer();
+    if (!player) return;
+    const textTracks = getVideoLibraryTextTracks();
+    textTracks.forEach((track) => {
+      try { track.mode = 'disabled'; } catch (_err) {}
+    });
+    const trackEls = [...player.querySelectorAll('track')];
+    trackEls.forEach((trackEl) => {
+      trackEl.default = false;
+      if (trackEl.track) {
+        try { trackEl.track.mode = 'disabled'; } catch (_err) {}
+      }
+    });
+    if (!_selectedVideoSubtitleId) {
+      updateVideoControlsUI();
+      return;
+    }
+    const subtitles = Array.isArray(videoLibrarySelectedVideo()?.subtitles) ? videoLibrarySelectedVideo().subtitles : [];
+    const selectedIndex = subtitles.findIndex((subtitle) => String(subtitle.id) === String(_selectedVideoSubtitleId));
+    if (selectedIndex < 0) {
+      updateVideoControlsUI();
+      return;
+    }
+
+    const selectedTrackEl = trackEls[selectedIndex] || trackEls.find((trackEl) => String(trackEl.dataset.subtitleId || '') === String(_selectedVideoSubtitleId));
+    const selectedTextTrack = textTracks[selectedIndex] || selectedTrackEl?.track || null;
+    if (selectedTrackEl) selectedTrackEl.default = true;
+
+    let applied = false;
+    if (selectedTextTrack) {
+      try {
+        selectedTextTrack.mode = 'hidden';
+        selectedTextTrack.mode = 'showing';
+        applied = selectedTextTrack.mode === 'showing';
+      } catch (_err) {}
+    }
+
+    if (!applied && attempt < 20) {
+      setTimeout(() => applySelectedSubtitleTrack(attempt + 1), 100);
+      return;
+    }
+    updateVideoControlsUI();
+  };
+
   const player = getVideoLibraryPlayer();
   if (!player) return;
-  const textTracks = getVideoLibraryTextTracks();
-  textTracks.forEach((track) => {
-    try { track.mode = 'disabled'; } catch (_err) {}
-  });
-  const trackEls = [...player.querySelectorAll('track')];
-  trackEls.forEach((trackEl) => {
-    trackEl.default = false;
-  });
-  if (!_selectedVideoSubtitleId) {
-    updateVideoControlsUI();
-    return;
-  }
-  const subtitles = Array.isArray(videoLibrarySelectedVideo()?.subtitles) ? videoLibrarySelectedVideo().subtitles : [];
-  const selectedIndex = subtitles.findIndex((subtitle) => String(subtitle.id) === String(_selectedVideoSubtitleId));
-  if (selectedIndex >= 0) {
-    if (trackEls[selectedIndex]) trackEls[selectedIndex].default = true;
-    if (textTracks[selectedIndex]) {
-      try { textTracks[selectedIndex].mode = 'disabled'; } catch (_err) {}
-      setTimeout(() => {
-        try { textTracks[selectedIndex].mode = 'showing'; } catch (_err) {}
-      }, 30);
-    }
-  }
-  updateVideoControlsUI();
+  applySelectedSubtitleTrack(0);
 }
 
 function clearVideoProgressTimer() {
@@ -2431,8 +2464,9 @@ function videoPlayerSeek(seconds) {
   const video = videoLibrarySelectedVideo();
   if (!player || !video) return;
   _videoPendingSourceState = null;
-  const duration = Number(videoPlayerExpectedDuration(player, video) || 0);
-  const target = Math.max(0, Math.min(duration || Number.MAX_SAFE_INTEGER, videoPlayerCurrentSeconds(player, video) + Number(seconds || 0)));
+  const duration = Number(videoPlayerExpectedDuration(player, video) || videoPlayerSeekableDuration(player) || 0);
+  const upperBound = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+  const target = Math.max(0, Math.min(upperBound, videoPlayerCurrentSeconds(player, video) + Number(seconds || 0)));
   if (videoPlayerIsAltAudioActive()) {
     setVideoAudioTrackPosition(target, !videoPlayerIsPaused(player));
     return;
@@ -2446,7 +2480,7 @@ function videoPlayerSeekTo(value) {
   const video = videoLibrarySelectedVideo();
   if (!player || !video) return;
   _videoPendingSourceState = null;
-  const duration = Number(videoPlayerExpectedDuration(player, video) || 0);
+  const duration = Number(videoPlayerExpectedDuration(player, video) || videoPlayerSeekableDuration(player) || 0);
   const progress = Number(value || 0);
   if (!(duration > 0)) return;
   const target = Math.max(0, Math.min(duration, (progress / 1000) * duration));
