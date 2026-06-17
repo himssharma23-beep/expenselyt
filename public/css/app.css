@@ -8184,10 +8184,15 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .video-library-detail-modal-shell .modal-body{
   padding:0;
   background:#101311;
+  max-height:85vh;
+  overflow:hidden;
 }
 .video-detail-shell{
   background:#101311;
   color:#edf3ee;
+  height:85vh;
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
 }
 .video-detail-top{
   display:flex;
@@ -8248,6 +8253,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   display:flex;
   flex-direction:column;
   min-height:0;
+  overflow:auto;
 }
 .video-detail-frame{
   flex:0 0 auto;
@@ -8454,6 +8460,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   gap:12px;
   padding-top:14px;
   border-top:1px solid rgba(255,255,255,.08);
+  min-height:0;
 }
 .video-detail-season-nav-head{
   color:rgba(240,247,242,.58);
@@ -8518,6 +8525,10 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   display:grid;
   grid-template-columns:minmax(0,1fr);
   gap:10px;
+  min-height:0;
+  max-height:min(36vh, 420px);
+  overflow:auto;
+  padding-right:4px;
 }
 .video-detail-main-episode{
   border:1px solid rgba(255,255,255,.08);
@@ -8628,12 +8639,16 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .video-detail-player-col{
     border-right:none;
     border-bottom:1px solid rgba(255,255,255,.08);
+    overflow:visible;
   }
   .video-detail-frame{
     max-height:min(48vh, 360px);
   }
   .video-detail-main-episodes{
     grid-template-columns:minmax(0,1fr);
+    max-height:none;
+    overflow:visible;
+    padding-right:0;
   }
   .video-detail-main-episode{
     grid-template-columns:52px minmax(0,1fr);
