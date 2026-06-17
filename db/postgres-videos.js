@@ -14,8 +14,11 @@ const LOCAL_FFMPEG_BIN_DIR = path.resolve(__dirname, '..', 'tools', 'ffmpeg', 'b
 const DEFAULT_VIDEO_SETTINGS = {
   library_title: 'Video Library',
   videos_root_path: DEFAULT_VIDEO_ROOT_PATH,
+  movies_root_path: '',
+  series_root_path: '',
   recursive_scan: true,
   allowed_extensions: ['.mp4', '.webm', '.ogg', '.mov', '.m4v', '.mkv'],
+  hidden_paths: [],
 };
 
 let ensureVideoTablesPromise = null;
@@ -54,6 +57,16 @@ function normalizeAllowedExtensions(value) {
   return [...new Set(normalized)].slice(0, 24);
 }
 
+function normalizeVideoPathArray(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/\r?\n|,/)
+      .map((part) => String(part || '').trim())
+      .filter(Boolean);
+  return [...new Set(source.map((entry) => normalizeVideoRootPath(entry)).filter(Boolean))].slice(0, 250);
+}
+
 function videoDirectPlaySupported(relativePath = '', mimeType = '', audioTracks = []) {
   const ext = String(path.extname(String(relativePath || '')) || '').toLowerCase();
   const normalizedMime = String(mimeType || '').trim().toLowerCase();
@@ -69,14 +82,30 @@ function videoDirectPlaySupported(relativePath = '', mimeType = '', audioTracks 
 }
 
 function normalizeVideoSettings(raw = {}) {
+  const moviesRootPath = String(raw.movies_root_path || '').trim();
+  const seriesRootPath = String(raw.series_root_path || '').trim();
+  const fallbackRoot = normalizeVideoRootPath(raw.videos_root_path);
   return {
     library_title: String(raw.library_title || DEFAULT_VIDEO_SETTINGS.library_title).trim() || DEFAULT_VIDEO_SETTINGS.library_title,
-    videos_root_path: normalizeVideoRootPath(raw.videos_root_path),
+    videos_root_path: fallbackRoot,
+    movies_root_path: moviesRootPath ? normalizeVideoRootPath(moviesRootPath) : '',
+    series_root_path: seriesRootPath ? normalizeVideoRootPath(seriesRootPath) : '',
     recursive_scan: normalizeBoolean(raw.recursive_scan, true),
     allowed_extensions: normalizeAllowedExtensions(raw.allowed_extensions).length
       ? normalizeAllowedExtensions(raw.allowed_extensions)
       : [...DEFAULT_VIDEO_SETTINGS.allowed_extensions],
+    hidden_paths: normalizeVideoPathArray(raw.hidden_paths),
   };
+}
+
+function pathStartsWithPath(targetPath = '', parentPath = '') {
+  const target = normalizeResolvedPath(targetPath);
+  const parent = normalizeResolvedPath(parentPath);
+  if (!target || !parent) return false;
+  if (process.platform === 'win32') {
+    return target.toLowerCase() === parent.toLowerCase() || target.toLowerCase().startsWith(`${parent.toLowerCase()}\\`) || target.toLowerCase().startsWith(`${parent.toLowerCase()}/`);
+  }
+  return target === parent || target.startsWith(`${parent}${path.sep}`) || target.startsWith(`${parent}/`);
 }
 
 function normalizeVideoRootPath(value) {
@@ -744,6 +773,75 @@ async function scanVideoDirectory(rootPath, options = {}, relativePrefix = '') {
   });
 }
 
+async function listVideoFolderTree(rootPath, options = {}) {
+  await ensureVideoTables();
+  const normalizedRootPath = String(rootPath || '').trim();
+  if (!normalizedRootPath) throw new Error('Folder path is required');
+  const resolvedRootPath = normalizeResolvedPath(resolveVideoRootPathForRuntime(normalizeVideoRootPath(normalizedRootPath)));
+  const maxDepth = Math.max(1, Math.min(8, Number(options.max_depth || 5) || 5));
+  const allowedExtensions = normalizeAllowedExtensions(options.allowed_extensions).length
+    ? normalizeAllowedExtensions(options.allowed_extensions)
+    : [...DEFAULT_VIDEO_SETTINGS.allowed_extensions];
+  const hiddenPaths = normalizeVideoPathArray(options.hidden_paths);
+
+  async function walk(relativePath = '', depth = 0) {
+    const absolutePath = relativePath ? path.join(resolvedRootPath, relativePath) : resolvedRootPath;
+    const entries = await fs.promises.readdir(absolutePath, { withFileTypes: true });
+    const folders = [];
+    let videoFileCount = 0;
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const childRelativePath = relativePath ? path.join(relativePath, entry.name) : entry.name;
+      const childAbsolutePath = path.join(resolvedRootPath, childRelativePath);
+      if (entry.isDirectory()) {
+        const nodeHidden = hiddenPaths.some((hiddenPath) => pathStartsWithPath(childAbsolutePath, hiddenPath));
+        const childNode = {
+          name: entry.name,
+          relative_path: childRelativePath.split(path.sep).join('/'),
+          absolute_path: childAbsolutePath,
+          hidden: nodeHidden,
+          children: [],
+          video_file_count: 0,
+          folder_count: 0,
+        };
+        if (depth < maxDepth - 1) {
+          const nested = await walk(childRelativePath, depth + 1);
+          childNode.children = nested.children;
+          childNode.video_file_count = nested.video_file_count;
+          childNode.folder_count = nested.folder_count;
+        }
+        folders.push(childNode);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = String(path.extname(entry.name) || '').toLowerCase();
+      if (allowedExtensions.includes(ext)) {
+        videoFileCount += 1;
+      }
+    }
+    folders.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    return {
+      children: folders,
+      video_file_count: videoFileCount + folders.reduce((sum, child) => sum + Number(child.video_file_count || 0), 0),
+      folder_count: folders.length + folders.reduce((sum, child) => sum + Number(child.folder_count || 0), 0),
+    };
+  }
+
+  const stats = await fs.promises.stat(resolvedRootPath);
+  if (!stats.isDirectory()) throw new Error('Folder path is not a directory');
+  const tree = await walk('', 0);
+  return {
+    name: path.basename(resolvedRootPath) || resolvedRootPath,
+    relative_path: '',
+    absolute_path: resolvedRootPath,
+    hidden: hiddenPaths.some((hiddenPath) => pathStartsWithPath(resolvedRootPath, hiddenPath)),
+    children: tree.children,
+    video_file_count: tree.video_file_count,
+    folder_count: tree.folder_count,
+    max_depth: maxDepth,
+  };
+}
+
 function encodeCatalogFileToken(fileId) {
   return Buffer.from(JSON.stringify({
     type: 'catalog_file',
@@ -1001,6 +1099,28 @@ function catalogItemShouldBeSeries(item = {}, files = []) {
     return true;
   }
   return catalogItemHasExplicitSeriesHints(item, files);
+}
+
+function normalizeCatalogFileMetadataInput(file = {}, fallback = {}) {
+  const seasonNumberRaw = file?.season_number;
+  const episodeNumberRaw = file?.episode_number;
+  const seasonNumber = seasonNumberRaw === '' || seasonNumberRaw == null
+    ? null
+    : (Number.isFinite(Number(seasonNumberRaw)) ? Math.max(1, Math.round(Number(seasonNumberRaw))) : null);
+  const episodeNumber = episodeNumberRaw === '' || episodeNumberRaw == null
+    ? null
+    : (Number.isFinite(Number(episodeNumberRaw)) ? Math.max(1, Math.round(Number(episodeNumberRaw))) : null);
+  const seriesTitle = String(file?.series_title ?? fallback?.series_title ?? '').trim();
+  const seasonLabel = String(file?.season_label ?? fallback?.season_label ?? '').trim() || (seasonNumber ? `Season ${seasonNumber}` : '');
+  const episodeLabel = String(file?.episode_label ?? fallback?.episode_label ?? '').trim() || (episodeNumber ? `Episode ${episodeNumber}` : '');
+  return {
+    id: Number(file?.id || fallback?.id || 0),
+    series_title: seriesTitle,
+    season_label: seasonLabel,
+    season_number: seasonNumber,
+    episode_label: episodeLabel,
+    episode_number: episodeNumber,
+  };
 }
 
 function parseYearFromLabel(label) {
@@ -1313,6 +1433,26 @@ async function clearVideoCatalog(rootPath = '') {
   });
 }
 
+async function deleteVideoCatalogItems(itemIds = []) {
+  await ensureVideoTables();
+  const normalizedIds = [...new Set((Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+  if (!normalizedIds.length) {
+    return { deleted_count: 0, item_ids: [] };
+  }
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `DELETE FROM video_catalog_items
+        WHERE id = ANY($1::bigint[])
+      RETURNING id`,
+      [normalizedIds]
+    );
+    return {
+      deleted_count: Number(result.rowCount || 0),
+      item_ids: result.rows.map((row) => Number(row.id || 0)).filter((id) => id > 0),
+    };
+  });
+}
+
 async function saveVideoCatalogAiMetadata(itemId, metadata = {}, userId = null) {
   await ensureVideoTables();
   const normalized = {
@@ -1443,6 +1583,7 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
   const currentItems = await listVideoCatalogItems({ status: 'all' });
   const current = currentItems.find((item) => Number(item.id || 0) === Number(itemId || 0));
   if (!current) throw new Error('Catalog item not found');
+  const currentFiles = safeJsonArray(current.files);
 
   const normalized = {
     display_title: String(payload.display_title ?? current.display_title ?? '').trim() || String(current.display_title || '').trim(),
@@ -1532,16 +1673,51 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
       userId ? Number(userId) : null,
     ]
   );
+  const incomingFiles = Array.isArray(payload.files) ? payload.files : [];
+  if (incomingFiles.length) {
+    const fileMap = new Map(currentFiles.map((file) => [Number(file.id || 0), file]));
+    const updates = incomingFiles
+      .map((file) => normalizeCatalogFileMetadataInput(file, fileMap.get(Number(file?.id || 0)) || {}))
+      .filter((file) => file.id > 0 && fileMap.has(file.id));
+    for (const file of updates) {
+      await query(
+        `UPDATE video_catalog_files
+            SET series_title = $2,
+                season_label = $3,
+                season_number = $4,
+                episode_label = $5,
+                episode_number = $6,
+                updated_at = NOW()
+          WHERE id = $1
+            AND catalog_item_id = $7`,
+        [
+          file.id,
+          file.series_title,
+          file.season_label,
+          file.season_number,
+          file.episode_label,
+          file.episode_number,
+          Number(itemId || 0),
+        ]
+      );
+    }
+  }
   return rows.rows[0] || null;
 }
 
 async function listVideoLibrary(userId = null) {
   await ensureVideoTables();
   const settings = await getVideoLibrarySettings();
-  const publishedItems = await listVideoCatalogItems({
+  const hiddenPaths = normalizeVideoPathArray(settings.hidden_paths);
+  let publishedItems = await listVideoCatalogItems({
     status: VIDEO_CATALOG_STATUSES.PUBLISHED,
     root_path: settings.videos_root_path || '',
   });
+  if (!publishedItems.length) {
+    publishedItems = await listVideoCatalogItems({
+      status: VIDEO_CATALOG_STATUSES.PUBLISHED,
+    });
+  }
   const repairIds = [];
   publishedItems.forEach((item) => {
     const files = safeJsonArray(item.files);
@@ -1574,7 +1750,15 @@ async function listVideoLibrary(userId = null) {
     };
   }
 
-  const allFiles = publishedItems.flatMap((item) => safeJsonArray(item.files).map((file) => ({ item, file })));
+  const allFiles = publishedItems.flatMap((item) => safeJsonArray(item.files)
+    .filter((file) => {
+      const absoluteFolderPath = normalizeResolvedPath(path.join(
+        resolveVideoRootPathForRuntime(item.source_root_path),
+        String(file.folder_relative_path || item.folder_relative_path || '').replace(/\//g, path.sep)
+      ));
+      return !hiddenPaths.some((hiddenPath) => pathStartsWithPath(absoluteFolderPath, hiddenPath));
+    })
+    .map((file) => ({ item, file })));
   const progressKeys = allFiles.map(({ file }) => `catalog:${Number(file.id || 0)}`);
   const progressMap = await getVideoWatchProgressMap(userId, progressKeys);
   const subtitle_engine = await getMediaToolsStatus();
@@ -1876,9 +2060,11 @@ module.exports = {
   getMediaToolsStatus,
   getVideoLibrarySettings,
   saveVideoLibrarySettings,
+  listVideoFolderTree,
   scanVideoCatalogPath,
   listVideoCatalogItems,
   clearVideoCatalog,
+  deleteVideoCatalogItems,
   saveVideoCatalogAiMetadata,
   updateVideoCatalogItem,
   publishVideoCatalogItems,

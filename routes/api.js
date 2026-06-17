@@ -8341,6 +8341,22 @@ router.put('/admin/videos/settings', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/admin/videos/folders/tree', requireAdmin, async (req, res) => {
+  try {
+    const root_path = String(req.query.root_path || '').trim() || '';
+    const max_depth = Number(req.query.max_depth || 5) || 5;
+    const settings = await Promise.resolve(pgVideoDb.getVideoLibrarySettings());
+    const tree = await Promise.resolve(pgVideoDb.listVideoFolderTree(root_path, {
+      max_depth,
+      allowed_extensions: settings.allowed_extensions,
+      hidden_paths: settings.hidden_paths,
+    }));
+    res.json({ success: true, tree });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load folder tree' });
+  }
+});
+
 router.post('/admin/videos/catalog/scan', requireAdmin, async (req, res) => {
   try {
     const scanPath = String(req.body?.scan_path || '').trim() || undefined;
@@ -8367,6 +8383,21 @@ router.post('/admin/videos/catalog/clear', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not clear the video catalog structure' });
+  }
+});
+
+router.post('/admin/videos/catalog/delete', requireAdmin, async (req, res) => {
+  try {
+    const itemIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids : [];
+    const result = await Promise.resolve(pgVideoDb.deleteVideoCatalogItems(itemIds));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
+    res.json({
+      success: true,
+      result,
+      items,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not remove the selected folder' });
   }
 });
 

@@ -20,6 +20,7 @@ let _videoCatalogModalState = {
 };
 let _videoLibraryMediaFilter = 'all';
 let _videoLibraryGenreFilter = 'all';
+let _videoDetailSeasonKey = '';
 let _videoPlaylistScrollState = { top: 0 };
 let _selectedVideoAudioTrackId = '';
 let _videoPendingSourceState = null;
@@ -271,7 +272,6 @@ function selectVideoLibraryFolder(folder) {
 }
 
 function videoLibrarySubtitleTracks(video) {
-  if (videoUsesHlsPlayback(video)) return '';
   const subtitles = Array.isArray(video?.subtitles) ? video.subtitles : [];
   return subtitles.map((subtitle) => `
     <track
@@ -461,6 +461,20 @@ function getVideoLibraryPlayerInstance() {
     }
   }
   return null;
+}
+
+function getVideoLibraryTextTracks() {
+  const nativePlayer = getVideoLibraryPlayer();
+  const nativeTracks = nativePlayer?.textTracks ? [...nativePlayer.textTracks] : [];
+  const instance = getVideoLibraryPlayerInstance();
+  let instanceTracks = [];
+  if (instance && typeof instance.textTracks === 'function') {
+    const list = instance.textTracks();
+    if (list && typeof list.length === 'number') {
+      instanceTracks = Array.from({ length: list.length }, (_, index) => list[index]).filter(Boolean);
+    }
+  }
+  return instanceTracks.length ? instanceTracks : nativeTracks;
 }
 
 function disposeVideoLibraryPlayer() {
@@ -828,15 +842,11 @@ function loadAltAudioAt(video, startSeconds, autoplay = true) {
 
 function setVideoSubtitle(value) {
   _selectedVideoSubtitleId = String(value || '');
-  if (videoUsesHlsPlayback()) {
-    updateVideoControlsUI();
-    return;
-  }
   const player = getVideoLibraryPlayer();
   if (!player) return;
-  const textTracks = [...(player.textTracks || [])];
+  const textTracks = getVideoLibraryTextTracks();
   textTracks.forEach((track) => {
-    track.mode = 'disabled';
+    try { track.mode = 'disabled'; } catch (_err) {}
   });
   const trackEls = [...player.querySelectorAll('track')];
   trackEls.forEach((trackEl) => {
@@ -1015,7 +1025,7 @@ function applyPendingVideoSourceState(player, video) {
   if (resumeAt > 0 && canSeekToResumePoint) {
     setVideoPlayerCurrentTime(resumeAt);
   }
-  if (!videoUsesHlsPlayback(video, _selectedVideoAudioTrackId)) setVideoSubtitle(_selectedVideoSubtitleId);
+  setVideoSubtitle(_selectedVideoSubtitleId);
   if (!canSeekToResumePoint) return false;
   if (pendingState.wasPlaying) videoPlayerPlay().catch(() => {});
   _videoPendingSourceState = null;
@@ -1051,7 +1061,7 @@ function setupVideoPlayerProgress() {
     const isCompleted = !!progress?.is_completed;
     const shouldDeferHlsResume = videoUsesHlsPlayback(video, _selectedVideoAudioTrackId);
     if (_videoPendingSourceState?.reason === 'audio-switch') {
-      if (!shouldDeferHlsResume) setVideoSubtitle(_selectedVideoSubtitleId);
+      setVideoSubtitle(_selectedVideoSubtitleId);
       updateVideoControlsUI();
       return;
     }
@@ -1060,7 +1070,7 @@ function setupVideoPlayerProgress() {
       setVideoPlayerCurrentTime(resumeAt);
       player.dataset.resumeApplied = '1';
     }
-    if (!_videoPendingSourceState && !shouldDeferHlsResume) setVideoSubtitle(_selectedVideoSubtitleId);
+    if (!_videoPendingSourceState) setVideoSubtitle(_selectedVideoSubtitleId);
     if (_videoPendingSourceState) applyPendingVideoSourceState(player, video);
     updateVideoControlsUI();
   };
@@ -1619,12 +1629,52 @@ function videoLibrarySeriesKey(video) {
   const base = String(
     video?.catalog_title
     || video?.series_title
-    || video?.title
     || video?.folder
+    || video?.title
     || video?.id
     || ''
   ).trim();
-  return base.toLowerCase();
+  return videoLibraryNormalizedSeriesName(base).toLowerCase();
+}
+
+function videoLibraryNormalizedSeriesName(value) {
+  return String(value || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/\bs\d{1,2}\s*e\d{1,3}\b/ig, ' ')
+    .replace(/\b\d{1,2}x\d{1,3}\b/ig, ' ')
+    .replace(/\bseason\s*\d{1,2}\b/ig, ' ')
+    .replace(/\b(?:720|1080|2160)p\b/ig, ' ')
+    .replace(/\b(?:bluray|brrip|webrip|web-dl|webdl|dvdrip|hdrip|x264|x265|h264|h265|hevc|opus|aac|ddp|atmos|multi|audio|proper|repack|complete)\b/ig, ' ')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function videoLibrarySeriesDisplayTitle(video) {
+  const candidates = [
+    video?.catalog_title,
+    video?.series_title,
+    video?.title,
+    video?.folder,
+  ];
+  for (const candidate of candidates) {
+    const cleaned = videoLibraryNormalizedSeriesName(candidate);
+    if (cleaned) return cleaned;
+  }
+  return 'Series';
+}
+
+function videoLibraryCleanEpisodeText(value) {
+  return String(value || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/\bs\d{1,2}\s*e\d{1,3}\b/ig, ' ')
+    .replace(/\b\d{1,2}x\d{1,3}\b/ig, ' ')
+    .replace(/\bseason\s*\d{1,2}\b/ig, ' ')
+    .replace(/\b(?:720|1080|2160)p\b/ig, ' ')
+    .replace(/\b(?:bluray|brrip|webrip|web-dl|webdl|dvdrip|hdrip|x264|x265|h264|h265|hevc|opus|aac|ddp|atmos|multi|audio|proper|repack|complete|mkv|mp4|webm)\b/ig, ' ')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function videoLibraryEpisodeSortValue(video) {
@@ -1666,8 +1716,8 @@ function videoLibrarySeriesGroups(videos = []) {
     return {
       id: `series:${encodeURIComponent(key)}`,
       series_group_key: key,
-      title: String(base?.catalog_title || base?.series_title || base?.title || 'Series'),
-      catalog_title: String(base?.catalog_title || base?.series_title || base?.title || 'Series'),
+      title: videoLibrarySeriesDisplayTitle(base),
+      catalog_title: videoLibrarySeriesDisplayTitle(base),
       media_type: 'series',
       release_year: base?.release_year || base?.year || null,
       genres,
@@ -1693,6 +1743,36 @@ function videoLibraryFindSeriesGroupById(seriesId, videos = null) {
     .find((group) => String(group.series_group_key || '') === String(key || '')) || null;
 }
 
+function videoLibrarySeasonGroups(entries = []) {
+  const groups = new Map();
+  videoLibrarySortEpisodes(entries).forEach((entry) => {
+    const seasonNumber = Number(entry?.season_number || 0);
+    const seasonLabel = String(entry?.season_label || '').trim() || (seasonNumber > 0 ? `Season ${seasonNumber}` : 'Season 1');
+    const key = `${seasonNumber || 1}:${seasonLabel.toLowerCase()}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        season_number: seasonNumber || 1,
+        season_label: seasonLabel,
+        entries: [],
+      });
+    }
+    groups.get(key).entries.push(entry);
+  });
+  return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+}
+
+function videoLibrarySeasonKeyForVideo(video) {
+  const seasonNumber = Number(video?.season_number || 0);
+  const seasonLabel = String(video?.season_label || '').trim() || (seasonNumber > 0 ? `Season ${seasonNumber}` : 'Season 1');
+  return `${seasonNumber || 1}:${seasonLabel.toLowerCase()}`;
+}
+
+function setVideoLibraryDetailSeason(seriesId, seasonKey) {
+  _videoDetailSeasonKey = String(seasonKey || '').trim();
+  openVideoLibraryDetail(String(seriesId || ''));
+}
+
 function videoLibrarySelectSeriesEpisode(group, preferredEpisodeId = '') {
   if (!group || !Array.isArray(group.entries) || !group.entries.length) return null;
   if (preferredEpisodeId) {
@@ -1714,11 +1794,19 @@ function videoLibraryGroupHasRealEpisodes(group) {
 }
 
 function videoLibraryEpisodeLabel(video) {
-  const bits = [String(video?.season_label || '').trim(), String(video?.episode_label || '').trim()].filter(Boolean);
-  if (bits.length) return bits.join(' · ');
   const season = Number(video?.season_number || 0);
   const episode = Number(video?.episode_number || 0);
-  if (season > 0 && episode > 0) return `Season ${season} · Episode ${episode}`;
+  const seriesTitle = videoLibrarySeriesDisplayTitle(video).toLowerCase();
+  const cleanedEpisodeLabel = videoLibraryCleanEpisodeText(video?.episode_label || '');
+  const cleanedTitle = videoLibraryCleanEpisodeText(video?.title || video?.filename || '');
+  const preferredName = [cleanedEpisodeLabel, cleanedTitle]
+    .find((label) => label && label.toLowerCase() !== seriesTitle) || '';
+  if (episode > 0 && preferredName && !new RegExp(`^episode\\s*${episode}$`, 'i').test(preferredName)) {
+    return `Episode ${episode} · ${preferredName}`;
+  }
+  if (episode > 0) return `Episode ${episode}`;
+  if (preferredName) return preferredName;
+  if (season > 0) return `Season ${season}`;
   if (episode > 0) return `Episode ${episode}`;
   return String(video?.title || video?.filename || '').trim();
 }
@@ -1743,7 +1831,8 @@ function videoLibrarySeriesCount(videos = []) {
   const keys = new Set();
   videos.forEach((video) => {
     if (!videoLibraryIsSeries(video)) return;
-    keys.add(String(video?.catalog_title || video?.series_title || video?.folder || video?.title || '').trim());
+    const key = videoLibrarySeriesKey(video);
+    if (key) keys.add(key);
   });
   return keys.size;
 }
@@ -1788,7 +1877,9 @@ function renderVideoShelfCard(video, options = {}) {
   const genres = videoLibraryGenresFor(video);
   const year = String(video?.release_year || video?.year || '').trim();
   const media = videoLibraryIsSeries(video) ? 'Series' : 'Movie';
-  const title = video?.title || video?.catalog_title || 'Untitled';
+  const title = videoLibraryIsSeries(video)
+    ? videoLibrarySeriesDisplayTitle(video)
+    : (video?.title || video?.catalog_title || 'Untitled');
   const secondary = [year, genres[0] || media].filter(Boolean).join(' · ');
   return `
     <button class="videos-shelf-card ${compact ? 'compact' : ''}" type="button" onclick="openVideoLibraryDetail('${String(video?.id || '').replace(/'/g, "\\'")}')">
@@ -1869,6 +1960,7 @@ function closeVideoLibraryDetail() {
   cancelPendingVideoAudioSwitch();
   _videoAltAudioOutputMuted = false;
   clearVideoLibraryAltAudioPlayer();
+  _videoDetailSeasonKey = '';
   flushVideoPlaybackProgress().catch(() => {}).finally(() => {
     closeModal();
   });
@@ -1928,6 +2020,15 @@ function openVideoLibraryDetail(videoId) {
       ['Status', String(video?.available === false ? 'not available' : (videoProgressLabel(video?.progress) || 'scanned'))],
     ];
     const related = videoLibraryRelatedVideos(video, 5);
+    const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
+      ? videoLibrarySeasonGroups(seriesGroup.entries)
+      : [];
+    const activeSeasonKey = _videoDetailSeasonKey || videoLibrarySeasonKeyForVideo(video);
+    const activeSeasonGroup = seasonGroups.find((group) => String(group.key) === String(activeSeasonKey))
+      || seasonGroups.find((group) => group.entries.some((entry) => String(entry?.id || '') === String(video?.id || '')))
+      || seasonGroups[0]
+      || null;
+    if (activeSeasonGroup?.key) _videoDetailSeasonKey = String(activeSeasonGroup.key);
     const nextEpisode = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
       ? (() => {
           const currentIndex = seriesGroup.entries.findIndex((entry) => String(entry?.id) === String(video?.id || ''));
@@ -1979,6 +2080,30 @@ function openVideoLibraryDetail(videoId) {
               <button id="videoControlSpeed" class="videos-control-btn videos-control-btn-speed" type="button" onclick="videoPlayerCycleRate()">${videoControlIcon('speed')}<span>1x</span></button>
               <button class="videos-control-btn videos-control-btn-primary" type="button" onclick="videoPlayerFullscreen()">${videoControlIcon('fullscreen')}</button>
               </div>
+              ${activeSeasonGroup ? `<div class="video-detail-season-nav">
+                <div class="video-detail-season-nav-head">Browse Episodes</div>
+                <div class="video-detail-season-tiles">
+                  ${seasonGroups.map((group) => `
+                    <button type="button" class="video-detail-season-tile ${String(group.key) === String(activeSeasonGroup?.key || '') ? 'active' : ''}" onclick="setVideoLibraryDetailSeason('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(group.key || '').replace(/'/g, "\\'")}')">
+                      <span>${escHtml(group.season_label || 'Season')}</span>
+                      <small>${escHtml(`${group.entries.length} episode${group.entries.length === 1 ? '' : 's'}`)}</small>
+                    </button>`).join('')}
+                </div>
+                <div class="video-detail-season-current">
+                  <div class="video-detail-season-current-title">${escHtml(activeSeasonGroup.season_label || 'Season')}</div>
+                  <div class="video-detail-season-current-meta">${escHtml(`${activeSeasonGroup.entries.length} episode${activeSeasonGroup.entries.length === 1 ? '' : 's'} in this season`)}</div>
+                </div>
+                <div class="video-detail-main-episodes">
+                  ${activeSeasonGroup.entries.map((entry) => `
+                    <button type="button" class="video-detail-main-episode ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
+                      <div class="video-detail-main-episode-badge">${escHtml(Number(entry?.episode_number || 0) > 0 ? `E${String(entry.episode_number).padStart(2, '0')}` : 'PLAY')}</div>
+                      <div class="video-detail-main-episode-copy">
+                        <div class="video-detail-main-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
+                        <div class="video-detail-main-episode-meta">${escHtml(String(entry?.id || '') === String(video?.id || '') ? 'Now playing' : (videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0)))}</div>
+                      </div>
+                    </button>`).join('')}
+                </div>
+              </div>` : ''}
             </div>`}
           </div>
           <aside class="video-detail-side">
@@ -1989,14 +2114,18 @@ function openVideoLibraryDetail(videoId) {
                   <div class="video-detail-kv-value">${escHtml(value)}</div>
                 </div>`).join('')}
             </div>
-            ${seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup) ? `<div class="video-detail-panel">
-              <div class="video-detail-more-title">Episodes</div>
+            ${seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup) && !activeSeasonGroup ? `<div class="video-detail-panel">
+              <div class="video-detail-more-title">Seasons & Episodes</div>
               <div class="video-detail-episode-list">
-                ${seriesGroup.entries.map((entry) => `
-                  <button type="button" class="video-detail-episode-item ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
-                    <div class="video-detail-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
-                    <div class="video-detail-episode-meta">${escHtml(videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0))}</div>
-                  </button>`).join('')}
+                ${videoLibrarySeasonGroups(seriesGroup.entries).map((seasonGroup) => `
+                  <div class="video-detail-season-group">
+                    <div class="video-detail-season-title">${escHtml(seasonGroup.season_label || 'Season')}</div>
+                    ${seasonGroup.entries.map((entry) => `
+                      <button type="button" class="video-detail-episode-item ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
+                        <div class="video-detail-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
+                        <div class="video-detail-episode-meta">${escHtml(videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0))}</div>
+                      </button>`).join('')}
+                  </div>`).join('')}
               </div>
             </div>` : ''}
             <div class="video-detail-panel video-detail-description">${escHtml(video?.synopsis || video?.overview || 'No description available yet.')}</div>
@@ -2106,18 +2235,8 @@ function renderVideosPage() {
       return bUpdated - aUpdated;
     })
     .slice(0, 12);
-  const recentVideos = [...filteredVideos]
-    .sort((a, b) => new Date(b?.updated_at || 0).getTime() - new Date(a?.updated_at || 0).getTime())
-    .slice(0, 8);
   const movieVideos = filteredVideos.filter((video) => !videoLibraryIsSeries(video));
-  const seriesVideos = filteredVideos.filter((video) => videoLibraryIsSeries(video));
   const seriesGroups = videoLibrarySeriesGroups(filteredVideos);
-  const allGridVideos = (_videoLibraryMediaFilter === 'series'
-    ? seriesGroups
-    : (_videoLibraryMediaFilter === 'movie'
-      ? movieVideos
-      : [...movieVideos, ...seriesGroups]))
-    .sort((a, b) => String(a?.title || a?.catalog_title || '').localeCompare(String(b?.title || b?.catalog_title || '')));
   const pathMeta = _userRole === 'admin' && settings.videos_root_path
     ? `<span class="videos-landing-meta">${escHtml(settings.videos_root_path)}</span>`
     : '';
@@ -2125,7 +2244,8 @@ function renderVideosPage() {
   const adminActions = _userRole === 'admin'
     ? `
       <button class="videos-hero-btn ghost" type="button" onclick="showVideoCatalogModal()">Catalog Sync</button>
-      <button class="videos-hero-btn green" type="button" onclick="showVideoLibrarySettingsModal()">Settings</button>`
+      <button class="videos-hero-btn ghost" type="button" onclick="showVideoSeriesManagerModal()">Series Manager</button>
+      <button class="videos-hero-btn green" type="button" onclick="showVideoLibrarySettingsModal()">Admin Panel</button>`
     : '';
 
   const hero = `
@@ -2176,25 +2296,17 @@ function renderVideosPage() {
   } else if (!filteredVideos.length) {
     sectionsHtml = `<div class="videos-landing-empty"><div class="videos-empty-title">${allVideos.length ? 'No videos match this filter' : 'No videos found yet'}</div><div class="videos-empty-sub">${escHtml(_videoLibraryData.message || 'Put supported files like MP4 or WebM inside the configured folder.')}</div></div>`;
   } else {
-    const dynamicGenreSections = _videoLibraryGenreFilter !== 'all'
+    const visibleSeriesGroups = (_videoLibraryMediaFilter === 'movie' || _videoLibraryGenreFilter !== 'all')
       ? []
-      : sectionGenreStats
-        .map((genre) => {
-          const genreMatches = filteredVideos
-            .filter((video) => videoLibraryGenresFor(video).some((name) => name.toLowerCase() === String(genre.name || '').toLowerCase()));
-          const groupedSeries = videoLibrarySeriesGroups(genreMatches);
-          const groupedGenreVideos = [
-            ...genreMatches.filter((video) => !videoLibraryIsSeries(video)),
-            ...groupedSeries,
-          ].sort((a, b) => String(a?.title || a?.catalog_title || '').localeCompare(String(b?.title || b?.catalog_title || '')));
-          if (!groupedGenreVideos.length) return '';
-          return renderVideoSection(genre.name, groupedGenreVideos.slice(0, 12), {
-            genre: genre.name,
-            countLabel: `${groupedGenreVideos.length} title${groupedGenreVideos.length === 1 ? '' : 's'}`,
-          });
-        })
-        .filter(Boolean)
-        .join('');
+      : seriesGroups;
+    const visibleMovieVideos = (_videoLibraryMediaFilter === 'series')
+      ? []
+      : (_videoLibraryGenreFilter === 'all'
+        ? movieVideos
+        : movieVideos.filter((video) => videoLibraryGenresFor(video).some((name) => name.toLowerCase() === String(_videoLibraryGenreFilter || '').toLowerCase())));
+    const emptyFilterMessage = _videoLibraryGenreFilter !== 'all'
+      ? `No ${String(_videoLibraryGenreFilter || '').trim()} titles found in this view.`
+      : 'No titles found for this selection.';
 
     sectionsHtml = `
       <div class="videos-filter-row">
@@ -2205,13 +2317,9 @@ function renderVideosPage() {
         ${pathMeta}
         <span class="videos-landing-meta">${filteredVideos.length} files</span>
       </div>
-      ${renderVideoSection('Watching', continueWatchingVideos, { accent: 'Continue', scrollTarget: 'videos-all-grid', countLabel: `${continueWatchingVideos.length} titles` })}
-      ${renderVideoSection('Scanned', recentVideos, { accent: 'Recently', scrollTarget: 'videos-all-grid', countLabel: `${recentVideos.length} titles` })}
-      ${_videoLibraryMediaFilter === 'all' && movieVideos.length ? renderVideoSection('Movies', movieVideos.slice(0, 12), { countLabel: `${movieVideos.length} titles` }) : ''}
-      ${_videoLibraryMediaFilter === 'all' && seriesGroups.length ? renderVideoSection('Series', seriesGroups.slice(0, 12), { countLabel: `${seriesGroups.length} titles` }) : ''}
-      ${_videoLibraryGenreFilter !== 'all' && allGridVideos.length ? renderVideoSection(String(_videoLibraryGenreFilter), allGridVideos.slice(0, 12), { genre: _videoLibraryGenreFilter, countLabel: `${allGridVideos.length} titles` }) : ''}
-      ${dynamicGenreSections}
-      ${renderVideoGridSection(_videoLibraryMediaFilter === 'series' ? 'All Series' : (_videoLibraryMediaFilter === 'movie' ? 'All Movies' : 'All Titles'), allGridVideos, { accent: 'All', sectionId: 'videos-all-grid' })}
+      ${visibleSeriesGroups.length ? renderVideoSection('Series', visibleSeriesGroups, { countLabel: `${visibleSeriesGroups.length} title${visibleSeriesGroups.length === 1 ? '' : 's'}` }) : ''}
+      ${visibleMovieVideos.length ? renderVideoSection('Movies', visibleMovieVideos, { countLabel: `${visibleMovieVideos.length} title${visibleMovieVideos.length === 1 ? '' : 's'}` }) : ''}
+      ${(!visibleSeriesGroups.length && !visibleMovieVideos.length) ? `<div class="videos-landing-empty"><div class="videos-empty-title">Nothing to show</div><div class="videos-empty-sub">${escHtml(emptyFilterMessage)}</div></div>` : ''}
     `;
   }
 
@@ -2481,7 +2589,6 @@ function renderVideoCatalogModal() {
       </label>
       <div class="fa">
         <button class="btn btn-p" onclick="videoCatalogScanNow()" ${_videoCatalogModalState.loading ? 'disabled' : ''}>Scan Folder</button>
-        <button class="btn btn-s" onclick="videoCatalogAiDraftNow()" ${_videoCatalogModalState.aiLoading ? 'disabled' : ''}>Fetch AI Details</button>
         <button class="btn btn-s" onclick="videoCatalogPublishReviewReady()">Publish Review Ready</button>
       </div>
       <div class="fa" style="margin-top:8px">
@@ -2671,7 +2778,7 @@ function renderVideoCatalogModal() {
         </div>
 
         <div class="video-catalog-intro">
-          Scan folders, <strong>enrich titles with AI</strong>, and publish only the entries you approve.
+          Scan folders and publish only the entries you approve.
         </div>
 
         <div class="video-catalog-path-row">
@@ -2684,19 +2791,280 @@ function renderVideoCatalogModal() {
         <div class="video-catalog-toolbar-main">
           <div class="video-catalog-toolbar-actions">
             ${videoCatalogIsBusy()
-              ? `<button class="btn btn-g" onclick="videoCatalogStopNow()">Stop</button>
-                 <button class="btn btn-s" disabled>Fetch AI Details</button>`
-              : `<button class="btn btn-p" onclick="videoCatalogScanNow()">Scan Folder</button>
-                 <button class="btn btn-s" onclick="videoCatalogAiDraftNow()">Fetch AI Details</button>`}
+              ? `<button class="btn btn-g" onclick="videoCatalogStopNow()">Stop</button>`
+              : `<button class="btn btn-p" onclick="videoCatalogScanNow()">Scan Folder</button>`}
+            <button class="btn btn-s" onclick="showVideoSeriesManagerModal()">Series Manager</button>
             <button class="btn btn-s" onclick="videoCatalogPublishReviewReady()" ${videoCatalogIsBusy() ? 'disabled' : ''}>Publish Review Ready</button>
             <button class="btn btn-s" onclick="videoCatalogClearNow()" ${videoCatalogIsBusy() ? 'disabled' : ''}>Clean Structure</button>
           </div>
         </div>
-        ${_videoCatalogModalState.loading || _videoCatalogModalState.aiLoading || _videoCatalogModalState.scanNotice
+        ${_videoCatalogModalState.loading || _videoCatalogModalState.scanNotice
           ? `<div class="video-catalog-status-strip">
               ${_videoCatalogModalState.loading ? '<span class="video-catalog-pill status-note">Preparing recursive scan...</span>' : ''}
-              ${_videoCatalogModalState.aiLoading ? '<span class="video-catalog-pill status-note ai">Enriching titles...</span>' : ''}
-              ${_videoCatalogModalState.scanNotice ? `<span class="video-catalog-pill status-note ${_videoCatalogModalState.aiLoading ? 'ai' : ''}">${escHtml(_videoCatalogModalState.scanNotice)}</span>` : ''}
+              ${_videoCatalogModalState.scanNotice ? `<span class="video-catalog-pill status-note">${escHtml(_videoCatalogModalState.scanNotice)}</span>` : ''}
+            </div>`
+          : ''}
+      </div>
+      <div class="video-catalog-content">
+        <div class="video-catalog-filters">
+          ${videoCatalogStatusOptions().map((option) => `<button class="btn ${selectedStatus === option.value ? 'btn-p' : 'btn-s'} btn-sm" onclick="videoCatalogSetStatus('${option.value}')">${option.label}${counts[option.value] ? ` <span class="video-catalog-filter-count">${counts[option.value]}</span>` : ''}</button>`).join('')}
+        </div>
+        <div class="video-catalog-scroll">
+          ${itemCards}
+        </div>
+      </div>
+    </div>`);
+}
+
+function renderVideoCatalogModal() {
+  window.__modalClassName = 'modal-wide video-catalog-shell-modal';
+  const items = Array.isArray(_videoCatalogModalState.items) ? _videoCatalogModalState.items : [];
+  const counts = items.reduce((acc, item) => {
+    const key = String(item.status || 'scanned');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const selectedStatus = String(_videoCatalogModalState.status || 'all');
+  const visibleItems = items.filter((item) => selectedStatus === 'all' || String(item.status || '') === selectedStatus);
+  const totalCount = items.length;
+  const reviewCount = Number(counts.review || 0);
+  const publishedCount = Number(counts.published || 0);
+  const scannedCount = Number(counts.scanned || 0);
+  const statusLabel = (value) => {
+    const raw = String(value || 'scanned').trim().toLowerCase();
+    return raw ? `${raw.charAt(0).toUpperCase()}${raw.slice(1)}` : 'Scanned';
+  };
+  const itemCards = visibleItems.length
+    ? visibleItems.map((item) => {
+        const itemId = Number(item.id || 0);
+        const posterSrc = String(item.poster_stream_url || '').trim();
+        const genres = catalogCsv(item.genres);
+        const castMembers = catalogCsv(item.cast_members);
+        const creators = catalogCsv(item.creators);
+        const tags = catalogCsv(item.tags);
+        const files = Array.isArray(item.files) ? item.files : [];
+        const fileRows = files.map((file) => {
+          const fileId = Number(file.id || 0);
+          const secondaryLabel = [
+            file.file_exists === false ? 'Not available' : '',
+            file.size_bytes ? videoLibraryFormatBytes(file.size_bytes) : '',
+          ].filter(Boolean).join(' • ');
+          return `
+            <div class="video-catalog-file-editor" data-video-catalog-file data-item-id="${itemId}" data-file-id="${fileId}">
+              <div class="video-catalog-file-top">
+                <div>
+                  <div class="video-catalog-file-name">${escHtml(String(file.filename || 'File'))}</div>
+                  <div class="video-catalog-file-meta">${escHtml(secondaryLabel || '')}</div>
+                </div>
+                <div class="video-catalog-file-path">${escHtml(String(file.relative_path || '').trim() || '-')}</div>
+              </div>
+              <div class="video-catalog-edit-grid video-catalog-edit-grid-files">
+                <label class="video-catalog-field">
+                  <span>Series Title</span>
+                  <input class="fi" id="videoCatalogFileSeries_${itemId}_${fileId}" value="${escHtml(String(file.series_title || item.display_title || '').trim())}" placeholder="Lost">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Season Label</span>
+                  <input class="fi" id="videoCatalogFileSeasonLabel_${itemId}_${fileId}" value="${escHtml(String(file.season_label || '').trim())}" placeholder="Season 1">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Season No.</span>
+                  <input class="fi" id="videoCatalogFileSeasonNumber_${itemId}_${fileId}" value="${escHtml(file.season_number != null ? String(file.season_number) : '')}" placeholder="1">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Episode Title</span>
+                  <input class="fi" id="videoCatalogFileEpisodeLabel_${itemId}_${fileId}" value="${escHtml(String(file.episode_label || '').trim())}" placeholder="Pilot - Part 1">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Episode No.</span>
+                  <input class="fi" id="videoCatalogFileEpisodeNumber_${itemId}_${fileId}" value="${escHtml(file.episode_number != null ? String(file.episode_number) : '')}" placeholder="1">
+                </label>
+              </div>
+            </div>`;
+        }).join('');
+        const statusClass = (() => {
+          const normalized = String(item.status || '').trim().toLowerCase();
+          if (normalized === 'review') return 'tag-review';
+          if (normalized === 'published') return 'tag-published';
+          return 'tag-scanned';
+        })();
+        const statusIcon = statusClass === 'tag-review'
+          ? '<span class="icon-svg" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.4"/></svg></span>'
+          : '<span class="icon-svg" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5 6.5 11.5 12.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+        const publishIcon = '<span class="icon-svg" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><path d="M8 2.5v7m0-7L5.5 5m2.5-2.5L10.5 5M3 10.5v1A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+        const saveIcon = '<span class="icon-svg" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 2.5h7l2 2v8a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5 2.5v3h5v-3M5.5 13v-4h5v4" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>';
+        const summaryPills = [
+          item.release_year ? `<span class="tag tag-year">${escHtml(String(item.release_year))}</span>` : '',
+          `<span class="tag tag-files">Files ${Number(item.file_count || 0)}</span>`,
+          `<span class="tag ${statusClass}">${statusIcon}${escHtml(statusLabel(item.status))}</span>`,
+          item.file_exists === false ? `<span class="tag tag-warn">Not available</span>` : '',
+        ].filter(Boolean).join('');
+        return `
+          <div class="vcard">
+            <div class="vcard-thumb">
+              ${posterSrc
+                ? `<div class="video-catalog-poster" style="background-image:url('${escHtml(posterSrc)}')"></div>`
+                : `<div class="video-catalog-poster video-catalog-poster-fallback">&#127909;</div>`
+              }
+              ${item.release_year ? `<div class="vcard-thumb-year">${escHtml(String(item.release_year))}</div>` : ''}
+            </div>
+            <div class="vcard-body">
+              <div class="vcard-title">${escHtml(item.display_title || item.folder_name || 'Untitled')}</div>
+              <div class="vcard-meta">
+                <span>${escHtml(item.media_type || 'movie')}</span>
+                ${item.folder_name ? `<div class="dot"></div><span>${escHtml(item.folder_name)}</span>` : ''}
+              </div>
+              <div class="tag-row">${summaryPills}</div>
+              <div class="video-catalog-edit-grid">
+                <label class="video-catalog-field">
+                  <span>Title</span>
+                  <input class="fi" id="videoCatalogTitle_${itemId}" value="${escHtml(item.display_title || '')}" placeholder="Series or movie title">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Type</span>
+                  <select class="fi" id="videoCatalogType_${itemId}">
+                    <option value="movie" ${String(item.media_type || 'movie') === 'movie' ? 'selected' : ''}>Movie</option>
+                    <option value="series" ${String(item.media_type || '') === 'series' ? 'selected' : ''}>Series</option>
+                  </select>
+                </label>
+                <label class="video-catalog-field">
+                  <span>Year</span>
+                  <input class="fi" id="videoCatalogYear_${itemId}" value="${escHtml(item.release_year != null ? String(item.release_year) : '')}" placeholder="2004">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Seasons</span>
+                  <input class="fi" id="videoCatalogSeasons_${itemId}" value="${escHtml(item.season_count != null ? String(item.season_count) : '')}" placeholder="1">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Episodes</span>
+                  <input class="fi" id="videoCatalogEpisodes_${itemId}" value="${escHtml(item.episode_count != null ? String(item.episode_count) : '')}" placeholder="25">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Runtime</span>
+                  <input class="fi" id="videoCatalogRuntime_${itemId}" value="${escHtml(item.runtime_minutes != null ? String(item.runtime_minutes) : '')}" placeholder="42">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Genres</span>
+                  <input class="fi" id="videoCatalogGenres_${itemId}" value="${escHtml(genres)}" placeholder="Drama, Mystery">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Cast</span>
+                  <input class="fi" id="videoCatalogCast_${itemId}" value="${escHtml(castMembers)}" placeholder="Cast members">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Language</span>
+                  <input class="fi" id="videoCatalogLanguage_${itemId}" value="${escHtml(item.original_language || '')}" placeholder="English">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Country</span>
+                  <input class="fi" id="videoCatalogCountry_${itemId}" value="${escHtml(item.country || '')}" placeholder="USA">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Rating</span>
+                  <input class="fi" id="videoCatalogRating_${itemId}" value="${escHtml(item.content_rating || '')}" placeholder="TV-14">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Creators</span>
+                  <input class="fi" id="videoCatalogCreators_${itemId}" value="${escHtml(creators)}" placeholder="Creators">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Tags</span>
+                  <input class="fi" id="videoCatalogTags_${itemId}" value="${escHtml(tags)}" placeholder="mystery, island">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Poster URL</span>
+                  <input class="fi" id="videoCatalogPosterUrl_${itemId}" value="${escHtml(item.poster_url || '')}" placeholder="https://...">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Poster Path</span>
+                  <input class="fi" id="videoCatalogPosterPath_${itemId}" value="${escHtml(item.poster_relative_path || '')}" placeholder="relative/poster.jpg">
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide video-catalog-textarea-field">
+                  <span>Synopsis</span>
+                  <textarea class="fi" id="videoCatalogSynopsis_${itemId}" placeholder="Short synopsis">${escHtml(item.synopsis || '')}</textarea>
+                </label>
+                <label class="video-catalog-field video-catalog-field-wide video-catalog-textarea-field">
+                  <span>Notes</span>
+                  <textarea class="fi" id="videoCatalogNotes_${itemId}" placeholder="Internal notes">${escHtml(item.ai_notes || '')}</textarea>
+                </label>
+              </div>
+              <div class="video-catalog-files">
+                <div class="video-catalog-files-head">
+                  <div class="video-catalog-files-title">Series / Season / Episode Mapping</div>
+                  ${files.length ? `<button type="button" class="btn btn-s btn-sm" onclick="videoCatalogApplyTitleToFiles(${itemId})">Use Title For Files</button>` : ''}
+                </div>
+                <div class="video-catalog-file-list">
+                  ${fileRows || '<div class="video-catalog-file-empty">No files found for this entry.</div>'}
+                </div>
+              </div>
+            </div>
+            <div class="vcard-actions">
+              <button class="vbtn pub" onclick="videoCatalogPublishItem(${itemId})">${publishIcon}<span>Publish</span></button>
+              <button class="vbtn save" onclick="videoCatalogSaveItem(${itemId})">${saveIcon}<span>Save</span></button>
+            </div>
+          </div>`;
+      }).join('')
+    : '<div class="video-catalog-empty">No catalog entries yet. Scan a folder first.</div>';
+
+  openModal('Video Catalog Sync', `
+    <div class="video-catalog-modal">
+      <div class="video-catalog-toolbar">
+        <div class="video-catalog-hero-shell">
+          <div class="video-catalog-hero">
+            <div class="video-catalog-hero-mark">
+              <div class="video-catalog-hero-icon">VC</div>
+              <div class="video-catalog-hero-copy">
+                <div class="video-catalog-hero-title">Video Catalog Sync</div>
+                <div class="video-catalog-hero-sub">Catalog Workspace - Scan, enrich & publish</div>
+              </div>
+            </div>
+            <button type="button" class="video-catalog-hero-closehint" onclick="closeModal()">&times;</button>
+          </div>
+          <div class="video-catalog-hero-stats">
+            <div class="video-catalog-stat">
+              <span class="video-catalog-stat-label">Total</span>
+              <strong>${totalCount}</strong>
+            </div>
+            <div class="video-catalog-stat">
+              <span class="video-catalog-stat-label">Scanned</span>
+              <strong>${scannedCount}</strong>
+            </div>
+            <div class="video-catalog-stat">
+              <span class="video-catalog-stat-label">Review</span>
+              <strong>${reviewCount}</strong>
+            </div>
+            <div class="video-catalog-stat">
+              <span class="video-catalog-stat-label">Published</span>
+              <strong>${publishedCount}</strong>
+            </div>
+          </div>
+          <div class="video-catalog-hero-foot">
+            <span class="video-catalog-hero-progress"></span>
+            <span class="video-catalog-hero-foot-text">${scannedCount}/${totalCount || scannedCount || 0} scanned</span>
+          </div>
+        </div>
+        <div class="video-catalog-intro">
+          Scan folders and publish only the entries you approve.
+        </div>
+        <div class="video-catalog-path-row">
+          <div class="video-catalog-path-card">
+            <input class="fi" id="videoCatalogScanPath" value="${escHtml(_videoCatalogModalState.path || '')}" placeholder="Scan path - e.g. /media/movies or leave blank for all">
+          </div>
+          <button class="btn btn-p video-catalog-browse-btn" onclick="document.getElementById('videoCatalogScanPath')?.focus()">Browse</button>
+        </div>
+        <div class="video-catalog-toolbar-main">
+          <div class="video-catalog-toolbar-actions">
+            ${videoCatalogIsBusy()
+              ? `<button class="btn btn-g" onclick="videoCatalogStopNow()">Stop</button>`
+              : `<button class="btn btn-p" onclick="videoCatalogScanNow()">Scan Folder</button>`}
+            <button class="btn btn-s" onclick="videoCatalogPublishReviewReady()" ${videoCatalogIsBusy() ? 'disabled' : ''}>Publish Review Ready</button>
+            <button class="btn btn-s" onclick="videoCatalogClearNow()" ${videoCatalogIsBusy() ? 'disabled' : ''}>Clean Structure</button>
+          </div>
+        </div>
+        ${_videoCatalogModalState.loading || _videoCatalogModalState.scanNotice
+          ? `<div class="video-catalog-status-strip">
+              ${_videoCatalogModalState.loading ? '<span class="video-catalog-pill status-note">Preparing recursive scan...</span>' : ''}
+              ${_videoCatalogModalState.scanNotice ? `<span class="video-catalog-pill status-note">${escHtml(_videoCatalogModalState.scanNotice)}</span>` : ''}
             </div>`
           : ''}
       </div>
@@ -2735,6 +3103,7 @@ async function videoCatalogSaveItem(itemId) {
     episode_count: document.getElementById(`videoCatalogEpisodes_${id}`)?.value?.trim() || '',
     synopsis: document.getElementById(`videoCatalogSynopsis_${id}`)?.value?.trim() || '',
     ai_notes: document.getElementById(`videoCatalogNotes_${id}`)?.value?.trim() || '',
+    files: videoCatalogBuildFilesPayload(id),
   };
   const result = await api(`/api/admin/videos/catalog/${id}`, {
     method: 'PUT',
@@ -2836,6 +3205,585 @@ function renderVideoPlaylistItems(videos = [], selectedVideo = null) {
 
 function catalogCsv(value) {
   return Array.isArray(value) ? value.join(', ') : String(value || '');
+}
+
+function videoCatalogBuildFilesPayload(itemId) {
+  const id = Number(itemId || 0);
+  if (!id) return [];
+  const item = (Array.isArray(_videoCatalogModalState.items) ? _videoCatalogModalState.items : [])
+    .find((entry) => Number(entry?.id || 0) === id);
+  const files = Array.isArray(item?.files) ? item.files : [];
+  return files.map((file) => {
+    const fileId = Number(file.id || 0);
+    return {
+      id: fileId,
+      series_title: document.getElementById(`videoCatalogFileSeries_${id}_${fileId}`)?.value?.trim() || '',
+      season_label: document.getElementById(`videoCatalogFileSeasonLabel_${id}_${fileId}`)?.value?.trim() || '',
+      season_number: document.getElementById(`videoCatalogFileSeasonNumber_${id}_${fileId}`)?.value?.trim() || '',
+      episode_label: document.getElementById(`videoCatalogFileEpisodeLabel_${id}_${fileId}`)?.value?.trim() || '',
+      episode_number: document.getElementById(`videoCatalogFileEpisodeNumber_${id}_${fileId}`)?.value?.trim() || '',
+    };
+  });
+}
+
+function videoCatalogApplyTitleToFiles(itemId) {
+  const id = Number(itemId || 0);
+  if (!id) return;
+  const title = document.getElementById(`videoCatalogTitle_${id}`)?.value?.trim() || '';
+  if (!title) {
+    toast('Enter the title first.', 'error');
+    return;
+  }
+  const item = (Array.isArray(_videoCatalogModalState.items) ? _videoCatalogModalState.items : [])
+    .find((entry) => Number(entry?.id || 0) === id);
+  const files = Array.isArray(item?.files) ? item.files : [];
+  files.forEach((file) => {
+    const input = document.getElementById(`videoCatalogFileSeries_${id}_${Number(file.id || 0)}`);
+    if (input) input.value = title;
+  });
+  toast('Applied title to file metadata.', 'success');
+}
+
+function videoCatalogRelativeParts(value) {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+}
+
+function videoCatalogFolderParts(value) {
+  const parts = videoCatalogRelativeParts(value);
+  return parts.length > 1 ? parts.slice(0, -1) : [];
+}
+
+function videoCatalogFileLabelFromPath(value, fallback = '') {
+  const parts = videoCatalogRelativeParts(value);
+  return parts.length ? parts[parts.length - 1] : String(fallback || '');
+}
+
+function videoCatalogSeasonNumberFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const seasonMatch = text.match(/\bseason\s*0*(\d{1,2})\b/i) || text.match(/\bs\s*0*(\d{1,2})\b/i);
+  if (seasonMatch) return Number(seasonMatch[1]);
+  return null;
+}
+
+function videoCatalogEpisodeNumberFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const sxMatch = text.match(/\bs\d{1,2}\s*e\s*0*(\d{1,3})\b/i);
+  if (sxMatch) return Number(sxMatch[1]);
+  const eMatch = text.match(/\bepisode\s*0*(\d{1,3})\b/i) || text.match(/\be\s*0*(\d{1,3})\b/i);
+  if (eMatch) return Number(eMatch[1]);
+  const altMatch = text.match(/\b\d{1,2}x0*(\d{1,3})\b/i);
+  if (altMatch) return Number(altMatch[1]);
+  return null;
+}
+
+function videoCatalogSeriesManagerFolderToken(depth) {
+  return `folder:${Number(depth || 0)}`;
+}
+
+function videoCatalogSeriesManagerFolderValue(parts, token) {
+  const match = String(token || '').match(/^folder:(\d+)$/);
+  const depth = match ? Number(match[1]) : 0;
+  if (!depth) return '';
+  return String(Array.isArray(parts) ? parts[depth - 1] || '' : '').trim();
+}
+
+function videoCatalogSeriesManagerEpisodeText(value, fallback = '') {
+  const cleaned = videoLibraryCleanEpisodeText(value || fallback || '');
+  return cleaned || String(fallback || '').trim();
+}
+
+function videoCatalogSeriesManagerSeriesTitleForRow(row, groupIndex = null) {
+  const manualTitle = groupIndex == null
+    ? String(row?.seriesTitle || '').trim()
+    : (document.getElementById(`videoSeriesManagerTitle_${Number(groupIndex || 0)}`)?.value?.trim() || '');
+  const source = groupIndex == null
+    ? String(row?.seriesSource || 'manual')
+    : (document.getElementById(`videoSeriesManagerSeriesSource_${Number(groupIndex || 0)}`)?.value?.trim() || 'manual');
+  if (source === 'manual') return manualTitle;
+  const folderValue = videoCatalogSeriesManagerFolderValue(row?.folderParts, source);
+  return videoLibraryNormalizedSeriesName(folderValue) || manualTitle || row?.seriesTitle || 'Series';
+}
+
+function videoCatalogSeriesManagerSeasonMetaForRow(row, groupIndex = null) {
+  const source = groupIndex == null
+    ? String(row?.seasonSource || 'none')
+    : (document.getElementById(`videoSeriesManagerSeasonSource_${Number(groupIndex || 0)}`)?.value?.trim() || 'none');
+  const rawFolder = source === 'none' ? '' : videoCatalogSeriesManagerFolderValue(row?.folderParts, source);
+  const seasonNumber = videoCatalogSeasonNumberFromText(rawFolder)
+    || Number(row?.seasonNumber || 0)
+    || videoCatalogSeasonNumberFromText(row?.fileName)
+    || 1;
+  return {
+    season_number: seasonNumber,
+    season_label: `Season ${seasonNumber}`,
+  };
+}
+
+function videoCatalogSeriesManagerEpisodeMetaForRow(row, groupIndex = null) {
+  const source = groupIndex == null
+    ? String(row?.episodeSource || 'filename')
+    : (document.getElementById(`videoSeriesManagerEpisodeSource_${Number(groupIndex || 0)}`)?.value?.trim() || 'filename');
+  let rawLabel = '';
+  if (source === 'existing') rawLabel = String(row?.episodeLabel || '').trim();
+  else if (source === 'filename') rawLabel = String(row?.fileName || '').trim();
+  else rawLabel = videoCatalogSeriesManagerFolderValue(row?.folderParts, source);
+  const episodeNumber = videoCatalogEpisodeNumberFromText(rawLabel)
+    || Number(row?.episodeNumber || 0)
+    || videoCatalogEpisodeNumberFromText(row?.fileName)
+    || null;
+  const cleaned = videoCatalogSeriesManagerEpisodeText(rawLabel, row?.fileName || 'Episode');
+  return {
+    episode_number: episodeNumber,
+    episode_label: episodeNumber ? `Episode ${episodeNumber}${cleaned && !new RegExp(`^episode\\s*${episodeNumber}$`, 'i').test(cleaned) ? ` - ${cleaned}` : ''}` : cleaned,
+  };
+}
+
+function videoCatalogSeriesManagerPreviewData(group, groupIndex = null) {
+  const rows = Array.isArray(group?.rows) ? group.rows : [];
+  const mappedRows = rows.map((row) => {
+    const seasonMeta = videoCatalogSeriesManagerSeasonMetaForRow(row, groupIndex);
+    const episodeMeta = videoCatalogSeriesManagerEpisodeMetaForRow(row, groupIndex);
+    return {
+      ...row,
+      resolvedSeriesTitle: videoCatalogSeriesManagerSeriesTitleForRow(row, groupIndex) || group?.title || 'Series',
+      resolvedSeasonNumber: seasonMeta.season_number,
+      resolvedSeasonLabel: seasonMeta.season_label,
+      resolvedEpisodeNumber: episodeMeta.episode_number,
+      resolvedEpisodeLabel: episodeMeta.episode_label,
+    };
+  });
+  const seriesTitle = mappedRows[0]?.resolvedSeriesTitle || group?.title || 'Series';
+  const seasons = new Map();
+  mappedRows.forEach((row) => {
+    const key = `${Number(row.resolvedSeasonNumber || 1)}:${String(row.resolvedSeasonLabel || '').toLowerCase()}`;
+    if (!seasons.has(key)) {
+      seasons.set(key, {
+        season_number: Number(row.resolvedSeasonNumber || 1),
+        season_label: row.resolvedSeasonLabel || `Season ${Number(row.resolvedSeasonNumber || 1)}`,
+        entries: [],
+      });
+    }
+    seasons.get(key).entries.push(row);
+  });
+  const seasonList = [...seasons.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+  seasonList.forEach((season) => {
+    season.entries.sort((a, b) => {
+      const episodeDiff = Number(a.resolvedEpisodeNumber || 0) - Number(b.resolvedEpisodeNumber || 0);
+      if (episodeDiff) return episodeDiff;
+      return String(a.fileName || '').localeCompare(String(b.fileName || ''));
+    });
+  });
+  return {
+    seriesTitle,
+    seasons: seasonList,
+    totalEpisodes: mappedRows.length,
+  };
+}
+
+function renderVideoSeriesManagerPreview(groupIndex) {
+  const groups = Array.isArray(window.__videoSeriesManagerGroups) ? window.__videoSeriesManagerGroups : [];
+  const group = groups[Number(groupIndex || 0)];
+  const node = document.getElementById(`videoSeriesManagerPreview_${Number(groupIndex || 0)}`);
+  if (!group || !node) return;
+  const preview = videoCatalogSeriesManagerPreviewData(group, groupIndex);
+  node.innerHTML = `
+    <div class="video-series-manager-preview-head">
+      <div class="video-series-manager-preview-title">${escHtml(preview.seriesTitle || 'Series')}</div>
+      <div class="video-series-manager-preview-meta">${preview.seasons.length} season${preview.seasons.length === 1 ? '' : 's'} • ${preview.totalEpisodes} episode${preview.totalEpisodes === 1 ? '' : 's'}</div>
+    </div>
+    <div class="video-series-manager-preview-seasons">
+      ${preview.seasons.map((season) => `
+        <div class="video-series-manager-preview-season">
+          <div class="video-series-manager-preview-season-label">${escHtml(season.season_label || `Season ${Number(season.season_number || 1)}`)}</div>
+          <div class="video-series-manager-preview-episodes">
+            ${season.entries.map((entry) => `
+              <div class="video-series-manager-preview-episode">
+                <span class="video-series-manager-preview-badge">${escHtml(Number(entry.resolvedEpisodeNumber || 0) > 0 ? `E${String(entry.resolvedEpisodeNumber).padStart(2, '0')}` : 'EP')}</span>
+                <span>${escHtml(entry.resolvedEpisodeLabel || entry.fileName || 'Episode')}</span>
+              </div>`).join('')}
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function videoCatalogSeriesManagerScanPath(groupIndex) {
+  return document.getElementById(`videoSeriesManagerScanPath_${Number(groupIndex || 0)}`)?.value?.trim() || '';
+}
+
+function videoCatalogSeriesManagerGroups() {
+  const items = Array.isArray(_videoCatalogModalState.items) ? _videoCatalogModalState.items : [];
+  const groups = new Map();
+  items.forEach((item) => {
+    const files = Array.isArray(item.files) ? item.files : [];
+    const relevantFiles = files.length ? files : [{
+      id: `item_${item.id}`,
+      filename: item.display_title || item.folder_name || 'Untitled',
+      relative_path: item.folder_relative_path || item.folder_name || item.display_title || 'Untitled',
+      season_label: '',
+      season_number: null,
+      episode_label: '',
+      episode_number: null,
+      series_title: item.display_title || '',
+    }];
+    relevantFiles.forEach((file) => {
+      const seed = file.series_title || item.display_title || item.folder_name || file.filename || '';
+      const key = videoLibraryNormalizedSeriesName(seed) || `series_${item.id}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          title: videoLibrarySeriesDisplayTitle({ catalog_title: item.display_title, series_title: file.series_title, title: file.filename, folder: item.folder_name }),
+          items: [],
+          rows: [],
+        });
+      }
+      const group = groups.get(key);
+      if (!group.items.some((entry) => Number(entry.id || 0) === Number(item.id || 0))) {
+        group.items.push(item);
+      }
+      const relativePath = String(file.relative_path || item.folder_relative_path || file.filename || '').trim();
+      group.rows.push({
+        itemId: Number(item.id || 0),
+        fileId: Number(file.id || 0),
+        fileName: videoCatalogFileLabelFromPath(relativePath, String(file.filename || item.display_title || 'File')),
+        relativePath,
+        folderParts: videoCatalogFolderParts(relativePath),
+        seasonLabel: String(file.season_label || '').trim(),
+        seasonNumber: file.season_number,
+        episodeLabel: String(file.episode_label || '').trim(),
+        episodeNumber: file.episode_number,
+        seriesTitle: String(file.series_title || item.display_title || '').trim(),
+      });
+    });
+  });
+  return [...groups.values()].map((group) => {
+    const maxDepth = Math.max(0, ...group.rows.map((row) => Array.isArray(row.folderParts) ? row.folderParts.length : 0));
+    group.folderOptions = Array.from({ length: maxDepth }, (_value, index) => {
+      const depth = index + 1;
+      const samples = [...new Set(group.rows.map((row) => String(row.folderParts?.[index] || '').trim()).filter(Boolean))];
+      return {
+        value: videoCatalogSeriesManagerFolderToken(depth),
+        label: `Folder ${depth}${samples.length ? ` - ${samples.slice(0, 2).join(', ')}${samples.length > 2 ? '...' : ''}` : ''}`,
+      };
+    });
+    group.defaultSeasonSource = group.folderOptions.length ? group.folderOptions[group.folderOptions.length - 1].value : 'none';
+    group.pathPreview = [...new Set(group.rows.map((row) => row.folderParts.join(' / ')).filter(Boolean))].slice(0, 3);
+    group.scanPath = String(_videoCatalogModalState.path || _videoLibraryData?.settings?.videos_root_path || '').trim();
+    return group;
+  }).sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+}
+
+function showVideoSeriesManagerModal() {
+  if (_userRole !== 'admin') {
+    toast('Only admins can manage series.', 'error');
+    return;
+  }
+  const openSeriesManager = () => {
+    const groups = videoCatalogSeriesManagerGroups().filter((group) => group.rows.length);
+    openModal('Series Manager', `
+      <div class="video-series-manager">
+        <div class="video-series-manager-top">
+          <div>
+            <div class="video-series-manager-title">Series Manager</div>
+            <div class="video-series-manager-intro">Group files into proper <strong>Series -> Seasons -> Episodes</strong>. Save one series group and the browser library will use the same structure.</div>
+          </div>
+          <button type="button" class="video-series-manager-close" onclick="closeModal()" aria-label="Close">&times;</button>
+        </div>
+        <div class="video-series-manager-list">
+          ${groups.length ? groups.map((group, groupIndex) => `
+            <div class="video-series-manager-card">
+              <div class="video-series-manager-head">
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Series Name</span>
+                  <input class="fi" id="videoSeriesManagerTitle_${groupIndex}" value="${escHtml(group.title || '')}" placeholder="Lost">
+                </label>
+                <button type="button" class="btn btn-p" onclick="saveVideoSeriesManagerGroup(${groupIndex})">Save Series</button>
+              </div>
+              <div class="video-series-manager-meta">${group.rows.length} episode file${group.rows.length === 1 ? '' : 's'} • ${group.items.length} catalog entr${group.items.length === 1 ? 'y' : 'ies'}</div>
+              <div class="video-series-manager-grid">
+                ${group.rows.map((row, rowIndex) => `
+                  <div class="video-series-manager-row">
+                    <div class="video-series-manager-file">${escHtml(row.fileName)}</div>
+                    <input class="fi" id="videoSeriesManagerSeasonLabel_${groupIndex}_${rowIndex}" value="${escHtml(row.seasonLabel || '')}" placeholder="Season 1">
+                    <input class="fi" id="videoSeriesManagerSeasonNumber_${groupIndex}_${rowIndex}" value="${escHtml(row.seasonNumber != null ? String(row.seasonNumber) : '')}" placeholder="1">
+                    <input class="fi" id="videoSeriesManagerEpisodeLabel_${groupIndex}_${rowIndex}" value="${escHtml(row.episodeLabel || '')}" placeholder="Episode title">
+                    <input class="fi" id="videoSeriesManagerEpisodeNumber_${groupIndex}_${rowIndex}" value="${escHtml(row.episodeNumber != null ? String(row.episodeNumber) : '')}" placeholder="1">
+                  </div>`).join('')}
+              </div>
+            </div>`).join('') : '<div class="video-catalog-empty">No detected series files yet. Run Catalog Sync first.</div>'}
+        </div>
+      </div>`);
+    window.__videoSeriesManagerGroups = groups;
+  };
+  if (!Array.isArray(_videoCatalogModalState.items) || !_videoCatalogModalState.items.length) {
+    _videoCatalogModalState.path = _videoCatalogModalState.path || _videoLibraryData?.settings?.videos_root_path || '';
+    loadVideoCatalogItems().then(openSeriesManager).catch((error) => {
+      console.error('showVideoSeriesManagerModal failed', error);
+      toast(error?.message || 'Could not load series manager.', 'error');
+    });
+    return;
+  }
+  openSeriesManager();
+}
+
+async function saveVideoSeriesManagerGroup(groupIndex) {
+  const groups = Array.isArray(window.__videoSeriesManagerGroups) ? window.__videoSeriesManagerGroups : [];
+  const group = groups[Number(groupIndex || 0)];
+  if (!group) {
+    toast('Series group not found.', 'error');
+    return;
+  }
+  const seriesTitle = document.getElementById(`videoSeriesManagerTitle_${Number(groupIndex || 0)}`)?.value?.trim() || '';
+  if (!seriesTitle) {
+    toast('Enter series name.', 'error');
+    return;
+  }
+  const itemsById = new Map();
+  group.rows.forEach((row, rowIndex) => {
+    if (!itemsById.has(row.itemId)) itemsById.set(row.itemId, []);
+    itemsById.get(row.itemId).push({
+      id: row.fileId,
+      series_title: seriesTitle,
+      season_label: document.getElementById(`videoSeriesManagerSeasonLabel_${Number(groupIndex || 0)}_${rowIndex}`)?.value?.trim() || '',
+      season_number: document.getElementById(`videoSeriesManagerSeasonNumber_${Number(groupIndex || 0)}_${rowIndex}`)?.value?.trim() || '',
+      episode_label: document.getElementById(`videoSeriesManagerEpisodeLabel_${Number(groupIndex || 0)}_${rowIndex}`)?.value?.trim() || '',
+      episode_number: document.getElementById(`videoSeriesManagerEpisodeNumber_${Number(groupIndex || 0)}_${rowIndex}`)?.value?.trim() || '',
+    });
+  });
+  for (const [itemId, files] of itemsById.entries()) {
+    const item = (_videoCatalogModalState.items || []).find((entry) => Number(entry?.id || 0) === Number(itemId || 0));
+    const result = await api(`/api/admin/videos/catalog/${itemId}`, {
+      method: 'PUT',
+      body: {
+        display_title: seriesTitle,
+        media_type: 'series',
+        release_year: item?.release_year != null ? String(item.release_year) : '',
+        poster_url: item?.poster_url || '',
+        poster_relative_path: item?.poster_relative_path || '',
+        genres: catalogCsv(item?.genres),
+        cast_members: catalogCsv(item?.cast_members),
+        creators: catalogCsv(item?.creators),
+        tags: catalogCsv(item?.tags),
+        original_language: item?.original_language || '',
+        country: item?.country || '',
+        content_rating: item?.content_rating || '',
+        runtime_minutes: item?.runtime_minutes != null ? String(item.runtime_minutes) : '',
+        season_count: item?.season_count != null ? String(item.season_count) : '',
+        episode_count: item?.episode_count != null ? String(item.episode_count) : '',
+        synopsis: item?.synopsis || '',
+        ai_notes: item?.ai_notes || '',
+        files,
+      },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not save series group.', 'error');
+      return;
+    }
+    _videoCatalogModalState.items = Array.isArray(result.items) ? result.items : _videoCatalogModalState.items;
+  }
+  toast(`Saved ${seriesTitle}`, 'success');
+  showVideoSeriesManagerModal();
+}
+
+function showVideoSeriesManagerModal() {
+  if (_userRole !== 'admin') {
+    toast('Only admins can manage series.', 'error');
+    return;
+  }
+  const openSeriesManager = () => {
+    const groups = videoCatalogSeriesManagerGroups().filter((group) => group.rows.length);
+    openModal('Series Manager', `
+      <div class="video-series-manager">
+        <div class="video-series-manager-top">
+          <div>
+            <div class="video-series-manager-title">Series Manager</div>
+            <div class="video-series-manager-intro">Pick which folder level should become the <strong>series</strong>, which should become the <strong>season</strong>, and the browser will build episode names from there.</div>
+          </div>
+          <button type="button" class="video-series-manager-close" onclick="closeModal()" aria-label="Close">&times;</button>
+        </div>
+        <div class="video-series-manager-list">
+          ${groups.length ? groups.map((group, groupIndex) => `
+            <div class="video-series-manager-card">
+              <div class="video-series-manager-head">
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Series Name</span>
+                  <input class="fi" id="videoSeriesManagerTitle_${groupIndex}" value="${escHtml(group.title || '')}" placeholder="Lost" oninput="renderVideoSeriesManagerPreview(${groupIndex})">
+                </label>
+                <label class="video-catalog-field">
+                  <span>Series Source</span>
+                  <select class="fi" id="videoSeriesManagerSeriesSource_${groupIndex}" onchange="renderVideoSeriesManagerPreview(${groupIndex})">
+                    <option value="manual">Manual title</option>
+                    ${group.folderOptions.map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="video-catalog-field">
+                  <span>Season Source</span>
+                  <select class="fi" id="videoSeriesManagerSeasonSource_${groupIndex}" onchange="renderVideoSeriesManagerPreview(${groupIndex})">
+                    <option value="none">No season folder</option>
+                    ${group.folderOptions.map((option) => `<option value="${escHtml(option.value)}"${option.value === group.defaultSeasonSource ? ' selected' : ''}>${escHtml(option.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="video-catalog-field">
+                  <span>Episode Source</span>
+                  <select class="fi" id="videoSeriesManagerEpisodeSource_${groupIndex}" onchange="renderVideoSeriesManagerPreview(${groupIndex})">
+                    <option value="filename">Filename</option>
+                    <option value="existing">Saved label</option>
+                    ${group.folderOptions.map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <button type="button" class="btn btn-p" onclick="saveVideoSeriesManagerGroup(${groupIndex})">Save Series</button>
+              </div>
+              <div class="video-series-manager-folderbar">
+                <label class="video-catalog-field video-catalog-field-wide">
+                  <span>Series Folder Path</span>
+                  <input class="fi" id="videoSeriesManagerScanPath_${groupIndex}" value="${escHtml(group.scanPath || '')}" placeholder="D:\\Series\\English\\Lost">
+                </label>
+                <button type="button" class="btn btn-s" onclick="scanVideoSeriesManagerFolder(${groupIndex})">Scan Folder</button>
+                <button type="button" class="btn btn-s danger" onclick="removeVideoSeriesManagerGroup(${groupIndex})">Remove Folder</button>
+              </div>
+              <div class="video-series-manager-meta">${group.rows.length} episode file${group.rows.length === 1 ? '' : 's'} • ${group.items.length} catalog entr${group.items.length === 1 ? 'y' : 'ies'}</div>
+              <div class="video-series-manager-paths">
+                ${group.pathPreview.map((entry) => `<div class="video-series-manager-path">${escHtml(entry)}</div>`).join('')}
+              </div>
+              <div class="video-series-manager-preview" id="videoSeriesManagerPreview_${groupIndex}"></div>
+              <div class="video-series-manager-grid">
+                ${group.rows.map((row) => `
+                  <div class="video-series-manager-row">
+                    <div class="video-series-manager-file">${escHtml(row.fileName)}</div>
+                    <div class="video-series-manager-file-sub">${escHtml(row.relativePath || '-')}</div>
+                  </div>`).join('')}
+              </div>
+            </div>`).join('') : '<div class="video-catalog-empty">No detected series files yet. Run Catalog Sync first.</div>'}
+        </div>
+      </div>`);
+    window.__videoSeriesManagerGroups = groups;
+    groups.forEach((_group, groupIndex) => renderVideoSeriesManagerPreview(groupIndex));
+  };
+  if (!Array.isArray(_videoCatalogModalState.items) || !_videoCatalogModalState.items.length) {
+    _videoCatalogModalState.path = _videoCatalogModalState.path || _videoLibraryData?.settings?.videos_root_path || '';
+    loadVideoCatalogItems().then(openSeriesManager).catch((error) => {
+      console.error('showVideoSeriesManagerModal failed', error);
+      toast(error?.message || 'Could not load series manager.', 'error');
+    });
+    return;
+  }
+  openSeriesManager();
+}
+
+async function saveVideoSeriesManagerGroup(groupIndex) {
+  const groups = Array.isArray(window.__videoSeriesManagerGroups) ? window.__videoSeriesManagerGroups : [];
+  const group = groups[Number(groupIndex || 0)];
+  if (!group) {
+    toast('Series group not found.', 'error');
+    return;
+  }
+  const seriesSource = document.getElementById(`videoSeriesManagerSeriesSource_${Number(groupIndex || 0)}`)?.value?.trim() || 'manual';
+  const manualTitle = document.getElementById(`videoSeriesManagerTitle_${Number(groupIndex || 0)}`)?.value?.trim() || '';
+  if (!manualTitle && seriesSource === 'manual') {
+    toast('Enter series name.', 'error');
+    return;
+  }
+  const preview = videoCatalogSeriesManagerPreviewData(group, groupIndex);
+  const resolvedSeriesTitle = String(preview.seriesTitle || manualTitle || group.title || 'Series').trim();
+  const itemsById = new Map();
+  group.rows.forEach((row) => {
+    const seasonMeta = videoCatalogSeriesManagerSeasonMetaForRow(row, groupIndex);
+    const episodeMeta = videoCatalogSeriesManagerEpisodeMetaForRow(row, groupIndex);
+    if (!itemsById.has(row.itemId)) itemsById.set(row.itemId, []);
+    itemsById.get(row.itemId).push({
+      id: row.fileId,
+      series_title: videoCatalogSeriesManagerSeriesTitleForRow(row, groupIndex) || resolvedSeriesTitle,
+      season_label: seasonMeta.season_label,
+      season_number: seasonMeta.season_number,
+      episode_label: episodeMeta.episode_label,
+      episode_number: episodeMeta.episode_number,
+    });
+  });
+  for (const [itemId, files] of itemsById.entries()) {
+    const item = (_videoCatalogModalState.items || []).find((entry) => Number(entry?.id || 0) === Number(itemId || 0));
+    const result = await api(`/api/admin/videos/catalog/${itemId}`, {
+      method: 'PUT',
+      body: {
+        display_title: resolvedSeriesTitle,
+        media_type: 'series',
+        release_year: item?.release_year != null ? String(item.release_year) : '',
+        poster_url: item?.poster_url || '',
+        poster_relative_path: item?.poster_relative_path || '',
+        genres: catalogCsv(item?.genres),
+        cast_members: catalogCsv(item?.cast_members),
+        creators: catalogCsv(item?.creators),
+        tags: catalogCsv(item?.tags),
+        original_language: item?.original_language || '',
+        country: item?.country || '',
+        content_rating: item?.content_rating || '',
+        runtime_minutes: item?.runtime_minutes != null ? String(item.runtime_minutes) : '',
+        season_count: preview.seasons.length ? String(preview.seasons.length) : (item?.season_count != null ? String(item.season_count) : ''),
+        episode_count: preview.totalEpisodes ? String(preview.totalEpisodes) : (item?.episode_count != null ? String(item.episode_count) : ''),
+        synopsis: item?.synopsis || '',
+        ai_notes: item?.ai_notes || '',
+        files,
+      },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not save series group.', 'error');
+      return;
+    }
+    _videoCatalogModalState.items = Array.isArray(result.items) ? result.items : _videoCatalogModalState.items;
+  }
+  toast(`Saved ${resolvedSeriesTitle}`, 'success');
+  showVideoSeriesManagerModal();
+}
+
+async function scanVideoSeriesManagerFolder(groupIndex) {
+  const scanPath = videoCatalogSeriesManagerScanPath(groupIndex);
+  if (!scanPath) {
+    toast('Enter series folder path first.', 'error');
+    return;
+  }
+  const result = await videoCatalogApi('/api/admin/videos/catalog/scan', {
+    method: 'POST',
+    body: { scan_path: scanPath },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not scan this folder.', 'error');
+    return;
+  }
+  _videoCatalogModalState.path = String(result?.result?.root_path || scanPath).trim();
+  _videoCatalogModalState.items = Array.isArray(result.items) ? result.items : [];
+  toast(`Scanned ${result?.result?.scanned_count || 0} item${Number(result?.result?.scanned_count || 0) === 1 ? '' : 's'}`, 'success');
+  showVideoSeriesManagerModal();
+}
+
+async function removeVideoSeriesManagerGroup(groupIndex) {
+  const groups = Array.isArray(window.__videoSeriesManagerGroups) ? window.__videoSeriesManagerGroups : [];
+  const group = groups[Number(groupIndex || 0)];
+  if (!group) {
+    toast('Series group not found.', 'error');
+    return;
+  }
+  const itemIds = (Array.isArray(group.items) ? group.items : []).map((item) => Number(item?.id || 0)).filter((id) => id > 0);
+  if (!itemIds.length) {
+    toast('No folder items found to remove.', 'error');
+    return;
+  }
+  const confirmed = window.confirm(`Remove "${group.title || 'this folder'}" from the video catalog?`);
+  if (!confirmed) return;
+  const result = await api('/api/admin/videos/catalog/delete', {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not remove folder.', 'error');
+    return;
+  }
+  _videoCatalogModalState.items = Array.isArray(result.items) ? result.items : [];
+  toast(`Removed ${group.title || 'folder'}`, 'success');
+  showVideoSeriesManagerModal();
 }
 
 function videoCatalogSetStatus(status) {
@@ -3251,11 +4199,14 @@ async function videoCatalogPublishItem(itemId) {
 
 async function videoCatalogPublishReviewReady() {
   const reviewIds = (Array.isArray(_videoCatalogModalState.items) ? _videoCatalogModalState.items : [])
-    .filter((item) => String(item.status || '') === 'review')
+    .filter((item) => {
+      const status = String(item.status || '').trim().toLowerCase();
+      return status === 'review' || status === 'scanned';
+    })
     .map((item) => Number(item.id || 0))
     .filter((itemId) => itemId > 0);
   if (!reviewIds.length) {
-    toast('No review-ready titles found.', 'error');
+    toast('No scanned or review-ready titles found.', 'error');
     return;
   }
   const result = await api('/api/admin/videos/catalog/publish', {
@@ -3272,53 +4223,245 @@ async function videoCatalogPublishReviewReady() {
   await loadVideosPage();
 }
 
+let _videoAdminPanelState = {
+  settings: null,
+  moviesTree: null,
+  seriesTree: null,
+};
+
+function videoAdminNormalizeHiddenPaths(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/\r?\n|,/)
+      .map((entry) => String(entry || '').trim())
+      .filter(Boolean);
+  return [...new Set(source)];
+}
+
+function videoAdminReadSettingsFromModal() {
+  const previous = _videoAdminPanelState.settings || {};
+  return {
+    library_title: document.getElementById('videoAdminLibraryTitle')?.value?.trim() || previous.library_title || 'Video Library',
+    videos_root_path: document.getElementById('videoAdminDefaultRoot')?.value?.trim()
+      || document.getElementById('videoAdminSeriesRoot')?.value?.trim()
+      || document.getElementById('videoAdminMoviesRoot')?.value?.trim()
+      || previous.videos_root_path
+      || '',
+    movies_root_path: document.getElementById('videoAdminMoviesRoot')?.value?.trim() || '',
+    series_root_path: document.getElementById('videoAdminSeriesRoot')?.value?.trim() || '',
+    recursive_scan: !!document.getElementById('videoAdminRecursive')?.checked,
+    allowed_extensions: document.getElementById('videoAdminExtensions')?.value?.trim() || '.mp4, .webm, .ogg, .mov, .m4v, .mkv',
+    hidden_paths: videoAdminNormalizeHiddenPaths(document.getElementById('videoAdminHiddenPaths')?.value || previous.hidden_paths || []),
+  };
+}
+
+async function videoAdminFetchTree(rootPath) {
+  const pathValue = String(rootPath || '').trim();
+  if (!pathValue) return null;
+  const result = await api(`/api/admin/videos/folders/tree?root_path=${encodeURIComponent(pathValue)}&max_depth=5`);
+  if (!result?.success) throw new Error(result?.error || 'Could not load folder tree.');
+  return result.tree || null;
+}
+
+async function loadVideoAdminPanel() {
+  const settingsResult = await api('/api/admin/videos/settings');
+  if (!settingsResult?.success) throw new Error(settingsResult?.error || 'Could not load video settings.');
+  const settings = settingsResult.settings || {};
+  const [moviesTree, seriesTree] = await Promise.all([
+    settings.movies_root_path ? videoAdminFetchTree(settings.movies_root_path) : Promise.resolve(null),
+    settings.series_root_path ? videoAdminFetchTree(settings.series_root_path) : Promise.resolve(null),
+  ]);
+  _videoAdminPanelState = { settings, moviesTree, seriesTree };
+}
+
+function renderVideoAdminTreeNode(node, kind, depth = 0) {
+  if (!node) return '';
+  const absolutePath = String(node.absolute_path || '').trim();
+  const isHidden = !!node.hidden;
+  return `
+    <div class="video-admin-tree-node" style="margin-left:${depth * 14}px">
+      <div class="video-admin-tree-row">
+        <div class="video-admin-tree-copy">
+          <div class="video-admin-tree-name">${escHtml(node.name || node.relative_path || absolutePath || 'Folder')}</div>
+          <div class="video-admin-tree-meta">${escHtml(absolutePath || '')} • ${Number(node.video_file_count || 0)} video files • ${Number(node.folder_count || 0)} subfolders${isHidden ? ' • Hidden' : ''}</div>
+        </div>
+        <div class="video-admin-tree-actions">
+          <button class="btn btn-s btn-sm" type="button" onclick='videoAdminAssignRoot("${kind}", ${JSON.stringify(absolutePath)})'>Use Here</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='videoAdminScanFolderPath(${JSON.stringify(absolutePath)})'>Scan</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='videoAdminToggleHidden(${JSON.stringify(absolutePath)}, ${isHidden ? 'false' : 'true'})'>${isHidden ? 'Unhide' : 'Hide'}</button>
+        </div>
+      </div>
+      ${(Array.isArray(node.children) && node.children.length) ? `<div class="video-admin-tree-children">${node.children.map((child) => renderVideoAdminTreeNode(child, kind, depth + 1)).join('')}</div>` : ''}
+    </div>`;
+}
+
+function renderVideoAdminPanel() {
+  const settings = _videoAdminPanelState.settings || {};
+  const hiddenPaths = Array.isArray(settings.hidden_paths) ? settings.hidden_paths : [];
+  openModal('Video Admin Panel', `
+    <div class="video-admin-panel">
+      <div class="video-admin-header">
+        <div>
+          <div class="video-admin-title">Video Admin Panel</div>
+          <div class="video-admin-sub">Choose separate movie and series folders, browse the real folder structure, scan only the folders you want, and hide anything from the browser library.</div>
+        </div>
+        <button type="button" class="video-series-manager-close" onclick="closeModal()" aria-label="Close">&times;</button>
+      </div>
+      <div class="video-admin-grid">
+        <label class="video-catalog-field video-catalog-field-wide">
+          <span>Library Title</span>
+          <input class="fi" id="videoAdminLibraryTitle" value="${escHtml(settings.library_title || 'Video Library')}" placeholder="Video Library">
+        </label>
+        <label class="video-catalog-field">
+          <span>Movies Root</span>
+          <input class="fi" id="videoAdminMoviesRoot" value="${escHtml(settings.movies_root_path || '')}" placeholder="D:\\Movies">
+        </label>
+        <label class="video-catalog-field">
+          <span>Series Root</span>
+          <input class="fi" id="videoAdminSeriesRoot" value="${escHtml(settings.series_root_path || '')}" placeholder="D:\\Series">
+        </label>
+        <label class="video-catalog-field">
+          <span>Default Runtime Root</span>
+          <input class="fi" id="videoAdminDefaultRoot" value="${escHtml(settings.videos_root_path || '')}" placeholder="Fallback root">
+        </label>
+        <label class="video-catalog-field">
+          <span>Allowed Extensions</span>
+          <input class="fi" id="videoAdminExtensions" value="${escHtml((settings.allowed_extensions || ['.mp4', '.webm', '.ogg', '.mov', '.m4v', '.mkv']).join(', '))}" placeholder=".mp4, .mkv">
+        </label>
+        <label class="video-catalog-field video-catalog-field-wide" style="display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="videoAdminRecursive" ${settings.recursive_scan !== false ? 'checked' : ''} style="width:16px;height:16px">
+          Scan subfolders recursively
+        </label>
+        <label class="video-catalog-field video-catalog-field-wide">
+          <span>Hidden Folders</span>
+          <textarea class="fi" id="videoAdminHiddenPaths" rows="4" placeholder="One absolute folder path per line">${escHtml(hiddenPaths.join('\n'))}</textarea>
+        </label>
+      </div>
+      <div class="video-admin-actions">
+        <button class="btn btn-p" type="button" onclick="saveVideoLibrarySettings()">Save Admin Settings</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminLoadTreeForRoot('movies')">Load Movies Tree</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminLoadTreeForRoot('series')">Load Series Tree</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminScanRoot('movies')">Scan Movies Root</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminScanRoot('series')">Scan Series Root</button>
+        <button class="btn btn-g" type="button" onclick="showVideoSeriesManagerModal()">Series Mapping</button>
+      </div>
+      <div class="video-admin-columns">
+        <div class="video-admin-card">
+          <div class="video-admin-card-head">
+            <div class="video-admin-card-title">Movies Folder Structure</div>
+            <div class="video-admin-card-meta">${escHtml(settings.movies_root_path || 'Set a movies root to browse folders')}</div>
+          </div>
+          <div class="video-admin-tree">${_videoAdminPanelState.moviesTree ? renderVideoAdminTreeNode(_videoAdminPanelState.moviesTree, 'movies') : '<div class="video-catalog-empty">No movies folder loaded yet.</div>'}</div>
+        </div>
+        <div class="video-admin-card">
+          <div class="video-admin-card-head">
+            <div class="video-admin-card-title">Series Folder Structure</div>
+            <div class="video-admin-card-meta">${escHtml(settings.series_root_path || 'Set a series root to browse folders')}</div>
+          </div>
+          <div class="video-admin-tree">${_videoAdminPanelState.seriesTree ? renderVideoAdminTreeNode(_videoAdminPanelState.seriesTree, 'series') : '<div class="video-catalog-empty">No series folder loaded yet.</div>'}</div>
+        </div>
+      </div>
+    </div>`);
+}
+
+async function videoAdminLoadTreeForRoot(kind) {
+  const isMovies = String(kind || '') === 'movies';
+  const inputId = isMovies ? 'videoAdminMoviesRoot' : 'videoAdminSeriesRoot';
+  const rootPath = document.getElementById(inputId)?.value?.trim() || '';
+  if (!rootPath) {
+    toast(`Enter ${isMovies ? 'movies' : 'series'} root first.`, 'error');
+    return;
+  }
+  const tree = await videoAdminFetchTree(rootPath);
+  _videoAdminPanelState.settings = videoAdminReadSettingsFromModal();
+  if (isMovies) _videoAdminPanelState.moviesTree = tree;
+  else _videoAdminPanelState.seriesTree = tree;
+  renderVideoAdminPanel();
+}
+
+function videoAdminAssignRoot(kind, folderPath) {
+  const inputId = String(kind || '') === 'movies' ? 'videoAdminMoviesRoot' : 'videoAdminSeriesRoot';
+  const input = document.getElementById(inputId);
+  if (input) input.value = String(folderPath || '').trim();
+}
+
+async function videoAdminScanFolderPath(folderPath) {
+  const pathValue = String(folderPath || '').trim();
+  if (!pathValue) {
+    toast('Folder path is missing.', 'error');
+    return;
+  }
+  const result = await videoCatalogApi('/api/admin/videos/catalog/scan', {
+    method: 'POST',
+    body: { scan_path: pathValue },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not scan folder.', 'error');
+    return;
+  }
+  _videoCatalogModalState.path = String(result?.result?.root_path || pathValue).trim();
+  _videoCatalogModalState.items = Array.isArray(result.items) ? result.items : [];
+  toast(`Scanned ${result?.result?.scanned_count || 0} folders`, 'success');
+}
+
+async function videoAdminScanRoot(kind) {
+  const inputId = String(kind || '') === 'movies' ? 'videoAdminMoviesRoot' : 'videoAdminSeriesRoot';
+  const rootPath = document.getElementById(inputId)?.value?.trim() || '';
+  if (!rootPath) {
+    toast(`Enter ${kind} root first.`, 'error');
+    return;
+  }
+  await videoAdminScanFolderPath(rootPath);
+}
+
+async function videoAdminToggleHidden(folderPath, shouldHide = true) {
+  const settings = videoAdminReadSettingsFromModal();
+  const nextHidden = new Set(videoAdminNormalizeHiddenPaths(settings.hidden_paths));
+  if (shouldHide) nextHidden.add(String(folderPath || '').trim());
+  else nextHidden.delete(String(folderPath || '').trim());
+  settings.hidden_paths = [...nextHidden];
+  const result = await api('/api/admin/videos/settings', {
+    method: 'PUT',
+    body: settings,
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not update hidden folders.', 'error');
+    return;
+  }
+  await loadVideoAdminPanel();
+  renderVideoAdminPanel();
+  await loadVideosPage();
+  toast(shouldHide ? 'Folder hidden from browser library' : 'Folder visible again', 'success');
+}
+
 function showVideoLibrarySettingsModal() {
   if (_userRole !== 'admin') {
     toast('Only admins can change video settings.', 'error');
     return;
   }
-  const settings = _videoLibraryData?.settings || {};
-  openModal('Video Library Settings', `
-    <div class="fg">
-      <label class="fl full">Library Title
-        <input class="fi" id="videoLibraryTitle" value="${escHtml(settings.library_title || 'Video Library')}" placeholder="Video Library">
-      </label>
-      <label class="fl full">Server Video Folder Path
-        <input class="fi" id="videoLibraryPath" value="${escHtml(settings.videos_root_path || '')}" placeholder="e.g. D:\\Videos or /srv/videos">
-      </label>
-      <label class="fl full" style="display:flex;align-items:center;gap:10px">
-        <input type="checkbox" id="videoLibraryRecursive" ${settings.recursive_scan !== false ? 'checked' : ''} style="width:16px;height:16px">
-        Scan subfolders recursively
-      </label>
-      <label class="fl full">Allowed Extensions
-        <input class="fi" id="videoLibraryExtensions" value="${escHtml((settings.allowed_extensions || ['.mp4', '.webm', '.ogg', '.mov', '.m4v']).join(', '))}" placeholder=".mp4, .webm, .ogg">
-      </label>
-      <div style="font-size:12px;color:var(--t3);line-height:1.7">
-        Save the folder where video files exist on the server. Users will only see supported video files from this folder in the Videos page.
-      </div>
-    </div>
-    <div class="fa" style="margin-top:16px">
-      <button class="btn btn-p" onclick="saveVideoLibrarySettings()">Save Settings</button>
-      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
-    </div>`);
+  openModal('Video Admin Panel', '<div class="video-catalog-empty">Loading admin panel...</div>');
+  loadVideoAdminPanel().then(renderVideoAdminPanel).catch((error) => {
+    console.error('showVideoLibrarySettingsModal failed', error);
+    toast(error?.message || 'Could not load video admin panel.', 'error');
+    closeModal();
+  });
 }
 
 async function saveVideoLibrarySettings() {
-  const library_title = document.getElementById('videoLibraryTitle')?.value?.trim() || 'Video Library';
-  const videos_root_path = document.getElementById('videoLibraryPath')?.value?.trim() || '';
-  const recursive_scan = !!document.getElementById('videoLibraryRecursive')?.checked;
-  const allowed_extensions = document.getElementById('videoLibraryExtensions')?.value?.trim() || '.mp4, .webm, .ogg, .mov, .m4v';
-
+  const payload = videoAdminReadSettingsFromModal();
   const result = await api('/api/admin/videos/settings', {
     method: 'PUT',
-    body: { library_title, videos_root_path, recursive_scan, allowed_extensions },
+    body: payload,
   });
   if (!result?.success) {
     toast(result?.error || 'Could not save video settings.', 'error');
     return;
   }
-  closeModal();
-  toast('Video library settings saved', 'success');
+  _videoAdminPanelState.settings = result.settings || payload;
+  await loadVideoAdminPanel();
+  renderVideoAdminPanel();
+  toast('Video admin settings saved', 'success');
   await loadVideosPage();
 }
 
@@ -3343,6 +4486,12 @@ window.videoPlayerRate = videoPlayerRate;
 window.videoPlayerCycleRate = videoPlayerCycleRate;
 window.videoPlayerFullscreen = videoPlayerFullscreen;
 window.showVideoCatalogModal = showVideoCatalogModal;
+window.showVideoSeriesManagerModal = showVideoSeriesManagerModal;
+window.saveVideoSeriesManagerGroup = saveVideoSeriesManagerGroup;
+window.renderVideoSeriesManagerPreview = renderVideoSeriesManagerPreview;
+window.scanVideoSeriesManagerFolder = scanVideoSeriesManagerFolder;
+window.removeVideoSeriesManagerGroup = removeVideoSeriesManagerGroup;
+window.setVideoLibraryDetailSeason = setVideoLibraryDetailSeason;
 window.videoCatalogSetStatus = videoCatalogSetStatus;
 window.videoCatalogScanNow = videoCatalogScanNow;
 window.videoCatalogAiDraftNow = videoCatalogAiDraftNow;
@@ -3351,6 +4500,11 @@ window.videoCatalogSaveItem = videoCatalogSaveItem;
 window.videoCatalogPublishItem = videoCatalogPublishItem;
 window.videoCatalogPublishReviewReady = videoCatalogPublishReviewReady;
 window.showVideoLibrarySettingsModal = showVideoLibrarySettingsModal;
+window.videoAdminLoadTreeForRoot = videoAdminLoadTreeForRoot;
+window.videoAdminAssignRoot = videoAdminAssignRoot;
+window.videoAdminScanRoot = videoAdminScanRoot;
+window.videoAdminScanFolderPath = videoAdminScanFolderPath;
+window.videoAdminToggleHidden = videoAdminToggleHidden;
 window.saveVideoLibrarySettings = saveVideoLibrarySettings;
 window.flushVideoPlaybackProgress = flushVideoPlaybackProgress;
 window.flushVideoPlaybackProgressWithTimeout = flushVideoPlaybackProgressWithTimeout;
