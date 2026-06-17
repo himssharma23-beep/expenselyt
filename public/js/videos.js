@@ -2046,7 +2046,7 @@ function openVideoLibraryDetail(videoId) {
             <div class="video-detail-frame">
               ${video?.available === false
                 ? `<div class="video-detail-unavailable"><div>File not available on server.</div></div>`
-                : `<video id="videoLibraryPlayer" class="videos-player video-detail-media video-js vjs-default-skin" controls controlslist="nodownload noplaybackrate noremoteplayback" disablepictureinpicture disableremoteplayback preload="auto" playsinline oncontextmenu="return false">${videoLibrarySubtitleTracks(video)}</video>`}
+                : `<video id="videoLibraryPlayer" class="videos-player video-detail-media" controlslist="nodownload noplaybackrate noremoteplayback" disablepictureinpicture disableremoteplayback preload="auto" playsinline oncontextmenu="return false">${videoLibrarySubtitleTracks(video)}</video>`}
             </div>
             ${video?.available === false ? '' : `<div class="video-detail-controls-wrap">
               <div class="video-detail-timeline">
