@@ -135,6 +135,77 @@ function resolveVideoRootPathForRuntime(configuredPath) {
   return configuredResolved;
 }
 
+async function findFileByNameWithinRoot(rootPath, filename, maxDepth = 8) {
+  const safeRoot = normalizeResolvedPath(rootPath);
+  const targetName = String(filename || '').trim().toLowerCase();
+  if (!safeRoot || !targetName) return null;
+
+  async function walk(currentPath, depth) {
+    if (depth > maxDepth) return null;
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+    } catch (_err) {
+      return null;
+    }
+
+    for (const entry of entries) {
+      if (entry.isFile() && String(entry.name || '').trim().toLowerCase() === targetName) {
+        return path.join(currentPath, entry.name);
+      }
+    }
+
+    const directories = entries.filter((entry) => entry.isDirectory());
+    for (const entry of directories) {
+      const found = await walk(path.join(currentPath, entry.name), depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  return walk(safeRoot, 0);
+}
+
+async function resolveExistingMediaPath(rootPath, relativePath = '', filenameHint = '') {
+  const resolvedRootPath = resolveVideoRootPathForRuntime(rootPath);
+  const normalizedRelativePath = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!resolvedRootPath) return null;
+
+  if (normalizedRelativePath && !normalizedRelativePath.includes('..')) {
+    const directAbsolutePath = path.resolve(resolvedRootPath, normalizedRelativePath);
+    if (isPathInsideRoot(resolvedRootPath, directAbsolutePath)) {
+      try {
+        const stats = await fs.promises.stat(directAbsolutePath);
+        if (stats.isFile()) {
+          return {
+            root_path: resolvedRootPath,
+            relative_path: normalizedRelativePath,
+            absolute_path: directAbsolutePath,
+            stats,
+          };
+        }
+      } catch (_err) {}
+    }
+  }
+
+  const fallbackName = String(filenameHint || path.basename(normalizedRelativePath) || '').trim();
+  if (!fallbackName) return null;
+  const fallbackAbsolutePath = await findFileByNameWithinRoot(resolvedRootPath, fallbackName);
+  if (!fallbackAbsolutePath || !isPathInsideRoot(resolvedRootPath, fallbackAbsolutePath)) return null;
+  try {
+    const stats = await fs.promises.stat(fallbackAbsolutePath);
+    if (!stats.isFile()) return null;
+    return {
+      root_path: resolvedRootPath,
+      relative_path: path.relative(resolvedRootPath, fallbackAbsolutePath).split(path.sep).join('/'),
+      absolute_path: fallbackAbsolutePath,
+      stats,
+    };
+  } catch (_err) {
+    return null;
+  }
+}
+
 function prettyVideoTitle(filename) {
   return String(filename || '')
     .replace(/\.[^.]+$/, '')
@@ -1875,25 +1946,18 @@ async function resolveVideoStreamTarget(token) {
     );
     const file = rows.rows[0];
     if (!file) return null;
-    const resolvedRootPath = resolveVideoRootPathForRuntime(file.source_root_path);
-    const absolutePath = path.resolve(resolvedRootPath, String(file.relative_path || ''));
-    if (!isPathInsideRoot(resolvedRootPath, absolutePath)) return null;
-    try {
-      const stats = await fs.promises.stat(absolutePath);
-      if (!stats.isFile()) return null;
-      return {
-        source_root_path: resolvedRootPath,
-        relative_path: String(file.relative_path || ''),
-        absolute_path: absolutePath,
-        stats,
-        filename: file.filename || path.basename(absolutePath),
-        title: prettyVideoTitle(file.filename || path.basename(absolutePath)),
-        mime_type: file.mime_type || videoMimeType(absolutePath),
-        audio_tracks: await listEmbeddedAudioTracks(resolvedRootPath, String(file.relative_path || '')),
-      };
-    } catch (_err) {
-      return null;
-    }
+    const resolvedTarget = await resolveExistingMediaPath(file.source_root_path, String(file.relative_path || ''), file.filename || '');
+    if (!resolvedTarget) return null;
+    return {
+      source_root_path: resolvedTarget.root_path,
+      relative_path: resolvedTarget.relative_path,
+      absolute_path: resolvedTarget.absolute_path,
+      stats: resolvedTarget.stats,
+      filename: file.filename || path.basename(resolvedTarget.absolute_path),
+      title: prettyVideoTitle(file.filename || path.basename(resolvedTarget.absolute_path)),
+      mime_type: file.mime_type || videoMimeType(resolvedTarget.absolute_path),
+      audio_tracks: await listEmbeddedAudioTracks(resolvedTarget.root_path, resolvedTarget.relative_path),
+    };
   }
 
   const settings = await getVideoLibrarySettings();
@@ -1972,13 +2036,13 @@ async function resolveSubtitleStreamTarget(token) {
     const streamIndex = Number(structured.stream_index || 0);
     if (!relativeVideoPath || relativeVideoPath.includes('..') || !Number.isInteger(streamIndex) || streamIndex < 0) return null;
     const resolvedRootPath = resolveVideoRootPathForRuntime(structured.root_path || (await getVideoLibrarySettings()).videos_root_path);
-    const absoluteVideoPath = path.resolve(resolvedRootPath, relativeVideoPath);
-    if (!isPathInsideRoot(resolvedRootPath, absoluteVideoPath)) return null;
     try {
-      const absoluteSubtitlePath = await ensureEmbeddedSubtitleExtracted(resolvedRootPath, relativeVideoPath, streamIndex);
+      const resolvedVideoTarget = await resolveExistingMediaPath(resolvedRootPath, relativeVideoPath, path.basename(relativeVideoPath));
+      if (!resolvedVideoTarget) return null;
+      const absoluteSubtitlePath = await ensureEmbeddedSubtitleExtracted(resolvedVideoTarget.root_path, resolvedVideoTarget.relative_path, streamIndex);
       const stats = await fs.promises.stat(absoluteSubtitlePath);
       return {
-        relative_path: relativeVideoPath,
+        relative_path: resolvedVideoTarget.relative_path,
         absolute_path: absoluteSubtitlePath,
         stats,
         filename: path.basename(absoluteSubtitlePath),

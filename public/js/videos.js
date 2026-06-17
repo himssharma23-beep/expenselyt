@@ -993,6 +993,11 @@ async function saveVideoPlaybackProgress(forceComplete = false) {
   const player = getVideoLibraryPlayer();
   const video = videoLibrarySelectedVideo();
   if (!player || !(video?.progress_key || video?.relative_path)) return;
+  const matchesVideo = (item) => (
+    String(item?.id || '') === String(video?.id || '')
+    || (String(video?.progress_key || '') && String(item?.progress_key || '') === String(video?.progress_key || ''))
+    || (String(video?.relative_path || '') && String(item?.relative_path || '') === String(video?.relative_path || ''))
+  );
   const duration = Number(videoPlayerExpectedDuration(player, video) || video.progress?.duration_seconds || 0);
   const current = forceComplete ? duration : videoPlayerCurrentSeconds(player, video);
   if (!forceComplete && video?.progress?.is_completed && current <= 5) {
@@ -1012,7 +1017,7 @@ async function saveVideoPlaybackProgress(forceComplete = false) {
     _videoLibraryData = {
       ..._videoLibraryData,
       videos: Array.isArray(_videoLibraryData?.videos)
-        ? _videoLibraryData.videos.map((item) => String(item.relative_path || '') === String(video.relative_path || '')
+        ? _videoLibraryData.videos.map((item) => matchesVideo(item)
           ? { ...item, progress: optimisticProgress }
           : item)
         : [],
@@ -1033,7 +1038,7 @@ async function saveVideoPlaybackProgress(forceComplete = false) {
   _videoLibraryData = {
     ..._videoLibraryData,
     videos: Array.isArray(_videoLibraryData?.videos)
-      ? _videoLibraryData.videos.map((item) => String(item.relative_path || '') === String(video.relative_path || '')
+      ? _videoLibraryData.videos.map((item) => matchesVideo(item)
         ? { ...item, progress }
         : item)
       : [],
@@ -1946,12 +1951,13 @@ function scrollVideoDetailActiveEpisodeIntoView() {
   });
 }
 
-function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
+async function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   const allVideos = Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : [];
   const group = videoLibraryFindSeriesGroupById(seriesId, allVideos);
   if (!group) return;
   const episode = videoLibrarySelectSeriesEpisode(group, episodeId);
   if (!episode) return;
+  await flushVideoPlaybackProgressWithTimeout(500);
   _selectedVideoLibraryId = String(episode?.id || '');
   _selectedVideoSubtitleId = '';
   _selectedVideoAudioTrackId = '';
