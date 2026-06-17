@@ -336,8 +336,9 @@ function guessVideoMimeType(video) {
 
 function getPlayableVideoSource(video, audioTrackId = '') {
   const normalizedAudioTrackId = String(audioTrackId || '').trim();
-  const directStreamUrl = !normalizedAudioTrackId ? buildVideoStreamUrl(video, '') : '';
-  if (directStreamUrl) {
+  const canUseDirectStream = !normalizedAudioTrackId && !!video?.direct_play_supported;
+  const directStreamUrl = canUseDirectStream ? buildVideoStreamUrl(video, '') : '';
+  if (canUseDirectStream && directStreamUrl) {
     return {
       src: directStreamUrl,
       type: guessVideoMimeType(video),
@@ -1821,6 +1822,19 @@ function videoLibraryNowPlayingLabel(video) {
   return parts.join(' • ');
 }
 
+function scrollVideoDetailActiveEpisodeIntoView() {
+  requestAnimationFrame(() => {
+    const activeEpisode = document.querySelector('.video-detail-main-episode.active');
+    if (activeEpisode && typeof activeEpisode.scrollIntoView === 'function') {
+      activeEpisode.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      });
+    }
+  });
+}
+
 function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   const allVideos = Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : [];
   const group = videoLibraryFindSeriesGroupById(seriesId, allVideos);
@@ -2157,6 +2171,7 @@ function openVideoLibraryDetail(videoId) {
         </div>
       </div>`);
     requestAnimationFrame(() => {
+      scrollVideoDetailActiveEpisodeIntoView();
       (async () => {
         await initializeVideoLibraryPlayer(video, deferInitialAudioSwitch ? '' : initialAudioTrackId);
         _videoProgressBoundVideoId = '';
