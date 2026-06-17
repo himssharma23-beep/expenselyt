@@ -3257,6 +3257,10 @@ function videoCatalogFileLabelFromPath(value, fallback = '') {
   return parts.length ? parts[parts.length - 1] : String(fallback || '');
 }
 
+
+
+
+
 function videoCatalogSeasonNumberFromText(value) {
   const text = String(value || '').trim();
   if (!text) return null;
