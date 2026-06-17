@@ -1979,14 +1979,10 @@ async function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   const episode = videoLibrarySelectSeriesEpisode(group, episodeId);
   if (!episode) return;
   await flushVideoPlaybackProgressWithTimeout(500);
-  _selectedVideoLibraryId = String(episode?.id || '');
-  _selectedVideoSubtitleId = '';
-  _selectedVideoAudioTrackId = '';
-  _videoPendingSourceState = null;
-  _videoAudioStreamOffsetSeconds = 0;
-  _videoAltAudioOutputMuted = false;
-  clearVideoLibraryAltAudioPlayer();
-  openVideoLibraryDetail(String(seriesId || ''));
+  openVideoLibraryDetail(String(seriesId || ''), {
+    skipProgressFlush: true,
+    targetEpisodeId: String(episode?.id || ''),
+  });
 }
 
 function videoLibrarySeriesCount(videos = []) {
@@ -2128,16 +2124,18 @@ function closeVideoLibraryDetail() {
   });
 }
 
-function openVideoLibraryDetail(videoId) {
+function openVideoLibraryDetail(videoId, options = {}) {
   const allVideos = Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : [];
+  const skipProgressFlush = !!options?.skipProgressFlush;
+  const targetEpisodeId = String(options?.targetEpisodeId || '');
   const seriesMode = String(videoId || '').startsWith('series:');
   const seriesGroup = seriesMode ? videoLibraryFindSeriesGroupById(videoId, allVideos) : null;
   const video = seriesMode
-    ? videoLibrarySelectSeriesEpisode(seriesGroup, _selectedVideoLibraryId)
+    ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || _selectedVideoLibraryId)
     : allVideos.find((item) => String(item?.id) === String(videoId || ''));
   if (!video) return;
   rememberVideoPlaylistScroll(videoId);
-  flushVideoPlaybackProgress().catch(() => {}).finally(() => {
+  const continueOpen = () => {
     _selectedVideoLibraryId = String(video.id || '');
     _selectedVideoSubtitleId = '';
     const audioTracks = videoLibraryAudioTracks(video);
@@ -2329,7 +2327,12 @@ function openVideoLibraryDetail(videoId) {
         scheduleInitialAudioSwitch();
       });
     });
-  });
+  };
+  if (skipProgressFlush) {
+    continueOpen();
+    return;
+  }
+  flushVideoPlaybackProgress().catch(() => {}).finally(continueOpen);
 }
 
 function videoLibraryOpenRandom() {
