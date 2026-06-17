@@ -8530,13 +8530,15 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   box-shadow:0 10px 24px rgba(0,0,0,.22);
 }
 .video-detail-main-episodes{
-  display:grid;
-  grid-template-columns:minmax(0,1fr);
+  display:flex;
+  flex-wrap:nowrap;
   gap:10px;
   min-height:0;
   max-height:none;
-  overflow:visible;
-  padding-right:0;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding:2px 0 8px;
+  scroll-snap-type:x proximity;
 }
 .video-detail-main-episode{
   border:1px solid rgba(255,255,255,.08);
@@ -8551,6 +8553,8 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   grid-template-columns:64px minmax(0,1fr);
   gap:14px;
   align-items:center;
+  flex:0 0 min(420px, 78vw);
+  scroll-snap-align:start;
 }
 .video-detail-main-episode:hover{
   background:rgba(255,255,255,.06);
@@ -8653,14 +8657,15 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
     max-height:min(48vh, 360px);
   }
   .video-detail-main-episodes{
-    grid-template-columns:minmax(0,1fr);
     max-height:none;
-    overflow:visible;
-    padding-right:0;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding:2px 0 8px;
   }
   .video-detail-main-episode{
     grid-template-columns:52px minmax(0,1fr);
     gap:10px;
+    flex-basis:min(320px, 84vw);
   }
   .video-detail-main-episode-badge{
     width:52px;
