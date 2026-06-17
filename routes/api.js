@@ -477,6 +477,24 @@ async function ensureMobileVideoCacheFile(target, ffmpegCommand) {
   };
 }
 
+async function getExistingMobileVideoCacheFile(target) {
+  await fs.promises.mkdir(VIDEO_MOBILE_CACHE_DIR, { recursive: true });
+  const cacheKey = hashMobileVideoKey(target);
+  const finalPath = path.join(VIDEO_MOBILE_CACHE_DIR, `${cacheKey}.mp4`);
+  try {
+    const stats = await fs.promises.stat(finalPath);
+    if (stats.isFile() && Number(stats.size || 0) > 0) {
+      return {
+        absolute_path: finalPath,
+        stats,
+        filename: (target.filename || 'video').replace(/\.[^.]+$/, '.mp4'),
+        mime_type: 'video/mp4',
+      };
+    }
+  } catch (_err) {}
+  return null;
+}
+
 function hashAudioClipKey(target, streamIndex, startSeconds) {
   return crypto
     .createHash('sha1')
@@ -646,6 +664,24 @@ async function ensureAlternateVideoCacheFile(target, ffmpegCommand, streamIndex)
 
   altVideoCachePromises.set(cacheKey, task);
   return task;
+}
+
+async function getExistingAlternateVideoCacheFile(target, streamIndex) {
+  await fs.promises.mkdir(VIDEO_ALT_STREAM_CACHE_DIR, { recursive: true });
+  const cacheKey = hashAltVideoKey(target, streamIndex);
+  const finalPath = path.join(VIDEO_ALT_STREAM_CACHE_DIR, `${cacheKey}.mp4`);
+  try {
+    const stats = await fs.promises.stat(finalPath);
+    if (stats.isFile() && Number(stats.size || 0) > 0) {
+      return {
+        absolute_path: finalPath,
+        filename: `${String(target?.filename || 'video').replace(/\.[^.]+$/, '')}.mp4`,
+        mime_type: 'video/mp4',
+        stats,
+      };
+    }
+  } catch (_err) {}
+  return null;
 }
 
 function normalizeOcrAmount(value) {
@@ -8654,12 +8690,16 @@ router.get('/videos/stream/:token', requireAuth, async (req, res) => {
         return streamLocalFileWithRange(req, res, cachedAudio);
       }
 
-      const cachedVideo = await ensureAlternateVideoCacheFile(
+      const requestedStreamIndex = Number(target.audio_track.stream_index || 0);
+      const cachedVideo = await getExistingAlternateVideoCacheFile(
         target,
-        pgVideoDb.ffmpegCommand(),
-        Number(target.audio_track.stream_index || 0)
+        requestedStreamIndex
       );
-      return streamLocalFileWithRange(req, res, cachedVideo);
+      if (cachedVideo) {
+        return streamLocalFileWithRange(req, res, cachedVideo);
+      }
+
+      return streamTranscodedMp4ToResponse(req, res, target, pgVideoDb.ffmpegCommand(), requestedStreamIndex);
 
       res.setHeader('Content-Type', audioOnly ? 'audio/mp4' : 'video/mp4');
       res.setHeader('Cache-Control', 'private, max-age=60');
@@ -8720,8 +8760,11 @@ router.get('/videos/stream/:token', requireAuth, async (req, res) => {
       if (!mediaTools?.available) {
         return res.status(503).json({ error: mediaTools?.message || 'Browser-compatible transcoding is not available right now.' });
       }
-      const cachedTarget = await ensureMobileVideoCacheFile(target, pgVideoDb.ffmpegCommand());
-      return streamLocalFileWithRange(req, res, cachedTarget);
+      const cachedTarget = await getExistingMobileVideoCacheFile(target);
+      if (cachedTarget) {
+        return streamLocalFileWithRange(req, res, cachedTarget);
+      }
+      return streamTranscodedMp4ToResponse(req, res, target, pgVideoDb.ffmpegCommand());
     }
 
     const fileSize = Number(target.stats?.size || 0);
