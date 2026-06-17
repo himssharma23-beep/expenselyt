@@ -8270,6 +8270,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   display:flex;
   align-items:center;
   justify-content:center;
+  position:relative;
   aspect-ratio:16 / 9;
   max-height:min(56vh, 420px);
   overflow:hidden;
@@ -8284,6 +8285,29 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   display:block;
   background:#000;
   object-fit:contain;
+}
+.video-subtitle-overlay{
+  position:absolute;
+  left:24px;
+  right:24px;
+  bottom:24px;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  pointer-events:none;
+  color:#fff;
+  font-size:20px;
+  font-weight:700;
+  line-height:1.45;
+  text-shadow:0 2px 8px rgba(0,0,0,.95), 0 0 2px rgba(0,0,0,.9);
+  z-index:3;
+}
+.video-subtitle-overlay.active{
+  display:flex;
+}
+.video-subtitle-overlay br{
+  content:"";
 }
 .video-detail-controls-wrap{
   display:flex;
