@@ -276,7 +276,7 @@ function videoLibrarySubtitleTracks(video) {
   return subtitles.map((subtitle) => `
     <track
       src="${escHtml(`/api/videos/subtitles/${encodeURIComponent(subtitle.id)}`)}"
-      kind="subtitles"
+      kind="captions"
       srclang="${escHtml(subtitle.srclang || 'en')}"
       label="${escHtml(subtitle.label || 'Subtitles')}"
     >`).join('');
@@ -336,23 +336,27 @@ function guessVideoMimeType(video) {
 
 function getPlayableVideoSource(video, audioTrackId = '') {
   const normalizedAudioTrackId = String(audioTrackId || '').trim();
-  const canUseDirectStream = !normalizedAudioTrackId && !!video?.direct_play_supported;
-  const directStreamUrl = canUseDirectStream ? buildVideoStreamUrl(video, '') : '';
-  if (canUseDirectStream && directStreamUrl) {
+  if (!normalizedAudioTrackId) {
+    const mobileUrl = buildVideoMobileStreamUrl(video);
+    if (mobileUrl) {
+      return {
+        src: mobileUrl,
+        type: 'video/mp4',
+      };
+    }
+  }
+  const directStreamUrl = buildVideoStreamUrl(video, normalizedAudioTrackId);
+  if (directStreamUrl) {
     return {
       src: directStreamUrl,
-      type: guessVideoMimeType(video),
+      type: 'video/mp4',
     };
   }
-  return {
-    src: buildVideoHlsUrl(video, audioTrackId),
-    type: 'application/x-mpegURL',
-  };
+  return { src: '', type: 'video/mp4' };
 }
 
 function videoUsesHlsPlayback(video = videoLibrarySelectedVideo(), audioTrackId = '') {
-  const source = getPlayableVideoSource(video, audioTrackId);
-  return String(source?.type || '').toLowerCase().includes('mpegurl');
+  return false;
 }
 
 function ensureVideoJsAssetsLoaded() {
@@ -466,16 +470,7 @@ function getVideoLibraryPlayerInstance() {
 
 function getVideoLibraryTextTracks() {
   const nativePlayer = getVideoLibraryPlayer();
-  const nativeTracks = nativePlayer?.textTracks ? [...nativePlayer.textTracks] : [];
-  const instance = getVideoLibraryPlayerInstance();
-  let instanceTracks = [];
-  if (instance && typeof instance.textTracks === 'function') {
-    const list = instance.textTracks();
-    if (list && typeof list.length === 'number') {
-      instanceTracks = Array.from({ length: list.length }, (_, index) => list[index]).filter(Boolean);
-    }
-  }
-  return instanceTracks.length ? instanceTracks : nativeTracks;
+  return nativePlayer?.textTracks ? [...nativePlayer.textTracks] : [];
 }
 
 function disposeVideoLibraryPlayer() {
@@ -494,33 +489,14 @@ async function initializeVideoLibraryPlayer(video, audioTrackId = '') {
   playerEl.setAttribute('disablepictureinpicture', 'true');
   playerEl.setAttribute('disableremoteplayback', 'true');
   playerEl.oncontextmenu = () => false;
-  if (!String(source?.type || '').toLowerCase().includes('mpegurl')) {
-    if (source?.type) {
-      playerEl.setAttribute('type', source.type);
-    } else {
-      playerEl.removeAttribute('type');
-    }
-    playerEl.src = source?.src || '';
-    playerEl.load();
-    return null;
+  if (source?.type) {
+    playerEl.setAttribute('type', source.type);
+  } else {
+    playerEl.removeAttribute('type');
   }
-  await ensureVideoJsAssetsLoaded();
-  _videoJsPlayer = window.videojs(playerEl, {
-    autoplay: false,
-    controls: true,
-    preload: 'auto',
-    fluid: false,
-    liveui: false,
-    html5: {
-      vhs: {
-        overrideNative: true,
-      },
-      nativeAudioTracks: false,
-      nativeVideoTracks: false,
-    },
-  });
-  _videoJsPlayer.src(source);
-  return _videoJsPlayer;
+  playerEl.src = source?.src || '';
+  playerEl.load();
+  return null;
 }
 
 function videoPlayerIsPaused(player = getVideoLibraryPlayer()) {
@@ -683,25 +659,15 @@ function setVideoLibraryPlayerSource(video, audioTrackId = '') {
       playerEl.addEventListener('canplay', restorePlaybackState, { once: true });
     }
   }
-  if (!String(source?.type || '').toLowerCase().includes('mpegurl')) {
-    if (playerInstance) {
-      disposeVideoLibraryPlayer();
-    }
-    if (source?.type) {
-      playerEl.setAttribute('type', source.type);
-    } else {
-      playerEl.removeAttribute('type');
-    }
-    playerEl.src = source?.src || '';
-    playerEl.load();
-    return;
+  if (playerInstance) {
+    disposeVideoLibraryPlayer();
   }
-  if (playerInstance && typeof playerInstance.src === 'function') {
-    playerInstance.src(source);
-    if (typeof playerInstance.load === 'function') playerInstance.load();
-    return;
+  if (source?.type) {
+    playerEl.setAttribute('type', source.type);
+  } else {
+    playerEl.removeAttribute('type');
   }
-  playerEl.src = source.src;
+  playerEl.src = source?.src || '';
   playerEl.load();
 }
 
@@ -862,10 +828,10 @@ function setVideoSubtitle(value) {
   if (selectedIndex >= 0) {
     if (trackEls[selectedIndex]) trackEls[selectedIndex].default = true;
     if (textTracks[selectedIndex]) {
-      try { textTracks[selectedIndex].mode = 'hidden'; } catch (_err) {}
+      try { textTracks[selectedIndex].mode = 'disabled'; } catch (_err) {}
       setTimeout(() => {
         try { textTracks[selectedIndex].mode = 'showing'; } catch (_err) {}
-      }, 0);
+      }, 30);
     }
   }
   updateVideoControlsUI();
