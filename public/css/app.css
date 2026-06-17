@@ -8185,12 +8185,12 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   padding:0;
   background:#101311;
   max-height:85vh;
-  overflow:hidden;
+  overflow:auto;
 }
 .video-detail-shell{
   background:#101311;
   color:#edf3ee;
-  height:85vh;
+  min-height:85vh;
   display:grid;
   grid-template-rows:auto minmax(0,1fr);
 }
@@ -8216,6 +8216,13 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   flex-wrap:wrap;
   color:rgba(240,247,242,.6);
   font-size:12px;
+}
+.video-detail-playing{
+  margin-top:8px;
+  color:#dff1e2;
+  font-size:13px;
+  font-weight:800;
+  letter-spacing:.02em;
 }
 .video-detail-tags{
   display:flex;
@@ -8247,13 +8254,14 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   grid-template-columns:minmax(0,1fr) 260px;
   min-height:0;
   max-height:calc(96vh - 76px);
+  overflow:auto;
 }
 .video-detail-player-col{
   border-right:1px solid rgba(255,255,255,.08);
   display:flex;
   flex-direction:column;
   min-height:0;
-  overflow:auto;
+  overflow:visible;
 }
 .video-detail-frame{
   flex:0 0 auto;
@@ -8353,7 +8361,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   display:grid;
   grid-template-rows:auto auto minmax(0,1fr);
   min-height:0;
-  overflow:hidden;
+  overflow:visible;
 }
 .video-detail-panel{
   padding:16px 18px;
@@ -8397,14 +8405,14 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .video-detail-more-list{
   display:grid;
   gap:8px;
-  max-height:360px;
-  overflow:auto;
+  max-height:none;
+  overflow:visible;
 }
 .video-detail-episode-list{
   display:grid;
   gap:8px;
-  max-height:220px;
-  overflow:auto;
+  max-height:none;
+  overflow:visible;
 }
 .video-detail-season-group{
   display:grid;
@@ -8526,9 +8534,9 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   grid-template-columns:minmax(0,1fr);
   gap:10px;
   min-height:0;
-  max-height:min(36vh, 420px);
-  overflow:auto;
-  padding-right:4px;
+  max-height:none;
+  overflow:visible;
+  padding-right:0;
 }
 .video-detail-main-episode{
   border:1px solid rgba(255,255,255,.08);

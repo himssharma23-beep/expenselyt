@@ -1811,6 +1811,16 @@ function videoLibraryEpisodeLabel(video) {
   return String(video?.title || video?.filename || '').trim();
 }
 
+function videoLibraryNowPlayingLabel(video) {
+  const season = Number(video?.season_number || 0);
+  const episode = Number(video?.episode_number || 0);
+  if (!(season > 0 || episode > 0)) return '';
+  const parts = [];
+  if (season > 0) parts.push(`Season ${season}`);
+  if (episode > 0) parts.push(`Episode ${episode}`);
+  return parts.join(' • ');
+}
+
 function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   const allVideos = Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : [];
   const group = videoLibraryFindSeriesGroupById(seriesId, allVideos);
@@ -2047,6 +2057,7 @@ function openVideoLibraryDetail(videoId) {
               <span>${escHtml(String(video?.release_year || video?.year || '-'))}</span>
               ${genres.length ? `<span>&middot;</span><span class="video-detail-tags">${genres.map((genre) => `<span class="video-detail-tag">${escHtml(genre)}</span>`).join('')}</span>` : ''}
             </div>
+            ${videoLibraryNowPlayingLabel(video) ? `<div class="video-detail-playing">${escHtml(videoLibraryNowPlayingLabel(video))}</div>` : ''}
           </div>
           <button type="button" class="video-detail-close" onclick="closeVideoLibraryDetail()">×</button>
         </div>
