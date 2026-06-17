@@ -578,11 +578,24 @@ function disposeVideoLibraryPlayer() {
   _videoJsPlayer = null;
 }
 
+function resetVideoLibraryPlayerElement(playerEl) {
+  if (!playerEl) return;
+  _videoSeekRequestId += 1;
+  try { playerEl.pause(); } catch (_err) {}
+  try { playerEl.removeAttribute('src'); } catch (_err) {}
+  try { playerEl.src = ''; } catch (_err) {}
+  try { playerEl.currentTime = 0; } catch (_err) {}
+  try { playerEl.load(); } catch (_err) {}
+  delete playerEl.dataset.progressBound;
+  playerEl.dataset.resumeApplied = '0';
+}
+
 async function initializeVideoLibraryPlayer(video, audioTrackId = '') {
   const playerEl = document.getElementById('videoLibraryPlayer');
   if (!playerEl) return null;
   const source = getPlayableVideoSource(video, audioTrackId);
   disposeVideoLibraryPlayer();
+  resetVideoLibraryPlayerElement(playerEl);
   playerEl.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
   playerEl.setAttribute('disablepictureinpicture', 'true');
   playerEl.setAttribute('disableremoteplayback', 'true');
@@ -778,6 +791,7 @@ function setVideoLibraryPlayerSource(video, audioTrackId = '') {
   if (playerInstance) {
     disposeVideoLibraryPlayer();
   }
+  resetVideoLibraryPlayerElement(playerEl);
   if (source?.type) {
     playerEl.setAttribute('type', source.type);
   } else {
@@ -1165,7 +1179,11 @@ function setupVideoPlayerProgress() {
     const isCompleted = !!progress?.is_completed;
     if (player.dataset.resumeApplied === '1') return;
     if (_videoPendingSourceState) return;
-    if (isCompleted || !(resumeAt > 0)) return;
+    if (isCompleted || !(resumeAt > 0)) {
+      setVideoPlayerCurrentTime(0, { retry: false });
+      player.dataset.resumeApplied = '1';
+      return;
+    }
     const expectedDuration = Number(videoPlayerExpectedDuration(player, video) || 0);
     if (!(expectedDuration > Math.min(resumeAt + 1, 5))) return;
     setVideoPlayerCurrentTime(resumeAt);
@@ -1185,6 +1203,9 @@ function setupVideoPlayerProgress() {
     const expectedDuration = Number(videoPlayerExpectedDuration(player, video) || 0);
     if (!_videoPendingSourceState && !shouldDeferHlsResume && !isCompleted && resumeAt > 0 && expectedDuration > Math.min(resumeAt + 1, 5)) {
       setVideoPlayerCurrentTime(resumeAt);
+      player.dataset.resumeApplied = '1';
+    } else if (!_videoPendingSourceState && (!resumeAt || isCompleted)) {
+      setVideoPlayerCurrentTime(0, { retry: false });
       player.dataset.resumeApplied = '1';
     }
     if (!_videoPendingSourceState) setVideoSubtitle(_selectedVideoSubtitleId);
