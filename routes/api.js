@@ -63,6 +63,10 @@ const audioClipCachePromises = new Map();
 const altVideoCachePromises = new Map();
 const hlsCachePromises = new Map();
 const ffmpegMp4EncoderCache = new Map();
+const VIDEO_BROWSER_TRANSCODE_EXTENSIONS = ['.mkv', '.avi', '.webm', '.ogg', '.ogv', '.wmv', '.flv', '.ts', '.m2ts', '.mpeg', '.mpg'];
+const videoPrepareQueue = [];
+const videoPrepareQueuedKeys = new Set();
+let videoPrepareWorkerPromise = null;
 
 function hashMobileVideoKey(target) {
   return crypto
@@ -186,6 +190,11 @@ function streamTranscodedMp4ToResponse(req, res, target, ffmpegCommand, audioStr
     if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
   });
   return ffmpeg.stdout.pipe(res);
+}
+
+function videoNeedsBrowserCompatibleTranscode(target) {
+  const ext = String(path.extname(target?.absolute_path || target?.filename || '') || '').toLowerCase();
+  return VIDEO_BROWSER_TRANSCODE_EXTENSIONS.includes(ext);
 }
 
 function streamLocalFileWithRange(req, res, target) {
@@ -682,6 +691,33 @@ async function getExistingAlternateVideoCacheFile(target, streamIndex) {
     }
   } catch (_err) {}
   return null;
+}
+
+function queueVideoPrepareTask(task = null) {
+  if (!task?.cacheKey || !task?.token) return false;
+  if (videoPrepareQueuedKeys.has(task.cacheKey)) return false;
+  videoPrepareQueuedKeys.add(task.cacheKey);
+  videoPrepareQueue.push(task);
+  if (!videoPrepareWorkerPromise) {
+    videoPrepareWorkerPromise = (async () => {
+      while (videoPrepareQueue.length) {
+        const nextTask = videoPrepareQueue.shift();
+        if (!nextTask) continue;
+        try {
+          const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(nextTask.token));
+          if (!target || !videoNeedsBrowserCompatibleTranscode(target)) continue;
+          const existing = await getExistingMobileVideoCacheFile(target);
+          if (existing) continue;
+          await ensureMobileVideoCacheFile(target, pgVideoDb.ffmpegCommand());
+        } catch (_err) {
+        } finally {
+          videoPrepareQueuedKeys.delete(nextTask.cacheKey);
+        }
+      }
+      videoPrepareWorkerPromise = null;
+    })();
+  }
+  return true;
 }
 
 function normalizeOcrAmount(value) {
@@ -8557,6 +8593,31 @@ router.put('/admin/videos/catalog/:id', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/admin/videos/catalog/:id/poster-upload', requireAdmin, upload.single('file'), async (req, res) => {
+  try {
+    const itemId = Number(req.params.id || 0);
+    if (!(itemId > 0)) {
+      return res.status(400).json({ error: 'Catalog item is invalid' });
+    }
+    const payload = {
+      ...(req.body || {}),
+    };
+    if (req.file?.buffer?.length) {
+      payload.file_name = String(req.file.originalname || payload.file_name || 'poster.jpg');
+      payload.content_type = String(req.file.mimetype || payload.content_type || 'image/jpeg');
+      payload.data_base64 = req.file.buffer.toString('base64');
+    } else if (String(payload.data_base64 || '').trim()) {
+      payload.file_name = String(payload.file_name || 'poster.jpg');
+      payload.content_type = String(payload.content_type || 'image/jpeg');
+    }
+    await Promise.resolve(pgVideoDb.saveVideoCatalogPosterUpload(itemId, payload, req.session.userId));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
+    res.json({ success: true, items });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not upload poster image' });
+  }
+});
+
 router.post('/admin/videos/catalog/publish', requireAdmin, async (req, res) => {
   try {
     const itemIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids : [];
@@ -8569,6 +8630,143 @@ router.post('/admin/videos/catalog/publish', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not publish catalog items' });
+  }
+});
+
+router.post('/admin/videos/cache/prepare', requireAdmin, async (req, res) => {
+  try {
+    const root_path = String(req.body?.root_path || '').trim() || undefined;
+    const media_type = String(req.body?.media_type || '').trim().toLowerCase();
+    const itemIds = [...new Set((Array.isArray(req.body?.item_ids) ? req.body.item_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const fileIds = [...new Set((Array.isArray(req.body?.file_ids) ? req.body.file_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({
+      status: itemIds.length || fileIds.length ? 'all' : 'published',
+      root_path,
+    }));
+    let filteredItems = ['movie', 'series'].includes(media_type)
+      ? items.filter((item) => String(item?.media_type || '').trim().toLowerCase() === media_type)
+      : items;
+    if (itemIds.length) {
+      filteredItems = filteredItems.filter((item) => itemIds.includes(Number(item?.id || 0)));
+    }
+    let queued_count = 0;
+    let skipped_count = 0;
+    let candidate_count = 0;
+
+    for (const item of filteredItems) {
+      const files = (Array.isArray(item?.files) ? item.files : []).filter((file) => !fileIds.length || fileIds.includes(Number(file?.id || 0)));
+      for (const file of files) {
+        if (!file?.file_exists) {
+          skipped_count += 1;
+          continue;
+        }
+        const token = Buffer.from(JSON.stringify({
+          type: 'catalog_file',
+          file_id: Number(file.id || 0),
+        }), 'utf8').toString('base64url');
+        const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(token));
+        if (!target || !videoNeedsBrowserCompatibleTranscode(target)) {
+          skipped_count += 1;
+          continue;
+        }
+        candidate_count += 1;
+        const existing = await getExistingMobileVideoCacheFile(target);
+        if (existing) {
+          skipped_count += 1;
+          continue;
+        }
+        const cacheKey = hashMobileVideoKey(target);
+        if (queueVideoPrepareTask({ cacheKey, token })) queued_count += 1;
+        else skipped_count += 1;
+      }
+    }
+
+    res.json({
+      success: true,
+      result: {
+        root_path: root_path || '',
+        media_type: media_type || 'all',
+        candidate_count,
+        queued_count,
+        skipped_count,
+        queue_depth: videoPrepareQueue.length,
+      },
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not prepare instant-play video cache' });
+  }
+});
+
+router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
+  try {
+    const root_path = String(req.body?.root_path || '').trim() || undefined;
+    const media_type = String(req.body?.media_type || '').trim().toLowerCase();
+    const itemIds = [...new Set((Array.isArray(req.body?.item_ids) ? req.body.item_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const fileIds = [...new Set((Array.isArray(req.body?.file_ids) ? req.body.file_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({
+      status: itemIds.length || fileIds.length ? 'all' : 'published',
+      root_path,
+    }));
+    let filteredItems = ['movie', 'series'].includes(media_type)
+      ? items.filter((item) => String(item?.media_type || '').trim().toLowerCase() === media_type)
+      : items;
+    if (itemIds.length) {
+      filteredItems = filteredItems.filter((item) => itemIds.includes(Number(item?.id || 0)));
+    }
+
+    let candidate_count = 0;
+    let ready_count = 0;
+    let queued_count = 0;
+    let pending_count = 0;
+    let skipped_count = 0;
+
+    for (const item of filteredItems) {
+      const files = (Array.isArray(item?.files) ? item.files : []).filter((file) => !fileIds.length || fileIds.includes(Number(file?.id || 0)));
+      for (const file of files) {
+        if (!file?.file_exists) {
+          skipped_count += 1;
+          continue;
+        }
+        const token = Buffer.from(JSON.stringify({
+          type: 'catalog_file',
+          file_id: Number(file.id || 0),
+        }), 'utf8').toString('base64url');
+        const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(token));
+        if (!target) {
+          skipped_count += 1;
+          continue;
+        }
+        if (!videoNeedsBrowserCompatibleTranscode(target)) {
+          ready_count += 1;
+          continue;
+        }
+        candidate_count += 1;
+        const existing = await getExistingMobileVideoCacheFile(target);
+        if (existing) {
+          ready_count += 1;
+          continue;
+        }
+        const cacheKey = hashMobileVideoKey(target);
+        if (videoPrepareQueuedKeys.has(cacheKey)) queued_count += 1;
+        else pending_count += 1;
+      }
+    }
+
+    res.json({
+      success: true,
+      result: {
+        root_path: root_path || '',
+        media_type: media_type || 'all',
+        candidate_count,
+        ready_count,
+        queued_count,
+        pending_count,
+        skipped_count,
+        is_ready: candidate_count === 0 || (ready_count >= candidate_count && queued_count === 0 && pending_count === 0),
+      },
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not check instant-play cache status' });
   }
 });
 

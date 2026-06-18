@@ -608,6 +608,7 @@ async function ensureVideoTables() {
           runtime_minutes INTEGER NULL,
           season_count INTEGER NULL,
           episode_count INTEGER NOT NULL DEFAULT 0,
+          season_posters JSONB NOT NULL DEFAULT '[]'::jsonb,
           primary_video_relative_path TEXT NOT NULL DEFAULT '',
           file_count INTEGER NOT NULL DEFAULT 0,
           file_exists BOOLEAN NOT NULL DEFAULT TRUE,
@@ -629,6 +630,7 @@ async function ensureVideoTables() {
       await query(`ALTER TABLE video_catalog_items ADD COLUMN IF NOT EXISTS poster_relative_path TEXT NOT NULL DEFAULT ''`);
       await query(`ALTER TABLE video_catalog_items ADD COLUMN IF NOT EXISTS poster_url TEXT NOT NULL DEFAULT ''`);
       await query(`ALTER TABLE video_catalog_items ADD COLUMN IF NOT EXISTS poster_exists BOOLEAN NOT NULL DEFAULT FALSE`);
+      await query(`ALTER TABLE video_catalog_items ADD COLUMN IF NOT EXISTS season_posters JSONB NOT NULL DEFAULT '[]'::jsonb`);
       await query(`CREATE INDEX IF NOT EXISTS idx_video_catalog_items_status ON video_catalog_items(status)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_video_catalog_items_root_path ON video_catalog_items(source_root_path)`);
       await query(`
@@ -1018,6 +1020,104 @@ async function downloadCatalogPosterToLocal(rootPath, folderRelativePath, poster
   }
 }
 
+async function saveVideoCatalogPosterUpload(itemId, payload = {}, userId = null) {
+  await ensureVideoTables();
+  const rows = await query(
+    `SELECT id, source_root_path, folder_relative_path, poster_relative_path, season_posters, status
+       FROM video_catalog_items
+      WHERE id = $1
+      LIMIT 1`,
+    [Number(itemId || 0)]
+  );
+  const current = rows.rows[0] || null;
+  if (!current) throw new Error('Catalog item not found');
+  const nextStatus = String(current.status || '').trim().toLowerCase() === VIDEO_CATALOG_STATUSES.PUBLISHED
+    ? VIDEO_CATALOG_STATUSES.PUBLISHED
+    : VIDEO_CATALOG_STATUSES.REVIEW;
+
+  const target = String(payload?.target || 'series').trim().toLowerCase();
+  const contentType = String(payload?.content_type || '').trim().toLowerCase();
+  const fileName = String(payload?.file_name || '').trim();
+  const dataBase64 = String(payload?.data_base64 || '').trim();
+  const seasonKey = String(payload?.season_key || '').trim();
+  const seasonLabel = String(payload?.season_label || '').trim();
+  const seasonNumberRaw = payload?.season_number;
+  const seasonNumber = seasonNumberRaw === '' || seasonNumberRaw == null
+    ? null
+    : (Number.isFinite(Number(seasonNumberRaw)) ? Math.max(1, Math.round(Number(seasonNumberRaw))) : null);
+
+  if (!dataBase64) throw new Error('Poster data is missing');
+  if (!/^image\//i.test(contentType)) throw new Error('Only image uploads are supported');
+
+  const extension = inferPosterExtensionFromContentType(contentType) || inferPosterExtensionFromUrl(fileName) || '.jpg';
+  const buffer = Buffer.from(dataBase64, 'base64');
+  if (!buffer.length) throw new Error('Poster file is empty');
+
+  const resolvedRootPath = resolveVideoRootPathForRuntime(current.source_root_path);
+  const normalizedFolder = sanitizeCatalogPosterRelativePath(current.folder_relative_path || '');
+  const normalizedFolderTarget = path.posix.extname(normalizedFolder)
+    ? path.posix.dirname(normalizedFolder)
+    : normalizedFolder;
+  const targetDir = path.resolve(resolvedRootPath, normalizedFolderTarget || '.');
+  if (!isPathInsideRoot(resolvedRootPath, targetDir)) {
+    throw new Error('Poster target folder is outside the library root.');
+  }
+  await fs.promises.mkdir(targetDir, { recursive: true });
+
+  const baseName = target === 'season' && seasonKey
+    ? `poster-season-${seasonKey.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}`
+    : 'poster-manual';
+  const filename = `${baseName}${extension}`;
+  const absolutePath = path.resolve(targetDir, filename);
+  if (!isPathInsideRoot(resolvedRootPath, absolutePath)) {
+    throw new Error('Poster target path is outside the library root.');
+  }
+  await fs.promises.writeFile(absolutePath, buffer);
+  const posterRelativePath = sanitizeCatalogPosterRelativePath(path.posix.join(normalizedFolderTarget, filename));
+
+  if (target === 'season') {
+    if (!seasonKey) throw new Error('Season key is required for season poster');
+    const seasonPosters = normalizeCatalogSeasonPosterInput(safeJsonArray(current.season_posters));
+    const nextPosters = [
+      ...seasonPosters.filter((entry) => String(entry.season_key || '') !== seasonKey),
+      {
+        season_key: seasonKey,
+        season_label: seasonLabel || (seasonNumber ? `Season ${seasonNumber}` : ''),
+        season_number: seasonNumber,
+        poster_relative_path: posterRelativePath,
+      },
+    ];
+    await query(
+      `UPDATE video_catalog_items
+          SET season_posters = $2::jsonb,
+              status = $4,
+              verified_by = $3,
+              verified_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1`,
+      [Number(itemId || 0), JSON.stringify(normalizeCatalogSeasonPosterInput(nextPosters)), userId ? Number(userId) : null, nextStatus]
+    );
+  } else {
+    await query(
+      `UPDATE video_catalog_items
+          SET poster_relative_path = $2,
+              poster_exists = TRUE,
+              status = $4,
+              verified_by = $3,
+              verified_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1`,
+      [Number(itemId || 0), posterRelativePath, userId ? Number(userId) : null, nextStatus]
+    );
+  }
+
+  return {
+    item_id: Number(itemId || 0),
+    target,
+    poster_relative_path: posterRelativePath,
+  };
+}
+
 function safeJsonArray(value) {
   if (Array.isArray(value)) return value;
   return [];
@@ -1192,6 +1292,32 @@ function normalizeCatalogFileMetadataInput(file = {}, fallback = {}) {
     episode_label: episodeLabel,
     episode_number: episodeNumber,
   };
+}
+
+function normalizeCatalogSeasonPosterInput(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const seasonKey = String(entry?.season_key || '').trim();
+      const seasonLabel = String(entry?.season_label || '').trim();
+      const seasonNumberRaw = entry?.season_number;
+      const seasonNumber = seasonNumberRaw === '' || seasonNumberRaw == null
+        ? null
+        : (Number.isFinite(Number(seasonNumberRaw)) ? Math.max(1, Math.round(Number(seasonNumberRaw))) : null);
+      const posterRelativePath = sanitizeCatalogPosterRelativePath(entry?.poster_relative_path || '');
+      if (!seasonKey || !posterRelativePath) return null;
+      return {
+        season_key: seasonKey,
+        season_label: seasonLabel || (seasonNumber ? `Season ${seasonNumber}` : ''),
+        season_number: seasonNumber,
+        poster_relative_path: posterRelativePath,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const numberDiff = Number(a.season_number || 0) - Number(b.season_number || 0);
+      if (numberDiff) return numberDiff;
+      return String(a.season_key || '').localeCompare(String(b.season_key || ''));
+    });
 }
 
 function parseYearFromLabel(label) {
@@ -1474,6 +1600,15 @@ async function listVideoCatalogItems(options = {}) {
     cast_members: normalizeTextArray(row.cast_members),
     creators: normalizeTextArray(row.creators),
     tags: normalizeTextArray(row.tags),
+    season_posters: normalizeCatalogSeasonPosterInput(safeJsonArray(row.season_posters)).map((seasonPoster) => ({
+      ...seasonPoster,
+      poster_stream_url: seasonPoster.poster_relative_path
+        ? `/api/videos/poster/${encodeURIComponent(encodeCatalogPosterToken(row.source_root_path, seasonPoster.poster_relative_path))}`
+        : '',
+    })),
+    poster_stream_url: row.poster_relative_path
+      ? `/api/videos/poster/${encodeURIComponent(encodeCatalogPosterToken(row.source_root_path, row.poster_relative_path))}`
+      : '',
     poster_url: '',
     files: safeJsonArray(row.files),
   }));
@@ -1687,6 +1822,7 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
       ? Number(current.ai_confidence || 0)
       : (Number.isFinite(Number(payload.ai_confidence)) ? Math.max(0, Math.min(100, Math.round(Number(payload.ai_confidence)))) : Number(current.ai_confidence || 0)),
     ai_notes: String(payload.ai_notes ?? current.ai_notes ?? '').trim(),
+    season_posters: normalizeCatalogSeasonPosterInput(payload.season_posters ?? current.season_posters ?? []),
   };
   normalized.poster_exists = !!(normalized.poster_url || normalized.poster_relative_path);
   normalized.search_text = buildCatalogSearchText(normalized);
@@ -1713,8 +1849,9 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
             ai_confidence = $19,
             ai_notes = $20,
             search_text = $21,
+            season_posters = $22::jsonb,
             status = '${VIDEO_CATALOG_STATUSES.REVIEW}',
-            verified_by = $22,
+            verified_by = $23,
             verified_at = NOW(),
             updated_at = NOW()
       WHERE id = $1
@@ -1741,6 +1878,7 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
       normalized.ai_confidence,
       normalized.ai_notes,
       normalized.search_text,
+      JSON.stringify(normalized.season_posters),
       userId ? Number(userId) : null,
     ]
   );
@@ -1905,6 +2043,12 @@ async function listVideoLibrary(userId = null) {
       poster_url: '',
       poster_exists: !!item.poster_exists,
       poster_stream_url: item.poster_relative_path ? `/api/videos/poster/${encodeURIComponent(encodeCatalogPosterToken(item.source_root_path, item.poster_relative_path))}` : '',
+      season_posters: normalizeCatalogSeasonPosterInput(item.season_posters).map((seasonPoster) => ({
+        ...seasonPoster,
+        poster_stream_url: seasonPoster.poster_relative_path
+          ? `/api/videos/poster/${encodeURIComponent(encodeCatalogPosterToken(item.source_root_path, seasonPoster.poster_relative_path))}`
+          : '',
+      })),
       series_title: file.series_title || item.display_title,
       season_label: file.season_label || '',
       season_number: file.season_number,
@@ -2130,6 +2274,7 @@ module.exports = {
   clearVideoCatalog,
   deleteVideoCatalogItems,
   saveVideoCatalogAiMetadata,
+  saveVideoCatalogPosterUpload,
   updateVideoCatalogItem,
   publishVideoCatalogItems,
   listVideoLibrary,

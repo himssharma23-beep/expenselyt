@@ -87,6 +87,22 @@ function videoLibraryFormatBytes(bytes) {
   return `${value} B`;
 }
 
+function cleanCatalogLabel(value) {
+  return String(value || '')
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[._]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function prettyVideoTitle(filename) {
+  const cleaned = cleanCatalogLabel(filename);
+  return cleaned
+    .replace(/\b(480p|720p|1080p|2160p|4k|hdr|x264|x265|hevc|bluray|webrip|web-dl|webdl|dvdrip|brrip|opus|aac|ddp|hindi|english)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function videoLibraryFilteredVideos() {
   const list = Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : [];
   const query = String(_videoLibrarySearch || '').trim().toLowerCase();
@@ -1862,6 +1878,12 @@ function videoLibrarySeriesGroups(videos = []) {
       synopsis: base?.synopsis || '',
       poster_url: base?.poster_url || '',
       poster_stream_url: base?.poster_stream_url || '',
+      season_posters: [...new Map(
+        sortedEntries
+          .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+          .filter((entry) => String(entry?.season_key || '').trim())
+          .map((entry) => [String(entry.season_key || '').trim(), entry])
+      ).values()],
       progress: progressSource?.progress || null,
       stream_url: progressSource?.stream_url || '',
       size_bytes: sortedEntries.reduce((sum, entry) => sum + Number(entry?.size_bytes || 0), 0),
@@ -1893,9 +1915,15 @@ function videoLibrarySeasonGroups(entries = []) {
         season_number: seasonNumber || 1,
         season_label: seasonLabel,
         entries: [],
+        poster_stream_url: '',
       });
     }
     groups.get(key).entries.push(entry);
+    if (!groups.get(key).poster_stream_url) {
+      const match = (Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+        .find((poster) => String(poster?.season_key || '') === key);
+      if (match?.poster_stream_url) groups.get(key).poster_stream_url = String(match.poster_stream_url || '').trim();
+    }
   });
   return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
 }
@@ -1961,6 +1989,14 @@ function videoLibraryNowPlayingLabel(video) {
 
 function scrollVideoDetailActiveEpisodeIntoView() {
   requestAnimationFrame(() => {
+    const activeSeason = document.querySelector('.video-detail-season-tile.active');
+    if (activeSeason && typeof activeSeason.scrollIntoView === 'function') {
+      activeSeason.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      });
+    }
     const activeEpisode = document.querySelector('.video-detail-main-episode.active');
     if (activeEpisode && typeof activeEpisode.scrollIntoView === 'function') {
       activeEpisode.scrollIntoView({
@@ -2243,26 +2279,13 @@ function openVideoLibraryDetail(videoId, options = {}) {
               <button class="videos-control-btn videos-control-btn-primary" type="button" onclick="videoPlayerFullscreen()">${videoControlIcon('fullscreen')}</button>
               </div>
               ${activeSeasonGroup ? `<div class="video-detail-season-nav">
-                <div class="video-detail-season-nav-head">Browse Episodes</div>
+                <div class="video-detail-season-nav-head">Browse Seasons</div>
                 <div class="video-detail-season-tiles">
                   ${seasonGroups.map((group) => `
                     <button type="button" class="video-detail-season-tile ${String(group.key) === String(activeSeasonGroup?.key || '') ? 'active' : ''}" onclick="setVideoLibraryDetailSeason('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(group.key || '').replace(/'/g, "\\'")}')">
+                      ${group.poster_stream_url ? `<div class="video-detail-season-thumb" style="background-image:url('${escHtml(group.poster_stream_url)}')"></div>` : ''}
                       <span>${escHtml(group.season_label || 'Season')}</span>
                       <small>${escHtml(`${group.entries.length} episode${group.entries.length === 1 ? '' : 's'}`)}</small>
-                    </button>`).join('')}
-                </div>
-                <div class="video-detail-season-current">
-                  <div class="video-detail-season-current-title">${escHtml(activeSeasonGroup.season_label || 'Season')}</div>
-                  <div class="video-detail-season-current-meta">${escHtml(`${activeSeasonGroup.entries.length} episode${activeSeasonGroup.entries.length === 1 ? '' : 's'} in this season`)}</div>
-                </div>
-                <div class="video-detail-main-episodes">
-                  ${activeSeasonGroup.entries.map((entry) => `
-                    <button type="button" class="video-detail-main-episode ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
-                      <div class="video-detail-main-episode-badge">${escHtml(Number(entry?.episode_number || 0) > 0 ? `E${String(entry.episode_number).padStart(2, '0')}` : 'PLAY')}</div>
-                      <div class="video-detail-main-episode-copy">
-                        <div class="video-detail-main-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
-                        <div class="video-detail-main-episode-meta">${escHtml(String(entry?.id || '') === String(video?.id || '') ? 'Now playing' : (videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0)))}</div>
-                      </div>
                     </button>`).join('')}
                 </div>
               </div>` : ''}
@@ -2276,34 +2299,26 @@ function openVideoLibraryDetail(videoId, options = {}) {
                   <div class="video-detail-kv-value">${escHtml(value)}</div>
                 </div>`).join('')}
             </div>
-            ${seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup) && !activeSeasonGroup ? `<div class="video-detail-panel">
-              <div class="video-detail-more-title">Seasons & Episodes</div>
-              <div class="video-detail-episode-list">
-                ${videoLibrarySeasonGroups(seriesGroup.entries).map((seasonGroup) => `
-                  <div class="video-detail-season-group">
-                    <div class="video-detail-season-title">${escHtml(seasonGroup.season_label || 'Season')}</div>
-                    ${seasonGroup.entries.map((entry) => `
-                      <button type="button" class="video-detail-episode-item ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
-                        <div class="video-detail-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
-                        <div class="video-detail-episode-meta">${escHtml(videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0))}</div>
-                      </button>`).join('')}
-                  </div>`).join('')}
+            ${activeSeasonGroup ? `<div class="video-detail-panel video-detail-season-sidebar">
+              <div class="video-detail-more-title">Episodes</div>
+              <div class="video-detail-season-nav">
+                <div class="video-detail-season-current">
+                  <div class="video-detail-season-current-title">${escHtml(activeSeasonGroup.season_label || 'Season')}</div>
+                  <div class="video-detail-season-current-meta">${escHtml(`${activeSeasonGroup.entries.length} episode${activeSeasonGroup.entries.length === 1 ? '' : 's'} in this season`)}</div>
+                </div>
+                <div class="video-detail-main-episodes video-detail-main-episodes-vertical">
+                  ${activeSeasonGroup.entries.map((entry) => `
+                    <button type="button" class="video-detail-main-episode ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
+                      <div class="video-detail-main-episode-badge">${escHtml(Number(entry?.episode_number || 0) > 0 ? `E${String(entry.episode_number).padStart(2, '0')}` : 'PLAY')}</div>
+                      <div class="video-detail-main-episode-copy">
+                        <div class="video-detail-main-episode-title">${escHtml(videoLibraryEpisodeLabel(entry))}</div>
+                        <div class="video-detail-main-episode-meta">${escHtml(String(entry?.id || '') === String(video?.id || '') ? 'Now playing' : (videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0)))}</div>
+                      </div>
+                    </button>`).join('')}
+                </div>
               </div>
             </div>` : ''}
             <div class="video-detail-panel video-detail-description">${escHtml(video?.synopsis || video?.overview || 'No description available yet.')}</div>
-            <div class="video-detail-panel">
-              <div class="video-detail-more-title">More Like This</div>
-              <div class="video-detail-more-list">
-                ${related.length ? related.map((item) => `
-                  <button type="button" class="video-detail-related" onclick="openVideoLibraryDetail('${String(item?.id || '').replace(/'/g, "\\'")}')">
-                    ${renderVideoShelfPoster(item, false)}
-                    <div class="video-detail-related-copy">
-                      <div class="video-detail-related-title">${escHtml(item?.title || 'Video')}</div>
-                      <div class="video-detail-related-meta">${escHtml(String(item?.release_year || item?.year || '-'))}</div>
-                    </div>
-                  </button>`).join('') : `<div class="video-detail-related-empty">No related titles yet.</div>`}
-              </div>
-            </div>
           </aside>
         </div>
       </div>`);
@@ -2340,6 +2355,24 @@ function videoLibraryOpenRandom() {
   if (!filtered.length) return;
   const pick = filtered[Math.floor(Math.random() * filtered.length)];
   openVideoLibraryDetail(pick?.id);
+}
+
+function videoLibraryRandomHeroCards(seriesGroups = [], movieVideos = [], count = 3) {
+  const posterBacked = [
+    ...(Array.isArray(seriesGroups) ? seriesGroups : []),
+    ...(Array.isArray(movieVideos) ? movieVideos : []),
+  ].filter((item) => String(item?.poster_stream_url || '').trim());
+  const fallback = [
+    ...(Array.isArray(seriesGroups) ? seriesGroups : []),
+    ...(Array.isArray(movieVideos) ? movieVideos : []),
+  ];
+  const source = posterBacked.length ? posterBacked : fallback;
+  const shuffled = [...source];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled.slice(0, Math.max(0, Number(count || 0)));
 }
 
 function renderVideosPage() {
@@ -2391,7 +2424,6 @@ function renderVideosPage() {
   const sectionGenreStats = videoLibraryGenreStats(filteredVideos).slice(0, 6);
   const totalSeries = videoLibrarySeriesCount(allVideos);
   const qualityLabel = allVideos.find((video) => String(video?.quality_label || '').trim())?.quality_label || 'HD';
-  const featuredVideos = filteredVideos.slice(0, 3);
   const continueWatchingVideos = [...filteredVideos]
     .filter((video) => {
       const progress = video?.progress || null;
@@ -2405,15 +2437,14 @@ function renderVideosPage() {
     .slice(0, 12);
   const movieVideos = filteredVideos.filter((video) => !videoLibraryIsSeries(video));
   const seriesGroups = videoLibrarySeriesGroups(filteredVideos);
+  const heroCards = videoLibraryRandomHeroCards(seriesGroups, movieVideos, 3);
   const pathMeta = _userRole === 'admin' && settings.videos_root_path
     ? `<span class="videos-landing-meta">${escHtml(settings.videos_root_path)}</span>`
     : '';
 
   const adminActions = _userRole === 'admin'
     ? `
-      <button class="videos-hero-btn ghost" type="button" onclick="showVideoCatalogModal()">Catalog Sync</button>
-      <button class="videos-hero-btn ghost" type="button" onclick="showVideoSeriesManagerModal()">Series Manager</button>
-      <button class="videos-hero-btn green" type="button" onclick="showVideoLibrarySettingsModal()">Admin Panel</button>`
+      <button class="videos-hero-btn green" type="button" onclick="showVideoLibrarySettingsModal()">Settings</button>`
     : '';
 
   const hero = `
@@ -2448,7 +2479,7 @@ function renderVideosPage() {
           </div>
         </div>
         <div class="videos-hero-art">
-          ${featuredVideos.map((video, index) => `
+          ${heroCards.map((video, index) => `
             <button type="button" class="videos-hero-poster-card ${index === 1 ? 'focus' : ''}" onclick="openVideoLibraryDetail('${String(video?.id || '').replace(/'/g, "\\'")}')">
               ${renderVideoShelfPoster(video, true)}
             </button>`).join('')}
@@ -4463,6 +4494,7 @@ function renderVideoAdminTreeNode(node, kind, depth = 0) {
         <div class="video-admin-tree-actions">
           <button class="btn btn-s btn-sm" type="button" onclick='videoAdminAssignRoot("${kind}", ${JSON.stringify(absolutePath)})'>Use Here</button>
           <button class="btn btn-s btn-sm" type="button" onclick='videoAdminScanFolderPath(${JSON.stringify(absolutePath)})'>Scan</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='videoAdminPrepareFolderPath(${JSON.stringify(absolutePath)}, "${kind}")'>Prepare</button>
           <button class="btn btn-s btn-sm" type="button" onclick='videoAdminToggleHidden(${JSON.stringify(absolutePath)}, ${isHidden ? 'false' : 'true'})'>${isHidden ? 'Unhide' : 'Hide'}</button>
         </div>
       </div>
@@ -4518,6 +4550,8 @@ function renderVideoAdminPanel() {
         <button class="btn btn-s" type="button" onclick="videoAdminLoadTreeForRoot('series')">Load Series Tree</button>
         <button class="btn btn-s" type="button" onclick="videoAdminScanRoot('movies')">Scan Movies Root</button>
         <button class="btn btn-s" type="button" onclick="videoAdminScanRoot('series')">Scan Series Root</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminPrepareRoot('movies')">Prepare Movies</button>
+        <button class="btn btn-s" type="button" onclick="videoAdminPrepareRoot('series')">Prepare Series</button>
         <button class="btn btn-g" type="button" onclick="showVideoSeriesManagerModal()">Series Mapping</button>
       </div>
       <div class="video-admin-columns">
@@ -4589,6 +4623,39 @@ async function videoAdminScanRoot(kind) {
   await videoAdminScanFolderPath(rootPath);
 }
 
+async function videoAdminPrepareFolderPath(folderPath, kind = '') {
+  const pathValue = String(folderPath || '').trim();
+  if (!pathValue) {
+    toast('Folder path is missing.', 'error');
+    return;
+  }
+  const normalizedKind = String(kind || '').trim().toLowerCase();
+  const mediaType = normalizedKind === 'movies' ? 'movie' : (normalizedKind === 'series' ? 'series' : '');
+  const result = await videoCatalogApi('/api/admin/videos/cache/prepare', {
+    method: 'POST',
+    body: {
+      root_path: pathValue,
+      media_type: mediaType,
+    },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not prepare videos for instant play.', 'error');
+    return;
+  }
+  const prep = result.result || {};
+  toast(`Queued ${prep.queued_count || 0} video${Number(prep.queued_count || 0) === 1 ? '' : 's'} for instant play.`, 'success');
+}
+
+async function videoAdminPrepareRoot(kind) {
+  const inputId = String(kind || '') === 'movies' ? 'videoAdminMoviesRoot' : 'videoAdminSeriesRoot';
+  const rootPath = document.getElementById(inputId)?.value?.trim() || '';
+  if (!rootPath) {
+    toast(`Enter ${kind} root first.`, 'error');
+    return;
+  }
+  await videoAdminPrepareFolderPath(rootPath, kind);
+}
+
 async function videoAdminToggleHidden(folderPath, shouldHide = true) {
   const settings = videoAdminReadSettingsFromModal();
   const nextHidden = new Set(videoAdminNormalizeHiddenPaths(settings.hidden_paths));
@@ -4639,6 +4706,1668 @@ async function saveVideoLibrarySettings() {
   await loadVideosPage();
 }
 
+_videoAdminPanelState = {
+  settings: _videoAdminPanelState?.settings || null,
+  browsePath: '',
+  browseTree: null,
+  selectedFolderPath: '',
+  expandedFolderPath: '',
+  expandedPublishedKeys: [],
+  folderDrafts: {},
+  publishingFolderPath: '',
+  publishingMessage: '',
+  publishingPercent: 0,
+  preparingKey: '',
+  preparingMessage: '',
+  preparingPercent: 0,
+  prepareStatusByKey: {},
+  draftMode: '',
+  draftItems: [],
+  excludedDraftGroupKeys: [],
+  publishedItems: [],
+  activeTab: 'setup',
+};
+
+async function videoAdminFetchCatalog(status = 'all') {
+  const result = await api(`/api/admin/videos/catalog?status=${encodeURIComponent(String(status || 'all'))}`);
+  if (!result?.success) throw new Error(result?.error || 'Could not load catalog items.');
+  return Array.isArray(result.items) ? result.items : [];
+}
+
+function videoAdminFindItemById(itemId) {
+  const targetId = Number(itemId || 0);
+  return (Array.isArray(_videoAdminPanelState.draftItems) ? _videoAdminPanelState.draftItems : []).find((item) => Number(item?.id || 0) === targetId)
+    || (Array.isArray(_videoAdminPanelState.publishedItems) ? _videoAdminPanelState.publishedItems.find((item) => Number(item?.id || 0) === targetId) : null)
+    || null;
+}
+
+function videoAdminFindTreeNodeByPath(node, folderPath = '') {
+  if (!node) return null;
+  const target = String(folderPath || '').trim().toLowerCase();
+  if (!target) return null;
+  if (String(node.absolute_path || '').trim().toLowerCase() === target) return node;
+  const children = Array.isArray(node.children) ? node.children : [];
+  for (const child of children) {
+    const found = videoAdminFindTreeNodeByPath(child, folderPath);
+    if (found) return found;
+  }
+  return null;
+}
+
+function videoAdminCurrentBrowseNode(folderPath = '') {
+  return videoAdminFindTreeNodeByPath(_videoAdminPanelState.browseTree, folderPath);
+}
+
+function videoAdminSeasonFolderNodes(node) {
+  return (Array.isArray(node?.children) ? node.children : []).filter((child) => {
+    const hasFolder = Number(child?.folder_count || 0) >= 0;
+    const hasVideoFiles = Number(child?.video_file_count || 0) > 0;
+    return hasFolder || hasVideoFiles;
+  });
+}
+
+function videoAdminSeasonShouldDefaultInclude(label = '') {
+  const normalized = cleanCatalogLabel(label).toLowerCase();
+  if (!normalized) return true;
+  if (/\bextras?\b/.test(normalized)) return false;
+  return true;
+}
+
+function videoAdminSeasonDraftMeta(label = '', fallback = 1) {
+  const cleaned = cleanCatalogLabel(label);
+  const included = videoAdminSeasonShouldDefaultInclude(cleaned);
+  const explicitMatch = String(cleaned || '').match(/season\s*(\d{1,3})/i);
+  const explicitNumber = explicitMatch ? Math.max(1, Number(explicitMatch[1] || fallback) || fallback) : null;
+  return {
+    cleaned,
+    included,
+    explicitNumber,
+    displayLabel: included
+      ? `Season ${explicitNumber || Math.max(1, Number(fallback || 1) || 1)}`
+      : (cleaned || `Extra ${fallback}`),
+  };
+}
+
+function videoAdminCreateFolderDraft(node, mode = 'movie') {
+  const absolutePath = String(node?.absolute_path || '').trim();
+  const name = cleanCatalogLabel(String(node?.name || videoAdminPathBaseName(absolutePath) || 'Video').trim()) || 'Video';
+  const seasonNodes = mode === 'series'
+    ? videoAdminSeasonFolderNodes(node).slice().sort((a, b) => {
+      const aMeta = videoAdminSeasonDraftMeta(String(a?.name || '').trim(), 999);
+      const bMeta = videoAdminSeasonDraftMeta(String(b?.name || '').trim(), 999);
+      if (aMeta.included !== bMeta.included) return aMeta.included ? -1 : 1;
+      const aNum = Number(aMeta.explicitNumber || 9999);
+      const bNum = Number(bMeta.explicitNumber || 9999);
+      if (aNum !== bNum) return aNum - bNum;
+      return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true, sensitivity: 'base' });
+    })
+    : [];
+  return {
+    folderPath: absolutePath,
+    mode,
+    title: name,
+    seasons: seasonNodes.map((seasonNode, index) => {
+      const meta = videoAdminSeasonDraftMeta(String(seasonNode.name || '').trim(), index + 1);
+      return {
+        path: String(seasonNode.absolute_path || '').trim(),
+        name: meta.cleaned || `Season ${index + 1}`,
+        number: meta.explicitNumber ? String(meta.explicitNumber) : '',
+        included: meta.included,
+        displayLabel: meta.displayLabel,
+      };
+    }),
+  };
+}
+
+function videoAdminEnsureFolderDraft(folderPath, mode = 'movie') {
+  const absolutePath = String(folderPath || '').trim();
+  const node = videoAdminCurrentBrowseNode(absolutePath);
+  if (!node) return null;
+  const current = _videoAdminPanelState.folderDrafts?.[absolutePath];
+  if (current && String(current.mode || '') === String(mode || '')) return current;
+  const draft = videoAdminCreateFolderDraft(node, mode);
+  _videoAdminPanelState.folderDrafts = {
+    ...(_videoAdminPanelState.folderDrafts || {}),
+    [absolutePath]: draft,
+  };
+  return draft;
+}
+
+function videoAdminSetPublishProgress(folderPath = '', message = '', percent = 0) {
+  _videoAdminPanelState.publishingFolderPath = String(folderPath || '').trim();
+  _videoAdminPanelState.publishingMessage = String(message || '').trim();
+  _videoAdminPanelState.publishingPercent = Math.max(0, Math.min(100, Number(percent || 0) || 0));
+  renderVideoAdminPanel();
+}
+
+function videoAdminClearPublishProgress() {
+  _videoAdminPanelState.publishingFolderPath = '';
+  _videoAdminPanelState.publishingMessage = '';
+  _videoAdminPanelState.publishingPercent = 0;
+}
+
+function videoAdminSetPrepareProgress(key = '', message = '', percent = 0) {
+  _videoAdminPanelState.preparingKey = String(key || '').trim();
+  _videoAdminPanelState.preparingMessage = String(message || '').trim();
+  _videoAdminPanelState.preparingPercent = Math.max(0, Math.min(100, Number(percent || 0) || 0));
+  renderVideoAdminPanel();
+}
+
+function videoAdminClearPrepareProgress() {
+  _videoAdminPanelState.preparingKey = '';
+  _videoAdminPanelState.preparingMessage = '';
+  _videoAdminPanelState.preparingPercent = 0;
+}
+
+async function videoAdminFetchPrepareStatus(itemIds = [], fileIds = []) {
+  const result = await videoCatalogApi('/api/admin/videos/cache/status', {
+    method: 'POST',
+    body: {
+      item_ids: (Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter((id) => id > 0),
+      file_ids: (Array.isArray(fileIds) ? fileIds : []).map((id) => Number(id || 0)).filter((id) => id > 0),
+    },
+  });
+  if (!result?.success) throw new Error(result?.error || 'Could not fetch prepare status.');
+  return result.result || {};
+}
+
+function videoAdminRememberPrepareStatus(key = '', status = null) {
+  const statusKey = String(key || '').trim();
+  if (!statusKey) return;
+  _videoAdminPanelState.prepareStatusByKey = {
+    ...(_videoAdminPanelState.prepareStatusByKey || {}),
+    [statusKey]: status || null,
+  };
+}
+
+function videoAdminPublishedKey(item = {}) {
+  const kind = String(item?.kind || item?.media_type || 'video').trim().toLowerCase();
+  const title = String(item?.title || item?.display_title || item?.folder_name || '').trim().toLowerCase();
+  const root = String(item?.source_root_path || '').trim().toLowerCase();
+  return `${kind}::${root}::${title}`;
+}
+
+function videoAdminSeriesGroupRootPath(item = {}) {
+  const raw = String(item?.source_root_path || '').trim();
+  if (!raw) return '';
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  if (!parts.length) return raw;
+  const tail = cleanCatalogLabel(parts[parts.length - 1] || '').toLowerCase();
+  if (/\bseason\s*\d+\b/.test(tail) || /\bextras?\b/.test(tail)) {
+    return parts.slice(0, -1).join('\\');
+  }
+  return raw;
+}
+
+function videoAdminGroupPublishedSeasons(item) {
+  const groups = new Map();
+  const files = Array.isArray(item?.files) ? item.files : [];
+  files.forEach((file) => {
+    const seasonNumber = Number(file?.season_number || 0) || 1;
+    const seasonLabel = String(file?.season_label || '').trim() || `Season ${seasonNumber}`;
+    const seasonKey = `${seasonNumber}:${seasonLabel.toLowerCase()}`;
+    if (!groups.has(seasonKey)) {
+      groups.set(seasonKey, {
+        season_key: seasonKey,
+        season_number: seasonNumber,
+        season_label: seasonLabel,
+        source_item_id: Number(item?.id || 0),
+        file_ids: [],
+        poster_stream_url: '',
+      });
+    }
+    groups.get(seasonKey).file_ids.push(Number(file?.id || 0));
+    if (!groups.get(seasonKey).poster_stream_url) {
+      const match = (Array.isArray(item?.season_posters) ? item.season_posters : []).find((poster) => String(poster?.season_key || '') === seasonKey);
+      if (match?.poster_stream_url) groups.get(seasonKey).poster_stream_url = String(match.poster_stream_url || '').trim();
+    }
+  });
+  return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+}
+
+function videoAdminBuildSeriesDraftSummary(items = []) {
+  const first = items[0] || {};
+  const title = videoAdminPathBaseName(_videoAdminPanelState.selectedFolderPath || '') || String(first?.display_title || first?.folder_name || 'Series').trim();
+  return {
+    title,
+    seasons: items.map((item, index) => {
+      const firstFile = (Array.isArray(item?.files) ? item.files : [])[0] || {};
+      const seasonNumber = Number(firstFile?.season_number || index + 1) || index + 1;
+      const seasonLabel = String(firstFile?.season_label || '').trim() || `Season ${seasonNumber}`;
+      const seasonKey = `${seasonNumber}:${seasonLabel.toLowerCase()}`;
+      const poster = (Array.isArray(item?.season_posters) ? item.season_posters : []).find((entry) => String(entry?.season_key || '') === seasonKey);
+      return {
+        item_id: Number(item?.id || 0),
+        season_key: seasonKey,
+        season_number: seasonNumber,
+        season_label: seasonLabel,
+        poster_stream_url: poster?.poster_stream_url || '',
+      };
+    }),
+  };
+}
+
+function videoAdminPathBaseName(folderPath = '') {
+  const normalized = String(folderPath || '').trim().replace(/[\\/]+$/, '');
+  if (!normalized) return '';
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  return String(parts[parts.length - 1] || '').trim();
+}
+
+function videoAdminInferSeasonNumber(label = '', fallback = 1) {
+  const match = String(label || '').match(/season\s*(\d{1,3})/i);
+  if (match) return Math.max(1, Number(match[1] || fallback) || fallback);
+  return Math.max(1, Number(fallback || 1) || 1);
+}
+
+function videoAdminSeriesDraftGroups(items = []) {
+  const groups = new Map();
+  const selectedBase = videoAdminPathBaseName(_videoAdminPanelState.selectedFolderPath || '');
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const files = Array.isArray(item?.files) ? item.files : [];
+    const file = files[0] || {};
+    const folderPath = String(file?.folder_relative_path || item?.folder_relative_path || '').trim();
+    const topFolder = folderPath.split('/').filter(Boolean)[0] || String(item?.folder_name || '').trim() || selectedBase || 'Season 1';
+    const cleanedFolder = cleanCatalogLabel(topFolder) || topFolder;
+    const groupKey = topFolder.toLowerCase();
+    if (!groups.has(groupKey)) {
+      const seasonNumber = videoAdminInferSeasonNumber(cleanedFolder, groups.size + 1);
+      groups.set(groupKey, {
+        group_key: groupKey,
+        folder_name: topFolder,
+        season_number: seasonNumber,
+        season_label: cleanedFolder || `Season ${seasonNumber}`,
+        items: [],
+        files: [],
+      });
+    }
+    const group = groups.get(groupKey);
+    group.items.push(item);
+    group.files.push(...files.map((entry, fileIndex) => ({
+      ...entry,
+      __source_item_id: Number(item?.id || 0),
+      episode_number: Number(entry?.episode_number || fileIndex + 1) || (fileIndex + 1),
+      episode_label: String(entry?.episode_label || '').trim() || prettyVideoTitle(String(entry?.filename || `Episode ${fileIndex + 1}`)),
+    })));
+  });
+  return [...groups.values()]
+    .map((group, index) => ({
+      ...group,
+      season_number: videoAdminInferSeasonNumber(group.season_label || group.folder_name, group.season_number || index + 1),
+      season_label: group.season_label || cleanCatalogLabel(group.folder_name || '') || `Season ${index + 1}`,
+    }))
+    .sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+}
+
+function videoAdminDraftGroupIncluded(groupKey = '') {
+  const excluded = Array.isArray(_videoAdminPanelState.excludedDraftGroupKeys) ? _videoAdminPanelState.excludedDraftGroupKeys : [];
+  return !excluded.includes(String(groupKey || ''));
+}
+
+function videoAdminToggleDraftGroup(groupKey = '') {
+  const key = String(groupKey || '').trim();
+  if (!key) return;
+  const excluded = new Set(Array.isArray(_videoAdminPanelState.excludedDraftGroupKeys) ? _videoAdminPanelState.excludedDraftGroupKeys : []);
+  if (excluded.has(key)) excluded.delete(key);
+  else excluded.add(key);
+  _videoAdminPanelState.excludedDraftGroupKeys = [...excluded];
+  renderVideoAdminPanel();
+}
+
+function videoAdminPublishedGroups(items = []) {
+  const seriesGroups = new Map();
+  const movieGroups = [];
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const isSeries = String(item?.media_type || '').trim().toLowerCase() === 'series';
+    if (!isSeries) {
+      movieGroups.push({
+        kind: 'movie',
+        title: String(item?.display_title || item?.folder_name || 'Movie').trim(),
+        source_root_path: item?.source_root_path || '',
+        representative_item_id: Number(item?.id || 0),
+        item_ids: [Number(item?.id || 0)],
+        file_count: Number(item?.file_count || (Array.isArray(item?.files) ? item.files.length : 0)),
+        poster_stream_url: item?.poster_stream_url || '',
+        seasons: [],
+      });
+      return;
+    }
+    const groupRootPath = videoAdminSeriesGroupRootPath(item);
+    const key = `${groupRootPath.toLowerCase()}::${String(item?.display_title || item?.folder_name || '').trim().toLowerCase()}`;
+    if (!seriesGroups.has(key)) {
+      seriesGroups.set(key, {
+        kind: 'series',
+        title: String(item?.display_title || item?.folder_name || 'Series').trim(),
+        source_root_path: groupRootPath || item?.source_root_path || '',
+        representative_item_id: Number(item?.id || 0),
+        item_ids: [],
+        file_count: 0,
+        poster_stream_url: item?.poster_stream_url || '',
+        seasons: [],
+      });
+    }
+    const group = seriesGroups.get(key);
+    group.item_ids.push(Number(item?.id || 0));
+    group.file_count += Number(item?.file_count || (Array.isArray(item?.files) ? item.files.length : 0));
+    if (!group.poster_stream_url && item?.poster_stream_url) group.poster_stream_url = String(item.poster_stream_url || '').trim();
+    videoAdminGroupPublishedSeasons(item).forEach((season) => {
+      const existing = group.seasons.find((entry) => String(entry?.season_key || '') === String(season?.season_key || ''));
+      if (existing) {
+        existing.file_ids = [...new Set([...(existing.file_ids || []), ...(season.file_ids || [])])];
+        if (!existing.poster_stream_url && season?.poster_stream_url) existing.poster_stream_url = String(season.poster_stream_url || '').trim();
+        if (!existing.source_item_id && season?.source_item_id) existing.source_item_id = Number(season.source_item_id || 0);
+      } else {
+        group.seasons.push({
+          ...season,
+          source_item_id: Number(season?.source_item_id || 0),
+          file_ids: [...new Set(Array.isArray(season?.file_ids) ? season.file_ids : [])],
+        });
+      }
+    });
+  });
+  seriesGroups.forEach((group) => {
+    group.seasons.sort((a, b) => Number(a?.season_number || 0) - Number(b?.season_number || 0));
+  });
+  return {
+    series: [...seriesGroups.values()].sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))),
+    movies: movieGroups.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))),
+  };
+}
+
+function renderVideoAdminTreeNode(node, depth = 0) {
+  if (!node) return '';
+  const absolutePath = String(node.absolute_path || '').trim();
+  const selected = String(_videoAdminPanelState.selectedFolderPath || '') === absolutePath;
+  const expanded = String(_videoAdminPanelState.expandedFolderPath || '') === absolutePath;
+  const draft = _videoAdminPanelState.folderDrafts?.[absolutePath] || null;
+  const canPublish = !!String(draft?.mode || '').trim();
+  const managesChildrenAsSeries = expanded && String(draft?.mode || '').trim().toLowerCase() === 'series';
+  const isPublishing = String(_videoAdminPanelState.publishingFolderPath || '') === absolutePath;
+  const icon = depth === 0 ? 'folder_open' : 'folder';
+  return `
+    <div class="video-admin-tree-node" style="margin-left:${depth * 12}px">
+      <div class="video-admin-tree-row ${expanded || selected ? 'active' : ''}">
+        <div class="video-admin-tree-copy" onclick='window.videoAdminSelectFolder(${JSON.stringify(absolutePath)})' style="cursor:pointer">
+          <div class="video-admin-tree-icon">${icon === 'folder_open' ? '▣' : '□'}</div>
+          <div>
+            <div class="video-admin-tree-name">${escHtml(node.name || absolutePath || 'Folder')}</div>
+            <div class="video-admin-tree-meta">${escHtml(absolutePath)} • ${Number(node.video_file_count || 0)} video file${Number(node.video_file_count || 0) === 1 ? '' : 's'} • ${Number(node.folder_count || 0)} subfolder${Number(node.folder_count || 0) === 1 ? '' : 's'}</div>
+          </div>
+        </div>
+        <div class="video-admin-tree-actions">
+          <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminOpenFolder(${JSON.stringify(absolutePath)}, "movie")' ${isPublishing ? 'disabled' : ''}>Movie</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminOpenFolder(${JSON.stringify(absolutePath)}, "series")' ${isPublishing ? 'disabled' : ''}>Series</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminToggleFolderEditor(${JSON.stringify(absolutePath)})' ${draft ? '' : 'disabled'}>${expanded ? 'Collapse' : 'Expand'}</button>
+          <button class="btn btn-p btn-sm" type="button" onclick='window.videoAdminPublishFolder(${JSON.stringify(absolutePath)})' ${(canPublish && !isPublishing) ? '' : 'disabled'}>${isPublishing ? 'Publishing...' : 'Publish'}</button>
+        </div>
+      </div>
+      ${expanded ? `<div class="video-admin-inline-editor">${videoAdminRenderFolderEditor(node, draft, isPublishing)}</div>` : ''}
+      ${(!managesChildrenAsSeries && Array.isArray(node.children) && node.children.length) ? `<div class="video-admin-tree-children">${node.children.map((child) => renderVideoAdminTreeNode(child, depth + 1)).join('')}</div>` : ''}
+    </div>`;
+}
+
+function videoAdminRenderSeasonGroup(group, index, summary = { seasons: [] }) {
+  const included = videoAdminDraftGroupIncluded(group.group_key);
+  const posterSeason = (summary.seasons || []).find((entry) => Number(entry?.season_number || 0) === Number(group.season_number || 0)) || {};
+  return `
+    <div class="video-admin-season-card ${included ? 'included' : ''}">
+      <div class="video-admin-season-strip">
+        <div class="video-admin-season-row">
+          <div class="video-admin-season-mini-icon">□</div>
+          <div>
+            <div class="video-admin-season-title-line">${escHtml(group.folder_name || `Season ${index + 1}`)}</div>
+            <div class="video-admin-section-sub">${group.files.length} episode${group.files.length === 1 ? '' : 's'}</div>
+          </div>
+        </div>
+        <button class="btn btn-s btn-sm" type="button" onclick="window.videoAdminToggleDraftGroup('${String(group.group_key || '').replace(/'/g, "\\'")}')">${included ? 'Included' : 'Select'}</button>
+      </div>
+      ${included ? `
+        <div class="video-admin-season-edit-row">
+          <input class="fi" id="videoAdminSeasonNumber_${index}" value="${escHtml(String(group.season_number || index + 1))}" placeholder="1">
+          <button class="btn btn-s" type="button" onclick="document.getElementById('videoAdminSeasonPosterUpload_${index}').click()">Season image</button>
+          <input id="videoAdminSeasonPosterUpload_${index}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPoster('season', ${Number((group.items[0] || {}).id || 0)}, '${String(posterSeason.season_key || `${group.season_number}:${String(group.season_label || '').toLowerCase()}`).replace(/'/g, "\\'")}')">
+        </div>
+        <input class="fi" id="videoAdminSeasonLabel_${index}" value="${escHtml(group.season_label || '')}" placeholder="Season 1">
+      ` : ''}
+    </div>`;
+}
+
+function videoAdminRenderDraftEditor() {
+  const items = Array.isArray(_videoAdminPanelState.draftItems) ? _videoAdminPanelState.draftItems : [];
+  if (!items.length) {
+    return `<div class="video-catalog-empty">Select a folder and mark it as Movie or Series.</div>`;
+  }
+  if (_videoAdminPanelState.draftMode === 'series') {
+    const summary = videoAdminBuildSeriesDraftSummary(items);
+    const seasonGroups = videoAdminSeriesDraftGroups(items);
+    return `
+      <div class="video-admin-editor">
+        <div class="video-admin-inline-head">
+          <div class="video-admin-inline-label">Series name</div>
+          <input class="fi" id="videoAdminSeriesTitle" value="${escHtml(summary.title || '')}" placeholder="Lost">
+        </div>
+        <div class="video-admin-poster-row">
+          <div class="video-admin-poster-box">${items[0]?.poster_stream_url ? `<div class="video-admin-poster-preview small" style="background-image:url('${escHtml(items[0].poster_stream_url)}')"></div>` : '<div class="video-admin-poster-placeholder">Series poster</div>'}</div>
+          <div class="video-admin-poster-copy">
+            <div class="video-admin-poster-title">Series poster</div>
+            <div class="video-admin-section-sub">Shown on browser series card</div>
+          </div>
+          <button class="btn btn-s" type="button" onclick="document.getElementById('videoAdminSeriesPosterUpload').click()">Upload</button>
+          <input id="videoAdminSeriesPosterUpload" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPoster('series', ${Number(items[0]?.id || 0)})">
+        </div>
+        <div class="video-admin-inline-label">Seasons found in this folder</div>
+        <div class="video-admin-season-editor-list">
+          ${seasonGroups.map((group, index) => videoAdminRenderSeasonGroup(group, index, summary)).join('')}
+        </div>
+        <div class="video-admin-inline-actions">
+          <button class="btn btn-s" type="button" onclick="window.videoAdminSaveDraft()">Save</button>
+          <button class="btn btn-p" type="button" onclick="window.videoAdminPublishDraft()">Publish</button>
+          <button class="btn btn-s danger" type="button" onclick="window.videoAdminDeleteDraft()">Remove</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="video-admin-editor">
+      ${items.map((item) => `
+        <div class="video-admin-movie-inline">
+          <div class="video-admin-inline-head">
+            <div class="video-admin-inline-label">Movie name</div>
+            <input class="fi" id="videoAdminMovieTitle_${Number(item?.id || 0)}" value="${escHtml(String(item?.display_title || item?.folder_name || '').trim())}" placeholder="Movie title">
+          </div>
+          <div class="video-admin-poster-row">
+            <div class="video-admin-poster-box">${item?.poster_stream_url ? `<div class="video-admin-poster-preview small" style="background-image:url('${escHtml(item.poster_stream_url)}')"></div>` : '<div class="video-admin-poster-placeholder">Movie poster</div>'}</div>
+            <div class="video-admin-poster-copy">
+              <div class="video-admin-poster-title">Movie poster</div>
+              <div class="video-admin-section-sub">Shown on browser movie card</div>
+            </div>
+            <button class="btn btn-s" type="button" onclick="document.getElementById('videoAdminMoviePosterUpload_${Number(item?.id || 0)}').click()">Upload</button>
+            <input id="videoAdminMoviePosterUpload_${Number(item?.id || 0)}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPoster('series', ${Number(item?.id || 0)})">
+          </div>
+        </div>`).join('')}
+        <div class="video-admin-inline-actions">
+          <button class="btn btn-s" type="button" onclick="window.videoAdminSaveDraft()">Save</button>
+          <button class="btn btn-p" type="button" onclick="window.videoAdminPublishDraft()">Publish</button>
+          <button class="btn btn-s danger" type="button" onclick="window.videoAdminDeleteDraft()">Remove</button>
+        </div>
+      </div>
+    `;
+}
+
+function videoAdminRenderFolderEditor(node, draft, isPublishing = false) {
+  if (!draft || !draft.mode) {
+    return `<div class="video-catalog-empty">Choose Movie or Series for this folder.</div>`;
+  }
+  const progressMarkup = isPublishing ? `
+    <div class="video-admin-publish-progress">
+      <div class="video-admin-publish-progress-copy">
+        <strong>${escHtml(_videoAdminPanelState.publishingMessage || 'Publishing...')}</strong>
+        <span>${Math.round(Number(_videoAdminPanelState.publishingPercent || 0))}%</span>
+      </div>
+      <div class="video-admin-publish-progress-track">
+        <div class="video-admin-publish-progress-bar" style="width:${Math.max(4, Number(_videoAdminPanelState.publishingPercent || 0))}%"></div>
+      </div>
+    </div>` : '';
+  if (draft.mode === 'movie') {
+    return `
+      <div class="video-admin-editor">
+        ${progressMarkup}
+        <div class="video-admin-inline-head">
+          <div class="video-admin-inline-label">Movie name</div>
+          <input class="fi" id="videoAdminFolderTitle" value="${escHtml(draft.title || cleanCatalogLabel(node?.name || 'Movie'))}" placeholder="Movie title">
+        </div>
+      </div>`;
+  }
+  const seasons = Array.isArray(draft.seasons) ? draft.seasons : [];
+  return `
+    <div class="video-admin-editor">
+      ${progressMarkup}
+      <div class="video-admin-inline-head">
+        <div class="video-admin-inline-label">Series name</div>
+        <input class="fi" id="videoAdminFolderTitle" value="${escHtml(draft.title || cleanCatalogLabel(node?.name || 'Series'))}" placeholder="Series title">
+      </div>
+      <div class="video-admin-inline-label">Seasons found in this folder</div>
+      <div class="video-admin-season-editor-list">
+        ${seasons.length ? seasons.map((season, index) => `
+          <div class="video-admin-season-card ${season.included ? 'included' : ''}">
+            <div class="video-admin-season-strip">
+              <div class="video-admin-season-row">
+                <div class="video-admin-season-mini-icon">S</div>
+                <div>
+                  <div class="video-admin-season-title-line">${escHtml(season.displayLabel || season.name || `Season ${index + 1}`)}</div>
+                  <div class="video-admin-section-sub">${escHtml(season.path || '')}</div>
+                </div>
+              </div>
+              <button class="btn btn-s btn-sm" type="button" onclick="window.videoAdminToggleFolderSeason(${index})">${season.included ? 'Included' : 'Excluded'}</button>
+            </div>
+          </div>
+        `).join('') : '<div class="video-catalog-empty">No season folders found inside this series folder.</div>'}
+      </div>
+    </div>`;
+}
+
+function renderVideoAdminPublishedCard(item) {
+  const isSeries = String(item?.kind || '').trim().toLowerCase() === 'series';
+  const seasons = Array.isArray(item?.seasons) ? item.seasons : [];
+  const itemIds = Array.isArray(item?.item_ids) ? item.item_ids : [Number(item?.id || 0)];
+  const itemKey = videoAdminPublishedKey(item);
+  const expanded = (Array.isArray(_videoAdminPanelState.expandedPublishedKeys) ? _videoAdminPanelState.expandedPublishedKeys : []).includes(itemKey);
+  const preparingItem = String(_videoAdminPanelState.preparingKey || '') === `item:${itemKey}`;
+  const itemPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[`item:${itemKey}`] || null;
+  const itemReadyLabel = itemPrepareStatus
+    ? (itemPrepareStatus.is_ready
+      ? 'Ready for instant play'
+      : (Number(itemPrepareStatus.queued_count || 0) > 0 ? `Queued ${Number(itemPrepareStatus.queued_count || 0)}` : 'Not ready'))
+    : '';
+  return `
+    <div class="video-admin-published-card">
+      <div class="video-admin-tree-row ${expanded ? 'active' : ''}">
+        <div>
+          <div class="video-admin-published-title">${escHtml(item?.title || item?.display_title || item?.folder_name || 'Video')}</div>
+          <div class="video-admin-section-sub">${escHtml(item?.source_root_path || '')} • ${Number(item?.file_count || 0)} file${Number(item?.file_count || 0) === 1 ? '' : 's'}${itemReadyLabel ? ` • ${escHtml(itemReadyLabel)}` : ''}</div>
+        </div>
+        <div class="video-admin-tree-actions">
+          <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminTogglePublishedItem(${JSON.stringify(itemKey)})'>${expanded ? 'Collapse' : 'Expand'}</button>
+          <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems(${JSON.stringify(itemIds)}, [], ${JSON.stringify(`item:${itemKey}`)}, ${JSON.stringify(`Preparing ${String(item?.title || item?.display_title || item?.folder_name || 'item')}`)})' ${preparingItem ? 'disabled' : ''}>${preparingItem ? 'Preparing...' : 'Prepare'}</button>
+          <button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminDeletePublished(${JSON.stringify(itemIds)})' ${preparingItem ? 'disabled' : ''}>Remove</button>
+        </div>
+      </div>
+      ${expanded ? `<div class="video-admin-inline-editor"><div class="video-admin-editor">
+      ${preparingItem ? `
+      <div class="video-admin-publish-progress">
+        <div class="video-admin-publish-progress-copy">
+          <strong>${escHtml(_videoAdminPanelState.preparingMessage || 'Preparing...')}</strong>
+          <span>${Math.round(Number(_videoAdminPanelState.preparingPercent || 0))}%</span>
+        </div>
+        <div class="video-admin-publish-progress-track">
+          <div class="video-admin-publish-progress-bar" style="width:${Math.max(4, Number(_videoAdminPanelState.preparingPercent || 0))}%"></div>
+        </div>
+      </div>` : ''}
+      <div class="video-admin-poster-row">
+        <div class="video-admin-poster-box">${item?.poster_stream_url ? `<div class="video-admin-poster-preview small" style="background-image:url('${escHtml(item.poster_stream_url)}')"></div>` : '<div class="video-admin-poster-placeholder">Poster</div>'}</div>
+        <div class="video-admin-poster-copy">
+          <div class="video-admin-poster-title">${escHtml(isSeries ? 'Series poster' : 'Movie poster')}</div>
+          <div class="video-admin-section-sub">Shown on browser ${escHtml(isSeries ? 'series' : 'movie')} card</div>
+        </div>
+        <button class="btn btn-s" type="button" onclick="document.getElementById('videoAdminPublishedPosterUpload_${Number(item?.representative_item_id || 0)}').click()">Upload</button>
+        <input id="videoAdminPublishedPosterUpload_${Number(item?.representative_item_id || 0)}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPublishedPoster('series', ${Number(item?.representative_item_id || 0)})">
+      </div>
+      ${isSeries && seasons.length ? `<div class="video-admin-season-prepare-list">
+        ${seasons.map((season) => {
+          const seasonPrepareKey = `season:${itemKey}:${String(season?.season_key || '')}`;
+          const preparingSeason = String(_videoAdminPanelState.preparingKey || '') === seasonPrepareKey;
+          const seasonPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[seasonPrepareKey] || null;
+          const seasonReadyLabel = seasonPrepareStatus
+            ? (seasonPrepareStatus.is_ready
+              ? 'Ready for instant play'
+              : (Number(seasonPrepareStatus.queued_count || 0) > 0 ? `Queued ${Number(seasonPrepareStatus.queued_count || 0)}` : 'Not ready'))
+            : '';
+          return `
+          <div class="video-admin-season-prepare-row">
+            <div class="video-admin-season-prepare-copy">
+              ${season.poster_stream_url ? `<div class="video-admin-season-thumb tiny" style="background-image:url('${escHtml(season.poster_stream_url)}')"></div>` : ''}
+              <div>
+                <div class="video-admin-season-prepare-title">${escHtml(season.season_label || 'Season')}</div>
+                <div class="video-admin-section-sub">${season.file_ids.length} episode${season.file_ids.length === 1 ? '' : 's'}${seasonReadyLabel ? ` • ${escHtml(seasonReadyLabel)}` : ''}</div>
+              </div>
+            </div>
+            <div class="video-admin-season-prepare-actions">
+              <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}').click()">Season poster</button>
+              <input id="videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPublishedPoster('season', ${Number(season?.source_item_id || 0)}, '${String(season?.season_key || '').replace(/'/g, "\\'")}', '${String(season?.season_label || '').replace(/'/g, "\\'")}', '${String(season?.season_number || '').replace(/'/g, "\\'")}')">
+              <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(`Preparing ${String(season?.season_label || 'season')}`)})' ${preparingSeason ? 'disabled' : ''}>${preparingSeason ? 'Preparing...' : 'Prepare Season'}</button>
+            </div>
+          </div>
+          ${preparingSeason ? `
+          <div class="video-admin-publish-progress">
+            <div class="video-admin-publish-progress-copy">
+              <strong>${escHtml(_videoAdminPanelState.preparingMessage || 'Preparing...')}</strong>
+              <span>${Math.round(Number(_videoAdminPanelState.preparingPercent || 0))}%</span>
+            </div>
+            <div class="video-admin-publish-progress-track">
+              <div class="video-admin-publish-progress-bar" style="width:${Math.max(4, Number(_videoAdminPanelState.preparingPercent || 0))}%"></div>
+            </div>
+          </div>` : ''}`;
+        }).join('')}
+      </div>` : `<div class="video-catalog-empty">${isSeries ? 'No published seasons found.' : 'Movie is published and ready to manage.'}</div>`}
+      </div></div>` : ''}
+    </div>`;
+}
+
+function renderVideoAdminPublishedTab() {
+  const grouped = videoAdminPublishedGroups(Array.isArray(_videoAdminPanelState.publishedItems) ? _videoAdminPanelState.publishedItems : []);
+  const seriesItems = grouped.series;
+  const movieItems = grouped.movies;
+  const allItems = [...seriesItems, ...movieItems];
+  return `
+    <div class="video-admin-published-shell">
+      <div class="video-admin-editor-head">
+        <div>
+          <div class="video-admin-section-title">Published Library</div>
+          <div class="video-admin-section-sub">Manage what is live in the browser and prepare playback before users click play.</div>
+        </div>
+        <div class="video-admin-editor-actions">
+          <button class="btn btn-s" type="button" onclick="window.videoAdminRefreshPublished()">Refresh</button>
+          <button class="btn btn-s danger" type="button" onclick="window.videoAdminClearPublished()">Clear Published</button>
+        </div>
+      </div>
+      <div class="video-admin-card">
+        <div class="video-admin-card-head">
+          <div class="video-admin-card-title">Published Files</div>
+          <div class="video-admin-card-meta">${allItems.length} published item${allItems.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="video-admin-published-list">${allItems.length ? allItems.map(renderVideoAdminPublishedCard).join('') : '<div class="video-catalog-empty">No published videos yet.</div>'}</div>
+      </div>
+    </div>`;
+}
+
+function renderVideoAdminPanel() {
+  const settings = _videoAdminPanelState.settings || {};
+  const publishedGroups = videoAdminPublishedGroups(Array.isArray(_videoAdminPanelState.publishedItems) ? _videoAdminPanelState.publishedItems : []);
+  const publishedCount = Number((publishedGroups.series || []).length) + Number((publishedGroups.movies || []).length);
+  openModal('Video Settings', `
+    <div class="video-admin-workspace">
+      <div class="video-admin-tabs">
+        <button class="btn ${_videoAdminPanelState.activeTab === 'setup' ? 'btn-p' : 'btn-s'}" type="button" onclick="window.videoAdminSwitchTab('setup')">Setup & Publish</button>
+        <button class="btn ${_videoAdminPanelState.activeTab === 'published' ? 'btn-p' : 'btn-s'}" type="button" onclick="window.videoAdminSwitchTab('published')">Published <span class="video-admin-tab-count">${publishedCount}</span></button>
+      </div>
+      ${_videoAdminPanelState.activeTab === 'published' ? renderVideoAdminPublishedTab() : `
+        <div class="video-admin-panel">
+          <div class="video-admin-grid">
+            <label class="video-catalog-field">
+              <span>Library Title</span>
+              <input class="fi" id="videoAdminLibraryTitle" value="${escHtml(settings.library_title || 'Video Library')}" placeholder="Video Library">
+            </label>
+            <label class="video-catalog-field">
+              <span>Default Runtime Root</span>
+              <input class="fi" id="videoAdminDefaultRoot" value="${escHtml(settings.videos_root_path || '')}" placeholder="D:\\Videos">
+            </label>
+            <label class="video-catalog-field video-catalog-field-wide">
+              <span>Browse Folder Path</span>
+              <div class="video-admin-browse-row">
+                <input class="fi" id="videoAdminBrowsePath" value="${escHtml(_videoAdminPanelState.browsePath || settings.videos_root_path || '')}" placeholder="D:\\Series\\English\\Lost">
+                <button class="btn btn-s" type="button" onclick="window.videoAdminBrowsePath()">Browse</button>
+              </div>
+            </label>
+          </div>
+          <div class="video-admin-card video-admin-structure-card">
+            <div class="video-admin-card-head">
+              <div class="video-admin-card-title">Folder structure</div>
+              <div class="video-admin-card-meta">${escHtml(_videoAdminPanelState.browsePath || 'Load a folder path to browse the real structure')}</div>
+            </div>
+            <div class="video-admin-tree">${_videoAdminPanelState.browseTree ? renderVideoAdminTreeNode(_videoAdminPanelState.browseTree) : '<div class="video-catalog-empty">Enter a folder path and click Browse.</div>'}</div>
+          </div>
+        </div>`}
+    </div>`);
+}
+
+async function loadVideoAdminPanel() {
+  const settingsResult = await api('/api/admin/videos/settings');
+  if (!settingsResult?.success) throw new Error(settingsResult?.error || 'Could not load video settings.');
+  const settings = settingsResult.settings || {};
+  const publishedItems = await videoAdminFetchCatalog('published');
+  _videoAdminPanelState = {
+    ..._videoAdminPanelState,
+    settings,
+    browsePath: _videoAdminPanelState.browsePath || settings.videos_root_path || '',
+    publishedItems,
+  };
+}
+
+function videoAdminSwitchTab(tab) {
+  _videoAdminPanelState.activeTab = String(tab || 'setup') === 'published' ? 'published' : 'setup';
+  renderVideoAdminPanel();
+}
+
+function videoAdminSelectFolder(folderPath) {
+  _videoAdminPanelState.selectedFolderPath = String(folderPath || '').trim();
+  renderVideoAdminPanel();
+}
+
+async function videoAdminBrowsePath() {
+  const browsePath = document.getElementById('videoAdminBrowsePath')?.value?.trim() || '';
+  if (!browsePath) {
+    toast('Enter a folder path first.', 'error');
+    return;
+  }
+  const tree = await videoAdminFetchTree(browsePath);
+  _videoAdminPanelState.browsePath = browsePath;
+  _videoAdminPanelState.browseTree = tree;
+  if (!_videoAdminPanelState.selectedFolderPath) {
+    _videoAdminPanelState.selectedFolderPath = String(tree?.absolute_path || browsePath).trim();
+  }
+  renderVideoAdminPanel();
+}
+
+async function videoAdminOpenFolder(folderPath, mediaType = 'movie') {
+  const pathValue = String(folderPath || '').trim();
+  if (!pathValue) {
+    toast('Folder path is missing.', 'error');
+    return;
+  }
+  const normalizedMode = String(mediaType || 'movie').trim().toLowerCase() === 'series' ? 'series' : 'movie';
+  const currentDraft = _videoAdminPanelState.folderDrafts?.[pathValue] || null;
+  if (String(_videoAdminPanelState.expandedFolderPath || '') === pathValue && String(currentDraft?.mode || '') === normalizedMode) {
+    _videoAdminPanelState.selectedFolderPath = '';
+    _videoAdminPanelState.expandedFolderPath = '';
+    renderVideoAdminPanel();
+    return;
+  }
+  const draft = videoAdminEnsureFolderDraft(pathValue, normalizedMode);
+  if (!draft) {
+    toast('Could not load folder details.', 'error');
+    return;
+  }
+  _videoAdminPanelState.selectedFolderPath = pathValue;
+  _videoAdminPanelState.expandedFolderPath = pathValue;
+  renderVideoAdminPanel();
+}
+
+function videoAdminToggleFolderSeason(index = 0) {
+  const folderPath = String(_videoAdminPanelState.expandedFolderPath || '').trim();
+  const draft = _videoAdminPanelState.folderDrafts?.[folderPath];
+  if (!draft || !Array.isArray(draft.seasons) || !draft.seasons[index]) return;
+  draft.seasons[index].included = !draft.seasons[index].included;
+  renderVideoAdminPanel();
+}
+
+function videoAdminToggleFolderEditor(folderPath = '') {
+  const pathValue = String(folderPath || '').trim();
+  if (!pathValue) return;
+  if (String(_videoAdminPanelState.expandedFolderPath || '') === pathValue) {
+    _videoAdminPanelState.expandedFolderPath = '';
+  } else if (_videoAdminPanelState.folderDrafts?.[pathValue]) {
+    _videoAdminPanelState.expandedFolderPath = pathValue;
+    _videoAdminPanelState.selectedFolderPath = pathValue;
+  }
+  renderVideoAdminPanel();
+}
+
+function videoAdminTogglePublishedItem(key = '') {
+  const value = String(key || '').trim();
+  if (!value) return;
+  const expanded = new Set(Array.isArray(_videoAdminPanelState.expandedPublishedKeys) ? _videoAdminPanelState.expandedPublishedKeys : []);
+  if (expanded.has(value)) expanded.delete(value);
+  else expanded.add(value);
+  _videoAdminPanelState.expandedPublishedKeys = [...expanded];
+  renderVideoAdminPanel();
+}
+
+async function videoAdminPublishFolder(folderPath) {
+  const pathValue = String(folderPath || '').trim();
+  const draft = _videoAdminPanelState.folderDrafts?.[pathValue];
+  if (!draft || !draft.mode) {
+    toast('Choose Movie or Series first.', 'error');
+    return;
+  }
+  if (String(_videoAdminPanelState.publishingFolderPath || '') === pathValue) return;
+  const title = document.getElementById('videoAdminFolderTitle')?.value?.trim() || draft.title || cleanCatalogLabel(videoAdminPathBaseName(pathValue)) || 'Video';
+  if (!title) {
+    toast('Enter a title first.', 'error');
+    return;
+  }
+  let includedSeasonCounter = 0;
+  const seasonDrafts = Array.isArray(draft.seasons) ? draft.seasons.map((season) => {
+    const seasonIncluded = !!season.included;
+    const assignedNumber = seasonIncluded
+      ? (Number(season.number || 0) > 0 ? Number(season.number || 0) : (includedSeasonCounter + 1))
+      : (Number(season.number || 0) > 0 ? Number(season.number || 0) : null);
+    if (seasonIncluded) includedSeasonCounter += 1;
+    return {
+      ...season,
+      number: assignedNumber ? String(assignedNumber) : '',
+      label: seasonIncluded
+        ? `Season ${assignedNumber || includedSeasonCounter || 1}`
+        : (season.displayLabel || season.name || 'Extras'),
+    };
+  }) : [];
+  const publishIds = [];
+  try {
+    videoAdminSetPublishProgress(pathValue, 'Starting publish...', 5);
+    if (draft.mode === 'movie') {
+      videoAdminSetPublishProgress(pathValue, 'Scanning movie folder...', 20);
+      const scanResult = await videoCatalogApi('/api/admin/videos/catalog/scan', { method: 'POST', body: { scan_path: pathValue } });
+      if (!scanResult?.success) {
+        toast(scanResult?.error || 'Could not scan the movie folder.', 'error');
+        return;
+      }
+      const items = Array.isArray(scanResult.items) ? scanResult.items : [];
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        videoAdminSetPublishProgress(pathValue, `Saving movie ${index + 1} of ${items.length}...`, 30 + Math.round(((index + 1) / Math.max(1, items.length)) * 40));
+        await videoCatalogApi(`/api/admin/videos/catalog/${Number(item.id || 0)}`, {
+          method: 'PUT',
+          body: {
+            display_title: title,
+            media_type: 'movie',
+          },
+        });
+        publishIds.push(Number(item.id || 0));
+      }
+    } else {
+      const includedSeasons = seasonDrafts.filter((season) => season.included);
+      const seasonTargets = includedSeasons.length
+        ? includedSeasons
+        : [{ path: pathValue, name: 'Season 1', number: '1', label: 'Season 1', included: true }];
+      for (let seasonIndex = 0; seasonIndex < seasonTargets.length; seasonIndex += 1) {
+        const season = seasonTargets[seasonIndex];
+        videoAdminSetPublishProgress(pathValue, `Scanning ${season.label || season.name || `Season ${seasonIndex + 1}`}...`, 15 + Math.round((seasonIndex / Math.max(1, seasonTargets.length)) * 20));
+        const scanResult = await videoCatalogApi('/api/admin/videos/catalog/scan', { method: 'POST', body: { scan_path: season.path } });
+        if (!scanResult?.success) {
+          toast(scanResult?.error || `Could not scan ${season.name || 'season'}.`, 'error');
+          return;
+        }
+        const items = (Array.isArray(scanResult.items) ? scanResult.items : []).slice().sort((a, b) => {
+          const aPath = String(a?.primary_video_relative_path || a?.folder_relative_path || '').toLowerCase();
+          const bPath = String(b?.primary_video_relative_path || b?.folder_relative_path || '').toLowerCase();
+          return aPath.localeCompare(bPath, undefined, { numeric: true, sensitivity: 'base' });
+        });
+        for (let index = 0; index < items.length; index += 1) {
+          const item = items[index];
+          const files = Array.isArray(item?.files) ? item.files : [];
+          const overall = (((seasonIndex * Math.max(1, items.length)) + index + 1) / Math.max(1, seasonTargets.length * Math.max(1, items.length)));
+          videoAdminSetPublishProgress(pathValue, `Saving ${season.label || `Season ${seasonIndex + 1}`} episode ${index + 1}...`, 35 + Math.round(overall * 45));
+          await videoCatalogApi(`/api/admin/videos/catalog/${Number(item.id || 0)}`, {
+            method: 'PUT',
+            body: {
+              display_title: title,
+              media_type: 'series',
+              season_count: seasonTargets.length,
+              episode_count: items.length,
+              files: files.map((file, fileIndex) => ({
+                id: Number(file?.id || 0),
+                series_title: title,
+                season_number: Number(season.number || 1) || 1,
+                season_label: String(season.label || `Season ${Number(season.number || 1) || 1}`),
+                episode_number: index + fileIndex + 1,
+                episode_label: prettyVideoTitle(String(file?.filename || `Episode ${index + fileIndex + 1}`)),
+              })),
+            },
+          });
+          publishIds.push(Number(item.id || 0));
+        }
+      }
+    }
+    const uniqueIds = [...new Set(publishIds.filter((id) => id > 0))];
+    if (!uniqueIds.length) {
+      toast('No videos found to publish in this folder.', 'error');
+      return;
+    }
+    videoAdminSetPublishProgress(pathValue, 'Publishing to library...', 90);
+    const publishResult = await videoCatalogApi('/api/admin/videos/catalog/publish', {
+      method: 'POST',
+      body: { item_ids: uniqueIds },
+    });
+    if (!publishResult?.success) {
+      toast(publishResult?.error || 'Could not publish this folder.', 'error');
+      return;
+    }
+    videoAdminSetPublishProgress(pathValue, 'Refreshing library...', 98);
+    _videoAdminPanelState.publishedItems = await videoAdminFetchCatalog('published');
+    toast(`${draft.mode === 'series' ? 'Series' : 'Movie'} published successfully.`, 'success');
+  } finally {
+    videoAdminClearPublishProgress();
+    renderVideoAdminPanel();
+  }
+}
+
+async function videoAdminReloadDraftItems() {
+  const draftIds = [...new Set((_videoAdminPanelState.draftItems || []).map((item) => Number(item?.id || 0)).filter((id) => id > 0))];
+  if (!draftIds.length) return;
+  const allItems = await videoAdminFetchCatalog('all');
+  _videoAdminPanelState.draftItems = allItems.filter((item) => draftIds.includes(Number(item?.id || 0)));
+}
+
+async function videoAdminSaveDraft() {
+  const items = Array.isArray(_videoAdminPanelState.draftItems) ? _videoAdminPanelState.draftItems : [];
+  if (!items.length) {
+    toast('No draft is loaded yet.', 'error');
+    return;
+  }
+  const seriesTitle = document.getElementById('videoAdminSeriesTitle')?.value?.trim() || '';
+  const seasonGroups = _videoAdminPanelState.draftMode === 'series' ? videoAdminSeriesDraftGroups(items) : [];
+  const seasonMetaByItemId = new Map();
+  const includedItemIds = new Set();
+  seasonGroups.forEach((group, index) => {
+    if (!videoAdminDraftGroupIncluded(group.group_key)) return;
+    const seasonNumber = document.getElementById(`videoAdminSeasonNumber_${index}`)?.value?.trim() || String(group.season_number || index + 1);
+    const seasonLabel = document.getElementById(`videoAdminSeasonLabel_${index}`)?.value?.trim() || group.season_label || `Season ${seasonNumber}`;
+    group.items.forEach((item) => {
+      includedItemIds.add(Number(item?.id || 0));
+      seasonMetaByItemId.set(Number(item?.id || 0), { seasonNumber, seasonLabel });
+    });
+  });
+  for (const item of items) {
+    const itemId = Number(item?.id || 0);
+    const files = Array.isArray(item?.files) ? item.files : [];
+    const isSeries = _videoAdminPanelState.draftMode === 'series';
+    if (isSeries && !includedItemIds.has(itemId)) continue;
+    const seasonMeta = seasonMetaByItemId.get(itemId) || { seasonNumber: '', seasonLabel: '' };
+    const seasonNumber = isSeries ? seasonMeta.seasonNumber : '';
+    const seasonLabel = isSeries ? seasonMeta.seasonLabel : '';
+    const payload = {
+      display_title: isSeries
+        ? (seriesTitle || item?.display_title || item?.folder_name || 'Series')
+        : (document.getElementById(`videoAdminMovieTitle_${itemId}`)?.value?.trim() || item?.display_title || item?.folder_name || 'Movie'),
+      media_type: isSeries ? 'series' : 'movie',
+      release_year: item?.release_year != null ? String(item.release_year) : '',
+      poster_relative_path: item?.poster_relative_path || '',
+      synopsis: item?.synopsis || '',
+      genres: catalogCsv(item?.genres),
+      cast_members: catalogCsv(item?.cast_members),
+      creators: catalogCsv(item?.creators),
+      tags: catalogCsv(item?.tags),
+      original_language: item?.original_language || '',
+      country: item?.country || '',
+      content_rating: item?.content_rating || '',
+      runtime_minutes: item?.runtime_minutes != null ? String(item.runtime_minutes) : '',
+      season_count: isSeries ? String(items.length) : '',
+      episode_count: isSeries ? String(files.length) : String(files.length || item?.episode_count || 0),
+      season_posters: Array.isArray(item?.season_posters) ? item.season_posters.map((entry) => ({
+        season_key: entry?.season_key || '',
+        season_label: entry?.season_label || '',
+        season_number: entry?.season_number || '',
+        poster_relative_path: entry?.poster_relative_path || '',
+      })) : [],
+      files: files.map((file, index) => ({
+        id: Number(file?.id || 0),
+        series_title: isSeries ? (seriesTitle || item?.display_title || 'Series') : '',
+        season_label: isSeries ? seasonLabel : '',
+        season_number: isSeries ? seasonNumber : '',
+        episode_label: isSeries ? (document.getElementById(`videoAdminEpisodeLabel_${itemId}_${Number(file?.id || 0)}`)?.value?.trim() || file?.episode_label || '') : '',
+        episode_number: isSeries ? (document.getElementById(`videoAdminEpisodeNumber_${itemId}_${Number(file?.id || 0)}`)?.value?.trim() || String(file?.episode_number || index + 1)) : '',
+      })),
+    };
+    const result = await api(`/api/admin/videos/catalog/${itemId}`, {
+      method: 'PUT',
+      body: payload,
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not save draft.', 'error');
+      return;
+    }
+  }
+  await videoAdminReloadDraftItems();
+  await videoAdminRefreshPublished(false);
+  renderVideoAdminPanel();
+  toast('Video draft saved', 'success');
+}
+
+async function videoAdminPublishDraft() {
+  await videoAdminSaveDraft();
+  const itemIds = _videoAdminPanelState.draftMode === 'series'
+    ? videoAdminSeriesDraftGroups(_videoAdminPanelState.draftItems || [])
+      .filter((group) => videoAdminDraftGroupIncluded(group.group_key))
+      .flatMap((group) => group.items.map((item) => Number(item?.id || 0)))
+      .filter((id) => id > 0)
+    : [...new Set((_videoAdminPanelState.draftItems || []).map((item) => Number(item?.id || 0)).filter((id) => id > 0))];
+  if (!itemIds.length) return;
+  const result = await api('/api/admin/videos/catalog/publish', {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not publish the selection.', 'error');
+    return;
+  }
+  await videoAdminRefreshPublished(false);
+  await loadVideosPage();
+  renderVideoAdminPanel();
+  toast(`Published ${result?.result?.published_count || itemIds.length} item${Number(result?.result?.published_count || itemIds.length) === 1 ? '' : 's'}`, 'success');
+}
+
+async function videoAdminPrepareItems(itemIds = [], fileIds = [], progressKey = '', progressLabel = 'Preparing videos') {
+  const normalizedItemIds = (Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter((id) => id > 0);
+  const normalizedFileIds = (Array.isArray(fileIds) ? fileIds : []).map((id) => Number(id || 0)).filter((id) => id > 0);
+  const stateKey = String(progressKey || '').trim();
+  try {
+    if (stateKey) videoAdminSetPrepareProgress(stateKey, `${progressLabel}...`, 15);
+    const result = await videoCatalogApi('/api/admin/videos/cache/prepare', {
+      method: 'POST',
+      body: {
+        item_ids: normalizedItemIds,
+        file_ids: normalizedFileIds,
+      },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not prepare the selected videos.', 'error');
+      return;
+    }
+    if (stateKey) videoAdminSetPrepareProgress(stateKey, 'Queueing instant-play jobs...', 80);
+    const prep = result.result || {};
+    if (stateKey) videoAdminSetPrepareProgress(stateKey, `Queued ${prep.queued_count || 0} video${Number(prep.queued_count || 0) === 1 ? '' : 's'}`, 100);
+    if (stateKey) {
+      videoAdminRememberPrepareStatus(stateKey, {
+        queued_count: Number(prep.queued_count || 0),
+        candidate_count: Number(prep.candidate_count || 0),
+        is_ready: Number(prep.candidate_count || 0) === 0 && Number(prep.queued_count || 0) === 0,
+      });
+      renderVideoAdminPanel();
+      const deadline = Date.now() + 1000 * 60 * 20;
+      let pollCount = 0;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        pollCount += 1;
+        const status = await videoAdminFetchPrepareStatus(normalizedItemIds, normalizedFileIds).catch(() => null);
+        if (!status) continue;
+        videoAdminRememberPrepareStatus(stateKey, status);
+        if (status.is_ready) {
+          videoAdminSetPrepareProgress(stateKey, 'Ready for instant play', 100);
+          break;
+        }
+        const totalReadyBase = Number(status.candidate_count || 0) || (Number(status.ready_count || 0) + Number(status.pending_count || 0) + Number(status.queued_count || 0));
+        const progressPercent = totalReadyBase > 0
+          ? Math.max(15, Math.min(99, Math.round((Number(status.ready_count || 0) / totalReadyBase) * 100)))
+          : 100;
+        videoAdminSetPrepareProgress(
+          stateKey,
+          Number(status.queued_count || 0) > 0
+            ? `Preparing... ${Number(status.ready_count || 0)}/${Number(status.candidate_count || totalReadyBase || 0)} ready`
+            : `Waiting... ${Number(status.ready_count || 0)}/${Number(status.candidate_count || totalReadyBase || 0)} ready`,
+          progressPercent
+        );
+        if (pollCount % 2 === 0) renderVideoAdminPanel();
+      }
+    }
+    toast(`Queued ${prep.queued_count || 0} video${Number(prep.queued_count || 0) === 1 ? '' : 's'} for instant play.`, 'success');
+  } finally {
+    if (stateKey) {
+      setTimeout(() => {
+        if (String(_videoAdminPanelState.preparingKey || '') === stateKey) {
+          videoAdminClearPrepareProgress();
+          renderVideoAdminPanel();
+        }
+      }, 700);
+    }
+  }
+}
+
+async function videoAdminPrepareDraft() {
+  const itemIds = _videoAdminPanelState.draftMode === 'series'
+    ? videoAdminSeriesDraftGroups(_videoAdminPanelState.draftItems || [])
+      .filter((group) => videoAdminDraftGroupIncluded(group.group_key))
+      .flatMap((group) => group.items.map((item) => Number(item?.id || 0)))
+      .filter((id) => id > 0)
+    : [...new Set((_videoAdminPanelState.draftItems || []).map((item) => Number(item?.id || 0)).filter((id) => id > 0))];
+  if (!itemIds.length) {
+    toast('No draft videos found to prepare.', 'error');
+    return;
+  }
+  await videoAdminPrepareItems(itemIds, []);
+}
+
+async function videoAdminDeleteDraft() {
+  const itemIds = [...new Set((_videoAdminPanelState.draftItems || []).map((item) => Number(item?.id || 0)).filter((id) => id > 0))];
+  if (!itemIds.length) {
+    toast('No draft is loaded yet.', 'error');
+    return;
+  }
+  if (!confirm('Remove this scanned draft from the video catalog? This will not delete the real files.')) return;
+  const result = await api('/api/admin/videos/catalog/delete', {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not remove the draft.', 'error');
+    return;
+  }
+  _videoAdminPanelState.draftItems = [];
+  _videoAdminPanelState.draftMode = '';
+  await videoAdminRefreshPublished(false);
+  renderVideoAdminPanel();
+  toast('Draft removed from catalog', 'success');
+}
+
+async function videoAdminDeletePublished(itemId) {
+  const itemIds = (Array.isArray(itemId) ? itemId : [itemId]).map((id) => Number(id || 0)).filter((id) => id > 0);
+  if (!itemIds.length) {
+    toast('Published entry is invalid.', 'error');
+    return;
+  }
+  if (!confirm('Remove this published entry from the browser library? This will not delete the real files.')) return;
+  const result = await api('/api/admin/videos/catalog/delete', {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not remove the published entry.', 'error');
+    return;
+  }
+  await videoAdminRefreshPublished(false);
+  await loadVideosPage();
+  renderVideoAdminPanel();
+  toast('Published entry removed', 'success');
+}
+
+async function videoAdminClearPublished() {
+  if (!confirm('Clear all published video catalog items? This will not delete the real files.')) return;
+  const itemIds = [...new Set((_videoAdminPanelState.publishedItems || []).map((item) => Number(item?.id || 0)).filter((id) => id > 0))];
+  const result = await api('/api/admin/videos/catalog/delete', {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not clear published entries.', 'error');
+    return;
+  }
+  _videoAdminPanelState.publishedItems = [];
+  await loadVideosPage();
+  renderVideoAdminPanel();
+  toast('Published library cleared', 'success');
+}
+
+async function videoAdminRefreshPublished(reRender = true) {
+  _videoAdminPanelState.publishedItems = await videoAdminFetchCatalog('published');
+  if (reRender) renderVideoAdminPanel();
+}
+
+const _videoAdminPosterEditorState = {
+  open: false,
+  sourceDataUrl: '',
+  fileName: '',
+  target: 'series',
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  aspect: 'poster',
+  imageWidth: 0,
+  imageHeight: 0,
+  escHandler: null,
+  resolve: null,
+  reject: null,
+};
+
+function videoAdminPosterAspectOptions(target = 'series') {
+  const normalizedTarget = String(target || 'series').toLowerCase();
+  return [
+    { key: normalizedTarget === 'season' ? 'wide' : 'poster', label: normalizedTarget === 'season' ? 'Season' : 'Poster', ratio: normalizedTarget === 'season' ? (16 / 9) : (2 / 3) },
+    { key: 'square', label: 'Square', ratio: 1 },
+    { key: 'wide', label: 'Wide', ratio: 16 / 9 },
+  ];
+}
+
+function videoAdminPosterEditorGetAspectMeta() {
+  const options = videoAdminPosterAspectOptions(_videoAdminPosterEditorState.target);
+  return options.find((option) => option.key === _videoAdminPosterEditorState.aspect) || options[0];
+}
+
+function videoAdminPosterEditorOverlay() {
+  return document.getElementById('videoPosterEditorOverlay');
+}
+
+function videoAdminPosterEditorClampedOffset(axis = 'x', value = 0) {
+  const meta = videoAdminPosterEditorGetAspectMeta();
+  const ratio = Number(meta?.ratio || (2 / 3)) || (2 / 3);
+  const frameWidth = 320;
+  const frameHeight = Math.max(180, Math.round(frameWidth / ratio));
+  const baseScale = Math.max(frameWidth / Math.max(1, Number(_videoAdminPosterEditorState.imageWidth || 1)), frameHeight / Math.max(1, Number(_videoAdminPosterEditorState.imageHeight || 1)));
+  const actualScale = baseScale * Math.max(1, Number(_videoAdminPosterEditorState.zoom || 1));
+  const scaledWidth = Math.max(1, Number(_videoAdminPosterEditorState.imageWidth || 1) * actualScale);
+  const scaledHeight = Math.max(1, Number(_videoAdminPosterEditorState.imageHeight || 1) * actualScale);
+  const limit = axis === 'x'
+    ? Math.max(0, (scaledWidth - frameWidth) / 2)
+    : Math.max(0, (scaledHeight - frameHeight) / 2);
+  return Math.max(-limit, Math.min(limit, Number(value || 0)));
+}
+
+function videoAdminClosePosterEditor(result = null) {
+  const overlay = videoAdminPosterEditorOverlay();
+  if (overlay) overlay.remove();
+  if (_videoAdminPosterEditorState.objectUrl) {
+    URL.revokeObjectURL(_videoAdminPosterEditorState.objectUrl);
+  }
+  if (typeof _videoAdminPosterEditorState.escHandler === 'function') {
+    document.removeEventListener('keydown', _videoAdminPosterEditorState.escHandler);
+  }
+  const resolver = _videoAdminPosterEditorState.resolve;
+  _videoAdminPosterEditorState.open = false;
+  _videoAdminPosterEditorState.sourceDataUrl = '';
+  _videoAdminPosterEditorState.fileName = '';
+  _videoAdminPosterEditorState.target = 'series';
+  _videoAdminPosterEditorState.zoom = 1;
+  _videoAdminPosterEditorState.offsetX = 0;
+  _videoAdminPosterEditorState.offsetY = 0;
+  _videoAdminPosterEditorState.aspect = 'poster';
+  _videoAdminPosterEditorState.imageWidth = 0;
+  _videoAdminPosterEditorState.imageHeight = 0;
+  _videoAdminPosterEditorState.escHandler = null;
+  _videoAdminPosterEditorState.objectUrl = '';
+  _videoAdminPosterEditorState.resolve = null;
+  _videoAdminPosterEditorState.reject = null;
+  if (typeof resolver === 'function') resolver(result);
+}
+
+function videoAdminRenderPosterEditor() {
+  const overlay = videoAdminPosterEditorOverlay();
+  if (!overlay) return;
+  const preview = overlay.querySelector('.video-poster-editor-preview');
+  const image = overlay.querySelector('.video-poster-editor-image');
+  const zoomInput = overlay.querySelector('[data-video-poster-zoom]');
+  const xInput = overlay.querySelector('[data-video-poster-offset-x]');
+  const yInput = overlay.querySelector('[data-video-poster-offset-y]');
+  const zoomValue = overlay.querySelector('[data-video-poster-zoom-value]');
+  const xValue = overlay.querySelector('[data-video-poster-offset-x-value]');
+  const yValue = overlay.querySelector('[data-video-poster-offset-y-value]');
+  const meta = videoAdminPosterEditorGetAspectMeta();
+  const ratio = Number(meta?.ratio || (2 / 3)) || (2 / 3);
+  const frameWidth = 320;
+  const frameHeight = Math.max(180, Math.round(frameWidth / ratio));
+  _videoAdminPosterEditorState.offsetX = videoAdminPosterEditorClampedOffset('x', _videoAdminPosterEditorState.offsetX);
+  _videoAdminPosterEditorState.offsetY = videoAdminPosterEditorClampedOffset('y', _videoAdminPosterEditorState.offsetY);
+  if (preview) preview.style.aspectRatio = `${ratio}`;
+  if (image) {
+    const baseScale = Math.max(frameWidth / Math.max(1, Number(_videoAdminPosterEditorState.imageWidth || 1)), frameHeight / Math.max(1, Number(_videoAdminPosterEditorState.imageHeight || 1)));
+    const actualScale = baseScale * Math.max(1, Number(_videoAdminPosterEditorState.zoom || 1));
+    image.style.transform = `translate(calc(-50% + ${Math.round(_videoAdminPosterEditorState.offsetX)}px), calc(-50% + ${Math.round(_videoAdminPosterEditorState.offsetY)}px)) scale(${actualScale})`;
+  }
+  if (zoomInput) zoomInput.value = String(_videoAdminPosterEditorState.zoom);
+  if (xInput) xInput.value = String(Math.round(_videoAdminPosterEditorState.offsetX));
+  if (yInput) yInput.value = String(Math.round(_videoAdminPosterEditorState.offsetY));
+  if (zoomValue) zoomValue.textContent = `${Number(_videoAdminPosterEditorState.zoom || 1).toFixed(2)}x`;
+  if (xValue) xValue.textContent = `${Math.round(_videoAdminPosterEditorState.offsetX)}px`;
+  if (yValue) yValue.textContent = `${Math.round(_videoAdminPosterEditorState.offsetY)}px`;
+  overlay.querySelectorAll('[data-video-poster-aspect]').forEach((button) => {
+    button.classList.toggle('active', String(button.getAttribute('data-video-poster-aspect') || '') === String(_videoAdminPosterEditorState.aspect || ''));
+  });
+}
+
+function videoAdminPosterEditorReset() {
+  _videoAdminPosterEditorState.zoom = 1;
+  _videoAdminPosterEditorState.offsetX = 0;
+  _videoAdminPosterEditorState.offsetY = 0;
+  videoAdminRenderPosterEditor();
+}
+
+async function videoAdminOpenPosterEditor(file, sourceDataUrl, target = 'series') {
+  if (_videoAdminPosterEditorState.open) {
+    videoAdminClosePosterEditor(null);
+  }
+  const image = await videoAdminLoadImageFromDataUrl(sourceDataUrl);
+  const aspectOptions = videoAdminPosterAspectOptions(target);
+  const defaultAspect = aspectOptions[0]?.key || 'poster';
+  _videoAdminPosterEditorState.open = true;
+  _videoAdminPosterEditorState.sourceDataUrl = sourceDataUrl;
+  _videoAdminPosterEditorState.fileName = String(file?.name || 'poster').trim() || 'poster';
+  _videoAdminPosterEditorState.target = String(target || 'series').toLowerCase();
+  _videoAdminPosterEditorState.zoom = 1;
+  _videoAdminPosterEditorState.offsetX = 0;
+  _videoAdminPosterEditorState.offsetY = 0;
+  _videoAdminPosterEditorState.aspect = defaultAspect;
+  _videoAdminPosterEditorState.imageWidth = Number(image.naturalWidth || image.width || 1) || 1;
+  _videoAdminPosterEditorState.imageHeight = Number(image.naturalHeight || image.height || 1) || 1;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'videoPosterEditorOverlay';
+  overlay.className = 'video-poster-editor-overlay';
+  overlay.innerHTML = `
+    <div class="video-poster-editor-modal" role="dialog" aria-modal="true" aria-label="Poster editor">
+      <div class="video-poster-editor-head">
+        <div>
+          <div class="video-poster-editor-title">Adjust Poster</div>
+          <div class="video-poster-editor-sub">Crop, zoom, and reposition the image before upload.</div>
+        </div>
+        <button type="button" class="video-poster-editor-close" aria-label="Close" onclick="window.videoAdminClosePosterEditor(null)">&times;</button>
+      </div>
+      <div class="video-poster-editor-body">
+        <div class="video-poster-editor-preview-shell">
+          <div class="video-poster-editor-preview">
+            <img class="video-poster-editor-image" src="${escHtml(sourceDataUrl)}" alt="Poster preview">
+          </div>
+        </div>
+        <div class="video-poster-editor-controls">
+          <div class="video-poster-editor-control-block">
+            <div class="video-poster-editor-label">Shape</div>
+            <div class="video-poster-editor-aspects">
+              ${aspectOptions.map((option) => `
+                <button
+                  type="button"
+                  class="video-poster-editor-aspect-btn${option.key === defaultAspect ? ' active' : ''}"
+                  data-video-poster-aspect="${escHtml(option.key)}"
+                >${escHtml(option.label)}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="video-poster-editor-control-block">
+            <div class="video-poster-editor-label-row">
+              <span>Zoom</span>
+              <strong data-video-poster-zoom-value>1.00x</strong>
+            </div>
+            <input data-video-poster-zoom type="range" min="1" max="3" step="0.01" value="1">
+          </div>
+          <div class="video-poster-editor-control-block">
+            <div class="video-poster-editor-label-row">
+              <span>Move Left / Right</span>
+              <strong data-video-poster-offset-x-value>0px</strong>
+            </div>
+            <input data-video-poster-offset-x type="range" min="-500" max="500" step="1" value="0">
+          </div>
+          <div class="video-poster-editor-control-block">
+            <div class="video-poster-editor-label-row">
+              <span>Move Up / Down</span>
+              <strong data-video-poster-offset-y-value>0px</strong>
+            </div>
+            <input data-video-poster-offset-y type="range" min="-500" max="500" step="1" value="0">
+          </div>
+          <div class="video-poster-editor-actions">
+            <button type="button" class="btn btn-g" onclick="window.videoAdminPosterEditorReset()">Reset</button>
+            <button type="button" class="btn btn-g" onclick="window.videoAdminClosePosterEditor(null)">Cancel</button>
+            <button type="button" class="btn btn-p" onclick="window.videoAdminConfirmPosterEditor()">Use This Crop</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) videoAdminClosePosterEditor(null);
+  });
+  const onEscape = (event) => {
+    if (event.key === 'Escape') {
+      videoAdminClosePosterEditor(null);
+    }
+  };
+  _videoAdminPosterEditorState.escHandler = onEscape;
+  document.addEventListener('keydown', onEscape);
+
+  overlay.querySelector('[data-video-poster-zoom]')?.addEventListener('input', (event) => {
+    _videoAdminPosterEditorState.zoom = Math.max(1, Number(event.target?.value || 1) || 1);
+    videoAdminRenderPosterEditor();
+  });
+  overlay.querySelector('[data-video-poster-offset-x]')?.addEventListener('input', (event) => {
+    _videoAdminPosterEditorState.offsetX = Number(event.target?.value || 0) || 0;
+    videoAdminRenderPosterEditor();
+  });
+  overlay.querySelector('[data-video-poster-offset-y]')?.addEventListener('input', (event) => {
+    _videoAdminPosterEditorState.offsetY = Number(event.target?.value || 0) || 0;
+    videoAdminRenderPosterEditor();
+  });
+  overlay.querySelectorAll('[data-video-poster-aspect]').forEach((button) => {
+    button.addEventListener('click', () => {
+      _videoAdminPosterEditorState.aspect = String(button.getAttribute('data-video-poster-aspect') || defaultAspect);
+      videoAdminPosterEditorReset();
+    });
+  });
+
+  videoAdminRenderPosterEditor();
+
+  return new Promise((resolve, reject) => {
+    _videoAdminPosterEditorState.resolve = resolve;
+    _videoAdminPosterEditorState.reject = reject;
+  });
+}
+
+async function videoAdminCanvasToUploadPayload(canvas, fileName = 'poster.jpg') {
+  const maxBase64Length = 700 * 1024;
+  let quality = 0.9;
+  let attempts = 0;
+  let dataUrl = '';
+  let match = null;
+  while (attempts < 10) {
+    dataUrl = canvas.toDataURL('image/jpeg', quality);
+    match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+    if (match && String(match[2] || '').length <= maxBase64Length) break;
+    quality = Math.max(0.46, quality - 0.08);
+    if (attempts >= 2) {
+      const nextCanvas = document.createElement('canvas');
+      nextCanvas.width = Math.max(720, Math.round(canvas.width * 0.88));
+      nextCanvas.height = Math.max(720, Math.round(canvas.height * 0.88));
+      const nextContext = nextCanvas.getContext('2d', { alpha: false });
+      if (nextContext) {
+        nextContext.fillStyle = '#101512';
+        nextContext.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+        nextContext.drawImage(canvas, 0, 0, nextCanvas.width, nextCanvas.height);
+        canvas = nextCanvas;
+      }
+    }
+    attempts += 1;
+  }
+  if (!match) {
+    throw new Error('Could not process the selected image.');
+  }
+  return {
+    file_name: videoAdminPosterRenamedFileName(fileName, 'jpg'),
+    content_type: match[1],
+    data_base64: match[2],
+    data_url: dataUrl,
+  };
+}
+
+async function videoAdminUploadPosterRequest(itemId, payload = {}, extraFields = {}) {
+  const normalizedItemId = Number(itemId || 0);
+  const detectedTimeZone = window.__currencyPrefs?.timeZone || detectCurrencyPrefs().timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const detectedLocale = window.__currencyPrefs?.localeCode || navigator.language || Intl.DateTimeFormat().resolvedOptions().locale || 'en-IN';
+  const formData = new FormData();
+  Object.entries(extraFields || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    formData.append(key, String(value));
+  });
+  formData.append('file_name', String(payload?.file_name || 'poster.jpg'));
+  formData.append('content_type', String(payload?.content_type || 'image/jpeg'));
+  if (payload?.data_base64) {
+    formData.append('data_base64', String(payload.data_base64));
+  }
+  const dataUrl = String(payload?.data_url || '');
+  const fileBlob = dataUrl
+    ? await (await fetch(dataUrl)).blob()
+    : new Blob([Uint8Array.from(atob(String(payload?.data_base64 || '')), (char) => char.charCodeAt(0))], {
+      type: String(payload?.content_type || 'image/jpeg'),
+    });
+  formData.append('file', fileBlob, String(payload?.file_name || 'poster.jpg'));
+  const response = await fetch(`/api/admin/videos/catalog/${normalizedItemId}/poster-upload`, {
+    method: 'POST',
+    headers: {
+      'X-Client-Timezone': detectedTimeZone,
+      'X-Client-Locale': detectedLocale,
+    },
+    body: formData,
+  });
+  if (response.status === 401) {
+    window.location.href = '/login';
+    return { success: false, error: 'Unauthorized', status: 401 };
+  }
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    return {
+      success: false,
+      error: text?.trim() || `Request failed with status ${response.status}`,
+      status: response.status,
+    };
+  }
+  const result = await response.json().catch(() => ({}));
+  if (response.ok) return result;
+  return {
+    success: false,
+    status: response.status,
+    ...result,
+  };
+}
+
+async function videoAdminConfirmPosterEditor() {
+  const meta = videoAdminPosterEditorGetAspectMeta();
+  const ratio = Number(meta?.ratio || (2 / 3)) || (2 / 3);
+  const previewWidth = 320;
+  const previewHeight = Math.max(180, Math.round(previewWidth / ratio));
+  const renderWidth = ratio >= 1.3 ? 1100 : (ratio >= 0.95 ? 1000 : 900);
+  const renderHeight = Math.max(1, Math.round(renderWidth / ratio));
+  const image = await videoAdminLoadImageFromDataUrl(_videoAdminPosterEditorState.sourceDataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = renderWidth;
+  canvas.height = renderHeight;
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) {
+    toast('Could not prepare poster image.', 'error');
+    return;
+  }
+  context.fillStyle = '#101512';
+  context.fillRect(0, 0, renderWidth, renderHeight);
+  const baseScale = Math.max(previewWidth / Math.max(1, Number(_videoAdminPosterEditorState.imageWidth || 1)), previewHeight / Math.max(1, Number(_videoAdminPosterEditorState.imageHeight || 1)));
+  const actualScale = baseScale * Math.max(1, Number(_videoAdminPosterEditorState.zoom || 1));
+  const drawWidth = Math.max(1, Number(_videoAdminPosterEditorState.imageWidth || 1) * actualScale * (renderWidth / previewWidth));
+  const drawHeight = Math.max(1, Number(_videoAdminPosterEditorState.imageHeight || 1) * actualScale * (renderHeight / previewHeight));
+  const drawX = (renderWidth / 2) - (drawWidth / 2) + (Number(_videoAdminPosterEditorState.offsetX || 0) * (renderWidth / previewWidth));
+  const drawY = (renderHeight / 2) - (drawHeight / 2) + (Number(_videoAdminPosterEditorState.offsetY || 0) * (renderHeight / previewHeight));
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  try {
+    const payload = await videoAdminCanvasToUploadPayload(canvas, _videoAdminPosterEditorState.fileName);
+    videoAdminClosePosterEditor(payload);
+  } catch (error) {
+    toast(error?.message || 'Could not process the selected image.', 'error');
+  }
+}
+
+function videoAdminPosterRenamedFileName(name, extensionWithoutDot) {
+  const rawName = String(name || 'poster').trim() || 'poster';
+  const baseName = rawName.replace(/\.[a-z0-9]+$/i, '') || 'poster';
+  return `${baseName}.${String(extensionWithoutDot || 'jpg').replace(/^\./, '')}`;
+}
+
+function videoAdminReadFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read image file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function videoAdminLoadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not load selected image'));
+    image.src = dataUrl;
+  });
+}
+
+async function videoAdminBuildPosterUploadPayload(file, target = 'series') {
+  if (!file) throw new Error('No image selected');
+  const directDataUrl = await videoAdminReadFileAsDataUrl(file);
+  const directMatch = String(directDataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+  if (!directMatch) {
+    throw new Error('Could not read the image file.');
+  }
+  const normalizedType = String(file.type || directMatch[1] || '').toLowerCase();
+  if (normalizedType.includes('svg')) {
+    return {
+      file_name: file.name || 'poster.svg',
+      content_type: directMatch[1],
+      data_base64: directMatch[2],
+    };
+  }
+  const editedPayload = await videoAdminOpenPosterEditor(file, directDataUrl, target);
+  if (!editedPayload) {
+    throw new Error('Poster upload cancelled.');
+  }
+  return editedPayload;
+}
+
+async function videoAdminUploadPoster(target, itemId, seasonKey = '') {
+  const inputId = target === 'season'
+    ? `videoAdminSeasonPosterUpload_${Number(itemId || 0)}`
+    : (document.getElementById(`videoAdminMoviePosterUpload_${Number(itemId || 0)}`) ? `videoAdminMoviePosterUpload_${Number(itemId || 0)}` : 'videoAdminSeriesPosterUpload');
+  const input = document.getElementById(inputId);
+  const file = input?.files?.[0];
+  if (!file) return;
+  const item = videoAdminFindItemById(itemId);
+  if (!item) {
+    toast('Catalog item not found for poster upload.', 'error');
+    return;
+  }
+  let uploadPayload;
+  try {
+    uploadPayload = await videoAdminBuildPosterUploadPayload(file, target);
+  } catch (error) {
+    if (String(error?.message || '').toLowerCase().includes('cancelled')) return;
+    toast(error?.message || 'Could not process the selected image.', 'error');
+    return;
+  } finally {
+    if (input) input.value = '';
+  }
+  const seasonEntry = target === 'season'
+    ? videoAdminBuildSeriesDraftSummary([item]).seasons.find((entry) => String(entry?.season_key || '') === String(seasonKey || ''))
+    : null;
+  const result = await videoAdminUploadPosterRequest(Number(itemId || 0), uploadPayload, {
+    target,
+    season_key: seasonKey,
+    season_label: seasonEntry?.season_label || '',
+    season_number: seasonEntry?.season_number || '',
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not upload image.', 'error');
+    return;
+  }
+  await videoAdminReloadDraftItems();
+  await videoAdminRefreshPublished(false);
+  renderVideoAdminPanel();
+  await loadVideosPage();
+  toast('Image uploaded successfully', 'success');
+}
+
+async function videoAdminUploadPublishedPoster(target, itemId, seasonKey = '', seasonLabel = '', seasonNumber = '') {
+  const normalizedItemId = Number(itemId || 0);
+  const safeSeasonKey = String(seasonKey || '');
+  const inputId = target === 'season'
+    ? `videoAdminPublishedSeasonPosterUpload_${normalizedItemId}_${safeSeasonKey.replace(/[^a-z0-9_-]/gi, '_')}`
+    : `videoAdminPublishedPosterUpload_${normalizedItemId}`;
+  const input = document.getElementById(inputId);
+  const file = input?.files?.[0];
+  if (!file) return;
+  let uploadPayload;
+  try {
+    uploadPayload = await videoAdminBuildPosterUploadPayload(file, target);
+  } catch (error) {
+    if (String(error?.message || '').toLowerCase().includes('cancelled')) return;
+    toast(error?.message || 'Could not process the selected image.', 'error');
+    return;
+  } finally {
+    if (input) input.value = '';
+  }
+  const result = await videoAdminUploadPosterRequest(normalizedItemId, uploadPayload, {
+    target,
+    season_key: safeSeasonKey,
+    season_label: String(seasonLabel || '').trim(),
+    season_number: String(seasonNumber || '').trim(),
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not upload image.', 'error');
+    return;
+  }
+  await videoAdminRefreshPublished(false);
+  renderVideoAdminPanel();
+  await loadVideosPage();
+  toast('Poster uploaded successfully', 'success');
+}
+
+function showVideoLibrarySettingsModal() {
+  if (_userRole !== 'admin') {
+    toast('Only admins can change video settings.', 'error');
+    return;
+  }
+  window.__modalClassName = 'modal-wide video-settings-modal';
+  openModal('Video Settings', '<div class="video-catalog-empty">Loading video workspace...</div>');
+  loadVideoAdminPanel().then(renderVideoAdminPanel).catch((error) => {
+    console.error('showVideoLibrarySettingsModal failed', error);
+    toast(error?.message || 'Could not load video admin panel.', 'error');
+    closeModal();
+  });
+}
+
+async function saveVideoLibrarySettings() {
+  const payload = videoAdminReadSettingsFromModal();
+  const result = await api('/api/admin/videos/settings', {
+    method: 'PUT',
+    body: payload,
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not save video settings.', 'error');
+    return;
+  }
+  _videoAdminPanelState.settings = result.settings || payload;
+  await loadVideosPage();
+  renderVideoAdminPanel();
+  toast('Video settings saved', 'success');
+}
+
 window.loadVideosPage = loadVideosPage;
 window.setVideoLibrarySearch = setVideoLibrarySearch;
 window.setVideoLibraryMediaFilter = setVideoLibraryMediaFilter;
@@ -4659,6 +6388,9 @@ window.videoPlayerSubtitleToggle = videoPlayerSubtitleToggle;
 window.videoPlayerRate = videoPlayerRate;
 window.videoPlayerCycleRate = videoPlayerCycleRate;
 window.videoPlayerFullscreen = videoPlayerFullscreen;
+window.videoAdminPosterEditorReset = videoAdminPosterEditorReset;
+window.videoAdminClosePosterEditor = videoAdminClosePosterEditor;
+window.videoAdminConfirmPosterEditor = videoAdminConfirmPosterEditor;
 window.showVideoCatalogModal = showVideoCatalogModal;
 window.showVideoSeriesManagerModal = showVideoSeriesManagerModal;
 window.saveVideoSeriesManagerGroup = saveVideoSeriesManagerGroup;
@@ -4674,11 +6406,25 @@ window.videoCatalogSaveItem = videoCatalogSaveItem;
 window.videoCatalogPublishItem = videoCatalogPublishItem;
 window.videoCatalogPublishReviewReady = videoCatalogPublishReviewReady;
 window.showVideoLibrarySettingsModal = showVideoLibrarySettingsModal;
-window.videoAdminLoadTreeForRoot = videoAdminLoadTreeForRoot;
-window.videoAdminAssignRoot = videoAdminAssignRoot;
-window.videoAdminScanRoot = videoAdminScanRoot;
-window.videoAdminScanFolderPath = videoAdminScanFolderPath;
-window.videoAdminToggleHidden = videoAdminToggleHidden;
+window.videoAdminSwitchTab = videoAdminSwitchTab;
+window.videoAdminBrowsePath = videoAdminBrowsePath;
+window.videoAdminSelectFolder = videoAdminSelectFolder;
+window.videoAdminOpenFolder = videoAdminOpenFolder;
+window.videoAdminToggleFolderEditor = videoAdminToggleFolderEditor;
+window.videoAdminToggleFolderSeason = videoAdminToggleFolderSeason;
+window.videoAdminPublishFolder = videoAdminPublishFolder;
+window.videoAdminTogglePublishedItem = videoAdminTogglePublishedItem;
+window.videoAdminToggleDraftGroup = videoAdminToggleDraftGroup;
+window.videoAdminSaveDraft = videoAdminSaveDraft;
+window.videoAdminPublishDraft = videoAdminPublishDraft;
+window.videoAdminPrepareDraft = videoAdminPrepareDraft;
+window.videoAdminPrepareItems = videoAdminPrepareItems;
+window.videoAdminDeleteDraft = videoAdminDeleteDraft;
+window.videoAdminDeletePublished = videoAdminDeletePublished;
+window.videoAdminClearPublished = videoAdminClearPublished;
+window.videoAdminRefreshPublished = videoAdminRefreshPublished;
+window.videoAdminUploadPoster = videoAdminUploadPoster;
+window.videoAdminUploadPublishedPoster = videoAdminUploadPublishedPoster;
 window.saveVideoLibrarySettings = saveVideoLibrarySettings;
 window.flushVideoPlaybackProgress = flushVideoPlaybackProgress;
 window.flushVideoPlaybackProgressWithTimeout = flushVideoPlaybackProgressWithTimeout;
