@@ -455,6 +455,7 @@ async function listEmbeddedSubtitles(rootPath, normalizedRelativeVideoPath) {
       .map((stream, index) => {
         const meta = subtitleDisplayNameFromTags(stream.tags || {}, `Embedded Subtitle ${index + 1}`);
         return {
+          type: 'embedded_subtitle',
           id: encodeEmbeddedSubtitleToken(normalizedRelativeVideoPath, Number(stream.index || 0)),
           filename: path.basename(normalizedRelativeVideoPath),
           relative_path: normalizedRelativeVideoPath,
@@ -1972,8 +1973,16 @@ async function listVideoLibrary(userId = null) {
   const progressMap = await getVideoWatchProgressMap(userId, progressKeys);
   const subtitle_engine = await getMediaToolsStatus();
   const videos = (await Promise.all(allFiles.map(async ({ item, file }) => {
-    const subtitles = safeJsonArray(file.subtitles).map((subtitle) => {
-      if (subtitle?.type === 'embedded_subtitle') {
+    const storedSubtitles = safeJsonArray(file.subtitles);
+    const fallbackEmbeddedSubtitles = (!storedSubtitles.length && file.file_exists && subtitle_engine?.available)
+      ? await listEmbeddedSubtitles(resolveVideoRootPathForRuntime(item.source_root_path), file.relative_path)
+      : [];
+    const subtitles = (storedSubtitles.length ? storedSubtitles : fallbackEmbeddedSubtitles).map((subtitle) => {
+      if (
+        subtitle?.type === 'embedded_subtitle'
+        || String(subtitle?.source_type || '').trim().toLowerCase() === 'embedded'
+        || String(subtitle?.extension || '').trim().toLowerCase() === '.embedded'
+      ) {
         return {
           ...subtitle,
           id: encodeCatalogEmbeddedSubtitleToken(item.source_root_path, file.relative_path, subtitle.stream_index),

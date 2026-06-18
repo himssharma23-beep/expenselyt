@@ -258,11 +258,18 @@ function restoreVideoPlaylistScroll() {
   }
 }
 
+function videoLibraryDefaultSubtitleId(video) {
+  const subtitles = Array.isArray(video?.subtitles) ? video.subtitles : [];
+  const preferred = subtitles.find((subtitle) => subtitle?.is_default) || subtitles.find((subtitle) => subtitle?.is_forced) || subtitles[0] || null;
+  return String(preferred?.id || '').trim();
+}
+
 function selectVideoLibraryItem(videoId) {
   rememberVideoPlaylistScroll(videoId);
   flushVideoPlaybackProgress().finally(() => {
     _selectedVideoLibraryId = String(videoId || '');
-    _selectedVideoSubtitleId = '';
+    const selectedVideo = (Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : []).find((video) => String(video?.id || '') === String(_selectedVideoLibraryId || '')) || null;
+    _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(selectedVideo);
     _selectedVideoAudioTrackId = '';
     _videoPendingSourceState = null;
     _videoAudioStreamOffsetSeconds = 0;
@@ -281,7 +288,7 @@ function selectVideoLibraryFolder(folder) {
     } else {
       _selectedVideoLibraryId = '';
     }
-    _selectedVideoSubtitleId = '';
+    _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(filtered[0] || null);
     _selectedVideoAudioTrackId = '';
     _videoPendingSourceState = null;
     _videoAudioStreamOffsetSeconds = 0;
@@ -988,8 +995,7 @@ function setVideoSubtitle(value) {
     if (selectedTextTrack) {
       try {
         selectedTextTrack.mode = 'hidden';
-        selectedTextTrack.mode = 'showing';
-        applied = selectedTextTrack.mode === 'showing';
+        applied = selectedTextTrack.mode === 'hidden';
       } catch (_err) {}
     }
 
@@ -1312,6 +1318,10 @@ async function loadVideosPage() {
         const filtered = videoLibraryFilteredVideos();
         if (!_selectedVideoLibraryId || !_videoLibraryData.videos.some((video) => String(video.id) === String(_selectedVideoLibraryId))) {
           _selectedVideoLibraryId = String((filtered[0] || _videoLibraryData.videos[0] || {}).id || '');
+        }
+        if (!_selectedVideoSubtitleId) {
+          const initialVideo = _videoLibraryData.videos.find((video) => String(video?.id || '') === String(_selectedVideoLibraryId || '')) || filtered[0] || _videoLibraryData.videos[0] || null;
+          _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(initialVideo);
         }
     }
   } catch (error) {
@@ -2173,7 +2183,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
   rememberVideoPlaylistScroll(videoId);
   const continueOpen = () => {
     _selectedVideoLibraryId = String(video.id || '');
-    _selectedVideoSubtitleId = '';
+    _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(video);
     const audioTracks = videoLibraryAudioTracks(video);
     const savedAudioTrackId = getSavedVideoAudioTrackId(video);
     const initialAudioTrackId = audioTracks.some((track) => String(track.id || '') === String(savedAudioTrackId || ''))
@@ -4885,21 +4895,24 @@ function videoAdminPrepareStatusLabel(status = null) {
   if (!status || typeof status !== 'object') return '';
   const candidateCount = Number(status.candidate_count || 0);
   const readyCount = Number(status.ready_count || 0);
+  const activeCount = Number(status.active_count || 0);
   const queuedCount = Number(status.queued_count || 0);
   const pendingCount = Number(status.pending_count || 0);
   if (status.is_ready) return candidateCount > 0 ? `Ready ${readyCount || candidateCount}/${candidateCount}` : 'Ready';
-  if (queuedCount > 0) {
+  if (activeCount > 0) {
     if (candidateCount > 0) return `Preparing now ${readyCount}/${candidateCount}`;
-    return `Preparing now ${queuedCount}`;
+    return `Preparing now ${activeCount}`;
   }
-  if (pendingCount > 0) return candidateCount > 0 ? `Waiting in queue ${pendingCount}/${candidateCount}` : `Waiting in queue ${pendingCount}`;
+  if (queuedCount > 0) return candidateCount > 0 ? `Waiting in queue ${queuedCount}/${candidateCount}` : `Waiting in queue ${queuedCount}`;
+  if (pendingCount > 0) return candidateCount > 0 ? `Pending ${pendingCount}/${candidateCount}` : `Pending ${pendingCount}`;
   return 'Not ready';
 }
 
 function videoAdminPrepareStatusTone(status = null) {
   if (!status || typeof status !== 'object') return 'muted';
   if (status.is_ready) return 'ready';
-  if (Number(status.queued_count || 0) > 0) return 'queued';
+  if (Number(status.active_count || 0) > 0) return 'queued';
+  if (Number(status.queued_count || 0) > 0) return 'pending';
   if (Number(status.pending_count || 0) > 0) return 'pending';
   return 'muted';
 }
@@ -5326,6 +5339,7 @@ function renderVideoAdminPublishedCard(item) {
   const expanded = (Array.isArray(_videoAdminPanelState.expandedPublishedKeys) ? _videoAdminPanelState.expandedPublishedKeys : []).includes(itemKey);
   const preparingItem = String(_videoAdminPanelState.preparingKey || '') === `item:${itemKey}`;
   const itemPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[`item:${itemKey}`] || null;
+  const itemCanStopPreparing = Number(itemPrepareStatus?.active_count || 0) > 0 || Number(itemPrepareStatus?.queued_count || 0) > 0;
   const itemReadyChip = videoAdminPrepareStatusMarkup(
     itemPrepareStatus,
     _videoAdminPanelState.prepareStatusLoading ? 'Checking...' : ''
@@ -5340,6 +5354,7 @@ function renderVideoAdminPublishedCard(item) {
         <div class="video-admin-tree-actions">
           <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminTogglePublishedItem(${JSON.stringify(itemKey)})'>${expanded ? 'Collapse' : 'Expand'}</button>
           <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems(${JSON.stringify(itemIds)}, [], ${JSON.stringify(`item:${itemKey}`)}, ${JSON.stringify(`Preparing ${String(item?.title || item?.display_title || item?.folder_name || 'item')}`)})' ${preparingItem ? 'disabled' : ''}>${preparingItem ? 'Preparing...' : 'Prepare'}</button>
+          ${itemCanStopPreparing ? `<button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminCancelPrepareItems(${JSON.stringify(itemIds)}, [], ${JSON.stringify(`item:${itemKey}`)}, ${JSON.stringify(String(item?.title || item?.display_title || item?.folder_name || 'item'))})'>Stop</button>` : ''}
           <button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminDeletePublished(${JSON.stringify(itemIds)})' ${preparingItem ? 'disabled' : ''}>Remove</button>
         </div>
       </div>
@@ -5368,6 +5383,7 @@ function renderVideoAdminPublishedCard(item) {
           const seasonPrepareKey = `season:${itemKey}:${String(season?.season_key || '')}`;
           const preparingSeason = String(_videoAdminPanelState.preparingKey || '') === seasonPrepareKey;
           const seasonPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[seasonPrepareKey] || null;
+          const seasonCanStopPreparing = Number(seasonPrepareStatus?.active_count || 0) > 0 || Number(seasonPrepareStatus?.queued_count || 0) > 0;
           const seasonReadyChip = videoAdminPrepareStatusMarkup(
             seasonPrepareStatus,
             _videoAdminPanelState.prepareStatusLoading ? 'Checking...' : ''
@@ -5385,6 +5401,7 @@ function renderVideoAdminPublishedCard(item) {
               <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}').click()">Season poster</button>
               <input id="videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPublishedPoster('season', ${Number(season?.source_item_id || 0)}, '${String(season?.season_key || '').replace(/'/g, "\\'")}', '${String(season?.season_label || '').replace(/'/g, "\\'")}', '${String(season?.season_number || '').replace(/'/g, "\\'")}')">
               <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(`Preparing ${String(season?.season_label || 'season')}`)})' ${preparingSeason ? 'disabled' : ''}>${preparingSeason ? 'Preparing...' : (seasonPrepareStatus?.is_ready ? 'Prepared' : 'Prepare Season')}</button>
+              ${seasonCanStopPreparing ? `<button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminCancelPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(String(season?.season_label || 'season'))})'>Stop Season</button>` : ''}
             </div>
           </div>
           ${preparingSeason ? `
@@ -5852,6 +5869,33 @@ async function videoAdminPrepareItems(itemIds = [], fileIds = [], progressKey = 
       }, 700);
     }
   }
+}
+
+async function videoAdminCancelPrepareItems(itemIds = [], fileIds = [], stateKey = '', label = 'videos') {
+  const normalizedItemIds = (Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter((id) => id > 0);
+  const normalizedFileIds = (Array.isArray(fileIds) ? fileIds : []).map((id) => Number(id || 0)).filter((id) => id > 0);
+  const result = await videoCatalogApi('/api/admin/videos/cache/cancel', {
+    method: 'POST',
+    body: {
+      item_ids: normalizedItemIds,
+      file_ids: normalizedFileIds,
+    },
+  });
+  if (!result?.success) {
+    toast(result?.error || `Could not stop preparing ${label}.`, 'error');
+    return;
+  }
+  if (stateKey) {
+    videoAdminRememberPrepareStatus(stateKey, {
+      ...( _videoAdminPanelState.prepareStatusByKey?.[stateKey] || {}),
+      active_count: 0,
+      queued_count: 0,
+    });
+  }
+  await videoAdminRefreshPrepareStatuses(true);
+  const stoppedActive = Number(result?.result?.active_stopped || 0);
+  const removedQueued = Number(result?.result?.queued_removed || 0);
+  toast(`Stopped ${label}: ${stoppedActive} active, ${removedQueued} queued`, 'success');
 }
 
 async function videoAdminPrepareDraft() {
@@ -6494,6 +6538,7 @@ window.videoAdminSaveDraft = videoAdminSaveDraft;
 window.videoAdminPublishDraft = videoAdminPublishDraft;
 window.videoAdminPrepareDraft = videoAdminPrepareDraft;
 window.videoAdminPrepareItems = videoAdminPrepareItems;
+window.videoAdminCancelPrepareItems = videoAdminCancelPrepareItems;
 window.videoAdminDeleteDraft = videoAdminDeleteDraft;
 window.videoAdminDeletePublished = videoAdminDeletePublished;
 window.videoAdminClearPublished = videoAdminClearPublished;

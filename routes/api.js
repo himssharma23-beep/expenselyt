@@ -66,6 +66,9 @@ const ffmpegMp4EncoderCache = new Map();
 const VIDEO_BROWSER_TRANSCODE_EXTENSIONS = ['.mkv', '.avi', '.webm', '.ogg', '.ogv', '.wmv', '.flv', '.ts', '.m2ts', '.mpeg', '.mpg'];
 const videoPrepareQueue = [];
 const videoPrepareQueuedKeys = new Set();
+const videoPrepareActiveKeys = new Set();
+const videoPrepareCancelledKeys = new Set();
+const videoPrepareActiveProcesses = new Map();
 let videoPrepareWorkerPromise = null;
 
 function hashMobileVideoKey(target) {
@@ -443,13 +446,18 @@ async function ensureMobileVideoCacheFile(target, ffmpegCommand) {
           windowsHide: true,
           stdio: ['ignore', 'ignore', 'pipe'],
         });
+        videoPrepareActiveProcesses.set(cacheKey, ffmpeg);
 
         let stderr = '';
         ffmpeg.stderr.on('data', (chunk) => {
           stderr += String(chunk || '');
         });
-        ffmpeg.on('error', (error) => reject(error));
+        ffmpeg.on('error', (error) => {
+          videoPrepareActiveProcesses.delete(cacheKey);
+          reject(error);
+        });
         ffmpeg.on('close', (code) => {
+          videoPrepareActiveProcesses.delete(cacheKey);
           if (code === 0) {
             resolve();
             return;
@@ -471,7 +479,11 @@ async function ensureMobileVideoCacheFile(target, ffmpegCommand) {
       }
 
       return finalPath;
-    })().finally(() => {
+    })().catch(async (error) => {
+      await fs.promises.unlink(tempPath).catch(() => {});
+      throw error;
+    }).finally(() => {
+      videoPrepareActiveProcesses.delete(cacheKey);
       mobileVideoTranscodePromises.delete(cacheKey);
     }));
   }
@@ -695,7 +707,8 @@ async function getExistingAlternateVideoCacheFile(target, streamIndex) {
 
 function queueVideoPrepareTask(task = null) {
   if (!task?.cacheKey || !task?.token) return false;
-  if (videoPrepareQueuedKeys.has(task.cacheKey)) return false;
+  if (videoPrepareQueuedKeys.has(task.cacheKey) || videoPrepareActiveKeys.has(task.cacheKey)) return false;
+  videoPrepareCancelledKeys.delete(task.cacheKey);
   videoPrepareQueuedKeys.add(task.cacheKey);
   videoPrepareQueue.push(task);
   if (!videoPrepareWorkerPromise) {
@@ -703,6 +716,12 @@ function queueVideoPrepareTask(task = null) {
       while (videoPrepareQueue.length) {
         const nextTask = videoPrepareQueue.shift();
         if (!nextTask) continue;
+        videoPrepareQueuedKeys.delete(nextTask.cacheKey);
+        if (videoPrepareCancelledKeys.has(nextTask.cacheKey)) {
+          videoPrepareCancelledKeys.delete(nextTask.cacheKey);
+          continue;
+        }
+        videoPrepareActiveKeys.add(nextTask.cacheKey);
         try {
           const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(nextTask.token));
           if (!target || !videoNeedsBrowserCompatibleTranscode(target)) continue;
@@ -711,13 +730,42 @@ function queueVideoPrepareTask(task = null) {
           await ensureMobileVideoCacheFile(target, pgVideoDb.ffmpegCommand());
         } catch (_err) {
         } finally {
-          videoPrepareQueuedKeys.delete(nextTask.cacheKey);
+          videoPrepareActiveKeys.delete(nextTask.cacheKey);
+          videoPrepareCancelledKeys.delete(nextTask.cacheKey);
         }
       }
       videoPrepareWorkerPromise = null;
     })();
   }
   return true;
+}
+
+function cancelVideoPrepareTasks(cacheKeys = []) {
+  const targets = new Set((Array.isArray(cacheKeys) ? cacheKeys : []).map((key) => String(key || '').trim()).filter(Boolean));
+  if (!targets.size) {
+    return { queued_removed: 0, active_stopped: 0 };
+  }
+  let queuedRemoved = 0;
+  for (let index = videoPrepareQueue.length - 1; index >= 0; index -= 1) {
+    const task = videoPrepareQueue[index];
+    const cacheKey = String(task?.cacheKey || '').trim();
+    if (!targets.has(cacheKey)) continue;
+    videoPrepareQueue.splice(index, 1);
+    videoPrepareQueuedKeys.delete(cacheKey);
+    videoPrepareCancelledKeys.add(cacheKey);
+    queuedRemoved += 1;
+  }
+  let activeStopped = 0;
+  targets.forEach((cacheKey) => {
+    videoPrepareCancelledKeys.add(cacheKey);
+    const activeProcess = videoPrepareActiveProcesses.get(cacheKey);
+    if (!activeProcess) return;
+    activeStopped += 1;
+    try {
+      if (!activeProcess.killed) activeProcess.kill('SIGKILL');
+    } catch (_err) {}
+  });
+  return { queued_removed: queuedRemoved, active_stopped: activeStopped };
 }
 
 function normalizeOcrAmount(value) {
@@ -8697,6 +8745,63 @@ router.post('/admin/videos/cache/prepare', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/admin/videos/cache/cancel', requireAdmin, async (req, res) => {
+  try {
+    const root_path = String(req.body?.root_path || '').trim() || undefined;
+    const media_type = String(req.body?.media_type || '').trim().toLowerCase();
+    const itemIds = [...new Set((Array.isArray(req.body?.item_ids) ? req.body.item_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const fileIds = [...new Set((Array.isArray(req.body?.file_ids) ? req.body.file_ids : []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({
+      status: itemIds.length || fileIds.length ? 'all' : 'published',
+      root_path,
+    }));
+    let filteredItems = ['movie', 'series'].includes(media_type)
+      ? items.filter((item) => String(item?.media_type || '').trim().toLowerCase() === media_type)
+      : items;
+    if (itemIds.length) {
+      filteredItems = filteredItems.filter((item) => itemIds.includes(Number(item?.id || 0)));
+    }
+
+    const cacheKeys = [];
+    let candidate_count = 0;
+    let skipped_count = 0;
+
+    for (const item of filteredItems) {
+      const files = (Array.isArray(item?.files) ? item.files : []).filter((file) => !fileIds.length || fileIds.includes(Number(file?.id || 0)));
+      for (const file of files) {
+        if (!file?.file_exists) {
+          skipped_count += 1;
+          continue;
+        }
+        const token = Buffer.from(JSON.stringify({
+          type: 'catalog_file',
+          file_id: Number(file.id || 0),
+        }), 'utf8').toString('base64url');
+        const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(token));
+        if (!target || !videoNeedsBrowserCompatibleTranscode(target)) {
+          skipped_count += 1;
+          continue;
+        }
+        candidate_count += 1;
+        cacheKeys.push(hashMobileVideoKey(target));
+      }
+    }
+
+    const result = cancelVideoPrepareTasks(cacheKeys);
+    res.json({
+      success: true,
+      result: {
+        candidate_count,
+        skipped_count,
+        queued_removed: Number(result.queued_removed || 0),
+        active_stopped: Number(result.active_stopped || 0),
+      },
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not cancel instant-play preparation' });
+  }
+});
+
 router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
   try {
     const root_path = String(req.body?.root_path || '').trim() || undefined;
@@ -8716,6 +8821,7 @@ router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
 
     let candidate_count = 0;
     let ready_count = 0;
+    let active_count = 0;
     let queued_count = 0;
     let pending_count = 0;
     let skipped_count = 0;
@@ -8747,7 +8853,8 @@ router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
           continue;
         }
         const cacheKey = hashMobileVideoKey(target);
-        if (videoPrepareQueuedKeys.has(cacheKey)) queued_count += 1;
+        if (videoPrepareActiveKeys.has(cacheKey)) active_count += 1;
+        else if (videoPrepareQueuedKeys.has(cacheKey)) queued_count += 1;
         else pending_count += 1;
       }
     }
@@ -8759,10 +8866,11 @@ router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
         media_type: media_type || 'all',
         candidate_count,
         ready_count,
+        active_count,
         queued_count,
         pending_count,
         skipped_count,
-        is_ready: candidate_count === 0 || (ready_count >= candidate_count && queued_count === 0 && pending_count === 0),
+        is_ready: candidate_count === 0 || (ready_count >= candidate_count && active_count === 0 && queued_count === 0 && pending_count === 0),
       },
     });
   } catch (err) {
