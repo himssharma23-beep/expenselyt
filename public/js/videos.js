@@ -4883,12 +4883,16 @@ function videoAdminRememberPrepareStatus(key = '', status = null) {
 
 function videoAdminPrepareStatusLabel(status = null) {
   if (!status || typeof status !== 'object') return '';
-  if (status.is_ready) return 'Prepared';
-  if (Number(status.queued_count || 0) > 0) return `Queued ${Number(status.queued_count || 0)}`;
-  if (Number(status.pending_count || 0) > 0) return `Pending ${Number(status.pending_count || 0)}`;
-  if (Number(status.ready_count || 0) > 0 && Number(status.candidate_count || 0) > 0) {
-    return `Ready ${Number(status.ready_count || 0)}/${Number(status.candidate_count || 0)}`;
+  const candidateCount = Number(status.candidate_count || 0);
+  const readyCount = Number(status.ready_count || 0);
+  const queuedCount = Number(status.queued_count || 0);
+  const pendingCount = Number(status.pending_count || 0);
+  if (status.is_ready) return candidateCount > 0 ? `Ready ${readyCount || candidateCount}/${candidateCount}` : 'Ready';
+  if (queuedCount > 0) {
+    if (candidateCount > 0) return `Preparing now ${readyCount}/${candidateCount}`;
+    return `Preparing now ${queuedCount}`;
   }
+  if (pendingCount > 0) return candidateCount > 0 ? `Waiting in queue ${pendingCount}/${candidateCount}` : `Waiting in queue ${pendingCount}`;
   return 'Not ready';
 }
 
