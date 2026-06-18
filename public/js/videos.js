@@ -38,6 +38,7 @@ let _videoPlaybackUiAnchorStartedAtMs = 0;
 let _videoSeekRequestId = 0;
 let _videoSubtitleCueData = [];
 let _videoSubtitleLoadedTrackId = '';
+let _videoSeasonRequestSendingKey = '';
 let _videoSubtitleLoadRequestId = 0;
 const VIDEO_AUDIO_PREFS_STORAGE_KEY = 'videoLibraryAudioTrackPrefs';
 
@@ -1888,18 +1889,35 @@ function videoLibrarySeriesGroups(videos = []) {
       synopsis: base?.synopsis || '',
       poster_url: base?.poster_url || '',
       poster_stream_url: base?.poster_stream_url || '',
-      season_posters: [...new Map(
-        sortedEntries
-          .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
-          .filter((entry) => String(entry?.season_key || '').trim())
-          .map((entry) => [String(entry.season_key || '').trim(), entry])
-      ).values()],
+      season_posters: [...sortedEntries
+        .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+        .filter((entry) => String(entry?.season_key || '').trim())
+        .reduce((map, entry) => {
+          const seasonKey = String(entry?.season_key || '').trim();
+          const existing = map.get(seasonKey) || null;
+          map.set(seasonKey, existing ? {
+            ...existing,
+            ...entry,
+            poster_stream_url: String(existing?.poster_stream_url || entry?.poster_stream_url || '').trim(),
+            is_paid: !!(existing?.is_paid || entry?.is_paid),
+          } : entry);
+          return map;
+        }, new Map()).values()],
       progress: progressSource?.progress || null,
       stream_url: progressSource?.stream_url || '',
       size_bytes: sortedEntries.reduce((sum, entry) => sum + Number(entry?.size_bytes || 0), 0),
       file_count: sortedEntries.length,
       episode_count: sortedEntries.length,
-      season_count: Math.max(1, ...sortedEntries.map((entry) => Number(entry?.season_number || entry?.season_count || 1) || 1)),
+      season_count: Math.max(
+        1,
+        ...sortedEntries.map((entry) => Number(entry?.season_number || entry?.season_count || 1) || 1),
+        ...([...new Map(
+          sortedEntries
+            .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+            .filter((poster) => String(poster?.season_key || '').trim())
+            .map((poster) => [String(poster.season_key || '').trim(), poster])
+        ).values()].map((poster) => Number(poster?.season_number || 0) || 1))
+      ),
       available: sortedEntries.some((entry) => entry?.available !== false),
       entries: sortedEntries,
       current_entry_id: String(progressSource?.id || sortedEntries[0]?.id || ''),
@@ -1915,6 +1933,25 @@ function videoLibraryFindSeriesGroupById(seriesId, videos = null) {
 
 function videoLibrarySeasonGroups(entries = []) {
   const groups = new Map();
+  [...new Map(
+    (Array.isArray(entries) ? entries : [])
+      .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+      .filter((poster) => String(poster?.season_key || '').trim())
+      .map((poster) => [String(poster.season_key || '').trim(), poster])
+  ).values()].forEach((poster, index) => {
+    const seasonNumber = Number(poster?.season_number || 0) || (index + 1);
+    const seasonLabel = String(poster?.season_label || '').trim() || `Season ${seasonNumber}`;
+    const key = String(poster?.season_key || `${seasonNumber}:${seasonLabel.toLowerCase()}`).trim();
+    if (!key || groups.has(key)) return;
+    groups.set(key, {
+      key,
+      season_number: seasonNumber,
+      season_label: seasonLabel,
+      entries: [],
+      poster_stream_url: String(poster?.poster_stream_url || '').trim(),
+      is_paid: !!poster?.is_paid,
+    });
+  });
   videoLibrarySortEpisodes(entries).forEach((entry) => {
     const seasonNumber = Number(entry?.season_number || 0);
     const seasonLabel = String(entry?.season_label || '').trim() || (seasonNumber > 0 ? `Season ${seasonNumber}` : 'Season 1');
@@ -1926,16 +1963,64 @@ function videoLibrarySeasonGroups(entries = []) {
         season_label: seasonLabel,
         entries: [],
         poster_stream_url: '',
+        is_paid: false,
       });
     }
     groups.get(key).entries.push(entry);
-    if (!groups.get(key).poster_stream_url) {
-      const match = (Array.isArray(entry?.season_posters) ? entry.season_posters : [])
-        .find((poster) => String(poster?.season_key || '') === key);
-      if (match?.poster_stream_url) groups.get(key).poster_stream_url = String(match.poster_stream_url || '').trim();
+    const match = (Array.isArray(entry?.season_posters) ? entry.season_posters : [])
+      .find((poster) => String(poster?.season_key || '') === key);
+    if (!groups.get(key).poster_stream_url && match?.poster_stream_url) {
+      groups.get(key).poster_stream_url = String(match.poster_stream_url || '').trim();
     }
+    if (match?.is_paid) groups.get(key).is_paid = true;
   });
   return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+}
+
+function videoLibrarySeasonIsPaid(group) {
+  return !!group?.is_paid;
+}
+
+function videoLibraryAdminEmail() {
+  return String(_videoLibraryData?.settings?.admin_email || 'expenselyt@gmail.com').trim() || 'expenselyt@gmail.com';
+}
+
+async function videoLibraryEmailAdminAboutSeason(seriesTitle = '', seasonLabel = '', requestKey = '') {
+  _videoSeasonRequestSendingKey = String(requestKey || '').trim();
+  if (_selectedVideoLibraryId) {
+    openVideoLibraryDetail(String(_selectedVideoLibraryId || '').startsWith('series:') ? _selectedVideoLibraryId : `series:${encodeURIComponent(videoLibrarySeriesKey(videoLibrarySelectedVideo() || {}))}`, {
+      skipProgressFlush: true,
+      targetEpisodeId: String(_selectedVideoLibraryId || ''),
+    });
+  }
+  try {
+    const result = await api('/api/videos/season-access-request', {
+      method: 'POST',
+      body: {
+        series_title: String(seriesTitle || '').trim(),
+        season_label: String(seasonLabel || '').trim(),
+      },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not send request to admin.', 'error');
+      return;
+    }
+    toast('Request sent to admin successfully.', 'success');
+  } finally {
+    _videoSeasonRequestSendingKey = '';
+    const activeVideo = videoLibrarySelectedVideo();
+    const reopenId = String(_selectedVideoLibraryId || '').startsWith('series:')
+      ? String(_selectedVideoLibraryId || '')
+      : (activeVideo && videoLibraryIsSeries(activeVideo))
+        ? `series:${encodeURIComponent(videoLibrarySeriesKey(activeVideo))}`
+        : String(_selectedVideoLibraryId || '');
+    if (reopenId) {
+      openVideoLibraryDetail(reopenId, {
+        skipProgressFlush: true,
+        targetEpisodeId: String(_selectedVideoLibraryId || ''),
+      });
+    }
+  }
 }
 
 function videoLibrarySeasonKeyForVideo(video) {
@@ -2024,6 +2109,17 @@ async function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   if (!group) return;
   const episode = videoLibrarySelectSeriesEpisode(group, episodeId);
   if (!episode) return;
+  const seasonGroups = videoLibrarySeasonGroups(group.entries);
+  const episodeSeasonKey = videoLibrarySeasonKeyForVideo(episode);
+  const episodeSeason = seasonGroups.find((entry) => String(entry?.key || '') === String(episodeSeasonKey || '')) || null;
+  if (videoLibrarySeasonIsPaid(episodeSeason)) {
+    _videoDetailSeasonKey = String(episodeSeason?.key || episodeSeasonKey || '');
+    openVideoLibraryDetail(String(seriesId || ''), {
+      skipProgressFlush: true,
+      targetEpisodeId: String(episode?.id || ''),
+    });
+    return;
+  }
   await flushVideoPlaybackProgressWithTimeout(500);
   openVideoLibraryDetail(String(seriesId || ''), {
     skipProgressFlush: true,
@@ -2176,9 +2272,16 @@ function openVideoLibraryDetail(videoId, options = {}) {
   const targetEpisodeId = String(options?.targetEpisodeId || '');
   const seriesMode = String(videoId || '').startsWith('series:');
   const seriesGroup = seriesMode ? videoLibraryFindSeriesGroupById(videoId, allVideos) : null;
-  const video = seriesMode
+  let video = seriesMode
     ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || _selectedVideoLibraryId)
     : allVideos.find((item) => String(item?.id) === String(videoId || ''));
+  if (seriesMode && seriesGroup && _videoDetailSeasonKey && !targetEpisodeId) {
+    const pickedSeason = videoLibrarySeasonGroups(seriesGroup.entries).find((group) => String(group?.key || '') === String(_videoDetailSeasonKey || '')) || null;
+    const pickedSeasonEpisode = videoLibrarySelectSeriesEpisode(pickedSeason, _selectedVideoLibraryId);
+    if (pickedSeasonEpisode) {
+      video = pickedSeasonEpisode;
+    }
+  }
   if (!video) return;
   rememberVideoPlaylistScroll(videoId);
   const continueOpen = () => {
@@ -2223,24 +2326,51 @@ function openVideoLibraryDetail(videoId, options = {}) {
       ['Size', videoLibraryFormatBytes(seriesGroup ? seriesGroup.size_bytes : (video?.size_bytes || 0))],
       ['Files', `${Number(seriesGroup ? seriesGroup.episode_count : (video?.file_count || 1))} ${seriesGroup ? 'episode' : 'file'}${Number(seriesGroup ? seriesGroup.episode_count : (video?.file_count || 1)) === 1 ? '' : 's'}`],
       ...(hasAltAudio ? [['Audio', `${audioTracks.length} tracks`]] : []),
-      ['Status', String(video?.available === false ? 'not available' : (videoProgressLabel(video?.progress) || 'scanned'))],
     ];
-    const related = videoLibraryRelatedVideos(video, 5);
     const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
       ? videoLibrarySeasonGroups(seriesGroup.entries)
       : [];
-    const activeSeasonKey = _videoDetailSeasonKey || videoLibrarySeasonKeyForVideo(video);
-    const activeSeasonGroup = seasonGroups.find((group) => String(group.key) === String(activeSeasonKey))
+    const requestedSeasonKey = _videoDetailSeasonKey || (targetEpisodeId ? videoLibrarySeasonKeyForVideo(video) : '');
+    let activeSeasonGroup = seasonGroups.find((group) => String(group.key) === String(requestedSeasonKey))
       || seasonGroups.find((group) => group.entries.some((entry) => String(entry?.id || '') === String(video?.id || '')))
       || seasonGroups[0]
       || null;
+    if (!_videoDetailSeasonKey && !targetEpisodeId && videoLibrarySeasonIsPaid(activeSeasonGroup)) {
+      activeSeasonGroup = seasonGroups.find((group) => !videoLibrarySeasonIsPaid(group)) || activeSeasonGroup;
+    }
     if (activeSeasonGroup?.key) _videoDetailSeasonKey = String(activeSeasonGroup.key);
+    const activeSeasonPaid = videoLibrarySeasonIsPaid(activeSeasonGroup);
+    details.push(['Status', String(activeSeasonPaid ? 'paid season' : (video?.available === false ? 'not available' : (videoProgressLabel(video?.progress) || 'scanned')))]);
     const nextEpisode = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
       ? (() => {
           const currentIndex = seriesGroup.entries.findIndex((entry) => String(entry?.id) === String(video?.id || ''));
           return currentIndex >= 0 ? (seriesGroup.entries[currentIndex + 1] || null) : null;
         })()
       : null;
+    const seasonTilesMarkup = activeSeasonGroup ? `
+      <div class="video-detail-season-nav">
+        <div class="video-detail-season-nav-head">Browse Seasons</div>
+        <div class="video-detail-season-tiles">
+          ${seasonGroups.map((group) => `
+            <button type="button" class="video-detail-season-tile ${String(group.key) === String(activeSeasonGroup?.key || '') ? 'active' : ''} ${videoLibrarySeasonIsPaid(group) ? 'locked' : ''}" onclick="setVideoLibraryDetailSeason('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(group.key || '').replace(/'/g, "\\'")}')">
+              ${group.poster_stream_url ? `<div class="video-detail-season-thumb" style="background-image:url('${escHtml(group.poster_stream_url)}')"></div>` : ''}
+              <span>${escHtml(group.season_label || 'Season')}</span>
+              <small>${escHtml(`${group.entries.length} episode${group.entries.length === 1 ? '' : 's'}`)}</small>
+              ${videoLibrarySeasonIsPaid(group) ? '<em class="video-detail-season-lock">Paid</em>' : ''}
+                    </button>`).join('')}
+        </div>
+      </div>` : '';
+    const emailSeasonKey = String(seriesGroup?.id || video?.id || '') + '::' + String(activeSeasonGroup?.key || '');
+    const sendingSeasonRequest = String(_videoSeasonRequestSendingKey || '') === emailSeasonKey;
+    const paidSeasonMessageMarkup = activeSeasonPaid ? `
+      <div class="video-detail-lock-panel">
+        <div class="video-detail-lock-badge">Paid Season</div>
+        <div class="video-detail-lock-title">This season is paid. Please contact admin.</div>
+        <div class="video-detail-lock-copy">Episodes are locked for ${escHtml(activeSeasonGroup?.season_label || 'this season')} until access is enabled.</div>
+        <div class="video-detail-lock-actions">
+          <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || video?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
+        </div>
+      </div>` : '';
     window.__modalClassName = 'modal-wide video-library-detail-modal-shell';
     openModal('', `
       <div class="video-detail-shell">
@@ -2260,12 +2390,15 @@ function openVideoLibraryDetail(videoId, options = {}) {
         <div class="video-detail-body">
           <div class="video-detail-player-col">
             <div class="video-detail-frame">
-              ${video?.available === false
-                ? `<div class="video-detail-unavailable"><div>File not available on server.</div></div>`
+              ${(video?.available === false || activeSeasonPaid)
+                ? `<div class="video-detail-unavailable"><div>${escHtml(activeSeasonPaid ? 'This season is paid. Please contact admin.' : 'File not available on server.')}</div></div>`
                 : `<video id="videoLibraryPlayer" class="videos-player video-detail-media" controlslist="nodownload noplaybackrate noremoteplayback" disablepictureinpicture disableremoteplayback preload="auto" playsinline oncontextmenu="return false">${videoLibrarySubtitleTracks(video)}</video>`}
-              ${video?.available === false ? '' : `<div id="videoSubtitleOverlay" class="video-subtitle-overlay" aria-live="polite" aria-atomic="true"></div>`}
+              ${(video?.available === false || activeSeasonPaid) ? '' : `<div id="videoSubtitleOverlay" class="video-subtitle-overlay" aria-live="polite" aria-atomic="true"></div>`}
             </div>
-            ${video?.available === false ? '' : `<div class="video-detail-controls-wrap">
+            ${video?.available === false ? '' : (activeSeasonPaid ? `<div class="video-detail-controls-wrap">
+              ${paidSeasonMessageMarkup}
+              ${seasonTilesMarkup}
+            </div>` : `<div class="video-detail-controls-wrap">
               <div class="video-detail-timeline">
                 <span id="videoTimeCurrent" class="video-detail-time">0:00</span>
                 <input id="videoSeekBar" class="video-detail-seek" type="range" min="0" max="1000" value="0" step="1" oninput="videoPlayerSeekTo(this.value)" aria-label="Seek video">
@@ -2288,18 +2421,8 @@ function openVideoLibraryDetail(videoId, options = {}) {
               <button id="videoControlSpeed" class="videos-control-btn videos-control-btn-speed" type="button" onclick="videoPlayerCycleRate()">${videoControlIcon('speed')}<span>1x</span></button>
               <button class="videos-control-btn videos-control-btn-primary" type="button" onclick="videoPlayerFullscreen()">${videoControlIcon('fullscreen')}</button>
               </div>
-              ${activeSeasonGroup ? `<div class="video-detail-season-nav">
-                <div class="video-detail-season-nav-head">Browse Seasons</div>
-                <div class="video-detail-season-tiles">
-                  ${seasonGroups.map((group) => `
-                    <button type="button" class="video-detail-season-tile ${String(group.key) === String(activeSeasonGroup?.key || '') ? 'active' : ''}" onclick="setVideoLibraryDetailSeason('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(group.key || '').replace(/'/g, "\\'")}')">
-                      ${group.poster_stream_url ? `<div class="video-detail-season-thumb" style="background-image:url('${escHtml(group.poster_stream_url)}')"></div>` : ''}
-                      <span>${escHtml(group.season_label || 'Season')}</span>
-                      <small>${escHtml(`${group.entries.length} episode${group.entries.length === 1 ? '' : 's'}`)}</small>
-                    </button>`).join('')}
-                </div>
-              </div>` : ''}
-            </div>`}
+              ${seasonTilesMarkup}
+            </div>`)}
           </div>
           <aside class="video-detail-side">
             <div class="video-detail-panel">
@@ -2316,7 +2439,13 @@ function openVideoLibraryDetail(videoId, options = {}) {
                   <div class="video-detail-season-current-title">${escHtml(activeSeasonGroup.season_label || 'Season')}</div>
                   <div class="video-detail-season-current-meta">${escHtml(`${activeSeasonGroup.entries.length} episode${activeSeasonGroup.entries.length === 1 ? '' : 's'} in this season`)}</div>
                 </div>
-                <div class="video-detail-main-episodes video-detail-main-episodes-vertical">
+                ${activeSeasonPaid ? `<div class="video-detail-lock-panel compact">
+                  <div class="video-detail-lock-title">This season is paid. Please contact admin.</div>
+                  <div class="video-detail-lock-copy">No episodes are available for preview in this season.</div>
+                  <div class="video-detail-lock-actions">
+                    <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || video?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
+                  </div>
+                </div>` : `<div class="video-detail-main-episodes video-detail-main-episodes-vertical">
                   ${activeSeasonGroup.entries.map((entry) => `
                     <button type="button" class="video-detail-main-episode ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
                       <div class="video-detail-main-episode-badge">${escHtml(Number(entry?.episode_number || 0) > 0 ? `E${String(entry.episode_number).padStart(2, '0')}` : 'PLAY')}</div>
@@ -2325,7 +2454,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
                         <div class="video-detail-main-episode-meta">${escHtml(String(entry?.id || '') === String(video?.id || '') ? 'Now playing' : (videoProgressLabel(entry?.progress) || videoLibraryFormatBytes(entry?.size_bytes || 0)))}</div>
                       </div>
                     </button>`).join('')}
-                </div>
+                </div>`}
               </div>
             </div>` : ''}
             <div class="video-detail-panel video-detail-description">${escHtml(video?.synopsis || video?.overview || 'No description available yet.')}</div>
@@ -2335,6 +2464,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
     requestAnimationFrame(() => {
       scrollVideoDetailActiveEpisodeIntoView();
       (async () => {
+        if (activeSeasonPaid || video?.available === false) return;
         await initializeVideoLibraryPlayer(video, deferInitialAudioSwitch ? '' : initialAudioTrackId);
         _videoProgressBoundVideoId = '';
         setupVideoPlayerProgress();
@@ -2343,6 +2473,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
         if (audioSelect) audioSelect.value = initialAudioTrackId || '';
         scheduleInitialAudioSwitch();
       })().catch(() => {
+        if (activeSeasonPaid || video?.available === false) return;
         setVideoLibraryPlayerSource(video, deferInitialAudioSwitch ? '' : initialAudioTrackId);
         _videoProgressBoundVideoId = '';
         setupVideoPlayerProgress();
@@ -4730,6 +4861,7 @@ _videoAdminPanelState = {
   preparingKey: '',
   preparingMessage: '',
   preparingPercent: 0,
+  seasonAccessSavingKey: '',
   prepareStatusByKey: {},
   prepareStatusLoading: false,
   draftMode: '',
@@ -4987,6 +5119,28 @@ function videoAdminSeriesGroupRootPath(item = {}) {
 
 function videoAdminGroupPublishedSeasons(item) {
   const groups = new Map();
+  (Array.isArray(item?.season_posters) ? item.season_posters : []).forEach((poster, index) => {
+    const seasonNumber = Number(poster?.season_number || 0) || (index + 1);
+    const seasonLabel = String(poster?.season_label || '').trim() || `Season ${seasonNumber}`;
+    const seasonKey = String(poster?.season_key || `${seasonNumber}:${seasonLabel.toLowerCase()}`).trim();
+    if (!seasonKey) return;
+    if (!groups.has(seasonKey)) {
+      groups.set(seasonKey, {
+        season_key: seasonKey,
+        season_number: seasonNumber,
+        season_label: seasonLabel,
+        source_item_id: Number(item?.id || 0),
+        file_ids: [],
+        poster_stream_url: String(poster?.poster_stream_url || '').trim(),
+        is_paid: !!poster?.is_paid,
+      });
+    } else {
+      if (!groups.get(seasonKey).poster_stream_url && poster?.poster_stream_url) {
+        groups.get(seasonKey).poster_stream_url = String(poster.poster_stream_url || '').trim();
+      }
+      if (poster?.is_paid) groups.get(seasonKey).is_paid = true;
+    }
+  });
   const files = Array.isArray(item?.files) ? item.files : [];
   files.forEach((file) => {
     const seasonNumber = Number(file?.season_number || 0) || 1;
@@ -5000,12 +5154,14 @@ function videoAdminGroupPublishedSeasons(item) {
         source_item_id: Number(item?.id || 0),
         file_ids: [],
         poster_stream_url: '',
+        is_paid: false,
       });
     }
     groups.get(seasonKey).file_ids.push(Number(file?.id || 0));
     if (!groups.get(seasonKey).poster_stream_url) {
       const match = (Array.isArray(item?.season_posters) ? item.season_posters : []).find((poster) => String(poster?.season_key || '') === seasonKey);
       if (match?.poster_stream_url) groups.get(seasonKey).poster_stream_url = String(match.poster_stream_url || '').trim();
+      if (match?.is_paid) groups.get(seasonKey).is_paid = true;
     }
   });
   return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
@@ -5142,6 +5298,7 @@ function videoAdminPublishedGroups(items = []) {
         existing.file_ids = [...new Set([...(existing.file_ids || []), ...(season.file_ids || [])])];
         if (!existing.poster_stream_url && season?.poster_stream_url) existing.poster_stream_url = String(season.poster_stream_url || '').trim();
         if (!existing.source_item_id && season?.source_item_id) existing.source_item_id = Number(season.source_item_id || 0);
+        if (season?.is_paid) existing.is_paid = true;
       } else {
         group.seasons.push({
           ...season,
@@ -5381,9 +5538,12 @@ function renderVideoAdminPublishedCard(item) {
       ${isSeries && seasons.length ? `<div class="video-admin-season-prepare-list">
         ${seasons.map((season) => {
           const seasonPrepareKey = `season:${itemKey}:${String(season?.season_key || '')}`;
+          const seasonAccessKey = `season-access:${itemKey}:${String(season?.season_key || '')}`;
           const preparingSeason = String(_videoAdminPanelState.preparingKey || '') === seasonPrepareKey;
+          const savingSeasonAccess = String(_videoAdminPanelState.seasonAccessSavingKey || '') === seasonAccessKey;
           const seasonPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[seasonPrepareKey] || null;
           const seasonCanStopPreparing = Number(seasonPrepareStatus?.active_count || 0) > 0 || Number(seasonPrepareStatus?.queued_count || 0) > 0;
+          const seasonHasEpisodes = Array.isArray(season?.file_ids) && season.file_ids.length > 0;
           const seasonReadyChip = videoAdminPrepareStatusMarkup(
             seasonPrepareStatus,
             _videoAdminPanelState.prepareStatusLoading ? 'Checking...' : ''
@@ -5394,13 +5554,14 @@ function renderVideoAdminPublishedCard(item) {
               ${season.poster_stream_url ? `<div class="video-admin-season-thumb tiny" style="background-image:url('${escHtml(season.poster_stream_url)}')"></div>` : ''}
               <div>
                 <div class="video-admin-season-prepare-title">${escHtml(season.season_label || 'Season')}</div>
-                <div class="video-admin-section-sub">${season.file_ids.length} episode${season.file_ids.length === 1 ? '' : 's'} ${seasonReadyChip}</div>
+                <div class="video-admin-section-sub">${season.file_ids.length} episode${season.file_ids.length === 1 ? '' : 's'} ${seasonReadyChip}${season?.is_paid ? '<span class="video-admin-status-chip locked">Paid</span>' : ''}</div>
               </div>
             </div>
             <div class="video-admin-season-prepare-actions">
-              <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}').click()">Season poster</button>
+              <button class="btn btn-s btn-sm" type="button" onclick="document.getElementById('videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}').click()" ${savingSeasonAccess ? 'disabled' : ''}>Season poster</button>
               <input id="videoAdminPublishedSeasonPosterUpload_${Number(season?.source_item_id || 0)}_${String(season?.season_key || '').replace(/[^a-z0-9_-]/gi, '_')}" type="file" accept="image/*" style="display:none" onchange="window.videoAdminUploadPublishedPoster('season', ${Number(season?.source_item_id || 0)}, '${String(season?.season_key || '').replace(/'/g, "\\'")}', '${String(season?.season_label || '').replace(/'/g, "\\'")}', '${String(season?.season_number || '').replace(/'/g, "\\'")}')">
-              <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(`Preparing ${String(season?.season_label || 'season')}`)})' ${preparingSeason ? 'disabled' : ''}>${preparingSeason ? 'Preparing...' : (seasonPrepareStatus?.is_ready ? 'Prepared' : 'Prepare Season')}</button>
+              <button class="btn btn-s btn-sm ${season?.is_paid ? 'danger' : ''}" type="button" onclick="window.videoAdminTogglePublishedSeasonPaid(${Number(season?.source_item_id || 0)}, '${String(season?.season_key || '').replace(/'/g, "\\'")}', '${String(season?.season_label || '').replace(/'/g, "\\'")}', '${String(season?.season_number || '').replace(/'/g, "\\'")}', ${season?.is_paid ? 'false' : 'true'}, '${String(seasonAccessKey).replace(/'/g, "\\'")}')" ${savingSeasonAccess ? 'disabled' : ''}>${savingSeasonAccess ? '<span class=\"btn-loading-inline\"><span class=\"btn-loading-dot\"></span>Saving...</span>' : (season?.is_paid ? 'Mark Free' : 'Mark Paid')}</button>
+              <button class="btn btn-s btn-sm" type="button" onclick='window.videoAdminPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(`Preparing ${String(season?.season_label || 'season')}`)})' ${preparingSeason || !seasonHasEpisodes || savingSeasonAccess ? 'disabled' : ''}>${!seasonHasEpisodes ? 'Empty Season' : (preparingSeason ? 'Preparing...' : (seasonPrepareStatus?.is_ready ? 'Prepared' : 'Prepare Season'))}</button>
               ${seasonCanStopPreparing ? `<button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminCancelPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(String(season?.season_label || 'season'))})'>Stop Season</button>` : ''}
             </div>
           </div>
@@ -5637,7 +5798,14 @@ async function videoAdminPublishFolder(folderPath) {
       const includedSeasons = seasonDrafts.filter((season) => season.included);
       const seasonTargets = includedSeasons.length
         ? includedSeasons
-        : [{ path: pathValue, name: 'Season 1', number: '1', label: 'Season 1', included: true }];
+      : [{ path: pathValue, name: 'Season 1', number: '1', label: 'Season 1', included: true }];
+      const seasonPosterEntries = seasonTargets.map((season) => ({
+        season_key: `${Number(season.number || 1) || 1}:${String(season.label || `Season ${Number(season.number || 1) || 1}`).toLowerCase()}`,
+        season_label: String(season.label || `Season ${Number(season.number || 1) || 1}`),
+        season_number: Number(season.number || 1) || 1,
+        poster_relative_path: '',
+        is_paid: !!season?.is_paid,
+      }));
       for (let seasonIndex = 0; seasonIndex < seasonTargets.length; seasonIndex += 1) {
         const season = seasonTargets[seasonIndex];
         videoAdminSetPublishProgress(pathValue, `Scanning ${season.label || season.name || `Season ${seasonIndex + 1}`}...`, 15 + Math.round((seasonIndex / Math.max(1, seasonTargets.length)) * 20));
@@ -5663,6 +5831,7 @@ async function videoAdminPublishFolder(folderPath) {
               media_type: 'series',
               season_count: seasonTargets.length,
               episode_count: items.length,
+              season_posters: seasonPosterEntries,
               files: files.map((file, fileIndex) => ({
                 id: Number(file?.id || 0),
                 series_title: title,
@@ -5757,6 +5926,7 @@ async function videoAdminSaveDraft() {
         season_label: entry?.season_label || '',
         season_number: entry?.season_number || '',
         poster_relative_path: entry?.poster_relative_path || '',
+        is_paid: !!entry?.is_paid,
       })) : [],
       files: files.map((file, index) => ({
         id: Number(file?.id || 0),
@@ -6459,6 +6629,60 @@ async function videoAdminUploadPublishedPoster(target, itemId, seasonKey = '', s
   toast('Poster uploaded successfully', 'success');
 }
 
+async function videoAdminTogglePublishedSeasonPaid(itemId, seasonKey = '', seasonLabel = '', seasonNumber = '', nextPaid = true, stateKey = '') {
+  const normalizedItemId = Number(itemId || 0);
+  const normalizedSeasonKey = String(seasonKey || '').trim();
+  if (!(normalizedItemId > 0) || !normalizedSeasonKey) {
+    toast('Season details are missing.', 'error');
+    return;
+  }
+  _videoAdminPanelState.seasonAccessSavingKey = String(stateKey || '').trim();
+  renderVideoAdminPanel();
+  try {
+    const item = (Array.isArray(_videoAdminPanelState.publishedItems) ? _videoAdminPanelState.publishedItems : [])
+      .find((entry) => Number(entry?.id || 0) === normalizedItemId);
+    if (!item) {
+      toast('Could not find the published season.', 'error');
+      return;
+    }
+    const existingPosters = Array.isArray(item?.season_posters) ? item.season_posters : [];
+    const matchedPoster = existingPosters.find((entry) => String(entry?.season_key || '') === normalizedSeasonKey) || null;
+    const updatedSeasonPosters = [
+      ...existingPosters.filter((entry) => String(entry?.season_key || '') !== normalizedSeasonKey).map((entry) => ({
+        season_key: entry?.season_key || '',
+        season_label: entry?.season_label || '',
+        season_number: entry?.season_number || '',
+        poster_relative_path: entry?.poster_relative_path || '',
+        is_paid: !!entry?.is_paid,
+      })),
+      {
+        season_key: normalizedSeasonKey,
+        season_label: String(seasonLabel || matchedPoster?.season_label || '').trim() || 'Season 1',
+        season_number: String(seasonNumber || matchedPoster?.season_number || '').trim() || '1',
+        poster_relative_path: matchedPoster?.poster_relative_path || '',
+        is_paid: nextPaid === true || String(nextPaid || '').trim().toLowerCase() === 'true',
+      },
+    ];
+    const result = await api(`/api/admin/videos/catalog/${normalizedItemId}`, {
+      method: 'PUT',
+      body: {
+        season_posters: updatedSeasonPosters,
+      },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not update season access.', 'error');
+      return;
+    }
+    await videoAdminRefreshPublished(false);
+    renderVideoAdminPanel();
+    await loadVideosPage();
+    toast(nextPaid ? 'Season marked as paid' : 'Season unlocked successfully', 'success');
+  } finally {
+    _videoAdminPanelState.seasonAccessSavingKey = '';
+    renderVideoAdminPanel();
+  }
+}
+
 function showVideoLibrarySettingsModal() {
   if (_userRole !== 'admin') {
     toast('Only admins can change video settings.', 'error');
@@ -6547,6 +6771,8 @@ window.videoAdminClearPublished = videoAdminClearPublished;
 window.videoAdminRefreshPublished = videoAdminRefreshPublished;
 window.videoAdminUploadPoster = videoAdminUploadPoster;
 window.videoAdminUploadPublishedPoster = videoAdminUploadPublishedPoster;
+window.videoAdminTogglePublishedSeasonPaid = videoAdminTogglePublishedSeasonPaid;
+window.videoLibraryEmailAdminAboutSeason = videoLibraryEmailAdminAboutSeason;
 window.saveVideoLibrarySettings = saveVideoLibrarySettings;
 window.flushVideoPlaybackProgress = flushVideoPlaybackProgress;
 window.flushVideoPlaybackProgressWithTimeout = flushVideoPlaybackProgressWithTimeout;

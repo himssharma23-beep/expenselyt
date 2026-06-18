@@ -34,7 +34,7 @@ const {
   AI_CANONICAL_QUESTIONS,
   AI_INTENT_RULES,
 } = require('../utils/ai-lookup-config');
-const { sendLiveSplitInviteEmail, sendTenantPaymentRequestEmail, sendSocietyPaymentRequestEmail } = require('../utils/mailer');
+const { sendLiveSplitInviteEmail, sendTenantPaymentRequestEmail, sendSocietyPaymentRequestEmail, sendVideoSeasonAccessRequestEmail, ADMIN_EMAIL } = require('../utils/mailer');
 const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
 const {
   isMsg91FlowSmsEnabled,
@@ -8878,6 +8878,21 @@ router.post('/admin/videos/cache/status', requireAdmin, async (req, res) => {
   }
 });
 
+async function assertVideoPlaybackAllowed(res, target = null) {
+  const rootPath = String(target?.source_root_path || '').trim();
+  const relativePath = String(target?.relative_path || '').trim();
+  if (!rootPath || !relativePath) return true;
+  const seasonAccess = await Promise.resolve(pgVideoDb.getVideoCatalogSeasonAccessByPath(rootPath, relativePath));
+  if (!seasonAccess?.is_paid) return true;
+  res.status(403).json({
+    error: 'This season is paid. Please contact admin.',
+    code: 'season_paid',
+    admin_email: ADMIN_EMAIL,
+    season: seasonAccess,
+  });
+  return false;
+}
+
 router.get('/videos/library', requireAuth, async (req, res) => {
   try {
     const library = await Promise.resolve(pgVideoDb.listVideoLibrary(req.session.userId));
@@ -8893,12 +8908,39 @@ router.get('/videos/library', requireAuth, async (req, res) => {
       configured: !!library?.configured,
       root_exists: library?.root_exists !== false,
       message: library?.message || '',
-      settings: library?.settings || null,
+      settings: library?.settings ? {
+        ...library.settings,
+        admin_email: ADMIN_EMAIL,
+      } : { admin_email: ADMIN_EMAIL },
       subtitle_engine: library?.subtitle_engine || { available: false, message: '' },
       videos,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Could not load videos' });
+  }
+});
+
+router.post('/videos/season-access-request', requireAuth, async (req, res) => {
+  try {
+    const seriesTitle = String(req.body?.series_title || '').trim();
+    const seasonLabel = String(req.body?.season_label || '').trim();
+    if (!seriesTitle || !seasonLabel) {
+      return res.status(400).json({ error: 'Series and season are required.' });
+    }
+    const user = await Promise.resolve(pgDb.findUserById(req.session.userId));
+    const emailResult = await sendVideoSeasonAccessRequestEmail({
+      requesterName: String(user?.display_name || user?.username || 'User').trim(),
+      requesterEmail: String(user?.email || '').trim(),
+      requesterMobile: String(user?.mobile || '').trim(),
+      seriesTitle,
+      seasonLabel,
+    });
+    if (!emailResult?.sent) {
+      return res.status(400).json({ error: 'Email not configured on server. Set SMTP settings first.' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not send season access request' });
   }
 });
 
@@ -8920,6 +8962,7 @@ router.get('/videos/hls/:token/master.m3u8', requireAuth, async (req, res) => {
       : await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Video not found' });
     if (requestedAudioTrack && !target.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+    if (!(await assertVideoPlaybackAllowed(res, target))) return;
 
     const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
     if (!mediaTools?.available) {
@@ -8957,6 +9000,7 @@ router.get('/videos/hls/:token/:segment', requireAuth, async (req, res) => {
       : await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Video not found' });
     if (requestedAudioTrack && !target.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+    if (!(await assertVideoPlaybackAllowed(res, target))) return;
 
     const mediaTools = await Promise.resolve(pgVideoDb.getMediaToolsStatus());
     if (!mediaTools?.available) {
@@ -8983,6 +9027,7 @@ router.get('/videos/stream/:token', requireAuth, async (req, res) => {
     if (requestedAudioTrack) {
       const target = await Promise.resolve(pgVideoDb.resolveVideoAudioTrackTarget(req.params.token, requestedAudioTrack));
       if (!target?.audio_track) return res.status(404).json({ error: 'Audio track not found' });
+      if (!(await assertVideoPlaybackAllowed(res, target))) return;
       const startSeconds = Math.max(0, Number(req.query.start_seconds || 0) || 0);
       const audioOnly = String(req.query.audio_only || '').trim() === '1';
 
@@ -9058,6 +9103,7 @@ router.get('/videos/stream/:token', requireAuth, async (req, res) => {
 
     const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Video not found' });
+    if (!(await assertVideoPlaybackAllowed(res, target))) return;
 
     const ext = String(path.extname(target.absolute_path || target.filename || '') || '').toLowerCase();
     const needsBrowserCompatibleTranscode = ['.mkv', '.avi', '.webm', '.ogg', '.ogv', '.wmv', '.flv', '.ts', '.m2ts', '.mpeg', '.mpg'].includes(ext);
@@ -9126,6 +9172,7 @@ router.get('/videos/mobile-stream/:token', requireAuth, async (req, res) => {
   try {
     const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Video not found' });
+    if (!(await assertVideoPlaybackAllowed(res, target))) return;
 
     const ext = String(path.extname(target.absolute_path || target.filename || '') || '').toLowerCase();
     const platform = String(req.query.platform || '').trim().toLowerCase();
@@ -9167,6 +9214,7 @@ router.get('/videos/subtitles/:token', requireAuth, async (req, res) => {
   try {
     const target = await Promise.resolve(pgVideoDb.resolveSubtitleStreamTarget(req.params.token));
     if (!target) return res.status(404).json({ error: 'Subtitle file not found' });
+    if (!(await assertVideoPlaybackAllowed(res, target))) return;
 
     const raw = await fs.promises.readFile(target.absolute_path, 'utf8');
     const body = target.extension === '.srt'

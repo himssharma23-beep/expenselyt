@@ -275,6 +275,41 @@ async function sendPhoneLoginHelpEmail({ phone, email, name, note }) {
   });
 }
 
+async function sendVideoSeasonAccessRequestEmail({
+  requesterName = '',
+  requesterEmail = '',
+  requesterMobile = '',
+  seriesTitle = '',
+  seasonLabel = '',
+}) {
+  return sendMail({
+    to: ADMIN_EMAIL,
+    replyTo: requesterEmail || undefined,
+    subject: `Video paid season access request: ${seriesTitle || 'Series'}${seasonLabel ? ` - ${seasonLabel}` : ''}`,
+    html: renderEmailLayout({
+      preheader: 'A user requested access to a paid video season.',
+      eyebrow: 'Video Access Request',
+      title: 'Paid season access requested',
+      intro: `${requesterName || 'A user'} requested access to a paid season in the video library.`,
+      bodyHtml: `
+        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:18px;padding:14px 16px;">
+          ${detailRows([
+            { label: 'Requester', value: escapeHtml(requesterName || '-') },
+            { label: 'Email', value: escapeHtml(requesterEmail || '-') },
+            { label: 'Mobile', value: escapeHtml(requesterMobile || '-') },
+            { label: 'Series', value: escapeHtml(seriesTitle || '-') },
+            { label: 'Season', value: escapeHtml(seasonLabel || '-') },
+          ])}
+        </table>
+        <p style="margin:18px 0 0;">The user wants access to this locked season. Please contact them with payment details or unlock the season from Video Settings.</p>
+      `,
+      actionLabel: 'Open Expense Lite AI',
+      actionHref: `${APP_BASE_URL}/`,
+      featureItems: ['Video Library', 'Season Locking', 'Admin Access', 'User Support'],
+    }),
+  });
+}
+
 async function sendContactEmail({ name, email, subject, message }) {
   return sendMail({
     to: ADMIN_EMAIL,
@@ -765,6 +800,7 @@ module.exports = {
   sendWelcomeEmail,
   sendAdminNewUserEmail,
   sendPhoneLoginHelpEmail,
+  sendVideoSeasonAccessRequestEmail,
   sendContactEmail,
   sendContactAckEmail,
   sendSplitSharedEmail,

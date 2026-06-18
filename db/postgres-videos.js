@@ -1079,6 +1079,7 @@ async function saveVideoCatalogPosterUpload(itemId, payload = {}, userId = null)
   if (target === 'season') {
     if (!seasonKey) throw new Error('Season key is required for season poster');
     const seasonPosters = normalizeCatalogSeasonPosterInput(safeJsonArray(current.season_posters));
+    const currentSeasonEntry = seasonPosters.find((entry) => String(entry?.season_key || '') === seasonKey) || null;
     const nextPosters = [
       ...seasonPosters.filter((entry) => String(entry.season_key || '') !== seasonKey),
       {
@@ -1086,6 +1087,7 @@ async function saveVideoCatalogPosterUpload(itemId, payload = {}, userId = null)
         season_label: seasonLabel || (seasonNumber ? `Season ${seasonNumber}` : ''),
         season_number: seasonNumber,
         poster_relative_path: posterRelativePath,
+        is_paid: !!currentSeasonEntry?.is_paid,
       },
     ];
     await query(
@@ -1305,12 +1307,14 @@ function normalizeCatalogSeasonPosterInput(entries = []) {
         ? null
         : (Number.isFinite(Number(seasonNumberRaw)) ? Math.max(1, Math.round(Number(seasonNumberRaw))) : null);
       const posterRelativePath = sanitizeCatalogPosterRelativePath(entry?.poster_relative_path || '');
-      if (!seasonKey || !posterRelativePath) return null;
+      const isPaid = entry?.is_paid === true || String(entry?.is_paid || '').trim().toLowerCase() === 'true';
+      if (!seasonKey) return null;
       return {
         season_key: seasonKey,
         season_label: seasonLabel || (seasonNumber ? `Season ${seasonNumber}` : ''),
         season_number: seasonNumber,
         poster_relative_path: posterRelativePath,
+        is_paid: isPaid,
       };
     })
     .filter(Boolean)
@@ -1319,6 +1323,24 @@ function normalizeCatalogSeasonPosterInput(entries = []) {
       if (numberDiff) return numberDiff;
       return String(a.season_key || '').localeCompare(String(b.season_key || ''));
     });
+}
+
+function buildCatalogSeasonKey(seasonNumber = null, seasonLabel = '') {
+  const normalizedNumber = seasonNumber === '' || seasonNumber == null
+    ? null
+    : (Number.isFinite(Number(seasonNumber)) ? Math.max(1, Math.round(Number(seasonNumber))) : null);
+  const normalizedLabel = String(seasonLabel || '').trim() || (normalizedNumber ? `Season ${normalizedNumber}` : '');
+  if (!normalizedLabel && !normalizedNumber) return '';
+  return `${normalizedNumber || 1}:${normalizedLabel.toLowerCase()}`;
+}
+
+function findCatalogSeasonPosterEntry(seasonPosters = [], seasonNumber = null, seasonLabel = '') {
+  const posters = normalizeCatalogSeasonPosterInput(seasonPosters);
+  const seasonKey = buildCatalogSeasonKey(seasonNumber, seasonLabel);
+  return posters.find((entry) => String(entry?.season_key || '') === String(seasonKey || ''))
+    || posters.find((entry) => Number(entry?.season_number || 0) === Number(seasonNumber || 0) && String(entry?.season_label || '').trim().toLowerCase() === String(seasonLabel || '').trim().toLowerCase())
+    || posters.find((entry) => Number(entry?.season_number || 0) === Number(seasonNumber || 0))
+    || null;
 }
 
 function parseYearFromLabel(label) {
@@ -1791,6 +1813,9 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
   const current = currentItems.find((item) => Number(item.id || 0) === Number(itemId || 0));
   if (!current) throw new Error('Catalog item not found');
   const currentFiles = safeJsonArray(current.files);
+  const nextStatus = String(current.status || '').trim().toLowerCase() === VIDEO_CATALOG_STATUSES.PUBLISHED
+    ? VIDEO_CATALOG_STATUSES.PUBLISHED
+    : VIDEO_CATALOG_STATUSES.REVIEW;
 
   const normalized = {
     display_title: String(payload.display_title ?? current.display_title ?? '').trim() || String(current.display_title || '').trim(),
@@ -1851,7 +1876,7 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
             ai_notes = $20,
             search_text = $21,
             season_posters = $22::jsonb,
-            status = '${VIDEO_CATALOG_STATUSES.REVIEW}',
+            status = $24,
             verified_by = $23,
             verified_at = NOW(),
             updated_at = NOW()
@@ -1881,6 +1906,7 @@ async function updateVideoCatalogItem(itemId, payload = {}, userId = null) {
       normalized.search_text,
       JSON.stringify(normalized.season_posters),
       userId ? Number(userId) : null,
+      nextStatus,
     ]
   );
   const incomingFiles = Array.isArray(payload.files) ? payload.files : [];
@@ -2080,6 +2106,43 @@ async function listVideoLibrary(userId = null) {
   };
 }
 
+async function getVideoCatalogSeasonAccessByPath(rootPath = '', relativePath = '') {
+  await ensureVideoTables();
+  const normalizedRootPath = normalizeResolvedPath(resolveVideoRootPathForRuntime(rootPath));
+  const normalizedRelativePath = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (!normalizedRootPath || !normalizedRelativePath) return null;
+  const rows = await query(
+    `SELECT
+       i.id,
+       i.display_title,
+       i.season_posters,
+       f.season_label,
+       f.season_number
+     FROM video_catalog_files f
+     JOIN video_catalog_items i ON i.id = f.catalog_item_id
+     WHERE LOWER(i.source_root_path) = LOWER($1)
+       AND LOWER(f.relative_path) = LOWER($2)
+     ORDER BY i.updated_at DESC, i.id DESC
+     LIMIT 1`,
+    [normalizedRootPath, normalizedRelativePath]
+  );
+  const row = rows.rows[0] || null;
+  if (!row) return null;
+  const seasonPoster = findCatalogSeasonPosterEntry(
+    safeJsonArray(row.season_posters),
+    row.season_number,
+    row.season_label
+  );
+  return {
+    item_id: Number(row.id || 0),
+    title: String(row.display_title || '').trim(),
+    season_key: seasonPoster?.season_key || buildCatalogSeasonKey(row.season_number, row.season_label),
+    season_label: String(seasonPoster?.season_label || row.season_label || '').trim() || (Number(row.season_number || 0) > 0 ? `Season ${Number(row.season_number || 0)}` : 'Season 1'),
+    season_number: Number(seasonPoster?.season_number || row.season_number || 0) || 1,
+    is_paid: !!seasonPoster?.is_paid,
+  };
+}
+
 async function resolveVideoStreamTarget(token) {
   await ensureVideoTables();
   const structured = decodeStructuredToken(token);
@@ -2174,6 +2237,7 @@ async function resolveSubtitleStreamTarget(token) {
       if (!['.vtt', '.srt'].includes(ext)) return null;
       return {
         relative_path: relativePath,
+        source_root_path: resolvedRootPath,
         absolute_path: absolutePath,
         stats,
         filename: path.basename(absolutePath),
@@ -2196,6 +2260,7 @@ async function resolveSubtitleStreamTarget(token) {
       const stats = await fs.promises.stat(absoluteSubtitlePath);
       return {
         relative_path: resolvedVideoTarget.relative_path,
+        source_root_path: resolvedVideoTarget.root_path,
         absolute_path: absoluteSubtitlePath,
         stats,
         filename: path.basename(absoluteSubtitlePath),
@@ -2232,6 +2297,7 @@ async function resolveSubtitleStreamTarget(token) {
 
   return {
     settings,
+    source_root_path: resolvedRootPath,
     relative_path: relativePath,
     absolute_path: absolutePath,
     stats,
@@ -2292,5 +2358,6 @@ module.exports = {
   resolveVideoAudioTrackTarget,
   resolveSubtitleStreamTarget,
   resolvePosterStreamTarget,
+  getVideoCatalogSeasonAccessByPath,
   convertSrtToVtt,
 };
