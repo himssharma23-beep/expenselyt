@@ -6176,6 +6176,8 @@ async function videoAdminOpenPosterEditor(file, sourceDataUrl, target = 'series'
   `;
   document.body.appendChild(overlay);
 
+
+  
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) videoAdminClosePosterEditor(null);
   });
