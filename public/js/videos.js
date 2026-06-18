@@ -6609,6 +6609,8 @@ async function videoAdminUploadPoster(target, itemId, seasonKey = '') {
   toast('Image uploaded successfully', 'success');
 }
 
+
+
 async function videoAdminUploadPublishedPoster(target, itemId, seasonKey = '', seasonLabel = '', seasonNumber = '') {
   const normalizedItemId = Number(itemId || 0);
   const safeSeasonKey = String(seasonKey || '');
