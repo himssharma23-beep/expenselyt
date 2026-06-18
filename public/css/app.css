@@ -8072,6 +8072,40 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   flex-wrap:wrap;
   justify-content:flex-end;
 }
+.video-admin-status-chip{
+  display:inline-flex;
+  align-items:center;
+  margin-left:8px;
+  padding:2px 8px;
+  border-radius:999px;
+  border:1px solid #d8d0c3;
+  background:#f7f3ec;
+  color:#6a7280;
+  font-size:11px;
+  font-weight:700;
+  line-height:1.2;
+  vertical-align:middle;
+}
+.video-admin-status-chip.ready{
+  border-color:#b9dec3;
+  background:#edf8f0;
+  color:#1f6a49;
+}
+.video-admin-status-chip.queued{
+  border-color:#d9d0a1;
+  background:#fff8df;
+  color:#8a6d12;
+}
+.video-admin-status-chip.pending{
+  border-color:#d6d9df;
+  background:#f3f5f8;
+  color:#586273;
+}
+.video-admin-status-chip.muted{
+  border-color:#e3ddd3;
+  background:#f8f5ef;
+  color:#8c8f98;
+}
 @media (max-width: 980px){
   .video-catalog-hero{
     grid-template-columns:minmax(0,1fr);
