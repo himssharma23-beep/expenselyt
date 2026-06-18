@@ -1931,14 +1931,28 @@ function videoLibraryFindSeriesGroupById(seriesId, videos = null) {
     .find((group) => String(group.series_group_key || '') === String(key || '')) || null;
 }
 
-function videoLibrarySeasonGroups(entries = []) {
+function videoLibrarySeasonGroups(entries = [], seasonPosterEntries = []) {
   const groups = new Map();
-  [...new Map(
-    (Array.isArray(entries) ? entries : [])
-      .flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : [])
-      .filter((poster) => String(poster?.season_key || '').trim())
-      .map((poster) => [String(poster.season_key || '').trim(), poster])
-  ).values()].forEach((poster, index) => {
+  const mergedSeasonPosters = [...[
+    ...(Array.isArray(seasonPosterEntries) ? seasonPosterEntries : []),
+    ...(Array.isArray(entries) ? entries : []).flatMap((entry) => Array.isArray(entry?.season_posters) ? entry.season_posters : []),
+  ].reduce((map, poster) => {
+    const seasonKey = String(poster?.season_key || '').trim();
+    if (!seasonKey) return map;
+    const existing = map.get(seasonKey) || null;
+    map.set(seasonKey, existing ? {
+      ...existing,
+      ...poster,
+      poster_stream_url: String(existing?.poster_stream_url || poster?.poster_stream_url || '').trim(),
+      is_paid: !!(existing?.is_paid || poster?.is_paid),
+    } : {
+      ...poster,
+      poster_stream_url: String(poster?.poster_stream_url || '').trim(),
+      is_paid: !!poster?.is_paid,
+    });
+    return map;
+  }, new Map()).values()];
+  mergedSeasonPosters.forEach((poster, index) => {
     const seasonNumber = Number(poster?.season_number || 0) || (index + 1);
     const seasonLabel = String(poster?.season_label || '').trim() || `Season ${seasonNumber}`;
     const key = String(poster?.season_key || `${seasonNumber}:${seasonLabel.toLowerCase()}`).trim();
@@ -2109,7 +2123,7 @@ async function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   if (!group) return;
   const episode = videoLibrarySelectSeriesEpisode(group, episodeId);
   if (!episode) return;
-  const seasonGroups = videoLibrarySeasonGroups(group.entries);
+  const seasonGroups = videoLibrarySeasonGroups(group.entries, group.season_posters);
   const episodeSeasonKey = videoLibrarySeasonKeyForVideo(episode);
   const episodeSeason = seasonGroups.find((entry) => String(entry?.key || '') === String(episodeSeasonKey || '')) || null;
   if (videoLibrarySeasonIsPaid(episodeSeason)) {
@@ -2276,7 +2290,8 @@ function openVideoLibraryDetail(videoId, options = {}) {
     ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || _selectedVideoLibraryId)
     : allVideos.find((item) => String(item?.id) === String(videoId || ''));
   if (seriesMode && seriesGroup && _videoDetailSeasonKey && !targetEpisodeId) {
-    const pickedSeason = videoLibrarySeasonGroups(seriesGroup.entries).find((group) => String(group?.key || '') === String(_videoDetailSeasonKey || '')) || null;
+    const pickedSeason = videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
+      .find((group) => String(group?.key || '') === String(_videoDetailSeasonKey || '')) || null;
     const pickedSeasonEpisode = videoLibrarySelectSeriesEpisode(pickedSeason, _selectedVideoLibraryId);
     if (pickedSeasonEpisode) {
       video = pickedSeasonEpisode;
@@ -2328,7 +2343,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
       ...(hasAltAudio ? [['Audio', `${audioTracks.length} tracks`]] : []),
     ];
     const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
-      ? videoLibrarySeasonGroups(seriesGroup.entries)
+      ? videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
       : [];
     const requestedSeasonKey = _videoDetailSeasonKey || (targetEpisodeId ? videoLibrarySeasonKeyForVideo(video) : '');
     let activeSeasonGroup = seasonGroups.find((group) => String(group.key) === String(requestedSeasonKey))
@@ -2353,7 +2368,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
         <div class="video-detail-season-tiles">
           ${seasonGroups.map((group) => `
             <button type="button" class="video-detail-season-tile ${String(group.key) === String(activeSeasonGroup?.key || '') ? 'active' : ''} ${videoLibrarySeasonIsPaid(group) ? 'locked' : ''}" onclick="setVideoLibraryDetailSeason('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(group.key || '').replace(/'/g, "\\'")}')">
-              ${group.poster_stream_url ? `<div class="video-detail-season-thumb" style="background-image:url('${escHtml(group.poster_stream_url)}')"></div>` : ''}
+                      ${(group.poster_stream_url || seriesGroup?.poster_stream_url) ? `<div class="video-detail-season-thumb" style="background-image:url('${escHtml(group.poster_stream_url || seriesGroup?.poster_stream_url || '')}')"></div>` : ''}
               <span>${escHtml(group.season_label || 'Season')}</span>
               <small>${escHtml(`${group.entries.length} episode${group.entries.length === 1 ? '' : 's'}`)}</small>
               ${videoLibrarySeasonIsPaid(group) ? '<em class="video-detail-season-lock">Paid</em>' : ''}
