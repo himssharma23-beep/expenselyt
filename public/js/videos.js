@@ -2289,21 +2289,32 @@ function openVideoLibraryDetail(videoId, options = {}) {
   let video = seriesMode
     ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || _selectedVideoLibraryId)
     : allVideos.find((item) => String(item?.id) === String(videoId || ''));
-  if (seriesMode && seriesGroup && _videoDetailSeasonKey && !targetEpisodeId) {
-    const pickedSeason = videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
-      .find((group) => String(group?.key || '') === String(_videoDetailSeasonKey || '')) || null;
-    const pickedSeasonEpisode = videoLibrarySelectSeriesEpisode(pickedSeason, _selectedVideoLibraryId);
-    if (pickedSeasonEpisode) {
-      video = pickedSeasonEpisode;
+  const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
+    ? videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
+    : [];
+  const requestedSeasonKey = _videoDetailSeasonKey || ((targetEpisodeId && video) ? videoLibrarySeasonKeyForVideo(video) : '');
+  let activeSeasonGroup = seasonGroups.find((group) => String(group?.key || '') === String(requestedSeasonKey || ''))
+    || seasonGroups.find((group) => group.entries.some((entry) => String(entry?.id || '') === String(video?.id || '')))
+    || seasonGroups[0]
+    || null;
+  if (!_videoDetailSeasonKey && !targetEpisodeId && videoLibrarySeasonIsPaid(activeSeasonGroup)) {
+    activeSeasonGroup = seasonGroups.find((group) => !videoLibrarySeasonIsPaid(group)) || activeSeasonGroup;
+  }
+  if (seriesMode && activeSeasonGroup) {
+    const currentSeasonKey = video ? videoLibrarySeasonKeyForVideo(video) : '';
+    const currentVideoMatchesSeason = !!(video && String(currentSeasonKey || '') === String(activeSeasonGroup?.key || ''));
+    if (!currentVideoMatchesSeason || !video) {
+      video = videoLibrarySelectSeriesEpisode(activeSeasonGroup, targetEpisodeId || _selectedVideoLibraryId) || null;
     }
   }
-  if (!video) return;
+  const displayVideo = video || (seriesMode ? (seriesGroup?.entries?.[0] || null) : null);
+  if (!displayVideo) return;
   rememberVideoPlaylistScroll(videoId);
   const continueOpen = () => {
-    _selectedVideoLibraryId = String(video.id || '');
-    _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(video);
-    const audioTracks = videoLibraryAudioTracks(video);
-    const savedAudioTrackId = getSavedVideoAudioTrackId(video);
+    _selectedVideoLibraryId = video ? String(video.id || '') : '';
+    _selectedVideoSubtitleId = video ? videoLibraryDefaultSubtitleId(video) : '';
+    const audioTracks = video ? videoLibraryAudioTracks(video) : [];
+    const savedAudioTrackId = video ? getSavedVideoAudioTrackId(video) : '';
     const initialAudioTrackId = audioTracks.some((track) => String(track.id || '') === String(savedAudioTrackId || ''))
       ? String(savedAudioTrackId || '')
       : '';
@@ -2315,7 +2326,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
       const runSwitch = () => {
         const activeVideo = videoLibrarySelectedVideo();
         const activePlayer = getVideoLibraryPlayer();
-        if (!activeVideo || !activePlayer || String(activeVideo.id || '') !== String(video.id || '')) return;
+        if (!activeVideo || !activePlayer || !video || String(activeVideo.id || '') !== String(video.id || '')) return;
         if (String(_selectedVideoAudioTrackId || '') === String(initialAudioTrackId || '')) return;
         setVideoAudioTrack(initialAudioTrackId);
       };
@@ -2331,33 +2342,29 @@ function openVideoLibraryDetail(videoId, options = {}) {
     _videoAudioStreamOffsetSeconds = 0;
     _videoAltAudioOutputMuted = false;
     clearVideoLibraryAltAudioPlayer();
-    const genres = videoLibraryGenresFor(video);
-    const defaultAudioTrack = videoLibraryDefaultAudioTrack(video);
+    const genres = videoLibraryGenresFor(displayVideo);
+    const defaultAudioTrack = video ? videoLibraryDefaultAudioTrack(video) : null;
     const hasAltAudio = audioTracks.length > 1;
-    const effectiveMediaType = videoLibraryIsSeries(video) ? 'series' : 'movie';
+    const effectiveMediaType = videoLibraryIsSeries(displayVideo) ? 'series' : 'movie';
     const details = [
       ['Type', effectiveMediaType],
-      ['Year', String(video?.release_year || video?.year || '-')],
-      ['Size', videoLibraryFormatBytes(seriesGroup ? seriesGroup.size_bytes : (video?.size_bytes || 0))],
-      ['Files', `${Number(seriesGroup ? seriesGroup.episode_count : (video?.file_count || 1))} ${seriesGroup ? 'episode' : 'file'}${Number(seriesGroup ? seriesGroup.episode_count : (video?.file_count || 1)) === 1 ? '' : 's'}`],
+      ['Year', String(displayVideo?.release_year || displayVideo?.year || '-')],
+      ['Size', videoLibraryFormatBytes(seriesGroup ? seriesGroup.size_bytes : (displayVideo?.size_bytes || 0))],
+      ['Files', `${Number(seriesGroup ? seriesGroup.episode_count : (displayVideo?.file_count || 1))} ${seriesGroup ? 'episode' : 'file'}${Number(seriesGroup ? seriesGroup.episode_count : (displayVideo?.file_count || 1)) === 1 ? '' : 's'}`],
       ...(hasAltAudio ? [['Audio', `${audioTracks.length} tracks`]] : []),
     ];
-    const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
-      ? videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
-      : [];
-    const requestedSeasonKey = _videoDetailSeasonKey || (targetEpisodeId ? videoLibrarySeasonKeyForVideo(video) : '');
-    let activeSeasonGroup = seasonGroups.find((group) => String(group.key) === String(requestedSeasonKey))
-      || seasonGroups.find((group) => group.entries.some((entry) => String(entry?.id || '') === String(video?.id || '')))
-      || seasonGroups[0]
-      || null;
-    if (!_videoDetailSeasonKey && !targetEpisodeId && videoLibrarySeasonIsPaid(activeSeasonGroup)) {
-      activeSeasonGroup = seasonGroups.find((group) => !videoLibrarySeasonIsPaid(group)) || activeSeasonGroup;
-    }
     if (activeSeasonGroup?.key) _videoDetailSeasonKey = String(activeSeasonGroup.key);
     const activeSeasonPaid = videoLibrarySeasonIsPaid(activeSeasonGroup);
-    details.push(['Status', String(activeSeasonPaid ? 'paid season' : (video?.available === false ? 'not available' : (videoProgressLabel(video?.progress) || 'scanned')))]);
+    const activeSeasonEmpty = !!(activeSeasonGroup && activeSeasonGroup.entries.length === 0);
+    const playbackBlocked = !video || activeSeasonPaid || activeSeasonEmpty || video?.available === false;
+    details.push(['Status', String(activeSeasonPaid
+      ? 'paid season'
+      : activeSeasonEmpty
+        ? 'empty season'
+        : (video?.available === false ? 'not available' : (videoProgressLabel(video?.progress) || 'scanned')))]);
     const nextEpisode = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
       ? (() => {
+          if (!video) return null;
           const currentIndex = seriesGroup.entries.findIndex((entry) => String(entry?.id) === String(video?.id || ''));
           return currentIndex >= 0 ? (seriesGroup.entries[currentIndex + 1] || null) : null;
         })()
@@ -2375,43 +2382,45 @@ function openVideoLibraryDetail(videoId, options = {}) {
                     </button>`).join('')}
         </div>
       </div>` : '';
-    const emailSeasonKey = String(seriesGroup?.id || video?.id || '') + '::' + String(activeSeasonGroup?.key || '');
+    const emailSeasonKey = String(seriesGroup?.id || displayVideo?.id || '') + '::' + String(activeSeasonGroup?.key || '');
     const sendingSeasonRequest = String(_videoSeasonRequestSendingKey || '') === emailSeasonKey;
-    const paidSeasonMessageMarkup = activeSeasonPaid ? `
+    const blockedSeasonMessageMarkup = (activeSeasonPaid || activeSeasonEmpty) ? `
       <div class="video-detail-lock-panel">
-        <div class="video-detail-lock-badge">Paid Season</div>
-        <div class="video-detail-lock-title">This season is paid. Please contact admin.</div>
-        <div class="video-detail-lock-copy">Episodes are locked for ${escHtml(activeSeasonGroup?.season_label || 'this season')} until access is enabled.</div>
-        <div class="video-detail-lock-actions">
-          <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || video?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
-        </div>
+        <div class="video-detail-lock-badge">${activeSeasonPaid ? 'Paid Season' : 'Empty Season'}</div>
+        <div class="video-detail-lock-title">${activeSeasonPaid ? 'This season is paid. Please contact admin.' : 'No episodes are available in this season yet.'}</div>
+        <div class="video-detail-lock-copy">${activeSeasonPaid
+          ? `Episodes are locked for ${escHtml(activeSeasonGroup?.season_label || 'this season')} until access is enabled.`
+          : `There are no published episodes inside ${escHtml(activeSeasonGroup?.season_label || 'this season')} right now.`}</div>
+        ${activeSeasonPaid ? `<div class="video-detail-lock-actions">
+          <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || displayVideo?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
+        </div>` : ''}
       </div>` : '';
     window.__modalClassName = 'modal-wide video-library-detail-modal-shell';
     openModal('', `
       <div class="video-detail-shell">
         <div class="video-detail-top">
           <div class="video-detail-copy">
-            <div class="video-detail-title">${escHtml(seriesGroup?.title || video?.title || 'Video')}</div>
+            <div class="video-detail-title">${escHtml(seriesGroup?.title || displayVideo?.title || 'Video')}</div>
             <div class="video-detail-meta">
               <span>${escHtml(effectiveMediaType)}</span>
               <span>&middot;</span>
-              <span>${escHtml(String(video?.release_year || video?.year || '-'))}</span>
+              <span>${escHtml(String(displayVideo?.release_year || displayVideo?.year || '-'))}</span>
               ${genres.length ? `<span>&middot;</span><span class="video-detail-tags">${genres.map((genre) => `<span class="video-detail-tag">${escHtml(genre)}</span>`).join('')}</span>` : ''}
             </div>
-            ${videoLibraryNowPlayingLabel(video) ? `<div class="video-detail-playing">${escHtml(videoLibraryNowPlayingLabel(video))}</div>` : ''}
+            ${video && videoLibraryNowPlayingLabel(video) ? `<div class="video-detail-playing">${escHtml(videoLibraryNowPlayingLabel(video))}</div>` : (activeSeasonGroup?.season_label ? `<div class="video-detail-playing">${escHtml(activeSeasonGroup.season_label)}</div>` : '')}
           </div>
           <button type="button" class="video-detail-close" onclick="closeVideoLibraryDetail()">×</button>
         </div>
         <div class="video-detail-body">
           <div class="video-detail-player-col">
             <div class="video-detail-frame">
-              ${(video?.available === false || activeSeasonPaid)
-                ? `<div class="video-detail-unavailable"><div>${escHtml(activeSeasonPaid ? 'This season is paid. Please contact admin.' : 'File not available on server.')}</div></div>`
+              ${playbackBlocked
+                ? `<div class="video-detail-unavailable"><div>${escHtml(activeSeasonPaid ? 'This season is paid. Please contact admin.' : (activeSeasonEmpty ? 'No episodes are available in this season yet.' : 'File not available on server.'))}</div></div>`
                 : `<video id="videoLibraryPlayer" class="videos-player video-detail-media" controlslist="nodownload noplaybackrate noremoteplayback" disablepictureinpicture disableremoteplayback preload="auto" playsinline oncontextmenu="return false">${videoLibrarySubtitleTracks(video)}</video>`}
-              ${(video?.available === false || activeSeasonPaid) ? '' : `<div id="videoSubtitleOverlay" class="video-subtitle-overlay" aria-live="polite" aria-atomic="true"></div>`}
+              ${playbackBlocked ? '' : `<div id="videoSubtitleOverlay" class="video-subtitle-overlay" aria-live="polite" aria-atomic="true"></div>`}
             </div>
-            ${video?.available === false ? '' : (activeSeasonPaid ? `<div class="video-detail-controls-wrap">
-              ${paidSeasonMessageMarkup}
+            ${((video?.available === false) && !activeSeasonPaid && !activeSeasonEmpty) ? '' : ((activeSeasonPaid || activeSeasonEmpty) ? `<div class="video-detail-controls-wrap">
+              ${blockedSeasonMessageMarkup}
               ${seasonTilesMarkup}
             </div>` : `<div class="video-detail-controls-wrap">
               <div class="video-detail-timeline">
@@ -2458,8 +2467,11 @@ function openVideoLibraryDetail(videoId, options = {}) {
                   <div class="video-detail-lock-title">This season is paid. Please contact admin.</div>
                   <div class="video-detail-lock-copy">No episodes are available for preview in this season.</div>
                   <div class="video-detail-lock-actions">
-                    <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || video?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
+                    <button class="videos-control-btn videos-control-btn-seek" type="button" onclick="videoLibraryEmailAdminAboutSeason('${String(seriesGroup?.title || displayVideo?.title || 'Series').replace(/'/g, "\\'")}', '${String(activeSeasonGroup?.season_label || '').replace(/'/g, "\\'")}', '${String(emailSeasonKey).replace(/'/g, "\\'")}')" ${sendingSeasonRequest ? 'disabled' : ''}>${sendingSeasonRequest ? '<span class="btn-loading-inline"><span class="btn-loading-dot"></span>Sending...</span>' : 'Email Admin'}</button>
                   </div>
+                </div>` : activeSeasonEmpty ? `<div class="video-detail-lock-panel compact">
+                  <div class="video-detail-lock-title">No episodes are available in this season yet.</div>
+                  <div class="video-detail-lock-copy">Published episodes will appear here once this season is added.</div>
                 </div>` : `<div class="video-detail-main-episodes video-detail-main-episodes-vertical">
                   ${activeSeasonGroup.entries.map((entry) => `
                     <button type="button" class="video-detail-main-episode ${String(entry?.id || '') === String(video?.id || '') ? 'active' : ''}" onclick="videoLibraryPlaySeriesEpisode('${String(seriesGroup?.id || '').replace(/'/g, "\\'")}', '${String(entry?.id || '').replace(/'/g, "\\'")}')">
@@ -2472,14 +2484,14 @@ function openVideoLibraryDetail(videoId, options = {}) {
                 </div>`}
               </div>
             </div>` : ''}
-            <div class="video-detail-panel video-detail-description">${escHtml(video?.synopsis || video?.overview || 'No description available yet.')}</div>
+            <div class="video-detail-panel video-detail-description">${escHtml(displayVideo?.synopsis || displayVideo?.overview || 'No description available yet.')}</div>
           </aside>
         </div>
       </div>`);
     requestAnimationFrame(() => {
       scrollVideoDetailActiveEpisodeIntoView();
       (async () => {
-        if (activeSeasonPaid || video?.available === false) return;
+        if (playbackBlocked) return;
         await initializeVideoLibraryPlayer(video, deferInitialAudioSwitch ? '' : initialAudioTrackId);
         _videoProgressBoundVideoId = '';
         setupVideoPlayerProgress();
@@ -2488,7 +2500,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
         if (audioSelect) audioSelect.value = initialAudioTrackId || '';
         scheduleInitialAudioSwitch();
       })().catch(() => {
-        if (activeSeasonPaid || video?.available === false) return;
+        if (playbackBlocked) return;
         setVideoLibraryPlayerSource(video, deferInitialAudioSwitch ? '' : initialAudioTrackId);
         _videoProgressBoundVideoId = '';
         setupVideoPlayerProgress();
