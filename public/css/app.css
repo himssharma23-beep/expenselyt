@@ -8995,6 +8995,15 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .video-subtitle-overlay br{
   content:"";
 }
+.video-detail-frame:fullscreen .video-subtitle-overlay,
+.video-detail-frame:-webkit-full-screen .video-subtitle-overlay{
+  left:48px;
+  right:48px;
+  bottom:40px;
+  font-size:30px;
+  line-height:1.5;
+  text-shadow:0 3px 12px rgba(0,0,0,.98), 0 0 3px rgba(0,0,0,.95);
+}
 .video-detail-controls-wrap{
   display:flex;
   flex-direction:column;

@@ -740,9 +740,21 @@ function videoPlayerRequestFullscreen() {
   if (instance && typeof instance.requestFullscreen === 'function') {
     return instance.requestFullscreen();
   }
+  const frame = document.querySelector('.video-detail-frame');
+  if (frame && typeof frame.requestFullscreen === 'function') {
+    return frame.requestFullscreen();
+  }
+  if (frame && typeof frame.webkitRequestFullscreen === 'function') {
+    frame.webkitRequestFullscreen();
+    return Promise.resolve();
+  }
   const player = getVideoLibraryPlayer();
   if (player && typeof player.requestFullscreen === 'function') {
     return player.requestFullscreen();
+  }
+  if (player && typeof player.webkitRequestFullscreen === 'function') {
+    player.webkitRequestFullscreen();
+    return Promise.resolve();
   }
   return Promise.resolve();
 }
