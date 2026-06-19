@@ -5861,6 +5861,31 @@ async function videoAdminPublishFolder(folderPath) {
         for (let index = 0; index < items.length; index += 1) {
           const item = items[index];
           const files = Array.isArray(item?.files) ? item.files : [];
+          const existingSeasonPosterMap = new Map(
+            (Array.isArray(item?.season_posters) ? item.season_posters : [])
+              .filter((entry) => String(entry?.season_key || '').trim())
+              .map((entry) => [String(entry.season_key || '').trim(), {
+                season_key: String(entry.season_key || '').trim(),
+                season_label: String(entry.season_label || '').trim() || `Season ${Number(entry.season_number || 1) || 1}`,
+                season_number: Number(entry.season_number || 1) || 1,
+                poster_relative_path: String(entry.poster_relative_path || '').trim(),
+                is_paid: !!entry?.is_paid,
+              }])
+          );
+          seasonPosterEntries.forEach((entry) => {
+            const seasonKey = String(entry?.season_key || '').trim();
+            if (!seasonKey) return;
+            const existing = existingSeasonPosterMap.get(seasonKey) || null;
+            existingSeasonPosterMap.set(seasonKey, {
+              season_key: seasonKey,
+              season_label: String(entry?.season_label || existing?.season_label || '').trim() || `Season ${Number(entry?.season_number || existing?.season_number || 1) || 1}`,
+              season_number: Number(entry?.season_number || existing?.season_number || 1) || 1,
+              poster_relative_path: String(entry?.poster_relative_path || existing?.poster_relative_path || '').trim(),
+              is_paid: !!(entry?.is_paid || existing?.is_paid),
+            });
+          });
+          const mergedSeasonPosterEntries = [...existingSeasonPosterMap.values()]
+            .sort((a, b) => Number(a?.season_number || 0) - Number(b?.season_number || 0));
           const overall = (((seasonIndex * Math.max(1, items.length)) + index + 1) / Math.max(1, seasonTargets.length * Math.max(1, items.length)));
           videoAdminSetPublishProgress(pathValue, `Saving ${season.label || `Season ${seasonIndex + 1}`} episode ${index + 1}...`, 35 + Math.round(overall * 45));
           await videoCatalogApi(`/api/admin/videos/catalog/${Number(item.id || 0)}`, {
@@ -5868,9 +5893,9 @@ async function videoAdminPublishFolder(folderPath) {
             body: {
               display_title: title,
               media_type: 'series',
-              season_count: seasonTargets.length,
+              season_count: Math.max(seasonTargets.length, mergedSeasonPosterEntries.length),
               episode_count: items.length,
-              season_posters: seasonPosterEntries,
+              season_posters: mergedSeasonPosterEntries,
               files: files.map((file, fileIndex) => ({
                 id: Number(file?.id || 0),
                 series_title: title,

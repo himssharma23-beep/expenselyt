@@ -780,6 +780,67 @@ async function setDefaultBankAccount(userId, id) {
   });
 }
 
+async function transferBetweenBankAccounts(userId, payload = {}) {
+  return withTransaction(async (client) => {
+    const fromBankId = normalizeBankAccountId(payload.from_bank_id);
+    const toBankId = normalizeBankAccountId(payload.to_bank_id);
+    const amount = normalizePositiveAmount(payload.amount, 'Transfer amount');
+    if (!fromBankId) throw validationError('Source bank account is required');
+    if (!toBankId) throw validationError('Destination bank account is required');
+    if (fromBankId === toBankId) throw validationError('Choose two different bank accounts');
+
+    const sourceResult = await client.query(
+      `SELECT id, bank_name, account_name, balance, min_balance
+       FROM bank_accounts
+       WHERE id = $1 AND user_id = $2 AND is_active = TRUE AND deleted_at IS NULL
+       LIMIT 1`,
+      [fromBankId, userId]
+    );
+    const targetResult = await client.query(
+      `SELECT id, bank_name, account_name, balance, min_balance
+       FROM bank_accounts
+       WHERE id = $1 AND user_id = $2 AND is_active = TRUE AND deleted_at IS NULL
+       LIMIT 1`,
+      [toBankId, userId]
+    );
+
+    const source = sourceResult.rows[0] || null;
+    const target = targetResult.rows[0] || null;
+    if (!source) throw validationError('Source bank account was not found');
+    if (!target) throw validationError('Destination bank account was not found');
+
+    const sourceBalance = num(source.balance);
+    const sourceMinBalance = num(source.min_balance);
+    const sourceSpendable = Math.max(0, sourceBalance - sourceMinBalance);
+    if (amount > sourceSpendable) {
+      throw validationError('Transfer amount exceeds spendable balance in source account');
+    }
+
+    await client.query(
+      `UPDATE bank_accounts
+       SET balance = balance - $1, updated_at = NOW(), updated_by = $3
+       WHERE id = $2 AND user_id = $3`,
+      [amount, fromBankId, userId]
+    );
+    await client.query(
+      `UPDATE bank_accounts
+       SET balance = balance + $1, updated_at = NOW(), updated_by = $3
+       WHERE id = $2 AND user_id = $3`,
+      [amount, toBankId, userId]
+    );
+
+    return {
+      success: true,
+      from_bank_id: fromBankId,
+      to_bank_id: toBankId,
+      amount,
+      source_spendable_before: sourceSpendable,
+      source_balance_after: Math.round((sourceBalance - amount) * 100) / 100,
+      target_balance_after: Math.round((num(target.balance) + amount) * 100) / 100,
+    };
+  });
+}
+
 async function deleteBankAccount(userId, id) {
   await withTransaction(async (client) => {
     await client.query('DELETE FROM bank_accounts WHERE id = $1 AND user_id = $2', [id, userId]);
@@ -2382,6 +2443,7 @@ module.exports = {
   updateBankAccount,
   updateBankBalance,
   setDefaultBankAccount,
+  transferBetweenBankAccounts,
   deleteBankAccount,
   getDefaultPayments,
   addDefaultPayment,

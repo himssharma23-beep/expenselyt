@@ -14667,7 +14667,10 @@ function renderBankAccounts() {
       ${statBar}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
-        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showBankTransferModal()">Transfer</button>
+          <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        </div>
       </div>
       <div class="bank-grid">${grid}</div>
     </div>`;
@@ -14851,7 +14854,10 @@ function renderBankAccountsPageView() {
       ${statBar}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
-        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showBankTransferModal()">Transfer</button>
+          <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        </div>
       </div>
       <div class="bank-grid">${grid}</div>
       <div class="bank-grid" style="margin-top:18px">${fdTile}</div>
@@ -14879,6 +14885,68 @@ function showBankModal(id) {
       <button class="btn btn-p" onclick="saveBankAccount(${id || 'null'})">${id ? 'Update' : 'Add Account'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
+}
+
+function showBankTransferModal() {
+  const accounts = _bankAccounts || [];
+  if (accounts.length < 2) {
+    toast('Add at least two bank accounts to transfer money', 'warning');
+    return;
+  }
+  const defaultSource = accounts.find((account) => account.is_default) || accounts[0];
+  const defaultTarget = accounts.find((account) => Number(account.id) !== Number(defaultSource?.id)) || accounts[1];
+  const opts = accounts.map((account) => `<option value="${account.id}">${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''} (${fmtCur(account.balance || 0)})</option>`).join('');
+  openModal('Transfer Between Bank Accounts', `
+    <div class="fg">
+      <label class="fl">From Account
+        <select class="fi" id="bankTransferFrom" onchange="previewBankTransferSpendable()">${opts}</select>
+      </label>
+      <label class="fl">To Account
+        <select class="fi" id="bankTransferTo">${opts}</select>
+      </label>
+      <label class="fl">Amount (&#8377;)
+        <input class="fi" type="number" step="0.01" min="0.01" id="bankTransferAmount" placeholder="0.00">
+      </label>
+      <label class="fl">Notes
+        <input class="fi" id="bankTransferNotes" placeholder="Optional note for your reference">
+      </label>
+      <div id="bankTransferHint" style="font-size:12px;color:var(--t3)"></div>
+    </div>
+    <div class="fa">
+      <button class="btn btn-p" onclick="saveBankTransfer()">Transfer</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  document.getElementById('bankTransferFrom').value = String(defaultSource?.id || '');
+  document.getElementById('bankTransferTo').value = String(defaultTarget?.id || '');
+  previewBankTransferSpendable();
+}
+
+function previewBankTransferSpendable() {
+  const fromId = document.getElementById('bankTransferFrom')?.value || '';
+  const hint = document.getElementById('bankTransferHint');
+  const source = _findBankAccountById(fromId);
+  if (!hint || !source) return;
+  const spendable = Math.max(0, Number(source.balance || 0) - Number(source.min_balance || 0));
+  hint.textContent = `Available to transfer from this account: ${fmtCur(spendable)} (balance ${fmtCur(source.balance || 0)}, locked ${fmtCur(source.min_balance || 0)})`;
+}
+
+async function saveBankTransfer() {
+  const from_bank_id = Number(document.getElementById('bankTransferFrom')?.value || 0);
+  const to_bank_id = Number(document.getElementById('bankTransferTo')?.value || 0);
+  const amount = Number(document.getElementById('bankTransferAmount')?.value || 0);
+  const notes = String(document.getElementById('bankTransferNotes')?.value || '').trim();
+  if (!(from_bank_id > 0)) { toast('Please choose the source account', 'warning'); return; }
+  if (!(to_bank_id > 0)) { toast('Please choose the destination account', 'warning'); return; }
+  if (from_bank_id === to_bank_id) { toast('Choose two different bank accounts', 'warning'); return; }
+  if (!Number.isFinite(amount) || amount <= 0) { toast('Enter a valid transfer amount', 'warning'); return; }
+  const result = await api('/api/banks/transfer', { method: 'POST', body: { from_bank_id, to_bank_id, amount, notes } });
+  if (result?.success) {
+    closeModal();
+    toast('Transfer completed', 'success');
+    loadBankAccounts();
+  } else {
+    toast(result?.error || 'Transfer failed', 'error');
+  }
 }
 
 async function saveBankAccount(id) {
@@ -17053,9 +17121,12 @@ function renderBankAccounts() {
         </div>
       </div>
       ${statBar}
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
         <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
-        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showBankTransferModal()">Transfer</button>
+          <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        </div>
       </div>
       <div class="bank-grid">${grid}</div>
     </div>`;
@@ -19314,9 +19385,12 @@ function renderBankAccounts() {
         </div>
       </div>
       ${statBar}
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
         <div style="font-size:16px;font-weight:700">My Bank Accounts</div>
-        <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="showBankTransferModal()">Transfer</button>
+          <button class="btn btn-p btn-sm" onclick="showBankModal()">+ Add Account</button>
+        </div>
       </div>
       <div class="bank-grid">${grid}</div>
       ${fdSection}

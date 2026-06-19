@@ -1781,6 +1781,263 @@
     return Object.entries(grouped);
   }
 
+  function isLiveSplitDateInRange(value, fromDate = '', toDate = '') {
+    const safe = toLocalIsoDate(value);
+    if (!safe) return false;
+    const fromSafe = toLocalIsoDate(fromDate);
+    const toSafe = toLocalIsoDate(toDate);
+    if (fromSafe && safe < fromSafe) return false;
+    if (toSafe && safe > toSafe) return false;
+    return true;
+  }
+
+  async function loadTripLedgersForSummaryEvents(events = []) {
+    const tripIds = [...new Set(
+      (events || [])
+        .filter((event) => Number(event?.trip_id || 0) > 0)
+        .map((event) => Number(event.trip_id))
+    )];
+    if (!tripIds.length) return;
+    await Promise.all(tripIds.map((tripId) => fetchTripLedger(tripId, true).catch(() => null)));
+  }
+
+  function getLiveSplitFriendPdfDateBounds(events = []) {
+    const dates = [];
+    (events || []).forEach((event) => {
+      const safeEventDate = toLocalIsoDate(event?.date);
+      if (safeEventDate) dates.push(safeEventDate);
+      if (String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0) {
+        const ledger = state.tripLedgerCache?.[Number(event.trip_id)] || null;
+        (Array.isArray(ledger?.groups) ? ledger.groups : []).forEach((group) => {
+          const safeGroupDate = toLocalIsoDate(group?.divide_date);
+          if (safeGroupDate) dates.push(safeGroupDate);
+        });
+      }
+    });
+    if (!dates.length) {
+      const today = todayLocalIso();
+      return { min: today, max: today };
+    }
+    dates.sort();
+    return { min: dates[0], max: dates[dates.length - 1] };
+  }
+
+  function monthStartLocalIso(baseDate = '') {
+    const safe = toLocalIsoDate(baseDate, todayLocalIso());
+    const [year, month] = safe.split('-');
+    return `${year}-${month}-01`;
+  }
+
+  function shiftLocalIsoByDays(baseDate = '', days = 0) {
+    const safe = toLocalIsoDate(baseDate, todayLocalIso());
+    const parsed = new Date(`${safe}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return safe;
+    parsed.setDate(parsed.getDate() + Number(days || 0));
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function liveSplitFriendPdfPresetRange(preset = 'this_month', minDate = '', maxDate = '') {
+    const safeMin = toLocalIsoDate(minDate, todayLocalIso());
+    const safeMax = toLocalIsoDate(maxDate, todayLocalIso());
+    if (preset === 'all_time') return { from: safeMin, to: safeMax };
+    if (preset === 'last_30_days') {
+      const from = shiftLocalIsoByDays(safeMax, -29);
+      return { from: from < safeMin ? safeMin : from, to: safeMax };
+    }
+    const from = monthStartLocalIso(safeMax);
+    return { from: from < safeMin ? safeMin : from, to: safeMax };
+  }
+
+  function buildLiveSplitFriendPdfScopedData(row, events = [], fromDate = '', toDate = '') {
+    const directEvents = [];
+    const tripSections = [];
+    (events || []).forEach((event) => {
+      if (Number(event?.trip_id || 0) > 0) return;
+      if (isLiveSplitDateInRange(event?.date, fromDate, toDate)) directEvents.push({ ...event });
+    });
+
+    const tripIds = [...new Set(
+      (events || [])
+        .filter((event) => Number(event?.trip_id || 0) > 0)
+        .map((event) => Number(event.trip_id))
+    )];
+
+    tripIds.forEach((tripId) => {
+      const ledger = state.tripLedgerCache?.[Number(tripId)] || null;
+      if (!ledger || !Array.isArray(ledger.groups)) return;
+      const scopedGroups = ledger.groups.filter((group) => isLiveSplitDateInRange(group?.divide_date, fromDate, toDate));
+      if (!scopedGroups.length) return;
+      const scopedTrip = { ...ledger, pair_balances: [], groups: scopedGroups };
+      const tripEvents = buildCanonicalTripEventsFromLedger(scopedTrip);
+      const scopedSourceTripEvents = (events || []).filter((event) => (
+        Number(event?.trip_id || 0) === Number(tripId)
+        && isLiveSplitDateInRange(event?.date, fromDate, toDate)
+      ));
+      const tripDelta = r2(scopedSourceTripEvents.reduce((sum, event) => sum + n(event?.delta), 0));
+      const latestDate = scopedGroups.reduce((maxDate, group) => {
+        const nextDate = toLocalIsoDate(group?.divide_date, '');
+        return nextDate > maxDate ? nextDate : maxDate;
+      }, '');
+      const tripMeta = (state.liveTrips || []).find((item) => Number(item?.id || 0) === Number(tripId)) || scopedTrip || null;
+      tripSections.push({
+        tripId: Number(tripId),
+        trip: tripMeta,
+        title: String(tripMeta?.name || scopedTrip?.name || `Trip #${tripId}`).trim(),
+        date: latestDate || toLocalIsoDate(scopedTrip?.latest_divide_date) || '',
+        delta: r2(tripDelta),
+        events: tripEvents,
+      });
+    });
+
+    const tripSummaryEvents = tripSections.map((section) => ({
+      key: `trip-summary-range-${section.tripId}`,
+      type: 'trip_summary',
+      trip_id: Number(section.tripId),
+      group_id: null,
+      date: section.date,
+      details: `Trip: ${section.title}`,
+      payer: '-',
+      total: r2(Math.abs(section.delta)),
+      delta: r2(section.delta),
+      my_share_amount: 0,
+      expense_count: Number(section.events.length || 0),
+      participants: [],
+    }));
+
+    const filteredEvents = [...directEvents, ...tripSummaryEvents].sort((a, b) => {
+      const dateCmp = String(b?.date || '').localeCompare(String(a?.date || ''));
+      if (dateCmp !== 0) return dateCmp;
+      return String(a?.details || '').localeCompare(String(b?.details || ''));
+    });
+    const total = r2(filteredEvents.reduce((sum, event) => sum + n(event?.delta), 0));
+    return { filteredEvents, tripSections, total };
+  }
+
+  async function liveSplitDownloadFriendPdf(rowRef, fromDate = '', toDate = '') {
+    const refToken = String(rowRef ?? '');
+    let row = findVisibleRow(refToken);
+    if (!row) {
+      toast('Could not find this friend in live split.', 'warning');
+      return;
+    }
+    if (typeof _P === 'undefined' || !_P || typeof _P.init !== 'function') {
+      toast('PDF tools are not ready yet', 'warning');
+      return;
+    }
+    let events = buildRowEvents(row, false);
+    if (!events.length) {
+      toast('No live split entries found for this friend.', 'warning');
+      return;
+    }
+    await loadTripLedgersForSummaryEvents(events);
+    row = findVisibleRow(refToken) || row;
+    events = buildRowEvents(row, false);
+    const bounds = getLiveSplitFriendPdfDateBounds(events);
+    const safeFrom = toLocalIsoDate(fromDate || bounds.min, bounds.min);
+    const safeTo = toLocalIsoDate(toDate || bounds.max, bounds.max);
+    if (safeFrom && safeTo && safeFrom > safeTo) {
+      toast('Start date must be before end date.', 'warning');
+      return;
+    }
+    const scoped = buildLiveSplitFriendPdfScopedData(row, events, safeFrom, safeTo);
+    const filteredEvents = scoped.filteredEvents || [];
+    if (!filteredEvents.length) {
+      toast('No entries found in this date range.', 'warning');
+      return;
+    }
+
+    const doc = _P.init(true);
+    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  ·  ${filteredEvents.length} entries`;
+    let y = _P.header(doc, `Live Split - ${row?.name || 'Friend'}`, subtitle);
+    y = _P.cards(doc, y, [
+      { label: 'Net Balance', value: _P.cur(scoped.total || 0), color: (scoped.total || 0) > 0 ? 'green' : (scoped.total || 0) < 0 ? 'red' : '' },
+      { label: 'Entries', value: String(filteredEvents.length), color: '' },
+      { label: 'Trips', value: String((scoped.tripSections || []).length), color: '' },
+      { label: 'Friend', value: String(row?.name || '-'), color: '' },
+    ]);
+    y = _P.section(doc, y, 'Live Split Entries');
+    y = _P.table(
+      doc,
+      y,
+      [['Date', 'Details', 'Type', 'Paid By', 'Amount']],
+      filteredEvents.map((event) => [
+        _P.dt(event?.date),
+        String(event?.details || '-'),
+        String(event?.type || '') === 'trip_summary' ? 'Trip' : 'Split',
+        String(event?.payer || '-'),
+        {
+          content: `${n(event?.delta) > 0.005 ? '+' : n(event?.delta) < -0.005 ? '-' : ''}${_P.cur(Math.abs(n(event?.delta || 0)))}`,
+          styles: {
+            textColor: n(event?.delta) > 0.005 ? [22, 163, 74] : n(event?.delta) < -0.005 ? [185, 55, 55] : [31, 41, 55],
+            fontStyle: 'bold',
+          },
+        },
+      ]),
+      { 0: { cellWidth: 28 }, 1: { cellWidth: 70 }, 2: { cellWidth: 20 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30, halign: 'right' } },
+      true
+    );
+
+    (scoped.tripSections || []).forEach((section) => {
+      y = _P.section(doc, y, `Trip Details - ${section.title}`);
+      y = _P.note(
+        doc,
+        y,
+        `Net in range: ${section.delta > 0.005 ? '+' : section.delta < -0.005 ? '-' : ''}${_P.cur(Math.abs(section.delta || 0))}`,
+        section.delta > 0.005 ? 'green' : section.delta < -0.005 ? 'red' : ''
+      );
+      y = _P.table(
+        doc,
+        y,
+        [['Date', 'Item', 'Paid By', 'Each Split', 'Amount']],
+        (section.events || []).map((event) => [
+          _P.dt(event?.date),
+          String(event?.details || '-'),
+          String(event?.payer || '-'),
+          (Array.isArray(event?.participants) ? event.participants : [])
+            .filter((participant) => String(participant?.name || '').trim())
+            .map((participant) => `${participant.name}: ${participant.paid ? 'paid' : 'owes'} ${_P.cur(participant.share || 0)}`)
+            .join('\n') || '-',
+          _P.cur(event?.total || 0),
+        ]),
+        { 0: { cellWidth: 24 }, 1: { cellWidth: 62 }, 2: { cellWidth: 30 }, 3: { cellWidth: 64 }, 4: { cellWidth: 24, halign: 'right' } },
+        true
+      );
+    });
+
+    _P.save(doc, `Live_Split_${row?.name || 'Friend'}_${safeFrom}_${safeTo}`);
+  }
+
+  function liveSplitApplyFriendPdfPreset(rowRef, preset = 'this_month') {
+    const refToken = String(rowRef ?? '');
+    const fromInput = document.getElementById(`liveSplitPdfFrom_${refToken}`);
+    const toInput = document.getElementById(`liveSplitPdfTo_${refToken}`);
+    const minDate = fromInput?.min || fromInput?.value || todayLocalIso();
+    const maxDate = toInput?.max || toInput?.value || todayLocalIso();
+    const range = liveSplitFriendPdfPresetRange(preset, minDate, maxDate);
+    if (fromInput) fromInput.value = range.from;
+    if (toInput) toInput.value = range.to;
+    const presetNodes = document.querySelectorAll(`[data-live-split-pdf-preset-for="${refToken}"]`);
+    presetNodes.forEach((node) => {
+      const isActive = String(node?.getAttribute('data-preset') || '') === String(preset);
+      node.style.background = isActive ? 'var(--green-l2)' : '#fff';
+      node.style.borderColor = isActive ? 'var(--green)' : 'var(--border)';
+      node.style.color = isActive ? 'var(--green)' : 'var(--t2)';
+    });
+  }
+
+  function liveSplitSetFriendPdfCustom(rowRef) {
+    const refToken = String(rowRef ?? '');
+    const presetNodes = document.querySelectorAll(`[data-live-split-pdf-preset-for="${refToken}"]`);
+    presetNodes.forEach((node) => {
+      node.style.background = '#fff';
+      node.style.borderColor = 'var(--border)';
+      node.style.color = 'var(--t2)';
+    });
+  }
+
   function buildSettlementParticipantsForOwnGroup(splits, total, payer, selfPayer) {
     const payerKey = textKey(payer);
     const ownerAmount = r2(splits.reduce((sum, split) => sum + n(split?.share_amount), 0)) || r2(total);
@@ -1803,7 +2060,7 @@
     }));
   }
 
-  function buildRowEvents(row) {
+  function buildRowEvents(row, collapseTrips = true) {
     const rowName = String(row?.name || '').trim();
     if (!rowName) return [];
     const rowKey = rowName.toLowerCase();
@@ -1973,6 +2230,9 @@
       }
     });
 
+    if (!collapseTrips) {
+      return [...events].sort((a, b) => String(b?.date || '').localeCompare(String(a?.date || '')));
+    }
     const directEvents = events.filter((event) => !(Number(event?.trip_id || 0) > 0));
     const tripBuckets = new Map();
     events.filter((event) => Number(event?.trip_id || 0) > 0).forEach((event) => {
@@ -2607,15 +2867,6 @@
     let friendActivities = [];
     const rowRefToken = encodeURIComponent(String(row?.key || refToken || rowFriendId || ''));
     let events = buildRowEvents(row);
-    const loadTripLedgersForRowEvents = async (items = []) => {
-      const tripIds = [...new Set(
-        (items || [])
-          .filter((event) => String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0)
-          .map((event) => Number(event.trip_id))
-      )];
-      if (!tripIds.length) return;
-      await Promise.all(tripIds.map((tripId) => fetchTripLedger(tripId, true).catch(() => null)));
-    };
     if (!events.length) {
       try {
         const sharedData = await api(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
@@ -2632,9 +2883,10 @@
         // keep existing state and show current details fallback
       }
     }
-    await loadTripLedgersForRowEvents(events);
+    await loadTripLedgersForSummaryEvents(events);
     events = buildRowEvents(row);
     const computedRowAmount = r2(events.reduce((sum, event) => sum + n(event?.delta), 0));
+    const dateBounds = getLiveSplitFriendPdfDateBounds(events);
     if (rowFriendId > 0) {
       try {
         const activityData = await api(`/api/live-split/friends/${rowFriendId}/activity`);
@@ -2650,9 +2902,21 @@
       <div class="live-split-modal-shell" style="display:grid;gap:10px">
         <div class="live-split-modal-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
           <div style="font-size:13px;color:var(--t2)">Current balance: <b style="color:${computedRowAmount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(computedRowAmount)}</b></div>
-          <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="${rowFriendId > 0 ? `liveSplitOpenCreateForFriend(${rowFriendId})` : 'liveSplitOpenCreate()'}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
-          </button>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="this_month" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'this_month')">This month</button>
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="last_30_days" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'last_30_days')">Last 30 days</button>
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="all_time" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'all_time')">All time</button>
+            </div>
+            <input id="liveSplitPdfFrom_${rowRefToken}" type="date" value="${escHtml(dateBounds.min)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
+            <input id="liveSplitPdfTo_${rowRefToken}" type="date" value="${escHtml(dateBounds.max)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
+            <button class="live-split-icon-btn soft" title="Download PDF" aria-label="Download PDF" onclick="liveSplitDownloadFriendPdf('${rowRefToken}', document.getElementById('liveSplitPdfFrom_${rowRefToken}')?.value || '', document.getElementById('liveSplitPdfTo_${rowRefToken}')?.value || '')">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v13H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 15h8M8 18h5"/></svg>
+            </button>
+            <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="${rowFriendId > 0 ? `liveSplitOpenCreateForFriend(${rowFriendId})` : 'liveSplitOpenCreate()'}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
+            </button>
+          </div>
         </div>
         <div>
           ${events.length ? grouped.map(([month, monthData]) => `
@@ -6536,6 +6800,9 @@
   window.liveSplitOpenTripEvent = openTripEventDetails;
   window.liveSplitToggleTripSplitView = toggleTripSplitView;
   window.liveSplitDownloadTripPdf = liveSplitDownloadTripPdf;
+  window.liveSplitDownloadFriendPdf = liveSplitDownloadFriendPdf;
+  window.liveSplitApplyFriendPdfPreset = liveSplitApplyFriendPdfPreset;
+  window.liveSplitSetFriendPdfCustom = liveSplitSetFriendPdfCustom;
   window.liveSplitUseTrip = openCreateFromTrip;
   window.liveSplitOpenVoiceFromTrip = openVoiceSplitFromTrip;
   window.liveSplitToggleTripStatus = updateLiveSplitTripStatus;

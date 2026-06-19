@@ -10039,6 +10039,11 @@ router.put('/banks/:id/default', (req, res) => {
     res.json({ success: true });
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
+router.post('/banks/transfer', (req, res) => {
+  Promise.resolve(getOpsDb().transferBetweenBankAccounts(req.session.userId, req.body)).then((result) => {
+    res.json({ success: true, ...result });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
 
 // ─── DEFAULT PAYMENTS ─────────────────────────────────────────
 router.get('/planner/defaults', (req, res) => {

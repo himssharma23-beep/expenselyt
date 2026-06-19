@@ -28,6 +28,20 @@ const _P = (() => {
     return cleanText(value);
   }
 
+  function cleanTableCell(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const content = cleanCellValue(
+        Object.prototype.hasOwnProperty.call(value, 'content') ? value.content : ''
+      );
+      const next = { content };
+      if (value.styles && typeof value.styles === 'object') next.styles = { ...value.styles };
+      if (value.rowSpan) next.rowSpan = value.rowSpan;
+      if (value.colSpan) next.colSpan = value.colSpan;
+      return next;
+    }
+    return cleanCellValue(value);
+  }
+
   function init(landscape) {
     const { jsPDF } = window.jspdf;
     return new jsPDF({ orientation: landscape ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
@@ -70,7 +84,7 @@ const _P = (() => {
 
   function table(doc, y, head, body, colStyles, landscape) {
     const safeHead = (head || []).map((row) => (row || []).map(cleanCellValue));
-    const safeBody = (body || []).map((row) => (row || []).map(cleanCellValue));
+    const safeBody = (body || []).map((row) => (row || []).map(cleanTableCell));
     doc.autoTable({
       startY: y, head: safeHead, body: safeBody,
       theme: 'grid',
@@ -123,8 +137,15 @@ const _P = (() => {
     return y + 6;
   }
 
-  function note(doc, y, text) {
-    doc.setFontSize(7.5); doc.setFont('helvetica','normal'); doc.setTextColor(...T2);
+  function note(doc, y, text, color) {
+    const palette = color === 'green'
+      ? [22, 163, 74]
+      : color === 'red'
+        ? [185, 55, 55]
+        : color === 'amber'
+          ? [180, 120, 10]
+          : T2;
+    doc.setFontSize(7.5); doc.setFont('helvetica','normal'); doc.setTextColor(...palette);
     doc.text(cleanText(text), 14, y);
     doc.setTextColor(0,0,0);
     return y + 5;
