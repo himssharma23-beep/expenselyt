@@ -774,13 +774,18 @@ async function getEmiDuesForMonth(userId, month) {
 
 async function getPreviewDataForMonth(userId, month, billingDb = null) {
   const [yr, mo] = month.split('-').map(Number);
-  const [defaults, recurringEntries, trackerItems, emiAll, accounts, cardsR] = await Promise.all([
+  const prevMonthDate = new Date(yr, mo - 2, 1);
+  const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+  const [defaults, recurringEntries, trackerItems, emiAll, accounts, cardsR, prevMonthlyPayments, prevEmiAll] = await Promise.all([
     pgOpsDb.getDefaultPayments(userId),
     pgOpsDb.getRecurringEntries(userId),
     pgOpsDb.getDailyTrackerPlannerItems(userId, month, { includeAutoAddToExpense: true }),
     getEmiDuesForMonth(userId, month),
     pgOpsDb.getBankAccounts(userId),
     query('SELECT * FROM credit_cards WHERE user_id = $1', [userId]),
+    pgOpsDb.getMonthlyPayments(userId, prevMonth),
+    getEmiDuesForMonth(userId, prevMonth),
   ]);
 
   const projectedDefaults = defaults.filter((row) => row.is_active).map((dp) => {
@@ -835,12 +840,69 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
     is_projected: 1,
   }));
 
+  const carryForwardPayments = prevMonthlyPayments
+    .filter((item) => item.status !== 'paid')
+    .map((item) => {
+      const remaining = Math.round((num(item.amount) - num(item.paid_amount)) * 100) / 100;
+      if (remaining <= 0) return null;
+      return {
+        ...item,
+        amount: remaining,
+        original_amount: num(item.amount),
+        paid_amount: 0,
+        status: 'pending',
+        month,
+        is_carry_forward: 1,
+        carry_forward_from: prevMonth,
+      };
+    })
+    .filter(Boolean);
+
   const emiDues = emiAll.filter((item) =>
     (item.emi_status === 'active' || item.emi_status === 'pending') &&
     num(item.paid_amount) < num(item.emi_amount) * 0.999
   );
 
+  const carryForwardEmiDues = prevEmiAll
+    .filter((item) =>
+      (item.emi_status === 'active' || item.emi_status === 'pending') &&
+      num(item.paid_amount) < num(item.emi_amount) * 0.999
+    )
+    .map((item) => {
+      const remaining = Math.round((num(item.emi_amount) - num(item.paid_amount)) * 100) / 100;
+      if (remaining <= 0) return null;
+      return {
+        ...item,
+        emi_amount: remaining,
+        original_emi_amount: num(item.emi_amount),
+        paid_amount: 0,
+        status: 'pending',
+        is_carry_forward: 1,
+        carry_forward_from: prevMonth,
+      };
+    })
+    .filter(Boolean);
+
   const projectedCcDues = [];
+  const carryForwardCcDues = [];
+
+  if (billingDb) {
+    const prevCcCycles = await billingDb.getCcDuesForMonth(userId, prevMonth);
+    for (const cycle of prevCcCycles || []) {
+      const remaining = Math.round((num(cycle.net_payable) - num(cycle.paid_amount)) * 100) / 100;
+      if (remaining <= 0 || ['paid', 'closed'].includes(cycle.status)) continue;
+      carryForwardCcDues.push({
+        ...cycle,
+        net_payable: remaining,
+        original_net_payable: num(cycle.net_payable),
+        paid_amount: 0,
+        status: 'open',
+        is_carry_forward: 1,
+        carry_forward_from: prevMonth,
+      });
+    }
+  }
+
   for (const card of cardsR.rows) {
     const actualDueCycle = billingDb ? await billingDb.getCcDuesForMonth(userId, month, card.id) : [];
     if (actualDueCycle[0]) {
@@ -905,6 +967,10 @@ async function getPreviewDataForMonth(userId, month, billingDb = null) {
     projectedDefaults: [...projectedDefaults, ...projectedRecurring, ...projectedTrackerItems],
     emiDues,
     projectedCcDues,
+    carryForwardMonth: prevMonth,
+    carryForwardPayments,
+    carryForwardEmiDues,
+    carryForwardCcDues,
   };
 }
 

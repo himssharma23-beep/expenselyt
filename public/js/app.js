@@ -15023,7 +15023,16 @@ async function renderPlanner() {
     }
     const pd = _previewDataCache || {};
     _bankAccounts = pd.accounts || [];
-    bodyHtml = renderPlannerPreview(pd.projectedDefaults || [], _bankAccounts, pd.projectedCcDues || [], pd.emiDues || []);
+    bodyHtml = renderPlannerPreview(
+      pd.projectedDefaults || [],
+      _bankAccounts,
+      pd.projectedCcDues || [],
+      pd.emiDues || [],
+      pd.carryForwardPayments || [],
+      pd.carryForwardCcDues || [],
+      pd.carryForwardEmiDues || [],
+      pd.carryForwardMonth || ''
+    );
   } else {
     const [data, banksData] = await Promise.all([
       api(`/api/planner/monthly?month=${_plannerMonth}`),
@@ -15062,7 +15071,12 @@ function applyPreviewBalance(bankId, baseBalance) {
     balance: _previewBankBalances[a.id] !== undefined ? _previewBankBalances[a.id] : a.balance,
   }));
   const summaryEl = document.getElementById('previewSummarySection');
-  if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(accounts, pd.projectedDefaults || [], pd.projectedCcDues || [], pd.emiDues || []);
+  if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(
+    accounts,
+    [...(pd.carryForwardPayments || []), ...(pd.projectedDefaults || [])],
+    [...(pd.carryForwardCcDues || []), ...(pd.projectedCcDues || [])],
+    [...(pd.carryForwardEmiDues || []), ...(pd.emiDues || [])]
+  );
 }
 
 // â”€â”€ Reset a bank's simulated balance back to actual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -15074,7 +15088,18 @@ function resetPreviewBalance(bankId) {
     balance: _previewBankBalances[a.id] !== undefined ? _previewBankBalances[a.id] : a.balance,
   }));
   const summaryEl = document.getElementById('previewSummarySection');
-  if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(accounts, pd.projectedDefaults || [], pd.projectedCcDues || [], pd.emiDues || []);
+  if (summaryEl) summaryEl.innerHTML = _renderPreviewSummary(
+    accounts,
+    [...(pd.carryForwardPayments || []), ...(pd.projectedDefaults || [])],
+    [...(pd.carryForwardCcDues || []), ...(pd.projectedCcDues || [])],
+    [...(pd.carryForwardEmiDues || []), ...(pd.emiDues || [])]
+  );
+}
+
+function plannerMonthLabel(monthStr) {
+  if (!/^\d{4}-\d{2}$/.test(monthStr || '')) return '';
+  const [yr, mo] = monthStr.split('-').map(Number);
+  return new Date(yr, mo - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 }
 
 function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
@@ -15138,26 +15163,34 @@ function _renderPreviewSummary(accounts, defaults, ccDues, emiDues) {
     </div>` : ''}`;
 }
 
-function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
+function renderPlannerPreview(defaults, accounts, ccDues, emiDues, carryForwardPayments = [], carryForwardCcDues = [], carryForwardEmiDues = [], carryForwardMonth = '') {
   // Apply any in-memory balance overrides
   const accs = accounts.map(a => ({
     ...a,
     balance: _previewBankBalances[a.id] !== undefined ? _previewBankBalances[a.id] : a.balance,
   }));
 
-  const summaryHtml = _renderPreviewSummary(accs, defaults, ccDues, emiDues);
+  const allPayments = [...carryForwardPayments, ...defaults];
+  const allCcDues = [...carryForwardCcDues, ...ccDues];
+  const allEmiDues = [...carryForwardEmiDues, ...emiDues];
+  const carryForwardLabel = plannerMonthLabel(carryForwardMonth);
+
+  const summaryHtml = _renderPreviewSummary(accs, allPayments, allCcDues, allEmiDues);
 
   // Payment list rows (read-only, no action buttons)
   const previewPayRow = (p) => {
     const bankAcc = p.bank_account_id ? accounts.find(a => a.id == p.bank_account_id) : null;
     const bankLabel = bankAcc ? `<span style="background:var(--bg2);color:var(--t2);font-size:10px;padding:1px 6px;border-radius:99px;margin-left:5px">${escHtml(bankAcc.bank_name)}</span>` : '';
+    const carryForwardTag = p.is_carry_forward
+      ? `<span style="background:rgba(245,158,11,0.12);color:#b45309;font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">Carry forward${carryForwardLabel ? ` · ${escHtml(carryForwardLabel)}` : ''}</span>`
+      : '';
     const sourceTag = p.daily_tracker_id
       ? '<span style="font-size:10px;color:var(--t3);font-weight:400">daily tracker</span>'
       : '<span style="font-size:10px;color:var(--t3);font-weight:400">recurring</span>';
     return `<div class="pay-row">
       <div class="pay-row-check" style="background:var(--bg2);cursor:default"></div>
       <div style="flex:1;min-width:0">
-        <div class="pay-row-name">${escHtml(p.name)} ${sourceTag}${bankLabel}</div>
+        <div class="pay-row-name">${carryForwardTag}${escHtml(p.name)} ${sourceTag}${bankLabel}</div>
         <div class="pay-row-sub">Due ${fmtDate(p.due_date)}</div>
       </div>
       <div class="pay-row-amt">${fmtCur(p.amount)}</div>
@@ -15169,6 +15202,7 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
     <div style="flex:1;min-width:0">
       <div class="pay-row-name">
         <span style="background:var(--blue-l);color:var(--blue);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">CC</span>
+        ${c.is_carry_forward ? `<span style="background:rgba(245,158,11,0.12);color:#b45309;font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">Carry forward${carryForwardLabel ? ` · ${escHtml(carryForwardLabel)}` : ''}</span>` : ''}
         ${escHtml(c.card_name)}
         <span style="font-size:11px;color:var(--t3);font-weight:400">${escHtml(c.bank_name)} **${escHtml(String(c.last4))}</span>
         ${c.is_projected ? '<span style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;padding:1px 5px;border-radius:4px;margin-left:4px">estimated</span>' : ''}
@@ -15183,6 +15217,7 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
     <div style="flex:1;min-width:0">
       <div class="pay-row-name">
         <span style="background:var(--green)22;color:var(--green);font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">EMI</span>
+        ${i.is_carry_forward ? `<span style="background:rgba(245,158,11,0.12);color:#b45309;font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;margin-right:6px">Carry forward${carryForwardLabel ? ` · ${escHtml(carryForwardLabel)}` : ''}</span>` : ''}
         ${escHtml(i.emi_name)}
         <span style="font-size:11px;color:var(--t3);font-weight:400">Installment #${i.installment_no}</span>
       </div>
@@ -15192,9 +15227,9 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
   </div>`;
 
   const allItems = [
-    ...ccDues.map(c  => ({ _type: 'cc',  _data: c, due_date: c.due_date })),
-    ...(emiDues.filter(i => i.paid_amount < i.emi_amount * 0.999)).map(i => ({ _type: 'emi', _data: i, due_date: i.due_date })),
-    ...defaults.map(p => ({ _type: 'pay', _data: p, due_date: p.due_date || '' })),
+    ...allCcDues.map(c  => ({ _type: 'cc',  _data: c, due_date: c.due_date })),
+    ...(allEmiDues.filter(i => i.paid_amount < i.emi_amount * 0.999)).map(i => ({ _type: 'emi', _data: i, due_date: i.due_date })),
+    ...allPayments.map(p => ({ _type: 'pay', _data: p, due_date: p.due_date || '' })),
   ].sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
 
   const rows = allItems.length
@@ -15211,6 +15246,7 @@ function renderPlannerPreview(defaults, accounts, ccDues, emiDues) {
     <div class="table-wrap">${rows}</div>
     <div style="font-size:12px;color:var(--t3);margin-top:12px;padding:0 4px">
       CC amounts are estimated from your latest billing cycle. Actual amounts may vary.
+      ${carryForwardPayments.length || carryForwardCcDues.length || carryForwardEmiDues.length ? `Unpaid dues from ${escHtml(carryForwardLabel || carryForwardMonth)} are carried forward into this preview. ` : ''}
       This view does not save or modify any data.
     </div>`;
 }
@@ -15227,6 +15263,10 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
   ccDues   = ccDues   || [];
   skipped  = skipped  || [];
   emiDues  = emiDues  || [];
+  const activeMonth = _plannerMonth || todayStr().slice(0, 7);
+  const [activeYear, activeMonthNum] = activeMonth.split('-').map(Number);
+  const nextMonthDate = new Date(activeYear, activeMonthNum, 1);
+  const nextMonthLabel = nextMonthDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
   // Totals â€” include CC dues + EMI dues in remaining calculation
   const ccUnpaid    = ccDues.filter(c => c.status !== 'paid');
@@ -15241,8 +15281,15 @@ function renderPlannerMonthly(payments, accounts, ccDues, skipped, emiDues) {
   const spendable   = Math.round(accounts.reduce((s, a) => s + (a.balance - a.min_balance), 0) * 100) / 100;
   const afterPay    = Math.round((spendable - remaining) * 100) / 100;
   const surplus     = afterPay >= 0;
+  const carryForwardNote = remaining > 0
+    ? `<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);color:#b45309;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:700;margin:0 0 12px 0">
+        <span>Will carry into ${escHtml(nextMonthLabel)} if unpaid</span>
+        <span style="font-family:var(--mono)">${fmtCur(remaining)}</span>
+      </div>`
+    : '';
 
   const summaryBar = `
+    ${carryForwardNote}
     <div class="planner-summary">
       <div class="pl-stat"><div class="lbl">Total Due This Month</div><div class="val">${fmtCur(totalDue)}</div></div>
       <div class="pl-stat"><div class="lbl">Already Paid</div><div class="val green">${fmtCur(totalPaid)}</div></div>
