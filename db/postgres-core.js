@@ -7823,6 +7823,7 @@ async function getSchoolKidDetail(userId, kidId) {
 
 module.exports = {
   computeLiveSplitDashboardSummary,
+  adjustBankBalance,
   getExpenses,
   getExpenseCategories,
   getExpenseCategoryLibrary,

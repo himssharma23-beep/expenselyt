@@ -4901,6 +4901,7 @@ _videoAdminPanelState = {
   preparingMessage: '',
   preparingPercent: 0,
   seasonAccessSavingKey: '',
+  deletingEpisodeId: 0,
   prepareStatusByKey: {},
   prepareStatusLoading: false,
   draftMode: '',
@@ -5170,6 +5171,7 @@ function videoAdminGroupPublishedSeasons(item) {
         season_label: seasonLabel,
         source_item_id: Number(item?.id || 0),
         file_ids: [],
+        files: [],
         poster_stream_url: String(poster?.poster_stream_url || '').trim(),
         is_paid: !!poster?.is_paid,
       });
@@ -5192,18 +5194,38 @@ function videoAdminGroupPublishedSeasons(item) {
         season_label: seasonLabel,
         source_item_id: Number(item?.id || 0),
         file_ids: [],
+        files: [],
         poster_stream_url: '',
         is_paid: false,
       });
     }
     groups.get(seasonKey).file_ids.push(Number(file?.id || 0));
+    groups.get(seasonKey).files.push({
+      id: Number(file?.id || 0),
+      filename: String(file?.filename || '').trim(),
+      episode_label: String(file?.episode_label || '').trim(),
+      episode_number: Number(file?.episode_number || 0) || null,
+      size_bytes: Number(file?.size_bytes || 0),
+      relative_path: String(file?.relative_path || '').trim(),
+    });
     if (!groups.get(seasonKey).poster_stream_url) {
       const match = (Array.isArray(item?.season_posters) ? item.season_posters : []).find((poster) => String(poster?.season_key || '') === seasonKey);
       if (match?.poster_stream_url) groups.get(seasonKey).poster_stream_url = String(match.poster_stream_url || '').trim();
       if (match?.is_paid) groups.get(seasonKey).is_paid = true;
     }
   });
-  return [...groups.values()].sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      files: (Array.isArray(group.files) ? group.files : [])
+        .slice()
+        .sort((a, b) => {
+          const episodeDiff = Number(a?.episode_number || 0) - Number(b?.episode_number || 0);
+          if (episodeDiff) return episodeDiff;
+          return String(a?.filename || '').localeCompare(String(b?.filename || ''), undefined, { numeric: true, sensitivity: 'base' });
+        }),
+    }))
+    .sort((a, b) => Number(a.season_number || 0) - Number(b.season_number || 0));
 }
 
 function videoAdminBuildSeriesDraftSummary(items = []) {
@@ -5335,6 +5357,17 @@ function videoAdminPublishedGroups(items = []) {
       const existing = group.seasons.find((entry) => String(entry?.season_key || '') === String(season?.season_key || ''));
       if (existing) {
         existing.file_ids = [...new Set([...(existing.file_ids || []), ...(season.file_ids || [])])];
+        existing.files = [
+          ...(Array.isArray(existing.files) ? existing.files : []),
+          ...(Array.isArray(season.files) ? season.files : []),
+        ]
+          .filter((file) => Number(file?.id || 0) > 0)
+          .sort((a, b) => {
+            const episodeDiff = Number(a?.episode_number || 0) - Number(b?.episode_number || 0);
+            if (episodeDiff) return episodeDiff;
+            return String(a?.filename || '').localeCompare(String(b?.filename || ''), undefined, { numeric: true, sensitivity: 'base' });
+          })
+          .filter((file, index, list) => index === list.findIndex((entry) => Number(entry?.id || 0) === Number(file?.id || 0)));
         if (!existing.poster_stream_url && season?.poster_stream_url) existing.poster_stream_url = String(season.poster_stream_url || '').trim();
         if (!existing.source_item_id && season?.source_item_id) existing.source_item_id = Number(season.source_item_id || 0);
         if (season?.is_paid) existing.is_paid = true;
@@ -5343,6 +5376,7 @@ function videoAdminPublishedGroups(items = []) {
           ...season,
           source_item_id: Number(season?.source_item_id || 0),
           file_ids: [...new Set(Array.isArray(season?.file_ids) ? season.file_ids : [])],
+          files: (Array.isArray(season?.files) ? season.files : []).slice(),
         });
       }
     });
@@ -5580,6 +5614,7 @@ function renderVideoAdminPublishedCard(item) {
           const seasonAccessKey = `season-access:${itemKey}:${String(season?.season_key || '')}`;
           const preparingSeason = String(_videoAdminPanelState.preparingKey || '') === seasonPrepareKey;
           const savingSeasonAccess = String(_videoAdminPanelState.seasonAccessSavingKey || '') === seasonAccessKey;
+          const seasonFiles = Array.isArray(season?.files) ? season.files : [];
           const seasonPrepareStatus = _videoAdminPanelState.prepareStatusByKey?.[seasonPrepareKey] || null;
           const seasonCanStopPreparing = Number(seasonPrepareStatus?.active_count || 0) > 0 || Number(seasonPrepareStatus?.queued_count || 0) > 0;
           const seasonHasEpisodes = Array.isArray(season?.file_ids) && season.file_ids.length > 0;
@@ -5604,6 +5639,20 @@ function renderVideoAdminPublishedCard(item) {
               ${seasonCanStopPreparing ? `<button class="btn btn-s btn-sm danger" type="button" onclick='window.videoAdminCancelPrepareItems([], ${JSON.stringify(season.file_ids)}, ${JSON.stringify(seasonPrepareKey)}, ${JSON.stringify(String(season?.season_label || 'season'))})'>Stop Season</button>` : ''}
             </div>
           </div>
+          ${seasonFiles.length ? `<div class="video-admin-season-episode-list" style="display:grid;gap:8px;margin:10px 0 2px 52px">
+            ${seasonFiles.map((file) => {
+              const deletingEpisode = Number(_videoAdminPanelState.deletingEpisodeId || 0) === Number(file?.id || 0);
+              const episodeTitle = String(file?.episode_label || '').trim() || prettyVideoTitle(String(file?.filename || 'Episode'));
+              return `
+                <div class="video-admin-season-episode-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid rgba(20,90,60,0.14);border-radius:14px;background:#fff">
+                  <div class="video-admin-season-episode-copy" style="min-width:0">
+                    <div class="video-admin-season-episode-title" style="font-size:13px;font-weight:700;color:var(--t1)">${escHtml(episodeTitle)}</div>
+                    <div class="video-admin-section-sub">${escHtml(Number(file?.episode_number || 0) > 0 ? `Episode ${Number(file.episode_number)}` : String(file?.filename || '').trim())}${file?.size_bytes ? ` • ${escHtml(videoLibraryFormatBytes(file.size_bytes))}` : ''}</div>
+                  </div>
+                  <button class="btn btn-s btn-sm danger" type="button" onclick="window.videoAdminDeleteEpisode(${Number(file?.id || 0)}, '${String(episodeTitle).replace(/'/g, "\\'")}')" ${deletingEpisode || preparingSeason || savingSeasonAccess ? 'disabled' : ''}>${deletingEpisode ? 'Deleting...' : 'Delete Episode'}</button>
+                </div>`;
+            }).join('')}
+          </div>` : ''}
           ${preparingSeason ? `
           <div class="video-admin-publish-progress">
             <div class="video-admin-publish-progress-copy">
@@ -6187,6 +6236,35 @@ async function videoAdminDeletePublished(itemId) {
   await loadVideosPage();
   renderVideoAdminPanel();
   toast('Published entry removed', 'success');
+}
+
+async function videoAdminDeleteEpisode(fileId, label = '') {
+  const normalizedFileId = Number(fileId || 0);
+  if (!(normalizedFileId > 0)) {
+    toast('Episode is invalid.', 'error');
+    return;
+  }
+  const episodeLabel = String(label || '').trim() || 'this episode';
+  if (!confirm(`Delete ${episodeLabel} from the published season?\n\nThis will also delete the real video file from the server.`)) return;
+  try {
+    _videoAdminPanelState.deletingEpisodeId = normalizedFileId;
+    renderVideoAdminPanel();
+    const result = await api('/api/admin/videos/catalog/file-delete', {
+      method: 'POST',
+      body: { file_id: normalizedFileId },
+    });
+    if (!result?.success) {
+      toast(result?.error || 'Could not delete the episode.', 'error');
+      return;
+    }
+    await videoAdminRefreshPublished(false);
+    await loadVideosPage();
+    renderVideoAdminPanel();
+    toast('Episode deleted from server', 'success');
+  } finally {
+    _videoAdminPanelState.deletingEpisodeId = 0;
+    renderVideoAdminPanel();
+  }
 }
 
 async function videoAdminClearPublished() {
@@ -6833,6 +6911,7 @@ window.videoAdminPrepareItems = videoAdminPrepareItems;
 window.videoAdminCancelPrepareItems = videoAdminCancelPrepareItems;
 window.videoAdminDeleteDraft = videoAdminDeleteDraft;
 window.videoAdminDeletePublished = videoAdminDeletePublished;
+window.videoAdminDeleteEpisode = videoAdminDeleteEpisode;
 window.videoAdminClearPublished = videoAdminClearPublished;
 window.videoAdminRefreshPublished = videoAdminRefreshPublished;
 window.videoAdminUploadPoster = videoAdminUploadPoster;

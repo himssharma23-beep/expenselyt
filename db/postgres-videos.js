@@ -1682,6 +1682,124 @@ async function deleteVideoCatalogItems(itemIds = []) {
   });
 }
 
+async function deleteVideoCatalogFile(fileId, options = {}) {
+  await ensureVideoTables();
+  const normalizedFileId = Number(fileId || 0);
+  if (!(normalizedFileId > 0)) {
+    const err = new Error('Episode file is invalid');
+    err.statusCode = 400;
+    throw err;
+  }
+  const fileRows = await query(
+    `SELECT
+       f.id,
+       f.catalog_item_id,
+       f.relative_path,
+       f.filename,
+       f.file_exists,
+       i.source_root_path,
+       i.media_type,
+       i.season_count,
+       i.season_posters
+     FROM video_catalog_files f
+     JOIN video_catalog_items i ON i.id = f.catalog_item_id
+     WHERE f.id = $1
+     LIMIT 1`,
+    [normalizedFileId]
+  );
+  const current = fileRows.rows[0] || null;
+  if (!current) {
+    const err = new Error('Episode not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const deleteFromDisk = options?.delete_from_disk !== false;
+  let deletedFromDisk = false;
+  let fileMissingOnDisk = false;
+  if (deleteFromDisk) {
+    const resolvedRootPath = resolveVideoRootPathForRuntime(current.source_root_path);
+    const relativePath = String(current.relative_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (relativePath && !relativePath.includes('..')) {
+      const absolutePath = path.resolve(resolvedRootPath, relativePath);
+      if (!isPathInsideRoot(resolvedRootPath, absolutePath)) {
+        const err = new Error('Episode path is outside the configured video library');
+        err.statusCode = 400;
+        throw err;
+      }
+      try {
+        const stats = await fs.promises.stat(absolutePath);
+        if (stats.isFile()) {
+          await fs.promises.unlink(absolutePath);
+          deletedFromDisk = true;
+        }
+      } catch (error) {
+        if (error?.code === 'ENOENT') fileMissingOnDisk = true;
+        else throw error;
+      }
+    }
+  }
+
+  return withTransaction(async (client) => {
+    await client.query(`DELETE FROM video_catalog_files WHERE id = $1`, [normalizedFileId]);
+    const remainingRows = await client.query(
+      `SELECT relative_path, file_exists, season_label, season_number, is_primary
+         FROM video_catalog_files
+        WHERE catalog_item_id = $1
+        ORDER BY is_primary DESC, relative_path ASC`,
+      [Number(current.catalog_item_id || 0)]
+    );
+    const remaining = remainingRows.rows || [];
+    const fileCount = remaining.length;
+    const primaryVideoRelativePath = fileCount ? String(remaining[0].relative_path || '').trim() : '';
+    const mediaType = String(current.media_type || '').trim().toLowerCase();
+    const posterSeasons = normalizeCatalogSeasonPosterInput(safeJsonArray(current.season_posters));
+    const seasonKeys = new Set(
+      remaining
+        .map((file) => {
+          const seasonNumber = Number(file?.season_number || 0) || 1;
+          const seasonLabel = String(file?.season_label || '').trim() || `Season ${seasonNumber}`;
+          return `${seasonNumber}:${seasonLabel.toLowerCase()}`;
+        })
+        .filter(Boolean)
+    );
+    posterSeasons.forEach((season) => {
+      const seasonNumber = Number(season?.season_number || 0) || 1;
+      const seasonLabel = String(season?.season_label || '').trim() || `Season ${seasonNumber}`;
+      seasonKeys.add(`${seasonNumber}:${seasonLabel.toLowerCase()}`);
+    });
+    const seasonCount = mediaType === 'series'
+      ? Math.max(seasonKeys.size, Number(current.season_count || 0) || 0)
+      : null;
+    await client.query(
+      `UPDATE video_catalog_items
+          SET primary_video_relative_path = $2,
+              file_count = $3,
+              episode_count = $4,
+              season_count = $5,
+              file_exists = $6,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [
+        Number(current.catalog_item_id || 0),
+        primaryVideoRelativePath,
+        fileCount,
+        mediaType === 'series' ? fileCount : Math.max(fileCount, 0),
+        seasonCount,
+        remaining.some((file) => !!file?.file_exists),
+      ]
+    );
+    return {
+      deleted_file_id: normalizedFileId,
+      catalog_item_id: Number(current.catalog_item_id || 0),
+      deleted_from_disk: deletedFromDisk,
+      file_missing_on_disk: fileMissingOnDisk,
+      file_count: fileCount,
+      filename: String(current.filename || '').trim(),
+    };
+  });
+}
+
 async function saveVideoCatalogAiMetadata(itemId, metadata = {}, userId = null) {
   await ensureVideoTables();
   const normalized = {
@@ -2348,6 +2466,7 @@ module.exports = {
   listVideoCatalogItems,
   clearVideoCatalog,
   deleteVideoCatalogItems,
+  deleteVideoCatalogFile,
   saveVideoCatalogAiMetadata,
   saveVideoCatalogPosterUpload,
   updateVideoCatalogItem,

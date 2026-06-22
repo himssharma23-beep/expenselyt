@@ -4986,6 +4986,25 @@ router.post('/expenses', async (req, res) => {
   }
 });
 
+router.post('/bank-accounts/adjust-balance', async (req, res) => {
+  try {
+    const { bank_account_id, amount, note } = req.body || {};
+    const bankAccountId = Number(bank_account_id || 0);
+    const delta = Number(amount || 0);
+    if (!(bankAccountId > 0)) return res.status(400).json({ error: 'Bank account is required' });
+    if (!Number.isFinite(delta) || delta === 0) return res.status(400).json({ error: 'Valid amount is required' });
+    await Promise.resolve(getCoreDb().adjustBankBalance(req.session.userId, bankAccountId, delta));
+    res.json({
+      success: true,
+      bank_account_id: bankAccountId,
+      amount: delta,
+      note: note ? String(note).trim() : '',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not update bank balance' });
+  }
+});
+
 router.get('/expenses/:id', async (req, res) => {
   try {
     const expense = await Promise.resolve(getCoreDb().getExpenseById(req.session.userId, req.params.id));
@@ -8518,6 +8537,21 @@ router.post('/admin/videos/catalog/delete', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not remove the selected folder' });
+  }
+});
+
+router.post('/admin/videos/catalog/file-delete', requireAdmin, async (req, res) => {
+  try {
+    const fileId = Number(req.body?.file_id || 0);
+    const result = await Promise.resolve(pgVideoDb.deleteVideoCatalogFile(fileId, { delete_from_disk: true }));
+    const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'published' }));
+    res.json({
+      success: true,
+      result,
+      items,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete the selected episode' });
   }
 });
 

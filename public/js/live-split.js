@@ -3603,13 +3603,13 @@
         ${settle.record_finance ? `
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="chip ${settle.finance_target === 'none' ? 'active' : ''}" onclick="liveSplitSettleField('finance_target','none')">None</button>
-            <button class="chip ${settle.finance_target === 'expense' ? 'active' : ''}" onclick="liveSplitSettleField('finance_target','expense')">Expense / Bank</button>
-            <button class="chip ${settle.finance_target === 'card' ? 'active' : ''}" onclick="liveSplitSettleField('finance_target','card')">Credit Card</button>
+            <button class="chip ${settle.finance_target === 'expense' ? 'active' : ''}" onclick="liveSplitSettleField('finance_target','expense')">Bank Account</button>
+            ${settle.direction === 'paid' ? `<button class="chip ${settle.finance_target === 'card' ? 'active' : ''}" onclick="liveSplitSettleField('finance_target','card')">Credit Card</button>` : ''}
           </div>
           ${settle.finance_target === 'expense' ? `
-            <label class="fl">Deduct From Bank (optional)
+            <label class="fl">${settle.direction === 'received' ? 'Add To Bank' : 'Deduct From Bank'} (optional)
               <select class="fi" onchange="liveSplitSettleField('bank_account_id', this.value)">
-                <option value="">Do not deduct</option>
+                <option value="">Do not update bank</option>
                 ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(settle.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join('')}
               </select>
             </label>
@@ -4054,7 +4054,7 @@
         });
       }
       if (settle.record_finance) {
-        if (settle.finance_target === 'card' && Number(settle.card_id || 0) > 0) {
+        if (settle.finance_target === 'card' && settle.direction === 'paid' && Number(settle.card_id || 0) > 0) {
           const cardId = Number(settle.card_id || 0);
           await api('/api/cc/txns', {
             method: 'POST',
@@ -4067,16 +4067,13 @@
               source: 'live_split_settlement',
             },
           });
-        } else if (settle.finance_target === 'expense') {
-          await api('/api/expenses', {
+        } else if (settle.finance_target === 'expense' && Number(settle.bank_account_id || 0) > 0) {
+          await api('/api/bank-accounts/adjust-balance', {
             method: 'POST',
             body: {
-              item_name: `Settlement - ${String(friend.name || 'Friend').trim()}`,
-              category: 'Settlement',
-              amount,
-              purchase_date: todayLocalIso(),
-              is_extra: false,
-              bank_account_id: settle.bank_account_id ? Number(settle.bank_account_id) : null,
+              bank_account_id: Number(settle.bank_account_id || 0),
+              amount: settle.direction === 'received' ? amount : -amount,
+              note: `Settlement - ${String(friend.name || 'Friend').trim()}`,
             },
           });
         }
@@ -7118,6 +7115,13 @@
       return;
     }
     if (field === 'record_finance') state.settle.record_finance = !!value;
+    else if (field === 'direction') {
+      state.settle.direction = value;
+      if (value !== 'paid' && state.settle.finance_target === 'card') state.settle.finance_target = 'expense';
+    }
+    else if (field === 'finance_target') {
+      state.settle.finance_target = value === 'card' && state.settle.direction !== 'paid' ? 'expense' : value;
+    }
     else if (field === 'bank_account_id' || field === 'card_id') state.settle[field] = value ? Number(value) : null;
     else if (field === 'card_discount_pct') state.settle.card_discount_pct = Number(value || 0);
     else state.settle[field] = value;
