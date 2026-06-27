@@ -114,7 +114,7 @@ async function createPostgresBackupFile() {
   const dbName = String(process.env.PGDATABASE || '').trim();
   if (!dbName) throw new Error('PGDATABASE is not configured.');
 
-  const fileName = `${dbName}-backup-${backupTimestamp()}.sql`;
+  const fileName = `${dbName}-backup-${backupTimestamp()}.backup`;
   const outputPath = path.join(DB_BACKUP_DIR, fileName);
   const pgDumpCommand = resolvePgDumpCommand();
   const args = [
@@ -122,6 +122,8 @@ async function createPostgresBackupFile() {
     '--port', String(process.env.PGPORT || '5432'),
     '--username', String(process.env.PGUSER || ''),
     '--dbname', dbName,
+    '--format=custom',
+    '--compress=6',
     '--clean',
     '--if-exists',
     '--no-owner',
