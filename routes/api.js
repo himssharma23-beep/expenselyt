@@ -1631,6 +1631,21 @@ function normalizePosterUrlCandidate(value) {
   return '';
 }
 
+function buildSchoolKidScanItemLabel(itemName = '', purchaseDate = '') {
+  const normalizedDate = String(purchaseDate || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthIndex = Number(normalizedDate.slice(5, 7)) - 1;
+    if (monthIndex >= 0 && monthIndex < monthNames.length) {
+      return `${monthNames[monthIndex]} fees`;
+    }
+  }
+  const cleanedName = String(itemName || '').trim();
+  if (!cleanedName) return 'School fees';
+  if (/receipt\s*\d+/i.test(cleanedName)) return 'School fees';
+  return cleanedName;
+}
+
 function withPromiseTimeout(promise, timeoutMs, message) {
   const maxMs = Math.max(1000, Number(timeoutMs || 0));
   return Promise.race([
@@ -3679,6 +3694,9 @@ async function parseReceiptDraftWithOpenAi(ocrText, imageBuffer = null, mimeType
     scanContext === 'trip_bill'
       ? 'This receipt is being turned into multiple Live Split trip rows. Be especially strict about using the rightmost final line total and avoid guessing an old or unrelated receipt date.'
       : '',
+    scanContext === 'school_kid_import'
+      ? 'This image is a school fee or school payment history screenshot, not a supermarket receipt. Each visible payment card, receipt row, or fee tile should become one returned item. Extract the date and final fee amount from each visible school payment entry. Ignore app chrome like arrows, buttons, ONLINE PAYMENT labels, headers, avatars, and navigation bars. Prefer a month-based fee label in item_name such as "May fees", "June fees", or "October fees" based on the visible payment date. Do not use receipt numbers as the main item_name unless there is truly no visible date. If no month can be inferred, use a short neutral detail like "School fees". Set category to "Education" for these rows. If the image shows multiple school payment cards, return one item per card instead of one item per line of text.'
+      : '',
   ].join(' ');
 
   const content = [
@@ -4993,7 +5011,10 @@ router.post('/bank-accounts/adjust-balance', async (req, res) => {
     const delta = Number(amount || 0);
     if (!(bankAccountId > 0)) return res.status(400).json({ error: 'Bank account is required' });
     if (!Number.isFinite(delta) || delta === 0) return res.status(400).json({ error: 'Valid amount is required' });
-    await Promise.resolve(getCoreDb().adjustBankBalance(req.session.userId, bankAccountId, delta));
+    await Promise.resolve(getCoreDb().adjustBankBalance(req.session.userId, bankAccountId, delta, null, {
+      entry_type: delta > 0 ? 'fund_added' : 'fund_removed',
+      note: note ? String(note).trim() : '',
+    }));
     res.json({
       success: true,
       bank_account_id: bankAccountId,
@@ -7527,6 +7548,9 @@ router.post('/trips/:id/expenses', async (req, res) => {
       paid_by_name,
       split_mode,
       splits,
+      bank_account_id,
+      card_id,
+      card_discount_pct,
     } = req.body;
     if (!expense_type || !details) return res.status(400).json({ error: 'Expense type and detail are required' });
     const id = await Promise.resolve(getCoreDb().addTripExpense(req.session.userId, req.params.id, {
@@ -7544,6 +7568,9 @@ router.post('/trips/:id/expenses', async (req, res) => {
       paid_by_name,
       split_mode,
       splits,
+      bank_account_id,
+      card_id,
+      card_discount_pct,
     }));
     res.json({ success: true, id });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
@@ -7726,6 +7753,9 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
       paid_by_name,
       split_mode,
       splits,
+      bank_account_id,
+      card_id,
+      card_discount_pct,
     } = req.body;
     await Promise.resolve(getCoreDb().updateTripExpense(req.session.userId, req.params.eid, {
       expense_type,
@@ -7742,6 +7772,9 @@ router.put('/trips/:id/expenses/:eid', async (req, res) => {
       paid_by_name,
       split_mode,
       splits,
+      bank_account_id,
+      card_id,
+      card_discount_pct,
     }));
     res.json({ success: true });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
@@ -10044,6 +10077,11 @@ router.get('/banks', (req, res) => {
     res.json({ accounts });
   }).catch((err) => { res.status(500).json({ error: err.message }); });
 });
+router.get('/banks/:id/history', (req, res) => {
+  Promise.resolve(getOpsDb().getBankAccountHistory(req.session.userId, req.params.id, req.query.limit || 200)).then((history) => {
+    res.json({ history });
+  }).catch((err) => { res.status(err.statusCode || 500).json({ error: err.message }); });
+});
 router.post('/banks', (req, res) => {
   Promise.resolve(getOpsDb().addBankAccount(req.session.userId, req.body)).then((id) => {
     res.json({ success: true, id });
@@ -11863,6 +11901,7 @@ router.post('/recurring', (req, res) => {
       start_month,
       card_id,
       bank_account_id,
+      school_kid_id,
       expense_category,
       due_day,
       discount_pct,
@@ -11883,6 +11922,7 @@ router.post('/recurring', (req, res) => {
       start_month,
       card_id,
       bank_account_id,
+      school_kid_id,
       expense_category,
       due_day,
       discount_pct,
@@ -12429,6 +12469,64 @@ router.post('/school-kids/import-excel', withUpload, async (req, res) => {
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not import school kids excel.' });
+  }
+});
+
+router.post('/school-kids/scan-images-batch', upload.array('files', 8), async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ error: 'No images uploaded' });
+
+    const referenceDate = req.body?.reference_date || '';
+    const pageResults = [];
+    for (const file of files) {
+      pageResults.push(await scanReceiptFile(file, {
+        referenceDate,
+        scanContext: 'school_kid_import',
+      }));
+    }
+
+    const pageDrafts = pageResults.map((entry) => entry?.draft).filter(Boolean);
+    const normalizedItems = pageDrafts
+      .flatMap((draft) => Array.isArray(draft?.items) ? draft.items : [])
+      .map((item) => {
+        const purchaseDate = normalizeReceiptScanDateForContext(item?.purchase_date, {
+          referenceDate,
+          scanContext: 'school_kid_import',
+        });
+        return {
+          item_name: buildSchoolKidScanItemLabel(item?.item_name, purchaseDate),
+          amount: normalizeOcrAmount(item?.amount),
+          purchase_date: purchaseDate,
+          category: String(item?.category || '').trim() || 'Education',
+          is_extra: false,
+          selected: item?.selected !== false,
+        };
+      })
+      .filter((item) => item.item_name && Number(item.amount || 0) > 0);
+
+    if (!normalizedItems.length) {
+      const err = new Error('Could not detect any valid school fee rows with amount and detail.');
+      err.statusCode = 422;
+      throw err;
+    }
+
+    res.json({
+      success: true,
+      draft: {
+        merchant: String(pageDrafts.find((draft) => String(draft?.merchant || '').trim())?.merchant || 'School fee scan').trim(),
+        purchase_date: String(pageDrafts.find((draft) => String(draft?.purchase_date || '').trim())?.purchase_date || '').trim(),
+        total_amount: Math.round(normalizedItems.reduce((sum, item) => sum + Number(item.amount || 0), 0) * 100) / 100,
+        notes: 'Scanned from school fee image',
+        items: normalizedItems,
+        page_count: pageDrafts.length,
+        provider: 'openai',
+      },
+      pages: pageDrafts,
+    });
+  } catch (err) {
+    console.error('[school-kids/scan-images-batch]', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not scan school fee images' });
   }
 });
 

@@ -3399,6 +3399,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:100; backdrop-filter:blur(2px); padding:24px; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .modal { background:var(--white); border-radius:16px; width:90%; max-width:540px; max-height:85vh; min-width:0; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,0.2); animation:slideUp 0.2s; margin:auto; }
 .modal-wide { max-width:min(840px, calc(100vw - 48px)); }
+.bank-history-modal { max-width:min(980px, calc(100vw - 40px)); }
 .admin-push-modal-shell { max-width:min(1180px, calc(100vw - 40px)); }
 .admin-push-modal-shell .modal-inner {
   max-height:min(94vh, 980px);
@@ -3896,6 +3897,24 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .modal-body { padding:24px; min-width:0; }
 .modal-inner { padding:24px; min-width:0; }
 .modal-title { font-size:17px; font-weight:700; color:var(--t1); margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+.bank-history-modal .modal-body { padding:20px 24px 24px; }
+.bank-history-shell { display:grid; gap:14px; min-width:0; }
+.bank-history-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.bank-history-filter-chips,
+.bank-history-export-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.bank-history-range-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+.bank-history-summary-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; }
+.bank-history-stat-card { padding:14px 16px; border:1px solid var(--border); border-radius:14px; background:#fff; min-width:0; }
+.bank-history-stat-label { font-size:11px; color:var(--t3); text-transform:uppercase; font-weight:700; letter-spacing:.08em; }
+.bank-history-stat-value { margin-top:6px; font-size:22px; font-weight:800; color:var(--t1); line-height:1.1; }
+.bank-history-stat-value.green { color:var(--green); }
+.bank-history-stat-value.red { color:var(--red); }
+.bank-history-breakdown-card { padding:14px 16px; border:1px solid var(--border); border-radius:14px; background:#f8fbf9; }
+.bank-history-breakdown-title { font-size:12px; font-weight:800; color:var(--t2); text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px; }
+.bank-history-breakdown-list { display:flex; gap:8px; flex-wrap:wrap; }
+.bank-history-breakdown-list span { display:inline-flex; align-items:center; padding:7px 10px; border-radius:999px; background:#fff; border:1px solid var(--border); color:var(--t2); font-size:12px; font-weight:600; }
+.bank-history-table-wrap { max-height:52vh; overflow:auto; border:1px solid var(--border); border-radius:14px; background:#fff; }
+.bank-history-empty { padding:28px 10px; color:var(--t3); text-align:center; border:1px dashed var(--border); border-radius:14px; background:#fbfcfd; }
 .trip-settlement-modal { max-width:min(980px, calc(100vw - 40px)); }
 .trip-settlement-shell,
 .trip-settlement-mobile-list,
@@ -4879,6 +4898,9 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   .modal-wide { max-width:100%; }
   .modal-head { padding:14px 16px; }
   .modal-body, .modal-inner { padding-left:14px; padding-right:14px; }
+  .bank-history-modal .modal-body { padding:16px; }
+  .bank-history-range-grid,
+  .bank-history-summary-grid { grid-template-columns:1fr; }
   .modal-head { align-items:flex-start; }
   .modal-head button { min-width:36px; min-height:36px; }
   .admin-push-modal-shell { max-width:100%; }

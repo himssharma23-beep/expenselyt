@@ -1041,16 +1041,61 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
   );
 }
 
-async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+async function adjustBankBalance(userId, bankAccountId, delta, client = null, meta = {}) {
   const normalizedId = normalizeBankAccountId(bankAccountId);
   const amount = Number(delta || 0);
   if (!normalizedId || !amount) return;
   const run = client || { query };
+  await run.query(`
+    CREATE TABLE IF NOT EXISTS bank_account_history (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bank_account_id BIGINT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+      related_bank_account_id BIGINT REFERENCES bank_accounts(id) ON DELETE SET NULL,
+      entry_type TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      balance_before NUMERIC(14,2) NOT NULL DEFAULT 0,
+      balance_after NUMERIC(14,2) NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run.query(`
+    CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
+    ON bank_account_history(user_id, bank_account_id, created_at DESC)
+  `);
+  const currentR = await run.query(
+    `SELECT balance
+     FROM bank_accounts
+     WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+     LIMIT 1`,
+    [normalizedId, userId]
+  );
+  const current = currentR.rows[0] || null;
+  if (!current) return;
+  const balanceBefore = num(current.balance);
+  const balanceAfter = Math.round((balanceBefore + amount) * 100) / 100;
   await run.query(
     `UPDATE bank_accounts
-     SET balance = balance + $1, updated_at = NOW()
+     SET balance = $1, updated_at = NOW()
      WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
-    [amount, normalizedId, userId]
+    [balanceAfter, normalizedId, userId]
+  );
+  await run.query(
+    `INSERT INTO bank_account_history (
+       user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      userId,
+      normalizedId,
+      String(meta.entry_type || (amount >= 0 ? 'fund_added' : 'fund_removed')).trim(),
+      amount >= 0 ? 'credit' : 'debit',
+      Math.abs(amount),
+      balanceBefore,
+      balanceAfter,
+      meta.note != null ? String(meta.note).trim() : null,
+    ]
   );
 }
 
@@ -1175,26 +1220,170 @@ async function getExpenses(userId, filters = {}) {
   if (filters.spendType === 'fair') where.push('is_extra = FALSE');
 
   const result = await query(
-    `SELECT *
-     FROM expenses
-     WHERE ${where.join(' AND ')} AND deleted_at IS NULL
+    `SELECT
+        e.*,
+        ba.bank_name AS bank_name,
+        ba.account_name AS account_name,
+        CASE
+          WHEN ba.id IS NOT NULL THEN
+            trim(
+              concat(
+                COALESCE(NULLIF(trim(ba.bank_name), ''), 'Bank'),
+                CASE
+                  WHEN NULLIF(trim(ba.account_name), '') IS NOT NULL THEN concat(' - ', trim(ba.account_name))
+                  ELSE ''
+                END
+              )
+            )
+          ELSE ''
+        END AS bank_label,
+        card_lookup.card_id AS linked_card_id,
+        card_lookup.card_name,
+        card_lookup.card_bank_name,
+        card_lookup.card_last4,
+        CASE
+          WHEN card_lookup.card_id IS NOT NULL THEN
+            trim(
+              concat(
+                COALESCE(NULLIF(trim(card_lookup.card_name), ''), 'Card'),
+                CASE
+                  WHEN NULLIF(trim(card_lookup.card_bank_name), '') IS NOT NULL
+                    THEN concat(' (', trim(card_lookup.card_bank_name), CASE WHEN NULLIF(trim(card_lookup.card_last4), '') IS NOT NULL THEN concat(' **', trim(card_lookup.card_last4)) ELSE '' END, ')')
+                  WHEN NULLIF(trim(card_lookup.card_last4), '') IS NOT NULL
+                    THEN concat(' (**', trim(card_lookup.card_last4), ')')
+                  ELSE ''
+                END
+              )
+            )
+          ELSE ''
+        END AS card_label
+     FROM expenses e
+     LEFT JOIN bank_accounts ba
+       ON ba.id = e.bank_account_id
+      AND ba.user_id = e.user_id
+     LEFT JOIN LATERAL (
+       SELECT
+         tx.card_id,
+         cc.card_name,
+         cc.bank_name AS card_bank_name,
+         cc.last4 AS card_last4
+       FROM cc_txns tx
+       JOIN credit_cards cc
+         ON cc.id = tx.card_id
+        AND cc.user_id = e.user_id
+       WHERE tx.user_id = e.user_id
+         AND (
+           (e.source = 'cc_txn' AND tx.id = e.source_id)
+           OR (
+             e.source IS NOT NULL
+             AND trim(e.source) <> ''
+             AND tx.source = e.source
+             AND tx.source_id = e.source_id
+           )
+           OR (
+             tx.source = 'expense'
+             AND tx.source_id = e.id
+           )
+         )
+       ORDER BY tx.id DESC
+       LIMIT 1
+     ) AS card_lookup ON TRUE
+     WHERE ${where.map((clause) => clause.replace(/\buser_id\b/g, 'e.user_id')).join(' AND ')} AND e.deleted_at IS NULL
      ORDER BY purchase_date DESC, id DESC`,
     params
   );
-  return result.rows.map((row) => ({ ...row, amount: num(row.amount) }));
+  return result.rows.map((row) => ({
+    ...row,
+    amount: num(row.amount),
+    bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+    card_id: row.linked_card_id != null ? Number(row.linked_card_id) : null,
+  }));
 }
 
 async function getExpenseById(userId, id, client = null) {
   const run = client || { query };
   const result = await run.query(
-    `SELECT *
-     FROM expenses
-     WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+    `SELECT
+        e.*,
+        ba.bank_name AS bank_name,
+        ba.account_name AS account_name,
+        CASE
+          WHEN ba.id IS NOT NULL THEN
+            trim(
+              concat(
+                COALESCE(NULLIF(trim(ba.bank_name), ''), 'Bank'),
+                CASE
+                  WHEN NULLIF(trim(ba.account_name), '') IS NOT NULL THEN concat(' - ', trim(ba.account_name))
+                  ELSE ''
+                END
+              )
+            )
+          ELSE ''
+        END AS bank_label,
+        card_lookup.card_id AS linked_card_id,
+        card_lookup.card_name,
+        card_lookup.card_bank_name,
+        card_lookup.card_last4,
+        CASE
+          WHEN card_lookup.card_id IS NOT NULL THEN
+            trim(
+              concat(
+                COALESCE(NULLIF(trim(card_lookup.card_name), ''), 'Card'),
+                CASE
+                  WHEN NULLIF(trim(card_lookup.card_bank_name), '') IS NOT NULL
+                    THEN concat(' (', trim(card_lookup.card_bank_name), CASE WHEN NULLIF(trim(card_lookup.card_last4), '') IS NOT NULL THEN concat(' **', trim(card_lookup.card_last4)) ELSE '' END, ')')
+                  WHEN NULLIF(trim(card_lookup.card_last4), '') IS NOT NULL
+                    THEN concat(' (**', trim(card_lookup.card_last4), ')')
+                  ELSE ''
+                END
+              )
+            )
+          ELSE ''
+        END AS card_label
+     FROM expenses e
+     LEFT JOIN bank_accounts ba
+       ON ba.id = e.bank_account_id
+      AND ba.user_id = e.user_id
+     LEFT JOIN LATERAL (
+       SELECT
+         tx.card_id,
+         cc.card_name,
+         cc.bank_name AS card_bank_name,
+         cc.last4 AS card_last4
+       FROM cc_txns tx
+       JOIN credit_cards cc
+         ON cc.id = tx.card_id
+        AND cc.user_id = e.user_id
+       WHERE tx.user_id = e.user_id
+         AND (
+           (e.source = 'cc_txn' AND tx.id = e.source_id)
+           OR (
+             e.source IS NOT NULL
+             AND trim(e.source) <> ''
+             AND tx.source = e.source
+             AND tx.source_id = e.source_id
+           )
+           OR (
+             tx.source = 'expense'
+             AND tx.source_id = e.id
+           )
+         )
+       ORDER BY tx.id DESC
+       LIMIT 1
+     ) AS card_lookup ON TRUE
+     WHERE e.id = $1 AND e.user_id = $2 AND e.deleted_at IS NULL
      LIMIT 1`,
     [id, userId]
   );
   const row = result.rows[0];
-  return row ? { ...row, amount: num(row.amount) } : null;
+  return row
+    ? {
+        ...row,
+        amount: num(row.amount),
+        bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+        card_id: row.linked_card_id != null ? Number(row.linked_card_id) : null,
+      }
+    : null;
 }
 
 async function getExpenseCategories(userId) {
@@ -1217,7 +1406,10 @@ async function addExpense(userId, data) {
       [userId, itemName, category, subcategory, amount, purchaseDate, !!data.is_extra, bankAccountId, data.source || null, data.source_id || null]
     );
     if (bankAccountId) {
-      await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client);
+      await adjustBankBalance(userId, bankAccountId, -Math.abs(amount), client, {
+        entry_type: 'fund_removed',
+        note: `Expense: ${itemName}`,
+      });
     }
     return Number(result.rows[0].id);
   };
@@ -1237,8 +1429,18 @@ async function updateExpense(userId, id, data) {
     const nextBankAccountId = normalizeBankAccountId(data.bank_account_id);
     const prevBankAccountId = normalizeBankAccountId(current.bank_account_id);
     const prevAmount = Math.abs(num(current.amount));
-    if (prevBankAccountId) await adjustBankBalance(userId, prevBankAccountId, prevAmount, client);
-    if (nextBankAccountId) await adjustBankBalance(userId, nextBankAccountId, -nextAmount, client);
+    if (prevBankAccountId) {
+      await adjustBankBalance(userId, prevBankAccountId, prevAmount, client, {
+        entry_type: 'fund_added',
+        note: `Expense updated refund: ${String(current.item_name || itemName || 'Expense').trim()}`,
+      });
+    }
+    if (nextBankAccountId) {
+      await adjustBankBalance(userId, nextBankAccountId, -nextAmount, client, {
+        entry_type: 'fund_removed',
+        note: `Expense: ${itemName}`,
+      });
+    }
     await client.query(
       `UPDATE expenses
        SET item_name = $1,
@@ -1264,7 +1466,10 @@ async function deleteExpense(userId, id) {
     const current = await getExpenseById(userId, id, client);
     if (!current) return;
     if (normalizeBankAccountId(current.bank_account_id)) {
-      await adjustBankBalance(userId, current.bank_account_id, Math.abs(num(current.amount)), client);
+      await adjustBankBalance(userId, current.bank_account_id, Math.abs(num(current.amount)), client, {
+        entry_type: 'fund_added',
+        note: `Deleted expense refund: ${String(current.item_name || 'Expense').trim()}`,
+      });
     }
     await client.query(
       `UPDATE expenses
@@ -1289,6 +1494,12 @@ async function bulkAddExpenses(userId, rows) {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [userId, row.item_name, category, subcategory, row.amount, row.purchase_date, !!row.is_extra, normalizeBankAccountId(row.bank_account_id)]
         );
+        if (normalizeBankAccountId(row.bank_account_id)) {
+          await adjustBankBalance(userId, row.bank_account_id, -Math.abs(num(row.amount)), client, {
+            entry_type: 'fund_removed',
+            note: `Expense: ${String(row.item_name || 'Expense').trim()}`,
+          });
+        }
         count++;
       }
     }
@@ -4452,6 +4663,9 @@ function mapTripExpenseRow(row) {
     conversion_rate: row.conversion_rate == null ? null : Number(row.conversion_rate),
     expense_date: row.expense_date,
     notes: row.notes || null,
+    bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+    card_id: row.card_id != null ? Number(row.card_id) : null,
+    card_discount_pct: row.card_discount_pct == null ? 0 : num(row.card_discount_pct),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -4494,6 +4708,12 @@ function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
   const paidByKey = normalizeTripMemberKeyValue(data.paid_by_key || 'self') || 'self';
   const paidByName = normalizeText(data.paid_by_name || 'You', 'Paid by', 80);
   const splitMode = normalizeTripSplitModeValue(data.split_mode || 'equal');
+  const bankAccountId = normalizeBankAccountId(data.bank_account_id);
+  const cardId = normalizeCardId(data.card_id);
+  const cardDiscountPct = data.card_discount_pct === undefined || data.card_discount_pct === null || data.card_discount_pct === ''
+    ? 0
+    : normalizeDiscountPercent(data.card_discount_pct, 0);
+  if (bankAccountId && cardId) throw validationError('Choose either a bank or a card for this trip expense');
   const rawSplits = Array.isArray(data.splits) ? data.splits : [];
   const splits = rawSplits.length
     ? rawSplits.map((split) => ({
@@ -4521,6 +4741,9 @@ function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
       : Math.round((conversionRate || 0) * 1000000) / 1000000,
     expense_date: expenseDate,
     notes: normalizeOptionalText(data.notes, 300),
+    bank_account_id: splitMode === 'settlement' ? null : bankAccountId,
+    card_id: splitMode === 'settlement' ? null : cardId,
+    card_discount_pct: splitMode === 'settlement' ? 0 : cardDiscountPct,
     paid_by_key: paidByKey,
     paid_by_name: paidByName,
     split_mode: splitMode,
@@ -4847,6 +5070,7 @@ async function getTripById(userId, tripId) {
       group.items.push(normalizedItem);
     }
   }
+  const expenseLedgerMeta = await getTripExpenseLedgerMeta(userId, expenses.map((expense) => Number(expense.id)));
   const expense_groups = Array.from(expenseTypeMap.values()).map((group) => ({
     ...group,
     total: Math.round(group.total * 100) / 100,
@@ -4883,10 +5107,18 @@ async function getTripById(userId, tripId) {
       created_at: row.created_at,
       updated_at: row.updated_at,
     })),
-    expenses: expenses.map((expense) => ({
-      ...expense,
-      expense_type: expense.expense_type || (normalizeTripSplitModeValue(expense.split_mode) === 'settlement' ? 'Settlement' : 'Other'),
-    })),
+    expenses: expenses.map((expense) => {
+      const ledger = expenseLedgerMeta.get(Number(expense.id));
+      return {
+        ...expense,
+        expense_type: expense.expense_type || (normalizeTripSplitModeValue(expense.split_mode) === 'settlement' ? 'Settlement' : 'Other'),
+        bank_account_id: ledger?.bank_account_id || null,
+        card_id: ledger?.card_id || null,
+        card_discount_pct: ledger?.card_discount_pct || 0,
+        expense_entry_id: ledger?.expense_entry_id || null,
+        cc_txn_id: ledger?.cc_txn_id || null,
+      };
+    }),
     expense_groups,
     grand_total: Math.round(grandTotal * 100) / 100,
     isOwner: !!trip.is_owner,
@@ -4961,6 +5193,8 @@ async function updateTrip(userId, id, data) {
 
 async function deleteTrip(userId, id) {
   await withTransaction(async (client) => {
+    const expenseIdsR = await client.query('SELECT id FROM trip_expenses WHERE trip_id = $1', [id]);
+    await removeTripExpenseLedgerLinks(userId, expenseIdsR.rows.map((row) => Number(row.id)), client);
     await client.query('DELETE FROM trip_itinerary_items WHERE trip_id = $1', [id]);
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id = $1)', [id]);
     await client.query('DELETE FROM trip_expenses WHERE trip_id = $1', [id]);
@@ -5038,11 +5272,30 @@ async function addTripExpense(userId, tripId, data) {
     const expR = await client.query(
       `INSERT INTO trip_expenses (
          trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode,
-         expense_type, quantity, unit_price, notes, original_currency_code, original_amount, conversion_rate, updated_at
+         expense_type, quantity, unit_price, notes, original_currency_code, original_amount, conversion_rate,
+         bank_account_id, card_id, card_discount_pct, updated_at
         )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
         RETURNING id`,
-      [tripId, payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, payload.original_currency_code, payload.original_amount, payload.conversion_rate]
+      [
+        tripId,
+        payload.paid_by_key,
+        payload.paid_by_name,
+        payload.details,
+        payload.amount,
+        payload.expense_date,
+        payload.split_mode,
+        payload.expense_type,
+        payload.quantity,
+        payload.unit_price,
+        payload.notes,
+        payload.original_currency_code,
+        payload.original_amount,
+        payload.conversion_rate,
+        payload.bank_account_id,
+        payload.card_id,
+        payload.card_discount_pct,
+      ]
     );
     const expenseId = Number(expR.rows[0].id);
     for (const split of payload.splits) {
@@ -5052,12 +5305,23 @@ async function addTripExpense(userId, tripId, data) {
         [expenseId, split.member_key, split.member_name, split.share_amount]
       );
     }
+    await syncTripExpenseLedger(userId, null, {
+      id: expenseId,
+      trip_id: Number(tripId),
+      details: payload.details,
+      amount: payload.amount,
+      expense_date: payload.expense_date,
+      split_mode: payload.split_mode,
+      bank_account_id: payload.bank_account_id,
+      card_id: payload.card_id,
+      card_discount_pct: payload.card_discount_pct,
+    }, client);
     return expenseId;
   });
 }
 
 async function updateTripExpense(userId, expenseId, data) {
-  const expR = await query('SELECT id, trip_id FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
+  const expR = await query('SELECT * FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
   const exp = expR.rows[0];
   if (!exp) throw new Error('Not found');
   await _assertTripOwner(userId, exp.trip_id);
@@ -5079,9 +5343,30 @@ async function updateTripExpense(userId, expenseId, data) {
            original_currency_code = $11,
            original_amount = $12,
            conversion_rate = $13,
+           bank_account_id = $14,
+           card_id = $15,
+           card_discount_pct = $16,
            updated_at = NOW()
-       WHERE id = $14`,
-      [payload.paid_by_key, payload.paid_by_name, payload.details, payload.amount, payload.expense_date, payload.split_mode, payload.expense_type, payload.quantity, payload.unit_price, payload.notes, payload.original_currency_code, payload.original_amount, payload.conversion_rate, expenseId]
+       WHERE id = $17`,
+      [
+        payload.paid_by_key,
+        payload.paid_by_name,
+        payload.details,
+        payload.amount,
+        payload.expense_date,
+        payload.split_mode,
+        payload.expense_type,
+        payload.quantity,
+        payload.unit_price,
+        payload.notes,
+        payload.original_currency_code,
+        payload.original_amount,
+        payload.conversion_rate,
+        payload.bank_account_id,
+        payload.card_id,
+        payload.card_discount_pct,
+        expenseId,
+      ]
     );
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
     for (const split of payload.splits) {
@@ -5091,6 +5376,17 @@ async function updateTripExpense(userId, expenseId, data) {
         [expenseId, split.member_key, split.member_name, split.share_amount]
       );
     }
+    await syncTripExpenseLedger(userId, exp, {
+      id: Number(expenseId),
+      trip_id: Number(exp.trip_id),
+      details: payload.details,
+      amount: payload.amount,
+      expense_date: payload.expense_date,
+      split_mode: payload.split_mode,
+      bank_account_id: payload.bank_account_id,
+      card_id: payload.card_id,
+      card_discount_pct: payload.card_discount_pct,
+    }, client);
   });
 }
 
@@ -5100,6 +5396,7 @@ async function deleteTripExpense(userId, expenseId) {
   if (!exp) throw new Error('Not found');
   await _assertTripOwner(userId, exp.trip_id);
   await withTransaction(async (client) => {
+    await removeTripExpenseLedgerLinks(userId, [expenseId], client);
     await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expenseId]);
     await client.query('DELETE FROM trip_expenses WHERE id = $1', [expenseId]);
   });
@@ -5108,6 +5405,8 @@ async function deleteTripExpense(userId, expenseId) {
 async function deleteAllTripExpenses(userId, tripId) {
   await _assertTripOwner(userId, tripId);
   await withTransaction(async (client) => {
+    const expenseIdsR = await client.query('SELECT id FROM trip_expenses WHERE trip_id = $1', [tripId]);
+    await removeTripExpenseLedgerLinks(userId, expenseIdsR.rows.map((row) => Number(row.id)), client);
     await client.query(
       'DELETE FROM trip_expense_splits WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id = $1)',
       [tripId]
@@ -7310,8 +7609,9 @@ async function deleteSchoolKidClass(userId, kidId, classId) {
 }
 
 const SCHOOL_KID_EXPENSE_SOURCE = 'school_kid_expense';
+const TRIP_EXPENSE_SOURCE = 'trip_expense';
 
-async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
+async function listLinkedExpenseRowsBySourceType(userId, source, sourceId, client) {
   const result = await client.query(
     `SELECT id, category, subcategory, is_extra, bank_account_id
      FROM expenses
@@ -7320,7 +7620,7 @@ async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
        AND source_id = $3
        AND deleted_at IS NULL
      ORDER BY id DESC`,
-    [userId, SCHOOL_KID_EXPENSE_SOURCE, sourceId]
+    [userId, String(source || '').trim(), sourceId]
   );
   return result.rows.map((row) => ({
     id: Number(row.id),
@@ -7329,6 +7629,10 @@ async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
     is_extra: !!row.is_extra,
     bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
   }));
+}
+
+async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
+  return listLinkedExpenseRowsBySourceType(userId, SCHOOL_KID_EXPENSE_SOURCE, sourceId, client);
 }
 
 async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, client) {
@@ -7420,6 +7724,124 @@ async function removeSchoolKidExpenseLedgerLinks(userId, expenseIds = [], client
       await deleteExpense(userId, linkedExpense.id, client);
     }
   }
+}
+
+async function syncTripExpenseLedger(userId, previousExpense = null, nextExpense = null, client) {
+  const prev = previousExpense ? mapTripExpenseRow(previousExpense) : null;
+  const next = nextExpense ? mapTripExpenseRow(nextExpense) : null;
+  const sourceExpenseId = Number(next?.id || prev?.id || 0);
+  const linkedCcTxn = sourceExpenseId > 0
+    ? await pgBillingDb.getCcTxnBySource(userId, TRIP_EXPENSE_SOURCE, sourceExpenseId, client)
+    : null;
+  const prevBankId = normalizeBankAccountId(prev?.bank_account_id);
+  const nextBankId = normalizeBankAccountId(next?.bank_account_id);
+  const prevAmount = Math.abs(num(prev?.amount));
+  const nextAmount = Math.abs(num(next?.amount));
+
+  if (prevBankId && (!nextBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
+    await adjustBankBalance(userId, prevBankId, prevAmount, client, {
+      entry_type: 'fund_added',
+      note: `Trip expense refund: ${String(prev?.details || 'Trip expense').trim()}`,
+    });
+  }
+  if (nextBankId && (!prevBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
+    await adjustBankBalance(userId, nextBankId, -nextAmount, client, {
+      entry_type: 'fund_removed',
+      note: `Trip expense: ${String(next?.details || 'Trip expense').trim()}`,
+    });
+  }
+
+  if (!next?.card_id) {
+    if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+    return;
+  }
+
+  const tripR = await client.query(
+    `SELECT COALESCE(destination, name) AS trip_name
+     FROM trips
+     WHERE id = $1
+     LIMIT 1`,
+    [next.trip_id]
+  );
+  const tripName = normalizeOptionalText(tripR.rows?.[0]?.trip_name, 80) || 'Trip';
+  const ccPayload = {
+    card_id: Number(next.card_id),
+    txn_date: next.expense_date,
+    description: `${tripName}: ${String(next.details || 'Trip expense').trim()}`,
+    amount: next.amount,
+    discount_pct: num(next.card_discount_pct),
+    source: TRIP_EXPENSE_SOURCE,
+    source_id: next.id,
+  };
+
+  if (linkedCcTxn?.id && Number(linkedCcTxn.card_id || 0) === Number(next.card_id || 0)) {
+    await pgBillingDb.updateCcTxn(userId, linkedCcTxn.id, ccPayload, client);
+    return;
+  }
+
+  if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
+  await pgBillingDb.addCcTxn(userId, ccPayload, client);
+}
+
+async function removeTripExpenseLedgerLinks(userId, expenseIds = [], client) {
+  const normalized = [...new Set((expenseIds || []).map((value) => Number(value)).filter((value) => value > 0))];
+  for (const expenseId of normalized) {
+    const expenseR = await client.query('SELECT * FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
+    const expense = expenseR.rows[0] || null;
+    if (expense) await syncTripExpenseLedger(userId, expense, null, client);
+  }
+}
+
+async function getTripExpenseLedgerMeta(userId, expenseIds = []) {
+  const normalized = [...new Set((expenseIds || []).map((value) => Number(value)).filter((value) => value > 0))];
+  if (!normalized.length) return new Map();
+  const [expenseRowsR, cardLinksR] = await Promise.all([
+    query(
+      `SELECT id, bank_account_id, card_id, card_discount_pct
+       FROM trip_expenses
+       WHERE id = ANY($1::bigint[])`,
+      [normalized]
+    ),
+    query(
+      `SELECT DISTINCT ON (source_id)
+          source_id,
+          id,
+          card_id,
+          discount_pct
+       FROM cc_txns
+       WHERE user_id = $1
+         AND source = $2
+         AND source_id = ANY($3::bigint[])
+       ORDER BY source_id, id DESC`,
+      [userId, TRIP_EXPENSE_SOURCE, normalized]
+    ),
+  ]);
+  const meta = new Map();
+  for (const row of expenseRowsR.rows || []) {
+    meta.set(Number(row.id), {
+      expense_entry_id: null,
+      bank_account_id: row.bank_account_id != null ? Number(row.bank_account_id) : null,
+      card_id: row.card_id != null ? Number(row.card_id) : null,
+      card_discount_pct: row.card_discount_pct == null ? 0 : num(row.card_discount_pct),
+      cc_txn_id: null,
+    });
+  }
+  for (const row of cardLinksR.rows || []) {
+    const key = Number(row.source_id);
+    const current = meta.get(key) || {
+      expense_entry_id: null,
+      bank_account_id: null,
+      card_id: null,
+      card_discount_pct: 0,
+      cc_txn_id: null,
+    };
+    current.card_id = row.card_id != null ? Number(row.card_id) : null;
+    current.card_discount_pct = num(row.discount_pct);
+    current.cc_txn_id = Number(row.id);
+    current.bank_account_id = null;
+    meta.set(key, current);
+  }
+  return meta;
 }
 
 async function getSchoolKidExpenseLedgerMeta(userId, expenseIds = []) {

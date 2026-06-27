@@ -49,16 +49,61 @@ function normalizeBankAccountId(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+async function adjustBankBalance(userId, bankAccountId, delta, client = null, meta = {}) {
   const targetBankId = normalizeBankAccountId(bankAccountId);
   const amount = Number(delta || 0);
   if (!targetBankId || !amount) return;
   const run = client || { query };
+  await run.query(`
+    CREATE TABLE IF NOT EXISTS bank_account_history (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bank_account_id BIGINT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+      related_bank_account_id BIGINT REFERENCES bank_accounts(id) ON DELETE SET NULL,
+      entry_type TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      balance_before NUMERIC(14,2) NOT NULL DEFAULT 0,
+      balance_after NUMERIC(14,2) NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run.query(`
+    CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
+    ON bank_account_history(user_id, bank_account_id, created_at DESC)
+  `);
+  const currentR = await run.query(
+    `SELECT balance
+     FROM bank_accounts
+     WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+     LIMIT 1`,
+    [targetBankId, userId]
+  );
+  const current = currentR.rows[0] || null;
+  if (!current) return;
+  const balanceBefore = num(current.balance);
+  const balanceAfter = roundMoney(balanceBefore + amount);
   await run.query(
     `UPDATE bank_accounts
-     SET balance = balance + $1, updated_at = NOW(), updated_by = $3
+     SET balance = $1, updated_at = NOW(), updated_by = $3
      WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
-    [amount, targetBankId, userId]
+    [balanceAfter, targetBankId, userId]
+  );
+  await run.query(
+    `INSERT INTO bank_account_history (
+       user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      userId,
+      targetBankId,
+      String(meta.entry_type || (amount >= 0 ? 'bank_credit' : 'bank_debit')).trim(),
+      amount >= 0 ? 'credit' : 'debit',
+      Math.abs(amount),
+      balanceBefore,
+      balanceAfter,
+      meta.note != null ? String(meta.note).trim() : null,
+    ]
   );
 }
 

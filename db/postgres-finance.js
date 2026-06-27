@@ -93,6 +93,14 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   }
 }
 
+async function getNextCcCycle(cardId, userId, currentCycle, client = null) {
+  if (!currentCycle?.cycle_end) return null;
+  const cycleEndDate = new Date(`${String(currentCycle.cycle_end).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(cycleEndDate.getTime())) return null;
+  cycleEndDate.setDate(cycleEndDate.getDate() + 1);
+  return getCcCycleForDate(cardId, userId, _localDate(cycleEndDate), client);
+}
+
 async function updateCycleTotals(cycleId, client = null) {
   const run = client || { query };
   const cycleR = await run.query('SELECT manual_total_override FROM cc_cycles WHERE id = $1 LIMIT 1', [cycleId]);
@@ -243,14 +251,13 @@ async function insertEmiCcTxns(userId, emiId, client = null) {
       inserted = true;
     }
     if (num(inst.gst_amount) > 0) {
-      let gstDate = inst.due_date;
-      if (Number(rec.gst_month_offset || 0) === 1) {
-        const gdt = new Date(`${inst.due_date}T00:00:00`);
-        gdt.setMonth(gdt.getMonth() + 1);
-        gstDate = _localDate(gdt);
-      }
-      const gstCycle = await getCcCycleForDate(rec.credit_card_id, userId, gstDate, client);
+      const gstCycle = Number(rec.gst_month_offset || 0) === 1
+        ? await getNextCcCycle(rec.credit_card_id, userId, cycle, client)
+        : cycle;
       if (gstCycle) {
+        const gstDate = Number(rec.gst_month_offset || 0) === 1
+          ? String(gstCycle.cycle_start).slice(0, 10)
+          : inst.due_date;
         await run.query(
           `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
            VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $6, 'emi', $7)`,
@@ -281,12 +288,25 @@ async function insertEmiCcTxns(userId, emiId, client = null) {
       updatedCycles.add(firstCycle.id);
       if (num(rec.cc_processing_gst_pct) > 0) {
         const gstAmt = Math.round(num(rec.cc_processing_charge) * num(rec.cc_processing_gst_pct) / 100 * 100) / 100;
+        const processingGstCycle = Number(rec.gst_month_offset || 0) === 1
+          ? await getNextCcCycle(rec.credit_card_id, userId, firstCycle, client)
+          : firstCycle;
         await run.query(
           `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
            VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $6, 'emi', $7)`,
-          [userId, rec.credit_card_id, firstCycle.id, firstInst.due_date, `${rec.name} - File Processing GST`, gstAmt, emiId]
+          [
+            userId,
+            rec.credit_card_id,
+            processingGstCycle?.id || firstCycle.id,
+            Number(rec.gst_month_offset || 0) === 1 && processingGstCycle?.cycle_start
+              ? String(processingGstCycle.cycle_start).slice(0, 10)
+              : firstInst.due_date,
+            `${rec.name} - File Processing GST`,
+            gstAmt,
+            emiId,
+          ]
         );
-        updatedCycles.add(firstCycle.id);
+        updatedCycles.add(processingGstCycle?.id || firstCycle.id);
       }
     }
   }

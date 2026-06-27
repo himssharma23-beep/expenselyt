@@ -85,6 +85,37 @@ function expenseCategoryDisplayText(category, subcategory = '') {
   return cat || sub || '';
 }
 
+function expenseSourceLabel(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  if (entry.card_label) return cleanMojibakeText(`Credit Card: ${entry.card_label}`);
+  if (entry.bank_label) return cleanMojibakeText(`Bank: ${entry.bank_label}`);
+  const cardId = Number(entry.card_id || 0);
+  if (cardId > 0) {
+    const card = (_ccCards || []).find((item) => Number(item?.id || 0) === cardId);
+    const label =
+      (entry.card_name
+        ? `${entry.card_name}${entry.card_bank_name ? ` (${entry.card_bank_name}${entry.card_last4 ? ` **${entry.card_last4}` : ''})` : entry.card_last4 ? ` (**${entry.card_last4})` : ''}`
+        : '') ||
+      (card
+        ? `${card.card_name || 'Card'}${card.bank_name ? ` (${card.bank_name}${card.last4 ? ` **${card.last4}` : ''})` : card.last4 ? ` (**${card.last4})` : ''}`
+        : '');
+    return label ? `Credit Card: ${cleanMojibakeText(label)}` : 'Credit Card';
+  }
+  const bankId = Number(entry.bank_account_id || 0);
+  if (bankId > 0) {
+    const bank = (_bankAccounts || []).find((item) => Number(item?.id || 0) === bankId);
+    const label =
+      (entry.bank_name
+        ? `${entry.bank_name}${entry.account_name ? ` - ${entry.account_name}` : ''}`
+        : '') ||
+      (bank
+        ? `${bank.bank_name || 'Bank'}${bank.account_name ? ` - ${bank.account_name}` : ''}`
+        : '');
+    return label ? `Bank: ${cleanMojibakeText(label)}` : 'Bank';
+  }
+  return '';
+}
+
 function syncExpenseCategoryInputs() {
   const categoryInput = document.getElementById('eCategory');
   const subcategoryInput = document.getElementById('eSubcategory');
@@ -841,7 +872,7 @@ function renderExpenseVoicePreview() {
                 ${item?.is_extra ? ' • Extra' : ' • Fair'}
               </div>
               <div style="font-size:11px;color:var(--t2);margin-top:4px">
-                ${item?.card_label ? `Card: ${escHtml(String(item.card_label))}` : item?.bank_label ? `Bank: ${escHtml(String(item.bank_label))}` : 'No bank/card selected'}
+                ${item?.card_label ? `Credit Card: ${escHtml(String(item.card_label))}` : item?.bank_label ? `Bank: ${escHtml(String(item.bank_label))}` : 'No bank/credit card selected'}
               </div>
             </div>
             <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.amount || 0))}</div>
@@ -1090,6 +1121,7 @@ let _schoolKidDetailCache = {};
 let _schoolKidsLoading = false;
 let _selectedSchoolKidClassId = null;
 let _schoolKidTab = 'overview';
+let _schoolKidScannedRows = [];
 const DIVIDE_DRAFT_STORAGE_KEY = 'expense-lite.divide-draft.v1';
 let divideItems = _loadDivideDraftItems();
 let divideSelected = new Set();
@@ -2006,6 +2038,17 @@ async function loadExpenses() {
   if (f.search) qs += `&search=${encodeURIComponent(f.search)}`;
   if (f.spendType !== 'all') qs += `&spendType=${f.spendType}`;
 
+  if (!_bankAccounts.length || !_ccCards.length) {
+    try {
+      const [banksData, cardsData] = await Promise.all([
+        !_bankAccounts.length ? api('/api/banks') : Promise.resolve(null),
+        !_ccCards.length ? api('/api/cc/cards') : Promise.resolve(null),
+      ]);
+      if (banksData?.accounts) _bankAccounts = banksData.accounts;
+      if (cardsData?.cards) _ccCards = cardsData.cards;
+    } catch (_) {}
+  }
+
   const data = await api('/api/expenses' + qs);
   if (!data) return;
   if (!_expenseCategories.length) {
@@ -2122,7 +2165,10 @@ async function loadExpenses() {
             ${pageList.length === 0 ? '<tr><td colspan="6" class="empty-td">No expenses found.</td></tr>' : ''}
             ${pageList.map(e => `<tr>
               <td>${fmtDate(e.purchase_date)}</td>
-              <td>${e.item_name}</td>
+              <td>
+                <div style="font-weight:600">${escHtml(e.item_name || '')}</div>
+                ${expenseSourceLabel(e) ? `<div style="font-size:11px;color:var(--t3);margin-top:3px">${escHtml(expenseSourceLabel(e))}</div>` : ''}
+              </td>
               <td>${expenseCategoryDisplayText(e.category, e.subcategory) ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(expenseCategoryDisplayText(e.category, e.subcategory))}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
               <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
               <td><span class="badge ${e.is_extra?'b-extra':'b-fair'}">${e.is_extra?'Extra':'Fair'}</span></td>
@@ -6009,6 +6055,7 @@ function tripExpenseSetEntryKind(kind) {
     _tripExpSel.add(_tripExpPaidBy);
   }
   tripRefreshSelectionChips();
+  tripExpenseToggleLedgerFields();
   tripUpdateSplitInputs();
 }
 
@@ -8777,6 +8824,35 @@ function getTripExpenseEffectiveRate(currencyCode) {
   return parseFloat(getTripCurrencyMeta(selectedCurrency)?.conversion_rate_to_default || 0);
 }
 
+function tripExpenseBankOptionsHtml(selectedValue = '') {
+  return `<option value="">-- Do not deduct from bank --</option>${(_bankAccounts || []).map((account) => `<option value="${account.id}" ${String(selectedValue || '') === String(account.id) ? 'selected' : ''}>${escHtml(account.bank_name)}${account.account_name ? ` - ${escHtml(account.account_name)}` : ''}${account.is_default ? ' (Default)' : ''}</option>`).join('')}`;
+}
+
+function tripExpenseCardOptionsHtml(selectedValue = '') {
+  return `<option value="">-- Select credit card --</option>${(_ccCards || []).map((card) => `<option value="${card.id}" data-disc="${Number(card.default_discount_pct || 0)}" ${String(selectedValue || '') === String(card.id) ? 'selected' : ''}>${escHtml(card.card_name)} (${escHtml(card.bank_name)} **${escHtml(card.last4)})</option>`).join('')}`;
+}
+
+function tripExpenseToggleLedgerFields() {
+  const paymentMode = document.getElementById('tripExpensePaymentMode')?.value || 'none';
+  const ledgerSection = document.getElementById('tripExpenseLedgerSection');
+  const bankRow = document.getElementById('tripExpenseBankRow');
+  const cardRow = document.getElementById('tripExpenseCardRow');
+  if (ledgerSection) ledgerSection.style.display = _tripExpIsSettlement ? 'none' : '';
+  if (bankRow) bankRow.style.display = !_tripExpIsSettlement && paymentMode === 'bank' ? '' : 'none';
+  if (cardRow) cardRow.style.display = !_tripExpIsSettlement && paymentMode === 'card' ? '' : 'none';
+}
+
+function tripExpenseCardChanged() {
+  const cardSelect = document.getElementById('tripExpenseCard');
+  const discountInput = document.getElementById('tripExpenseCardDiscount');
+  if (!cardSelect || !discountInput) return;
+  const selectedOption = cardSelect.options[cardSelect.selectedIndex];
+  if (!selectedOption) return;
+  if (!discountInput.value && selectedOption.dataset.disc != null) {
+    discountInput.value = selectedOption.dataset.disc;
+  }
+}
+
 function recalcTripExpenseConvertedTotal() {
   const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
   const currencyInput = document.getElementById('tripExpenseOrigCurrency');
@@ -8809,6 +8885,11 @@ async function showTripExpenseModal(expenseId = null) {
   cleanupExpenseVoiceCapture();
   _expenseVoiceBusy = false;
   await ensureTripCurrenciesLoaded();
+  if (!_bankAccounts.length) {
+    const banksData = await api('/api/banks');
+    _bankAccounts = banksData?.accounts || [];
+  }
+  await getCcCardsForForm();
   const expense = expenseId ? _findTripExpenseById(expenseId) : null;
   const defaultCurrencyCode = _currentUser?.currency_code || 'INR';
   const originalCurrencyCode = expense?.original_currency_code || defaultCurrencyCode;
@@ -8864,6 +8945,9 @@ async function showTripExpenseModal(expenseId = null) {
       )
     : {};
   if (_tripExpIsSettlement && _tripExpSel.has(_tripExpPaidBy)) _tripExpSel.delete(_tripExpPaidBy);
+  const paymentMode = expense?.card_id ? 'card' : expense?.bank_account_id ? 'bank' : 'none';
+  const selectedCard = (_ccCards || []).find((card) => String(card.id) === String(expense?.card_id || '')) || _ccCards?.[0] || null;
+  const cardDiscount = expense?.card_discount_pct != null ? expense.card_discount_pct : Number(selectedCard?.default_discount_pct || 0);
   const splitModeChips = SPLIT_MODES.map((mode) =>
     `<button class="chip split-mode-chip ${_tripExpMode === mode.key ? 'active' : ''}" data-mode="${mode.key}" onclick="tripSetSplitMode('${mode.key}')">${mode.label}</button>`
   ).join('');
@@ -8915,6 +8999,30 @@ async function showTripExpenseModal(expenseId = null) {
           }).join('')}
         </select>
       </label>
+      <div class="full" id="tripExpenseLedgerSection" style="${_tripExpIsSettlement ? 'display:none' : ''};margin-top:2px;padding:14px;border:1px solid var(--border);border-radius:14px;background:#f8fbf9">
+        <div class="fg">
+          <label class="fl">Payment Mode
+            <select class="fi" id="tripExpensePaymentMode" onchange="tripExpenseToggleLedgerFields()">
+              <option value="none" ${paymentMode === 'none' ? 'selected' : ''}>Trip only</option>
+              <option value="bank" ${paymentMode === 'bank' ? 'selected' : ''}>Deduct from bank</option>
+              <option value="card" ${paymentMode === 'card' ? 'selected' : ''}>Charge to credit card</option>
+            </select>
+          </label>
+          <label class="fl full" id="tripExpenseBankRow" style="${!_tripExpIsSettlement && paymentMode === 'bank' ? '' : 'display:none'}">Bank Account
+            <select class="fi" id="tripExpenseBank">${tripExpenseBankOptionsHtml(expense?.bank_account_id || '')}</select>
+          </label>
+          <div class="full" id="tripExpenseCardRow" style="${!_tripExpIsSettlement && paymentMode === 'card' ? '' : 'display:none'}">
+            <div class="fg">
+              <label class="fl">Credit Card
+                <select class="fi" id="tripExpenseCard" onchange="tripExpenseCardChanged()">${tripExpenseCardOptionsHtml(expense?.card_id || '')}</select>
+              </label>
+              <label class="fl">Discount %
+                <input class="fi" type="number" min="0" max="100" step="0.1" id="tripExpenseCardDiscount" value="${escHtml(String(cardDiscount || 0))}">
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
       <label class="fl full">Entry Type
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button type="button" class="chip trip-entry-kind-chip ${_tripExpIsSettlement ? '' : 'active'}" data-entry-kind="expense" onclick="tripExpenseSetEntryKind('expense')">Expense</button>
@@ -8941,6 +9049,7 @@ async function showTripExpenseModal(expenseId = null) {
   `);
   tripExpenseCurrencyChanged();
   tripExpenseSetEntryKind(_tripExpIsSettlement ? 'settlement' : 'expense');
+  tripExpenseToggleLedgerFields();
   tripUpdateSplitInputs();
 }
 
@@ -9033,7 +9142,25 @@ async function saveTripExpenseModal(expenseId = null) {
     paid_by_name: payer.member_name,
     split_mode: _tripExpIsSettlement ? 'settlement' : _tripExpMode,
     splits: shares.map((share) => ({ member_key: share.key, member_name: share.name, share_amount: share.share })),
+    bank_account_id: null,
+    card_id: null,
+    card_discount_pct: 0,
   };
+  const paymentMode = !_tripExpIsSettlement ? (document.getElementById('tripExpensePaymentMode')?.value || 'none') : 'none';
+  if (paymentMode === 'bank') {
+    body.bank_account_id = parseInt(document.getElementById('tripExpenseBank')?.value || '', 10) || null;
+    if (!body.bank_account_id) {
+      toast('Choose a bank account', 'warning');
+      return;
+    }
+  } else if (paymentMode === 'card') {
+    body.card_id = parseInt(document.getElementById('tripExpenseCard')?.value || '', 10) || null;
+    body.card_discount_pct = parseFloat(document.getElementById('tripExpenseCardDiscount')?.value || '0') || 0;
+    if (!body.card_id) {
+      toast('Choose a credit card', 'warning');
+      return;
+    }
+  }
   if (!body.expense_type || !body.details || !body.expense_date) {
     toast('Type, detail, and date are required', 'warning');
     return;
@@ -14641,6 +14768,7 @@ function renderBankAccounts() {
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions">
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
             <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
           </div>
@@ -14711,6 +14839,7 @@ function renderBankAccountsPageView() {
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
             <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
           </div>
@@ -14947,6 +15076,450 @@ async function saveBankTransfer() {
   } else {
     toast(result?.error || 'Transfer failed', 'error');
   }
+}
+
+function _bankHistoryTypeLabel(entry = {}) {
+  const type = String(entry.entry_type || '').trim();
+  const labels = {
+    opening_balance: 'Opening balance',
+    balance_set: 'Balance edited',
+    fund_added: 'Money added',
+    fund_removed: 'Money removed',
+    transfer_in: 'Transfer received',
+    transfer_out: 'Transfer sent',
+    bank_credit: 'Bank credit',
+    bank_debit: 'Bank debit',
+  };
+  return labels[type] || (type ? type.replace(/_/g, ' ') : 'Balance change');
+}
+
+let _bankHistoryState = {
+  bank: null,
+  rows: [],
+  filter: 'all',
+  from: '',
+  to: '',
+};
+
+function _bankHistoryFilterMatches(entry, filter = 'all') {
+  const direction = String(entry?.direction || '').toLowerCase();
+  const type = String(entry?.entry_type || '').toLowerCase();
+  if (filter === 'credit') return direction === 'credit';
+  if (filter === 'debit') return direction === 'debit';
+  if (filter === 'transfer') return type === 'transfer_in' || type === 'transfer_out';
+  return true;
+}
+
+function _bankHistoryEntryDate(entry) {
+  const value = String(entry?.created_at || '');
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function _bankHistoryDateMatches(entry) {
+  const date = _bankHistoryEntryDate(entry);
+  if (!date) return true;
+  if (_bankHistoryState.from && date < _bankHistoryState.from) return false;
+  if (_bankHistoryState.to && date > _bankHistoryState.to) return false;
+  return true;
+}
+
+function _bankHistoryFilteredRows() {
+  return (_bankHistoryState.rows || []).filter((entry) =>
+    _bankHistoryFilterMatches(entry, _bankHistoryState.filter) && _bankHistoryDateMatches(entry)
+  );
+}
+
+function _bankHistoryTimeLabel(value) {
+  if (!value) return '-';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return escHtml(String(value));
+  return escHtml(dt.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }));
+}
+
+function renderBankHistoryModalBody() {
+  const bank = _bankHistoryState.bank || null;
+  const rows = _bankHistoryFilteredRows();
+  const filter = _bankHistoryState.filter || 'all';
+  const totals = rows.reduce((acc, entry) => {
+    const amount = Number(entry?.amount || 0);
+    const direction = String(entry?.direction || '').toLowerCase();
+    const type = String(entry?.entry_type || '').toLowerCase();
+    acc.count += 1;
+    if (direction === 'credit') acc.credit += amount;
+    else acc.debit += amount;
+    if (type === 'opening_balance') acc.opening += amount;
+    else if (type === 'fund_added') acc.added += amount;
+    else if (type === 'fund_removed') acc.removed += amount;
+    else if (type === 'transfer_in') acc.transferIn += amount;
+    else if (type === 'transfer_out') acc.transferOut += amount;
+    else acc.other += amount;
+    return acc;
+  }, { count: 0, credit: 0, debit: 0, opening: 0, added: 0, removed: 0, transferIn: 0, transferOut: 0, other: 0 });
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${[
+          ['all', 'All'],
+          ['credit', 'Credits'],
+          ['debit', 'Debits'],
+          ['transfer', 'Transfers'],
+        ].map(([key, label]) => `
+          <button class="chip ${filter === key ? 'active' : ''}" onclick="setBankHistoryFilter('${key}')">${label}</button>
+        `).join('')}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-s btn-sm" onclick="downloadBankHistoryCsv()">CSV</button>
+        <button class="btn btn-s btn-sm" onclick="downloadBankHistoryPdf()">PDF</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px">
+      <label class="fl" style="margin:0">From
+        <input class="fi" type="date" id="bankHistoryFromDate" value="${escHtml(_bankHistoryState.from || '')}" onchange="setBankHistoryDateRange(this.value, document.getElementById('bankHistoryToDate')?.value || '')">
+      </label>
+      <label class="fl" style="margin:0">To
+        <input class="fi" type="date" id="bankHistoryToDate" value="${escHtml(_bankHistoryState.to || '')}" onchange="setBankHistoryDateRange(document.getElementById('bankHistoryFromDate')?.value || '', this.value)">
+      </label>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px">
+      <div style="padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">Entries</div>
+        <div style="font-size:18px;font-weight:800;color:var(--t1)">${rows.length}</div>
+      </div>
+      <div style="padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">Credits</div>
+        <div style="font-size:18px;font-weight:800;color:var(--green)">${fmtCur(totals.credit)}</div>
+      </div>
+      <div style="padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">Debits</div>
+        <div style="font-size:18px;font-weight:800;color:var(--em)">${fmtCur(totals.debit)}</div>
+      </div>
+    </div>
+    <div style="padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#f8fbf9;margin-bottom:12px;font-size:12px;color:var(--t2)">
+      Opening ${fmtCur(totals.opening)} · Added ${fmtCur(totals.added)} · Removed ${fmtCur(totals.removed)} · Transfer In ${fmtCur(totals.transferIn)} · Transfer Out ${fmtCur(totals.transferOut)}${totals.other ? ` · Other ${fmtCur(totals.other)}` : ''}
+    </div>
+    ${rows.length ? `
+      <div style="max-height:52vh;overflow:auto;border:1px solid var(--border);border-radius:14px">
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Type</th>
+              <th>Note</th>
+              <th style="text-align:right">Amount</th>
+              <th style="text-align:right">Balance After</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((entry) => {
+              const isCredit = String(entry.direction || '').toLowerCase() === 'credit';
+              const noteParts = [];
+              if (entry.note) noteParts.push(escHtml(entry.note));
+              if (entry.related_bank_name) {
+                noteParts.push(`Other bank: ${escHtml(entry.related_bank_name)}${entry.related_account_name ? ` - ${escHtml(entry.related_account_name)}` : ''}`);
+              }
+              return `<tr>
+                <td>${_bankHistoryTimeLabel(entry.created_at)}</td>
+                <td style="text-transform:capitalize">${escHtml(_bankHistoryTypeLabel(entry))}</td>
+                <td>${noteParts.join('<br>') || '-'}</td>
+                <td style="text-align:right;font-weight:700;color:${isCredit ? 'var(--green)' : 'var(--em)'}">${isCredit ? '+' : '-'}${fmtCur(entry.amount || 0)}</td>
+                <td style="text-align:right">${fmtCur(entry.balance_after || 0)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : `<div style="padding:24px 4px;color:var(--t3);text-align:center">No entries match this filter.</div>`}
+  `;
+}
+
+function refreshBankHistoryModalBody() {
+  const body = document.getElementById('bankHistoryModalBody');
+  if (body) body.innerHTML = renderBankHistoryModalBody();
+}
+
+function setBankHistoryFilter(filter) {
+  _bankHistoryState.filter = String(filter || 'all');
+  refreshBankHistoryModalBody();
+}
+
+function setBankHistoryDateRange(fromValue, toValue) {
+  _bankHistoryState.from = String(fromValue || '').trim();
+  _bankHistoryState.to = String(toValue || '').trim();
+  refreshBankHistoryModalBody();
+}
+
+async function showBankHistoryModal(bankId) {
+  const bank = _findBankAccountById(bankId);
+  if (!bank) {
+    toast('Bank account not found', 'warning');
+    return;
+  }
+  _bankHistoryState = { bank, rows: [], filter: 'all', from: '', to: '' };
+  openModal(`Bank History - ${escHtml(bank.bank_name)}${bank.account_name ? ` - ${escHtml(bank.account_name)}` : ''}`, `
+    <div id="bankHistoryModalBody" style="min-height:180px;display:flex;align-items:center;justify-content:center;color:var(--t3)">
+      Loading history...
+    </div>
+    <div class="fa">
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>`);
+  const body = document.getElementById('bankHistoryModalBody');
+  try {
+    const result = await api(`/api/banks/${bankId}/history`);
+    const rows = Array.isArray(result?.history) ? result.history : [];
+    if (!body) return;
+    _bankHistoryState.rows = rows;
+    if (!rows.length) {
+      body.innerHTML = `<div style="padding:16px 4px;color:var(--t3)">No bank history yet for this account.</div>`;
+      return;
+    }
+    refreshBankHistoryModalBody();
+  } catch (error) {
+    if (body) body.innerHTML = `<div style="padding:16px 4px;color:var(--em)">Could not load bank history.</div>`;
+  }
+}
+
+function renderBankHistoryModalBody() {
+  const rows = _bankHistoryFilteredRows();
+  const filter = _bankHistoryState.filter || 'all';
+  const totals = rows.reduce((acc, entry) => {
+    const amount = Number(entry?.amount || 0);
+    const direction = String(entry?.direction || '').toLowerCase();
+    const type = String(entry?.entry_type || '').toLowerCase();
+    acc.count += 1;
+    if (direction === 'credit') acc.credit += amount;
+    else acc.debit += amount;
+    if (type === 'opening_balance') acc.opening += amount;
+    else if (type === 'fund_added') acc.added += amount;
+    else if (type === 'fund_removed') acc.removed += amount;
+    else if (type === 'transfer_in') acc.transferIn += amount;
+    else if (type === 'transfer_out') acc.transferOut += amount;
+    else acc.other += amount;
+    return acc;
+  }, { count: 0, credit: 0, debit: 0, opening: 0, added: 0, removed: 0, transferIn: 0, transferOut: 0, other: 0 });
+  return `
+    <div class="bank-history-shell">
+      <div class="bank-history-toolbar">
+        <div class="bank-history-filter-chips">
+          ${[
+            ['all', 'All'],
+            ['credit', 'Credits'],
+            ['debit', 'Debits'],
+            ['transfer', 'Transfers'],
+          ].map(([key, label]) => `
+            <button class="chip ${filter === key ? 'active' : ''}" onclick="setBankHistoryFilter('${key}')">${label}</button>
+          `).join('')}
+        </div>
+        <div class="bank-history-export-actions">
+          <button class="btn btn-s btn-sm" onclick="downloadBankHistoryCsv()">CSV</button>
+          <button class="btn btn-s btn-sm" onclick="downloadBankHistoryPdf()">PDF</button>
+        </div>
+      </div>
+      <div class="bank-history-range-grid">
+        <label class="fl" style="margin:0">From
+          <input class="fi" type="date" id="bankHistoryFromDate" value="${escHtml(_bankHistoryState.from || '')}" onchange="setBankHistoryDateRange(this.value, document.getElementById('bankHistoryToDate')?.value || '')">
+        </label>
+        <label class="fl" style="margin:0">To
+          <input class="fi" type="date" id="bankHistoryToDate" value="${escHtml(_bankHistoryState.to || '')}" onchange="setBankHistoryDateRange(document.getElementById('bankHistoryFromDate')?.value || '', this.value)">
+        </label>
+      </div>
+      <div class="bank-history-summary-grid">
+        <div class="bank-history-stat-card">
+          <div class="bank-history-stat-label">Entries</div>
+          <div class="bank-history-stat-value">${rows.length}</div>
+        </div>
+        <div class="bank-history-stat-card">
+          <div class="bank-history-stat-label">Credits</div>
+          <div class="bank-history-stat-value green">${fmtCur(totals.credit)}</div>
+        </div>
+        <div class="bank-history-stat-card">
+          <div class="bank-history-stat-label">Debits</div>
+          <div class="bank-history-stat-value red">${fmtCur(totals.debit)}</div>
+        </div>
+      </div>
+      <div class="bank-history-breakdown-card">
+        <div class="bank-history-breakdown-title">Breakdown</div>
+        <div class="bank-history-breakdown-list">
+          <span>Opening ${fmtCur(totals.opening)}</span>
+          <span>Added ${fmtCur(totals.added)}</span>
+          <span>Removed ${fmtCur(totals.removed)}</span>
+          <span>Transfer In ${fmtCur(totals.transferIn)}</span>
+          <span>Transfer Out ${fmtCur(totals.transferOut)}</span>
+          ${totals.other ? `<span>Other ${fmtCur(totals.other)}</span>` : ''}
+        </div>
+      </div>
+      ${rows.length ? `
+        <div class="bank-history-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Type</th>
+                <th>Note</th>
+                <th style="text-align:right">Amount</th>
+                <th style="text-align:right">Balance After</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((entry) => {
+                const isCredit = String(entry.direction || '').toLowerCase() === 'credit';
+                const noteParts = [];
+                if (entry.note) noteParts.push(escHtml(entry.note));
+                if (entry.related_bank_name) {
+                  noteParts.push(`Other bank: ${escHtml(entry.related_bank_name)}${entry.related_account_name ? ` - ${escHtml(entry.related_account_name)}` : ''}`);
+                }
+                return `<tr>
+                  <td>${_bankHistoryTimeLabel(entry.created_at)}</td>
+                  <td style="text-transform:capitalize">${escHtml(_bankHistoryTypeLabel(entry))}</td>
+                  <td>${noteParts.join('<br>') || '-'}</td>
+                  <td style="text-align:right;font-weight:700;color:${isCredit ? 'var(--green)' : 'var(--em)'}">${isCredit ? '+' : '-'}${fmtCur(entry.amount || 0)}</td>
+                  <td style="text-align:right">${fmtCur(entry.balance_after || 0)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : `<div class="bank-history-empty">No entries match this filter.</div>`}
+    </div>
+  `;
+}
+
+async function showBankHistoryModal(bankId) {
+  const bank = _findBankAccountById(bankId);
+  if (!bank) {
+    toast('Bank account not found', 'warning');
+    return;
+  }
+  _bankHistoryState = { bank, rows: [], filter: 'all', from: '', to: '' };
+  window.__modalClassName = 'modal-wide bank-history-modal';
+  openModal(`Bank History - ${escHtml(bank.bank_name)}${bank.account_name ? ` - ${escHtml(bank.account_name)}` : ''}`, `
+    <div id="bankHistoryModalBody" style="min-height:180px;display:flex;align-items:center;justify-content:center;color:var(--t3)">
+      Loading history...
+    </div>
+    <div class="fa">
+      <button class="btn btn-g" onclick="closeModal()">Close</button>
+    </div>`);
+  const body = document.getElementById('bankHistoryModalBody');
+  try {
+    const result = await api(`/api/banks/${bankId}/history`);
+    const rows = Array.isArray(result?.history) ? result.history : [];
+    if (!body) return;
+    _bankHistoryState.rows = rows;
+    if (!rows.length) {
+      body.innerHTML = `<div class="bank-history-empty">No bank history yet for this account.</div>`;
+      return;
+    }
+    refreshBankHistoryModalBody();
+  } catch (error) {
+    if (body) body.innerHTML = `<div class="bank-history-empty" style="color:var(--em)">Could not load bank history.</div>`;
+  }
+}
+
+function downloadBankHistoryPdf() {
+  const bank = _bankHistoryState.bank || null;
+  const rows = _bankHistoryFilteredRows();
+  if (!bank || !rows.length) {
+    toast('No bank history rows to export', 'warning');
+    return;
+  }
+  const credits = rows.reduce((sum, row) => sum + (String(row.direction || '').toLowerCase() === 'credit' ? Number(row.amount || 0) : 0), 0);
+  const debits = rows.reduce((sum, row) => sum + (String(row.direction || '').toLowerCase() === 'debit' ? Number(row.amount || 0) : 0), 0);
+  const title = `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''} Bank History`;
+  const rangeLabel = [_bankHistoryState.from || '', _bankHistoryState.to || ''].filter(Boolean).join(' to ') || 'All dates';
+  const subtitle = `Filter: ${(_bankHistoryState.filter || 'all').toUpperCase()} · ${rangeLabel} · ${rows.length} entries`;
+  const now = new Date().toLocaleString('en-IN');
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>${escHtml(title)}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; font-size:13px; color:#1A1D24; padding:32px; }
+    .pr-header { border-bottom:3px solid #145A3C; padding-bottom:16px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:flex-end; }
+    .pr-title { font-size:22px; font-weight:700; color:#145A3C; }
+    .pr-subtitle { font-size:12px; color:#9CA3B0; margin-top:4px; }
+    .pr-logo { font-size:13px; font-weight:600; color:#145A3C; }
+    .pr-summary { display:flex; gap:16px; margin-bottom:20px; }
+    .pr-card { flex:1; border:1px solid #E4E7EC; border-radius:8px; padding:12px 16px; }
+    .pr-lbl { font-size:11px; color:#9CA3B0; font-weight:600; text-transform:uppercase; margin-bottom:4px; }
+    .pr-val { font-size:16px; font-weight:700; color:#1A1D24; }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    thead tr { background:#145A3C; color:#fff; }
+    th { padding:9px 12px; text-align:left; font-weight:600; font-size:11.5px; }
+    td { padding:8px 12px; border-bottom:1px solid #F0F1F4; vertical-align:top; }
+    tr:nth-child(even) td { background:#F9FAFB; }
+    .pos { color:#1f8f4e; font-weight:700; }
+    .neg { color:#c94f45; font-weight:700; }
+  </style></head><body>
+  <div class="pr-header">
+    <div><div class="pr-title">${escHtml(title)}</div><div class="pr-subtitle">${escHtml(subtitle)}</div></div>
+    <div class="pr-logo">Expense Lite AI</div>
+  </div>
+  <div class="pr-summary">
+    <div class="pr-card"><div class="pr-lbl">Entries</div><div class="pr-val">${rows.length}</div></div>
+    <div class="pr-card"><div class="pr-lbl">Credits</div><div class="pr-val">${escHtml(fmtCur(credits))}</div></div>
+    <div class="pr-card"><div class="pr-lbl">Debits</div><div class="pr-val">${escHtml(fmtCur(debits))}</div></div>
+  </div>
+  <table>
+    <thead><tr><th>When</th><th>Type</th><th>Note</th><th>Amount</th><th>Balance After</th></tr></thead>
+    <tbody>
+      ${rows.map((entry) => {
+        const isCredit = String(entry.direction || '').toLowerCase() === 'credit';
+        const note = [entry.note || '', entry.related_bank_name ? `Other bank: ${entry.related_bank_name}${entry.related_account_name ? ` - ${entry.related_account_name}` : ''}` : ''].filter(Boolean).join(' | ');
+        return `<tr>
+          <td>${_bankHistoryTimeLabel(entry.created_at)}</td>
+          <td>${escHtml(_bankHistoryTypeLabel(entry))}</td>
+          <td>${escHtml(note || '-')}</td>
+          <td class="${isCredit ? 'pos' : 'neg'}">${isCredit ? '+' : '-'}${escHtml(fmtCur(entry.amount || 0))}</td>
+          <td>${escHtml(fmtCur(entry.balance_after || 0))}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  <script>window.onload = () => { window.print(); }<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+function downloadBankHistoryCsv() {
+  const bank = _bankHistoryState.bank || null;
+  const rows = _bankHistoryFilteredRows();
+  if (!bank || !rows.length) {
+    toast('No bank history rows to export', 'warning');
+    return;
+  }
+  const csvEscape = (value) => {
+    const text = String(value ?? '');
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+  const lines = [
+    ['Date', 'Type', 'Note', 'Direction', 'Amount', 'Balance After'],
+    ...rows.map((entry) => [
+      _bankHistoryEntryDate(entry),
+      _bankHistoryTypeLabel(entry),
+      [entry.note || '', entry.related_bank_name ? `Other bank: ${entry.related_bank_name}${entry.related_account_name ? ` - ${entry.related_account_name}` : ''}` : ''].filter(Boolean).join(' | '),
+      String(entry.direction || '').toLowerCase(),
+      Number(entry.amount || 0).toFixed(2),
+      Number(entry.balance_after || 0).toFixed(2),
+    ]),
+  ].map((row) => row.map(csvEscape).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(bank.bank_name || 'bank').replace(/[^a-z0-9]+/gi, '_')}_history.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function saveBankAccount(id) {
@@ -16613,6 +17186,14 @@ async function deleteTracker(id) {
 // RECURRING ENTRIES
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let _recurringEntries = [];
+let _recurringSchoolKids = [];
+
+async function ensureRecurringSchoolKidsLoaded(force = false) {
+  if (!force && Array.isArray(_recurringSchoolKids) && _recurringSchoolKids.length) return _recurringSchoolKids;
+  const overview = await api('/api/school-kids');
+  _recurringSchoolKids = Array.isArray(overview?.kids) ? overview.kids : [];
+  return _recurringSchoolKids;
+}
 
 function _recurringReminderSummary(entry) {
   const dueDay = Math.max(1, Math.min(28, parseInt(entry?.due_day, 10) || 1));
@@ -16656,10 +17237,13 @@ function renderRecurring() {
     const statusBadge = appliedThisMonth
       ? `<span class="badge b-fair">Applied</span>`
       : (e.is_active ? `<span class="badge" style="background:var(--bg2);color:var(--t3)">Pending</span>` : `<span class="badge" style="background:var(--bg2);color:var(--t3)">Inactive</span>`);
+    const schoolKidLabel = e.school_kid_name
+      ? `<br><span style="font-size:11px;color:var(--t3)">School Kid: ${escHtml(e.school_kid_name)}</span>`
+      : '';
     return `<tr>
       <td><input type="checkbox" title="${e.is_active ? 'Active - click to disable' : 'Inactive - click to enable'}" ${e.is_active ? 'checked' : ''} onchange="toggleRecurringActive(${e.id},this.checked)"></td>
       <td>${typeBadge}${extraBadge}</td>
-      <td>${escHtml(e.description)}${cardLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span><br><span style="font-size:11px;color:var(--t3)">${escHtml(reminderLabel)}</span></td>
+      <td>${escHtml(e.description)}${cardLabel}${schoolKidLabel}<br><span style="font-size:11px;color:var(--t3)">${scheduleLabel}</span><br><span style="font-size:11px;color:var(--t3)">${escHtml(reminderLabel)}</span></td>
       <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
       <td>${statusBadge}</td>
       <td><button class="btn-d" style="color:var(--em)" onclick="showRecurringModal(${e.id})">Edit</button><button class="btn-d" onclick="deleteRecurring(${e.id})">Del</button></td>
@@ -16723,6 +17307,7 @@ async function showRecurringModal(id) {
   if (!_expenseCategories.length) await loadExpenseCategories();
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
+  const schoolKids = await ensureRecurringSchoolKidsLoaded();
   const currentMonth = _localYM();
 
   const isCC = entry?.type === 'cc_txn';
@@ -16731,6 +17316,9 @@ async function showRecurringModal(id) {
   const reminderDaysBefore = Math.max(0, parseInt(entry?.reminder_days_before, 10) || 0);
   const reminderFrequency = String(entry?.reminder_frequency || 'once').toLowerCase();
   const cardOptions = cards.map(c => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
+  const schoolKidOptions = [`<option value="">-- none --</option>`].concat(
+    schoolKids.map((kid) => `<option value="${Number(kid.id)}" ${String(entry?.school_kid_id || '') === String(kid.id) ? 'selected' : ''}>${escHtml(kid.kid_name)}${kid.age_years != null ? ` · Age ${Number(kid.age_years)}` : ''}</option>`)
+  ).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
     <div class="fg">
@@ -16761,8 +17349,12 @@ async function showRecurringModal(id) {
         <label class="fl">Discount %<input class="fi" type="number" step="0.1" id="reDisc" value="${entry?.discount_pct || 0}" min="0" max="100"></label>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
-        <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
+        <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleRecurringExpenseCategory()">
         Also add as expense
+      </label>
+      <label class="fl full" id="reCcSchoolKidRow">School Kid
+        <select class="fi" id="reCcSchoolKid">${schoolKidOptions}</select>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px">If selected, this recurring credit card entry can also create a school expense in the matching class/year with notes like "June fees" when added as expense.</div>
       </label>
       <label class="fl full" id="reCcExpenseCategoryRow" style="${isCC && !entry?.also_expense ? 'display:none' : ''}">Expense Category
         <input class="fi" id="reCcExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Subscriptions, Bills, Shopping">
@@ -16771,10 +17363,16 @@ async function showRecurringModal(id) {
     </div>
 
     <div id="reExpenseFields" style="${isCC ? 'display:none' : ''}">
-      <label class="fl full">Expense Category
-        <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
-        <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
-      </label>
+      <div class="fg">
+        <label class="fl full">School Kid
+          <select class="fi" id="reSchoolKid">${schoolKidOptions}</select>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">If selected, this recurring expense will also create a school expense in the matching class/year with notes like "June fees".</div>
+        </label>
+        <label class="fl full">Expense Category
+          <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
+          <datalist id="expenseCategoryList">${_expenseCategories.map((cat) => `<option value="${escHtml(cat)}"></option>`).join('')}</datalist>
+        </label>
+      </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
         <input type="checkbox" id="reIsExtra" ${entry?.is_extra ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
         Mark as extra spending
@@ -16828,8 +17426,8 @@ function recurringTypeToggle() {
 
 function toggleRecurringExpenseCategory() {
   const row = document.getElementById('reCcExpenseCategoryRow');
-  if (!row) return;
-  row.style.display = document.getElementById('reAlsoExpense')?.checked ? '' : 'none';
+  const visible = document.getElementById('reAlsoExpense')?.checked ? '' : 'none';
+  if (row) row.style.display = visible;
 }
 
 async function saveRecurring(id) {
@@ -16855,7 +17453,9 @@ async function saveRecurring(id) {
     body.card_id = parseInt(document.getElementById('reCard').value) || null;
     body.discount_pct = parseFloat(document.getElementById('reDisc').value) || 0;
     body.also_expense = document.getElementById('reAlsoExpense').checked ? 1 : 0;
+    body.school_kid_id = parseInt(document.getElementById('reCcSchoolKid')?.value, 10) || null;
   } else {
+    body.school_kid_id = parseInt(document.getElementById('reSchoolKid')?.value, 10) || null;
     body.is_extra = document.getElementById('reIsExtra').checked ? 1 : 0;
     if (!id) body.apply_current_month = document.getElementById('reApplyCurrentMonth')?.checked ? 1 : 0;
   }
@@ -16975,6 +17575,7 @@ function renderBankAccounts() {
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
             <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
           </div>
@@ -17336,6 +17937,7 @@ async function showRecurringModal(id) {
   if (!_expenseCategories.length) await loadExpenseCategories();
   const cards = _ccCards && _ccCards.length ? _ccCards : (await api('/api/cc/cards'))?.cards || [];
   if (!_ccCards || !_ccCards.length) _ccCards = cards;
+  const schoolKids = await ensureRecurringSchoolKidsLoaded();
   if (!_bankAccounts.length) {
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
@@ -17348,6 +17950,9 @@ async function showRecurringModal(id) {
   const reminderFrequency = String(entry?.reminder_frequency || 'once').toLowerCase();
   const cardOptions = cards.map((c) => `<option value="${c.id}" ${entry?.card_id === c.id ? 'selected' : ''}>${escHtml(c.bank_name)} ${escHtml(c.card_name)} **${escHtml(c.last4)}</option>`).join('');
   const bankOptions = `<option value="">-- Default / none --</option>${_bankDropdownOptions(entry?.bank_account_id)}`;
+  const schoolKidOptions = [`<option value="">-- none --</option>`].concat(
+    schoolKids.map((kid) => `<option value="${Number(kid.id)}" ${String(entry?.school_kid_id || '') === String(kid.id) ? 'selected' : ''}>${escHtml(kid.kid_name)}${kid.age_years != null ? ` · Age ${Number(kid.age_years)}` : ''}</option>`)
+  ).join('');
 
   openModal(id ? 'Edit Recurring Entry' : 'Add Recurring Entry', `
     <div class="fg">
@@ -17382,15 +17987,25 @@ async function showRecurringModal(id) {
         <input type="checkbox" id="reAlsoExpense" ${entry?.also_expense ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer" onchange="toggleRecurringExpenseCategory()">
         Also add as expense
       </label>
+      <label class="fl full" id="reCcSchoolKidRow">School Kid
+        <select class="fi" id="reCcSchoolKid">${schoolKidOptions}</select>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px">If selected, this recurring credit card entry can also create a school expense in the matching class/year with notes like "June fees" when added as expense.</div>
+      </label>
       <label class="fl full" id="reCcExpenseCategoryRow" style="${isCC && !entry?.also_expense ? 'display:none' : ''}">Expense Category
         <input class="fi" id="reCcExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Subscriptions, Bills, Shopping">
       </label>
     </div>
 
     <div id="reExpenseFields" style="${isCC ? 'display:none' : ''}">
-      <label class="fl full">Expense Category
-        <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
-      </label>
+      <div class="fg">
+        <label class="fl full">School Kid
+          <select class="fi" id="reSchoolKid">${schoolKidOptions}</select>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">If selected, this recurring expense will also create a school expense in the matching class/year with notes like "June fees".</div>
+        </label>
+        <label class="fl full">Expense Category
+          <input class="fi" id="reExpenseCategory" list="expenseCategoryList" value="${escHtml(entry?.expense_category || '')}" placeholder="e.g. Bills, Rent, Groceries">
+        </label>
+      </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t2);margin-bottom:12px;cursor:pointer">
         <input type="checkbox" id="reIsExtra" ${entry?.is_extra ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer">
         Mark as extra spending
@@ -17463,12 +18078,14 @@ async function saveRecurring(id) {
     body.card_id = parseInt(document.getElementById('reCard').value, 10) || null;
     body.discount_pct = parseFloat(document.getElementById('reDisc').value) || 0;
     body.also_expense = document.getElementById('reAlsoExpense').checked ? 1 : 0;
+    body.school_kid_id = parseInt(document.getElementById('reCcSchoolKid')?.value, 10) || null;
     if (!body.card_id) { toast('Please select a credit card', 'warning'); return; }
     if (!Number.isFinite(body.discount_pct) || body.discount_pct < 0 || body.discount_pct > 100) {
       toast('Discount % must be between 0 and 100', 'warning');
       return;
     }
   } else {
+    body.school_kid_id = parseInt(document.getElementById('reSchoolKid')?.value, 10) || null;
     body.is_extra = document.getElementById('reIsExtra').checked ? 1 : 0;
     if (!id) body.apply_current_month = document.getElementById('reApplyCurrentMonth')?.checked ? 1 : 0;
   }
@@ -19196,6 +19813,7 @@ function renderBankAccounts() {
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
+            <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
             <button class="btn-d" onclick="deleteBankAccount(${a.id})">Delete</button>
           </div>
@@ -21157,7 +21775,7 @@ function renderSchoolKidsPage() {
   const classDetailSection = selectedClass ? (() => {
     const monthRows = (selectedClass.month_summary || []).map((row) => `<tr><td>${escHtml(schoolKidMonthLabel(row.month_key))}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(row.total || 0)}</td></tr>`).join('');
     const expenseRows = (selectedClass.expenses || []).map((expense) => `<tr><td>${fmtDate(expense.expense_date)}</td><td style="font-weight:700;color:var(--t1)">${escHtml(expense.item_name || '-')}</td><td style="text-align:right;font-weight:800;color:var(--green);${moneyStyle}">${fmtCur(expense.amount || 0)}</td><td>${escHtml(expense.notes || '-')}</td><td style="white-space:nowrap"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSchoolKidExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSchoolKidExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td></tr>`).join('');
-    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+    return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="showSchoolKidImageImportModal(${Number(selectedClass.id)})">Scan Image</button><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
   })() : '';
 
   main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${escHtml(formatSchoolKidMeta(selectedKid, { includeClassCount: true }))}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
@@ -21249,7 +21867,7 @@ function renderSchoolKidsPage() {
     return `<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div><div style="font-size:20px;font-weight:900;color:var(--t1)">${escHtml(selectedClass.school_name)} · ${escHtml(selectedClass.class_label)}</div><div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(formatAcademicYear(selectedClass.academic_year))} · total <span style="${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</span></div></div><button class="btn btn-p btn-sm" onclick="showSchoolKidExpenseModal(null, ${Number(selectedClass.id)})">+ Add Expense To This Class</button></div><div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;padding:18px 20px;border-bottom:1px solid var(--border-l)"><div class="card" style="padding:16px;background:#f7fbf8"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Expected Fees</div><div style="display:grid;gap:8px;margin-top:12px;font-size:13px;color:var(--t2)"><div style="display:flex;justify-content:space-between;gap:10px"><span>Monthly</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.expected_monthly_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Bus</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.bus_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Other</span><strong style="color:var(--green);${moneyStyle}">${fmtCur(selectedClass.other_fee || 0)}</strong></div><div style="display:flex;justify-content:space-between;gap:10px"><span>Annual Estimate</span><strong style="color:var(--t1);${moneyStyle}">${fmtCur(selectedClass.expected_annual_total || 0)}</strong></div></div>${selectedClass.details ? `<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:12px">${escHtml(selectedClass.details)}</div>` : ''}</div><div class="card" style="padding:16px;background:#fff"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Month Wise Expense</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Month</th><th style="text-align:right">Expenses</th></tr></thead><tbody>${monthRows || '<tr><td colspan="2" style="text-align:center;color:var(--t3)">No monthly expenses yet.</td></tr>'}</tbody></table></div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Thing</th><th style="text-align:right">Amount</th><th>Notes</th><th class="td-m">Actions</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No expenses recorded for this class yet.</td></tr>'}</tbody><tfoot><tr style="background:#edf8f1"><td colspan="2" style="font-weight:900;color:var(--t1)">Total</td><td style="text-align:right;font-weight:900;color:var(--green);${moneyStyle}">${fmtCur(selectedClass.total_expense || 0)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
   })() : '';
 
-  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
+  main.innerHTML = `<div class="tab-content"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><div style="font-size:28px;font-weight:800;color:var(--t1);line-height:1.1">School Kids</div><div style="font-size:14px;color:var(--t2);margin-top:6px">Track school expenses kid wise, year wise, school wise, and class wise.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-s btn-sm" onclick="loadSchoolKids()">Refresh</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImportModal()">Import Excel</button><button class="btn btn-s btn-sm" onclick="showSchoolKidImageImportModal()">Scan Image</button><button class="btn btn-p btn-sm" onclick="showSchoolKidModal()">+ Add Kid</button></div></div>${_schoolKidsLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading school kids...</div>' : (!_schoolKidsList.length ? `<div class="card" style="padding:36px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--t1)">Create your first school tracker</div><div style="font-size:14px;color:var(--t3);line-height:1.7;margin-top:8px">Add your kids, their schools and classes, then record class-wise school expenses over the years.</div><button class="btn btn-p" style="margin-top:16px" onclick="showSchoolKidModal()">+ Add Kid</button></div>` : `<div class="card" style="padding:18px 22px;margin-bottom:16px;background:linear-gradient(135deg, rgba(20,90,60,0.98) 0%, rgba(53,130,81,0.96) 100%),radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 36%);color:#fff;position:relative;overflow:hidden;border:none;box-shadow:0 24px 54px rgba(22,66,46,0.18)"><div style="position:absolute;inset:0;opacity:.14;background-image:linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);background-size:34px 34px;pointer-events:none"></div><div style="position:relative;display:grid;gap:14px"><div style="display:grid;grid-template-columns:minmax(250px,.9fr) minmax(220px,.8fr);gap:16px;align-items:start"><div><div style="font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Grand Total</div><div style="font-size:42px;font-weight:900;line-height:1.05;margin-top:8px;${moneyStyle}">${fmtCur(overview.grand_total || 0)}</div><div style="font-size:13px;color:rgba(255,255,255,.74);margin-top:8px">${_schoolKidsList.length} kids tracked · all-time</div></div><div><div style="font-size:21px;font-weight:900;color:#fff;line-height:1.1">${escHtml(selectedKid?.kid_name || 'Select a kid')}</div><div style="font-size:12px;color:rgba(255,255,255,.72);margin-top:4px">${selectedKid?.age_years != null ? `Age ${Number(selectedKid.age_years)}` : 'Age not set'}${selectedKid?.class_count ? ` · ${Number(selectedKid.class_count)} class records` : ''}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px">${kidCards}</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px"><div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>${tabsHtml}</div><div style="display:grid;gap:18px">${_schoolKidTab === 'overview' ? overviewTables : ''}${_schoolKidTab === 'kid' ? selectedKidSection : ''}${_schoolKidTab === 'class' ? classDetailSection : ''}</div>`)} </div>`;
   repairMojibakeInNode(main);
   pruneSchoolKidClassPanels(main);
   sortSchoolKidDetailRows(main);
@@ -21614,6 +22232,152 @@ function showSchoolKidImportModal() {
       <button class="btn btn-s" onclick="loadSchoolKidImportSheets()">Read File</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
+}
+
+function showSchoolKidImageImportModal(classId = null) {
+  if (!_selectedSchoolKidId) return;
+  const classes = _schoolKidDetail?.classes || [];
+  if (!classes.length) { toast('Add a school/class first.', 'warning'); return; }
+  const selectedClassId = Number(classId || _selectedSchoolKidClassId || classes[0]?.id || 0);
+  const classOptions = classes.map((row) => `<option value="${Number(row.id)}" ${Number(row.id) === selectedClassId ? 'selected' : ''}>${escHtml(row.school_name)} · ${escHtml(formatAcademicYear(row.academic_year))} · ${escHtml(row.class_label)}</option>`).join('');
+  _schoolKidScannedRows = [];
+  openModal('Scan School Fee Image', `
+    <div class="fg">
+      <label class="fl full">School / Class *
+        <select class="fi" id="schoolKidScanClass">${classOptions}</select>
+      </label>
+      <label class="fl full">Upload image(s)
+        <input type="file" class="fi" id="schoolKidScanFiles" accept="image/*" multiple>
+      </label>
+      <label class="fl">Reference Date
+        <input type="date" class="fi" id="schoolKidScanReferenceDate" value="${escHtml(todayStr())}">
+      </label>
+      <label class="fl">Default Notes
+        <input class="fi" id="schoolKidScanNotes" value="Scanned from school fee image" placeholder="Optional notes for imported rows">
+      </label>
+    </div>
+    <div style="font-size:12px;color:var(--t3);margin-top:8px">Upload one or more screenshots. The scan will try to detect each visible receipt/payment card as a separate school expense row.</div>
+    <div id="schoolKidScanPreview" style="margin-top:14px"></div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-s" onclick="scanSchoolKidImages()">Scan Image</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function renderSchoolKidImageScanPreview() {
+  const preview = document.getElementById('schoolKidScanPreview');
+  if (!preview) return;
+  const selectedCount = _schoolKidScannedRows.filter((row) => row.selected !== false).length;
+  const totalAmount = Math.round(_schoolKidScannedRows
+    .filter((row) => row.selected !== false)
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0) * 100) / 100;
+  preview.innerHTML = `
+    <div class="card" style="padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="font-size:13px;color:var(--t2)">${selectedCount} selected row${selectedCount === 1 ? '' : 's'} · total <strong style="color:var(--green)">${fmtCur(totalAmount)}</strong></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="setAllSchoolKidScanRows(true)">Select All</button>
+          <button class="btn btn-s btn-sm" onclick="setAllSchoolKidScanRows(false)">Clear All</button>
+          <button class="btn btn-p btn-sm" onclick="importSchoolKidScannedExpenses()">Import Selected</button>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th></th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th></tr></thead>
+          <tbody>
+            ${_schoolKidScannedRows.map((row, index) => `
+              <tr>
+                <td style="width:44px"><input type="checkbox" ${row.selected !== false ? 'checked' : ''} onchange="toggleSchoolKidScanRow(${index}, this.checked)"></td>
+                <td><input class="fi" type="date" value="${escHtml(row.purchase_date || todayStr())}" onchange="updateSchoolKidScanRow(${index}, 'purchase_date', this.value)" style="min-width:150px"></td>
+                <td><input class="fi" value="${escHtml(row.item_name || '')}" onchange="updateSchoolKidScanRow(${index}, 'item_name', this.value)" placeholder="Expense detail"></td>
+                <td style="min-width:140px"><input class="fi" type="number" step="0.01" min="0" value="${escHtml(String(row.amount || ''))}" onchange="updateSchoolKidScanRow(${index}, 'amount', this.value)" style="text-align:right"></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function toggleSchoolKidScanRow(index, checked) {
+  if (!_schoolKidScannedRows[index]) return;
+  _schoolKidScannedRows[index].selected = !!checked;
+  renderSchoolKidImageScanPreview();
+}
+
+function setAllSchoolKidScanRows(checked) {
+  _schoolKidScannedRows = _schoolKidScannedRows.map((row) => ({ ...row, selected: !!checked }));
+  renderSchoolKidImageScanPreview();
+}
+
+function updateSchoolKidScanRow(index, field, value) {
+  if (!_schoolKidScannedRows[index]) return;
+  if (field === 'amount') {
+    _schoolKidScannedRows[index][field] = Number(value || 0);
+  } else {
+    _schoolKidScannedRows[index][field] = String(value || '').trim();
+  }
+  renderSchoolKidImageScanPreview();
+}
+
+async function scanSchoolKidImages() {
+  const files = [...(document.getElementById('schoolKidScanFiles')?.files || [])];
+  if (!files.length) { toast('Please choose at least one image.', 'warning'); return; }
+  const preview = document.getElementById('schoolKidScanPreview');
+  if (preview) preview.innerHTML = `<div style="color:var(--t3);font-size:13px">Scanning image${files.length === 1 ? '' : 's'}...</div>`;
+  const fd = new FormData();
+  files.forEach((file) => fd.append('files', file));
+  fd.append('reference_date', document.getElementById('schoolKidScanReferenceDate')?.value || '');
+  const response = await fetch('/api/school-kids/scan-images-batch', { method: 'POST', body: fd });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    if (preview) preview.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(data?.error || 'Could not scan school fee image.')}</div>`;
+    return;
+  }
+  _schoolKidScannedRows = Array.isArray(data?.draft?.items) ? data.draft.items.map((item) => ({
+    item_name: String(item?.item_name || '').trim(),
+    amount: Number(item?.amount || 0),
+    purchase_date: String(item?.purchase_date || '').trim() || todayStr(),
+    selected: item?.selected !== false,
+  })) : [];
+  if (!_schoolKidScannedRows.length) {
+    if (preview) preview.innerHTML = `<div style="color:var(--amber);font-size:13px">No school expense rows were detected.</div>`;
+    return;
+  }
+  renderSchoolKidImageScanPreview();
+}
+
+async function importSchoolKidScannedExpenses() {
+  if (!_selectedSchoolKidId) return;
+  const classId = Number(document.getElementById('schoolKidScanClass')?.value || 0);
+  if (!(classId > 0)) { toast('Please choose a school/class first.', 'warning'); return; }
+  const notes = document.getElementById('schoolKidScanNotes')?.value?.trim() || 'Scanned from school fee image';
+  const rows = _schoolKidScannedRows.filter((row) => row.selected !== false);
+  if (!rows.length) { toast('Please keep at least one scanned row selected.', 'warning'); return; }
+  for (const row of rows) {
+    const body = {
+      class_id: classId,
+      expense_date: row.purchase_date || todayStr(),
+      item_name: String(row.item_name || '').trim(),
+      amount: Number(row.amount || 0),
+      notes,
+      add_to_expense: false,
+      expense_type: 'fair',
+      category: '',
+      bank_account_id: null,
+      card_id: null,
+      card_discount_pct: 0,
+    };
+    if (!body.item_name || !(body.amount > 0)) continue;
+    const result = await api(`/api/school-kids/${Number(_selectedSchoolKidId)}/expenses`, { method: 'POST', body });
+    if (!result?.success) {
+      toast(result?.error || `Could not import "${body.item_name}".`, 'error');
+      return;
+    }
+  }
+  closeModal();
+  _selectedSchoolKidClassId = classId;
+  toast(`Imported ${rows.length} scanned school expense row${rows.length === 1 ? '' : 's'}.`, 'success');
+  await loadSchoolKids();
 }
 
 function getSelectedSchoolKidImportSheets() {

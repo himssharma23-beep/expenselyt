@@ -1461,6 +1461,40 @@
     return amountValue;
   }
 
+  function computeTripCreateShareTotals(form) {
+    if (!form) return [];
+    const participantOptions = getTripScanParticipantOptions(form);
+    const totals = new Map(
+      participantOptions.map((person) => [
+        String(person.key),
+        {
+          key: String(person.key),
+          name: String(person.name || 'Person').trim() || 'Person',
+          amount: 0,
+        },
+      ])
+    );
+    const selectedRows = [
+      ...(form.scan_items || []).filter((item) => item?.selected !== false),
+      ...(form.manual_items || []).filter((item) => item?.selected !== false),
+    ];
+    selectedRows.forEach((row) => {
+      const split = String(row?.key || '').startsWith('trip-manual-')
+        ? computeTripManualRowSplit(row, form)
+        : computeTripScanRowSplit(row, form);
+      if (!split?.valid) return;
+      (split.shares || []).forEach((share) => {
+        const key = String(share?.key || '');
+        if (!totals.has(key)) return;
+        const current = totals.get(key);
+        current.amount = r2(n(current.amount) + n(share?.share));
+      });
+    });
+    return participantOptions
+      .map((person) => totals.get(String(person.key)))
+      .filter((entry) => entry && n(entry.amount) > 0);
+  }
+
   function getTripById(tripId) {
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return null;
@@ -4912,8 +4946,14 @@
     const scanSelectedTax = r2(scanSelectedRows.reduce((sum, item) => sum + getTripScanRowTaxShare(form, item), 0));
     const manualRows = (form.manual_items || []).map((item) => normalizeTripManualRowSplitState({ ...item }, form));
     const manualActiveRows = manualRows.filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0);
-    const manualTotal = r2(manualActiveRows.reduce((sum, item) => sum + n(item?.amount), 0));
-    const manualMyShare = r2(manualActiveRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
+    const selectedManualRows = manualActiveRows.filter((item) => item?.selected !== false);
+    const manualTotal = r2(selectedManualRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const manualMyShare = r2(selectedManualRows.reduce((sum, item) => sum + computeTripRowSelfShare(item, selectedFriendCount), 0));
+    const selectedRowCount = [...(form.scan_items || []), ...(form.manual_items || [])].filter((item) => item?.selected !== false).length;
+    const selectedSubtotal = r2(scanSelectedRows.reduce((sum, item) => sum + n(item?.amount), 0) + selectedManualRows.reduce((sum, item) => sum + n(item?.amount), 0));
+    const selectedTotalInclTax = r2(scanSelectedTotal + manualTotal);
+    const selectedMyShare = r2(scanSelectedMyShare + manualMyShare);
+    const shareTotals = computeTripCreateShareTotals(form);
     openModal('Live Split Trip - New', `
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
@@ -5011,6 +5051,11 @@
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px">
               <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Rows</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${selectedRowCount}</div>
+                <div style="font-size:11px;color:var(--t3);margin-top:4px">${tripCreatePayerOptions(form).length} participant${tripCreatePayerOptions(form).length === 1 ? '' : 's'} in split</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
                 <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Merchant</div>
                 <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${escHtml(form.scan_merchant || 'Scanned bill')}</div>
               </div>
@@ -5023,24 +5068,40 @@
                 <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${Number(form.scan_total_amount || 0) > 0 ? fmtCur(form.scan_total_amount) : 'Not found'}</div>
               </div>
               <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Subtotal</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(selectedSubtotal)}</div>
+                <div style="font-size:11px;color:var(--t3);margin-top:4px">Before tax</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Total Incl Tax</div>
+                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(selectedTotalInclTax)}</div>
+                <div style="font-size:11px;color:var(--t3);margin-top:4px">With receipt tax</div>
+              </div>
+              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
                 <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Receipt Tax</div>
                 <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(scanTaxTotal)}</div>
                 <div style="font-size:11px;color:var(--t3);margin-top:4px">${scanTaxPct > 0 ? `${(scanTaxPct * 100).toFixed(2)}% of subtotal added to split` : 'No tax detected'}</div>
                 <input class="fi" type="number" step="0.01" min="0" value="${escHtml(String(form.scan_tax_override !== '' ? form.scan_tax_override : scanTaxTotal))}" placeholder="0" style="margin-top:8px;width:100%;text-align:right" onchange="liveSplitTripScanTax(this.value)">
               </div>
               <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
-                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Rows</div>
-                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${scanSelectedRows.length}/${form.scan_items.length}</div>
-              </div>
-              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
-                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Selected Total Incl Tax</div>
-                <div style="font-size:16px;font-weight:900;color:var(--t1);margin-top:6px">${fmtCur(scanSelectedTotal)}</div>
-              </div>
-              <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
                 <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">My Share</div>
-                <div style="font-size:16px;font-weight:900;color:var(--green);margin-top:6px">${fmtCur(scanSelectedMyShare)}</div>
+                <div style="font-size:16px;font-weight:900;color:var(--green);margin-top:6px">${fmtCur(selectedMyShare)}</div>
+                <div style="font-size:11px;color:var(--t3);margin-top:4px">Across selected rows</div>
               </div>
             </div>
+            ${shareTotals.length ? `
+              <div style="margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff">
+                <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Each Share</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+                  ${shareTotals.map((entry) => `
+                    <div style="padding:8px 12px;border:1px solid #d8deea;border-radius:999px;background:#f8fbff">
+                      <span style="font-size:12px;font-weight:800;color:var(--t1)">${escHtml(entry.name)}</span>
+                      <span style="font-size:12px;color:var(--green);font-weight:900;margin-left:8px">${fmtCur(entry.amount)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
           </div>
           <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} • Receipt tax ${fmtCur(scanTaxTotal)} • Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
           ${form.scan_debug ? `

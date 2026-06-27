@@ -568,6 +568,9 @@ ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_currency_code TEXT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_amount NUMERIC(14,2);
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS conversion_rate NUMERIC(14,6);
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS card_id BIGINT;
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS card_discount_pct NUMERIC(8,2) NOT NULL DEFAULT 0;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS currency_rates (
@@ -665,6 +668,22 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_bank_user ON bank_accounts(user_id);
+
+CREATE TABLE IF NOT EXISTS bank_account_history (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bank_account_id BIGINT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+  related_bank_account_id BIGINT REFERENCES bank_accounts(id) ON DELETE SET NULL,
+  entry_type TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  amount NUMERIC(14,2) NOT NULL,
+  balance_before NUMERIC(14,2) NOT NULL DEFAULT 0,
+  balance_after NUMERIC(14,2) NOT NULL DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
+  ON bank_account_history(user_id, bank_account_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS default_payments (
   id BIGSERIAL PRIMARY KEY,
@@ -900,6 +919,7 @@ CREATE TABLE IF NOT EXISTS recurring_entries (
   due_day INTEGER NOT NULL DEFAULT 1,
   card_id BIGINT,
   bank_account_id BIGINT,
+  school_kid_id BIGINT,
   expense_category TEXT,
   discount_pct NUMERIC(8,4) NOT NULL DEFAULT 0,
   also_expense BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1195,6 +1215,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_query_logs_intent_created_at ON ai_query_logs(
 CREATE INDEX IF NOT EXISTS idx_ai_training_examples_active ON ai_training_examples(is_active, updated_at DESC);
 ALTER TABLE daily_trackers ADD COLUMN IF NOT EXISTS expense_category TEXT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
+ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS school_kid_id BIGINT;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS due_day INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS reminder_days_before INTEGER NOT NULL DEFAULT 0;

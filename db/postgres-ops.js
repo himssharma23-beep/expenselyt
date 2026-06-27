@@ -1,4 +1,5 @@
 const { query, withTransaction } = require('./postgres');
+let recurringSchemaEnsured = false;
 
 function num(value) {
   return Number(value || 0);
@@ -61,6 +62,17 @@ function normalizeReminderDaysBefore(value) {
 }
 
 function normalizeBankAccountId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function ensureRecurringSchema() {
+  if (recurringSchemaEnsured) return;
+  await query(`ALTER TABLE recurring_entries ADD COLUMN IF NOT EXISTS school_kid_id BIGINT`);
+  recurringSchemaEnsured = true;
+}
+
+function normalizeSchoolKidId(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
@@ -133,6 +145,109 @@ function dbDateToYmd(value) {
   return raw.slice(0, 10);
 }
 
+function recurringSchoolKidAcademicYearForMonth(month) {
+  const [year, monthNo] = String(month || '').split('-').map(Number);
+  if (!year || !monthNo) return null;
+  const startYear = monthNo >= 4 ? year : (year - 1);
+  const endYear = String((startYear + 1) % 100).padStart(2, '0');
+  return `${startYear}-${endYear}`;
+}
+
+function recurringSchoolKidMonthFeeLabel(month) {
+  const [year, monthNo] = String(month || '').split('-').map(Number);
+  if (!year || !monthNo) return 'Monthly fee';
+  const dt = new Date(year, monthNo - 1, 1);
+  return `${dt.toLocaleString('en-US', { month: 'long' })} fees`;
+}
+
+function recurringSchoolKidClassSortValue(row) {
+  const normalized = String(row?.class_label || '').trim().toLowerCase();
+  const map = {
+    playway: 0,
+    play: 0,
+    nursery: 1,
+    lkg: 2,
+    ukg: 3,
+    '1st': 4,
+    '2nd': 5,
+    '3rd': 6,
+    '4th': 7,
+    '5th': 8,
+    '6th': 9,
+    '7th': 10,
+    '8th': 11,
+    '9th': 12,
+    '10th': 13,
+    '11th': 14,
+    '12th': 15,
+  };
+  if (map[normalized] != null) return map[normalized];
+  const numMatch = normalized.match(/^(\d{1,2})/);
+  if (numMatch) return 100 + Number(numMatch[1]);
+  return 999;
+}
+
+async function ensureOwnedSchoolKidId(userId, value) {
+  const schoolKidId = normalizeSchoolKidId(value);
+  if (!schoolKidId) return null;
+  const result = await query(
+    `SELECT id
+     FROM school_kids
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [schoolKidId, userId]
+  );
+  if (!result.rows[0]) throw validationError('Selected school kid was not found');
+  return schoolKidId;
+}
+
+async function addRecurringSchoolKidExpenseForMonth(userId, schoolKidId, month, postingDate, description, amount, client) {
+  const kidId = normalizeSchoolKidId(schoolKidId);
+  if (!kidId) return false;
+  const academicYear = recurringSchoolKidAcademicYearForMonth(month);
+  const classesResult = await client.query(
+    `SELECT c.id, c.academic_year, c.class_label, c.school_name
+     FROM school_kid_classes c
+     INNER JOIN school_kids k ON k.id = c.kid_id
+     WHERE c.kid_id = $1
+       AND k.user_id = $2
+     ORDER BY c.academic_year DESC, lower(c.school_name), lower(c.class_label), c.id DESC`,
+    [kidId, userId]
+  );
+  const rows = classesResult.rows || [];
+  if (!rows.length) return false;
+  let classRow = rows.find((row) => String(row.academic_year || '').trim() === String(academicYear || '').trim()) || null;
+  if (!classRow && academicYear) {
+    const targetStartYear = Number(String(academicYear).slice(0, 4)) || 0;
+    const eligible = rows
+      .filter((row) => {
+        const match = String(row.academic_year || '').match(/(\d{4})/);
+        return match ? Number(match[1]) <= targetStartYear : false;
+      })
+      .sort((a, b) => {
+        const aYear = Number(String(a.academic_year || '').match(/(\d{4})/)?.[1] || 0);
+        const bYear = Number(String(b.academic_year || '').match(/(\d{4})/)?.[1] || 0);
+        if (bYear !== aYear) return bYear - aYear;
+        return recurringSchoolKidClassSortValue(b) - recurringSchoolKidClassSortValue(a);
+      });
+    classRow = eligible[0] || null;
+  }
+  if (!classRow) return false;
+  await client.query(
+    `INSERT INTO school_kid_expenses (kid_id, class_id, expense_date, item_name, amount, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+    [
+      kidId,
+      Number(classRow.id),
+      postingDate,
+      description,
+      amount,
+      recurringSchoolKidMonthFeeLabel(month),
+    ]
+  );
+  return true;
+}
+
 const TRACKER_PRICE_BASELINE_DATE = '1900-01-01';
 
 function monthStartFromYmd(value) {
@@ -188,17 +303,89 @@ async function getDefaultBankAccountId(userId, client = null) {
   return result.rows[0] ? Number(result.rows[0].id) : null;
 }
 
-async function adjustBankBalance(userId, bankAccountId, delta, client = null) {
+let bankAccountHistorySchemaReadyPromise = null;
+
+async function ensureBankAccountHistorySchema(run = null) {
+  if (!bankAccountHistorySchemaReadyPromise) {
+    const db = run || { query };
+    bankAccountHistorySchemaReadyPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS bank_account_history (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          bank_account_id BIGINT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+          related_bank_account_id BIGINT REFERENCES bank_accounts(id) ON DELETE SET NULL,
+          entry_type TEXT NOT NULL,
+          direction TEXT NOT NULL,
+          amount NUMERIC(14,2) NOT NULL,
+          balance_before NUMERIC(14,2) NOT NULL DEFAULT 0,
+          balance_after NUMERIC(14,2) NOT NULL DEFAULT 0,
+          note TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
+        ON bank_account_history(user_id, bank_account_id, created_at DESC)
+      `);
+    })().catch((err) => {
+      bankAccountHistorySchemaReadyPromise = null;
+      throw err;
+    });
+  }
+  return bankAccountHistorySchemaReadyPromise;
+}
+
+async function appendBankHistory(userId, bankAccountId, delta, client = null, meta = {}) {
   const normalizedId = normalizeBankAccountId(bankAccountId);
   const amount = Number(delta || 0);
-  if (!normalizedId || !amount) return;
+  if (!normalizedId || !amount) return null;
   const run = client || { query };
+  await ensureBankAccountHistorySchema(run);
+  const currentR = await run.query(
+    `SELECT id, bank_name, account_name, balance
+     FROM bank_accounts
+     WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+     LIMIT 1`,
+    [normalizedId, userId]
+  );
+  const current = currentR.rows[0] || null;
+  if (!current) return null;
+  const balanceBefore = num(current.balance);
+  const balanceAfter = Math.round((balanceBefore + amount) * 100) / 100;
   await run.query(
     `UPDATE bank_accounts
-     SET balance = balance + $1, updated_at = NOW(), updated_by = $3
+     SET balance = $1, updated_at = NOW(), updated_by = $3
      WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
-    [amount, normalizedId, userId]
+    [balanceAfter, normalizedId, userId]
   );
+  await run.query(
+    `INSERT INTO bank_account_history (
+       user_id, bank_account_id, related_bank_account_id, entry_type, direction, amount,
+       balance_before, balance_after, note
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      userId,
+      normalizedId,
+      normalizeBankAccountId(meta.related_bank_account_id),
+      String(meta.entry_type || 'balance_change').trim() || 'balance_change',
+      amount >= 0 ? 'credit' : 'debit',
+      Math.abs(amount),
+      balanceBefore,
+      balanceAfter,
+      meta.note != null ? String(meta.note).trim() : null,
+    ]
+  );
+  return {
+    bank_account_id: normalizedId,
+    balance_before: balanceBefore,
+    balance_after: balanceAfter,
+    amount,
+  };
+}
+
+async function adjustBankBalance(userId, bankAccountId, delta, client = null, meta = {}) {
+  await appendBankHistory(userId, bankAccountId, delta, client, meta);
 }
 
 async function insertTrackerMonthExpense(userId, tracker, year, month, client, bankAccountId = null, expenseMonth = null, expenseCategory = null) {
@@ -734,6 +921,47 @@ async function getBankAccounts(userId) {
   return result.rows.map((row) => ({ ...row, balance: num(row.balance), min_balance: num(row.min_balance), is_default: !!row.is_default, is_active: !!row.is_active }));
 }
 
+async function getBankAccountHistory(userId, bankAccountId, limit = 200) {
+  const normalizedId = normalizeBankAccountId(bankAccountId);
+  if (!normalizedId) throw validationError('Bank account is required');
+  await ensureBankAccountHistorySchema();
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+  const result = await query(
+    `SELECT
+       h.*,
+       b.bank_name,
+       b.account_name,
+       rb.bank_name AS related_bank_name,
+       rb.account_name AS related_account_name
+     FROM bank_account_history h
+     JOIN bank_accounts b
+       ON b.id = h.bank_account_id
+     LEFT JOIN bank_accounts rb
+       ON rb.id = h.related_bank_account_id
+     WHERE h.user_id = $1
+       AND h.bank_account_id = $2
+     ORDER BY h.created_at DESC, h.id DESC
+     LIMIT $3`,
+    [userId, normalizedId, safeLimit]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    bank_account_id: Number(row.bank_account_id),
+    related_bank_account_id: row.related_bank_account_id ? Number(row.related_bank_account_id) : null,
+    bank_name: row.bank_name || '',
+    account_name: row.account_name || '',
+    related_bank_name: row.related_bank_name || '',
+    related_account_name: row.related_account_name || '',
+    entry_type: row.entry_type || 'balance_change',
+    direction: row.direction || 'credit',
+    amount: num(row.amount),
+    balance_before: num(row.balance_before),
+    balance_after: num(row.balance_after),
+    note: row.note || '',
+    created_at: row.created_at,
+  }));
+}
+
 async function addBankAccount(userId, account) {
   return withTransaction(async (client) => {
     const bankName = normalizeText(account.bank_name, 'Bank name', 80);
@@ -751,6 +979,15 @@ async function addBankAccount(userId, account) {
     if (countR.rows[0]?.c === 1) {
       await client.query('UPDATE bank_accounts SET is_default = TRUE WHERE id = $1', [id]);
     }
+    if (balance > 0) {
+      await ensureBankAccountHistorySchema(client);
+      await client.query(
+        `INSERT INTO bank_account_history (
+           user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
+         ) VALUES ($1, $2, 'opening_balance', 'credit', $3, 0, $3, $4)`,
+        [userId, id, balance, 'Opening balance']
+      );
+    }
     return id;
   });
 }
@@ -760,17 +997,80 @@ async function updateBankAccount(userId, id, account) {
   const accountName = normalizeOptionalText(account.account_name, 80);
   const balance = normalizeNonNegativeAmount(account.balance || 0, 'Balance');
   const minBalance = normalizeNonNegativeAmount(account.min_balance || 0, 'Minimum balance');
-  await query(
-    `UPDATE bank_accounts
-     SET bank_name = $1, account_name = $2, account_type = $3, balance = $4, min_balance = $5, updated_at = NOW(), updated_by = $7
-     WHERE id = $6 AND user_id = $7`,
-    [bankName, accountName, account.account_type || 'savings', balance, minBalance, id, userId]
-  );
+  await withTransaction(async (client) => {
+    const currentR = await client.query(
+      `SELECT balance
+       FROM bank_accounts
+       WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+       LIMIT 1`,
+      [id, userId]
+    );
+    const current = currentR.rows[0] || null;
+    if (!current) throw validationError('Bank account not found');
+    const prevBalance = num(current.balance);
+    await client.query(
+      `UPDATE bank_accounts
+       SET bank_name = $1, account_name = $2, account_type = $3, balance = $4, min_balance = $5, updated_at = NOW(), updated_by = $7
+       WHERE id = $6 AND user_id = $7`,
+      [bankName, accountName, account.account_type || 'savings', balance, minBalance, id, userId]
+    );
+    const delta = Math.round((balance - prevBalance) * 100) / 100;
+    if (delta !== 0) {
+      await ensureBankAccountHistorySchema(client);
+      await client.query(
+        `INSERT INTO bank_account_history (
+           user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
+         ) VALUES ($1, $2, 'balance_set', $3, $4, $5, $6, $7)`,
+        [
+          userId,
+          Number(id),
+          delta >= 0 ? 'credit' : 'debit',
+          Math.abs(delta),
+          prevBalance,
+          balance,
+          'Balance edited from account settings',
+        ]
+      );
+    }
+  });
 }
 
 async function updateBankBalance(userId, id, balance) {
   const nextBalance = normalizeNonNegativeAmount(balance, 'Balance');
-  await query('UPDATE bank_accounts SET balance = $1, updated_at = NOW(), updated_by = $3 WHERE id = $2 AND user_id = $3', [nextBalance, id, userId]);
+  await withTransaction(async (client) => {
+    const currentR = await client.query(
+      `SELECT balance
+       FROM bank_accounts
+       WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
+       LIMIT 1`,
+      [id, userId]
+    );
+    const current = currentR.rows[0] || null;
+    if (!current) throw validationError('Bank account not found');
+    const prevBalance = num(current.balance);
+    await client.query(
+      'UPDATE bank_accounts SET balance = $1, updated_at = NOW(), updated_by = $3 WHERE id = $2 AND user_id = $3',
+      [nextBalance, id, userId]
+    );
+    const delta = Math.round((nextBalance - prevBalance) * 100) / 100;
+    if (delta !== 0) {
+      await ensureBankAccountHistorySchema(client);
+      await client.query(
+        `INSERT INTO bank_account_history (
+           user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
+         ) VALUES ($1, $2, 'balance_set', $3, $4, $5, $6, $7)`,
+        [
+          userId,
+          Number(id),
+          delta >= 0 ? 'credit' : 'debit',
+          Math.abs(delta),
+          prevBalance,
+          nextBalance,
+          'Balance edited manually',
+        ]
+      );
+    }
+  });
 }
 
 async function setDefaultBankAccount(userId, id) {
@@ -816,18 +1116,20 @@ async function transferBetweenBankAccounts(userId, payload = {}) {
       throw validationError('Transfer amount exceeds spendable balance in source account');
     }
 
-    await client.query(
-      `UPDATE bank_accounts
-       SET balance = balance - $1, updated_at = NOW(), updated_by = $3
-       WHERE id = $2 AND user_id = $3`,
-      [amount, fromBankId, userId]
-    );
-    await client.query(
-      `UPDATE bank_accounts
-       SET balance = balance + $1, updated_at = NOW(), updated_by = $3
-       WHERE id = $2 AND user_id = $3`,
-      [amount, toBankId, userId]
-    );
+    const sourceLabel = [source.bank_name, source.account_name].filter(Boolean).join(' - ');
+    const targetLabel = [target.bank_name, target.account_name].filter(Boolean).join(' - ');
+    const cleanNotes = payload.notes ? String(payload.notes).trim() : '';
+
+    await adjustBankBalance(userId, fromBankId, -amount, client, {
+      entry_type: 'transfer_out',
+      related_bank_account_id: toBankId,
+      note: cleanNotes || `Transfer to ${targetLabel}`,
+    });
+    await adjustBankBalance(userId, toBankId, amount, client, {
+      entry_type: 'transfer_in',
+      related_bank_account_id: fromBankId,
+      note: cleanNotes || `Transfer from ${sourceLabel}`,
+    });
 
     return {
       success: true,
@@ -2170,11 +2472,14 @@ async function importHabitEntries(userId, trackerId, items = []) {
 }
 
 async function getRecurringEntries(userId) {
+  await ensureRecurringSchema();
   const result = await query(
-    `SELECT r.*, c.card_name, c.bank_name, c.last4, b.bank_name AS recurring_bank_name, b.account_name AS recurring_account_name
+    `SELECT r.*, c.card_name, c.bank_name, c.last4, b.bank_name AS recurring_bank_name, b.account_name AS recurring_account_name,
+            sk.kid_name AS school_kid_name
      FROM recurring_entries r
      LEFT JOIN credit_cards c ON r.card_id = c.id
      LEFT JOIN bank_accounts b ON r.bank_account_id = b.id
+     LEFT JOIN school_kids sk ON r.school_kid_id = sk.id
      WHERE r.user_id = $1 AND r.deleted_at IS NULL
      ORDER BY r.created_at DESC`,
     [userId]
@@ -2188,6 +2493,7 @@ async function getRecurringEntries(userId) {
     reminder_days_before: normalizeReminderDaysBefore(row.reminder_days_before),
     reminder_frequency: normalizeReminderFrequency(row.reminder_frequency),
     reminder_silent: !!row.reminder_silent,
+    school_kid_id: row.school_kid_id != null ? Number(row.school_kid_id) : null,
     also_expense: !!row.also_expense,
     is_extra: !!row.is_extra,
     is_active: !!row.is_active,
@@ -2195,6 +2501,7 @@ async function getRecurringEntries(userId) {
 }
 
 async function addRecurringEntry(userId, data) {
+  await ensureRecurringSchema();
   const description = normalizeText(data.description, 'Recurring description', 160);
   const amount = normalizePositiveAmount(data.amount);
   const expenseCategory = normalizeOptionalText(data.expense_category, 80);
@@ -2203,9 +2510,10 @@ async function addRecurringEntry(userId, data) {
   const reminderDaysBefore = normalizeReminderDaysBefore(data.reminder_days_before);
   const reminderFrequency = normalizeReminderFrequency(data.reminder_frequency);
   const reminderSilent = !!data.reminder_silent;
+  const schoolKidId = data.school_kid_id ? await ensureOwnedSchoolKidId(userId, data.school_kid_id) : null;
   const result = await query(
-    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, due_day, card_id, bank_account_id, expense_category, discount_pct, also_expense, is_extra, reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $1, $1)
+    `INSERT INTO recurring_entries (user_id, type, description, amount, interval_months, start_month, due_day, card_id, bank_account_id, school_kid_id, expense_category, discount_pct, also_expense, is_extra, reminder_enabled, reminder_days_before, reminder_frequency, reminder_silent, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $1, $1)
      RETURNING id`,
     [
       userId,
@@ -2217,6 +2525,7 @@ async function addRecurringEntry(userId, data) {
       dueDay,
       data.card_id || null,
       normalizeBankAccountId(data.bank_account_id),
+      schoolKidId,
       expenseCategory,
       parseFloat(data.discount_pct) || 0,
       !!data.also_expense,
@@ -2231,6 +2540,7 @@ async function addRecurringEntry(userId, data) {
 }
 
 async function applyRecurringEntryForCurrentMonth(userId, entryId) {
+  await ensureRecurringSchema();
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const entryR = await query('SELECT * FROM recurring_entries WHERE id = $1 AND user_id = $2 LIMIT 1', [entryId, userId]);
@@ -2254,6 +2564,17 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
       );
       if (bankAccountId) {
         await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
+      }
+      if (entry.school_kid_id) {
+        await addRecurringSchoolKidExpenseForMonth(
+          userId,
+          entry.school_kid_id,
+          currentMonth,
+          postingDate,
+          entry.description,
+          num(entry.amount),
+          client
+        );
       }
       await client.query(
         `UPDATE monthly_payments
@@ -2280,11 +2601,22 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
       if (entry.also_expense) {
         const bankAccountId = normalizeBankAccountId(entry.bank_account_id);
         await client.query(
-          `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $5, FALSE, $6, $1, $1)`,
-          [userId, entry.description, entry.expense_category || null, entry.amount, postingDate, bankAccountId]
+          `INSERT INTO expenses (user_id, item_name, category, amount, purchase_date, is_extra, bank_account_id, source, source_id, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $1, $1)`,
+          [userId, entry.description, entry.expense_category || null, entry.amount, postingDate, bankAccountId, 'recurring', Number(entry.id)]
         );
         if (bankAccountId) await adjustBankBalance(userId, bankAccountId, -num(entry.amount), client);
+        if (entry.school_kid_id) {
+          await addRecurringSchoolKidExpenseForMonth(
+            userId,
+            entry.school_kid_id,
+            currentMonth,
+            postingDate,
+            entry.description,
+            num(entry.amount),
+            client
+          );
+        }
       }
     } else {
       throw new Error('Recurring entry type is not supported');
@@ -2295,6 +2627,7 @@ async function applyRecurringEntryForCurrentMonth(userId, entryId) {
 }
 
 async function updateRecurringEntry(userId, id, data) {
+  await ensureRecurringSchema();
   const type = data.type === 'cc_txn' ? 'cc_txn' : 'expense';
   const description = normalizeText(data.description, 'Recurring description', 160);
   const amount = normalizePositiveAmount(data.amount);
@@ -2306,6 +2639,7 @@ async function updateRecurringEntry(userId, id, data) {
   const reminderSilent = !!data.reminder_silent;
   const intervalMonths = Math.max(1, parseInt(data.interval_months, 10) || 1);
   const bankAccountId = type === 'expense' ? normalizeBankAccountId(data.bank_account_id) : null;
+  const schoolKidId = data.school_kid_id ? await ensureOwnedSchoolKidId(userId, data.school_kid_id) : null;
   const cardId = type === 'cc_txn' ? (parseInt(data.card_id, 10) || null) : null;
   const discountPct = type === 'cc_txn' ? (parseFloat(data.discount_pct) || 0) : 0;
   const alsoExpense = type === 'cc_txn' ? !!data.also_expense : false;
@@ -2315,10 +2649,10 @@ async function updateRecurringEntry(userId, id, data) {
     await client.query(
       `UPDATE recurring_entries
        SET type = $1, description = $2, amount = $3, interval_months = $4, start_month = $5, due_day = $6, card_id = $7,
-           bank_account_id = $8, expense_category = $9, discount_pct = $10, also_expense = $11, is_extra = $12,
-           reminder_enabled = $13, reminder_days_before = $14, reminder_frequency = $15, reminder_silent = $16,
-           is_active = $17, updated_at = NOW(), updated_by = $19
-       WHERE id = $18 AND user_id = $19`,
+           bank_account_id = $8, school_kid_id = $9, expense_category = $10, discount_pct = $11, also_expense = $12, is_extra = $13,
+           reminder_enabled = $14, reminder_days_before = $15, reminder_frequency = $16, reminder_silent = $17,
+           is_active = $18, updated_at = NOW(), updated_by = $20
+       WHERE id = $19 AND user_id = $20`,
       [
         type,
         description,
@@ -2328,6 +2662,7 @@ async function updateRecurringEntry(userId, id, data) {
         dueDay,
         cardId,
         bankAccountId,
+        schoolKidId,
         expenseCategory,
         discountPct,
         alsoExpense,
@@ -2368,10 +2703,12 @@ async function updateRecurringEntry(userId, id, data) {
 }
 
 async function deleteRecurringEntry(userId, id) {
+  await ensureRecurringSchema();
   await query('DELETE FROM recurring_entries WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
 async function applyRecurringEntries(userId) {
+  await ensureRecurringSchema();
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const entries = await getRecurringEntries(userId);
@@ -2439,6 +2776,7 @@ module.exports = {
   findAiTrainingExample,
   getAiQueryHistory,
   getBankAccounts,
+  getBankAccountHistory,
   addBankAccount,
   updateBankAccount,
   updateBankBalance,
