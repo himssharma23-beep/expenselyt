@@ -9590,6 +9590,7 @@ async function deleteShareLink(id) {
 // ADMIN PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let adminSection = 'users'; // users | expense_stats | public_stats | plans | subscriptions | notifications | portal_access | ai | currencies
+let _adminBackupDownloading = false;
 let _adminExpenseStatsSearch = '';
 let _adminNotifUsers = [];
 let _adminNotifSelected = new Set();
@@ -9733,10 +9734,65 @@ function renderAdminShell() {
   ).join('');
   document.getElementById('main').innerHTML = `
     <div class="tab-content admin-shell">
-      <div class="admin-title">Admin Panel</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div class="admin-title">Admin Panel</div>
+        <button
+          id="adminBackupBtn"
+          class="btn btn-p btn-sm"
+          onclick="adminDownloadDatabaseBackup()"
+          ${_adminBackupDownloading ? 'disabled' : ''}
+        >${_adminBackupDownloading ? 'Preparing backup...' : 'Download Live DB Backup'}</button>
+      </div>
       <div class="admin-tabs admin-tabs-scroll">${tabHtml}</div>
       <div id="adminContent"></div>
     </div>`;
+}
+
+function syncAdminBackupButton() {
+  const btn = document.getElementById('adminBackupBtn');
+  if (!btn) return;
+  btn.disabled = !!_adminBackupDownloading;
+  btn.textContent = _adminBackupDownloading ? 'Preparing backup...' : 'Download Live DB Backup';
+}
+
+async function adminDownloadDatabaseBackup() {
+  if (_adminBackupDownloading) return;
+  _adminBackupDownloading = true;
+  syncAdminBackupButton();
+  try {
+    const res = await fetch('/api/admin/database/backup/download', {
+      method: 'GET',
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      let message = 'Could not download database backup.';
+      try {
+        const data = await res.json();
+        if (data?.error) message = data.error;
+      } catch (_err) {}
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const disposition = String(res.headers.get('content-disposition') || '');
+    const fileNameMatch = disposition.match(/filename\*?=(?:UTF-8''|\"?)([^\";]+)/i);
+    const fileName = fileNameMatch?.[1]
+      ? decodeURIComponent(fileNameMatch[1].replace(/\"/g, ''))
+      : `database-backup-${Date.now()}.sql`;
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
+    toast('Database backup downloaded.', 'success');
+  } catch (err) {
+    toast(err?.message || 'Could not download database backup.', 'error');
+  } finally {
+    _adminBackupDownloading = false;
+    syncAdminBackupButton();
+  }
 }
 
 async function loadAdminPortalAccess(page = _adminPortalAccessState.page || 1) {

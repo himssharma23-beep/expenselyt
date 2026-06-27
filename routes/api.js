@@ -58,6 +58,7 @@ const VIDEO_MOBILE_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-mobile
 const VIDEO_AUDIO_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-audio-cache');
 const VIDEO_ALT_STREAM_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-alt-stream-cache');
 const VIDEO_HLS_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-hls-cache');
+const DB_BACKUP_DIR = path.resolve(process.cwd(), 'data', 'db-backups');
 const mobileVideoTranscodePromises = new Map();
 const audioClipCachePromises = new Map();
 const altVideoCachePromises = new Map();
@@ -70,6 +71,94 @@ const videoPrepareActiveKeys = new Set();
 const videoPrepareCancelledKeys = new Set();
 const videoPrepareActiveProcesses = new Map();
 let videoPrepareWorkerPromise = null;
+
+function backupTimestamp(date = new Date()) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;
+}
+
+function resolvePgDumpCommand() {
+  const configured = String(process.env.PG_DUMP_PATH || '').trim();
+  const candidates = configured
+    ? [configured]
+    : process.platform === 'win32'
+      ? [
+          'pg_dump',
+          'C:\\Program Files\\PostgreSQL\\17\\bin\\pg_dump.exe',
+          'C:\\Program Files\\PostgreSQL\\16\\bin\\pg_dump.exe',
+          'C:\\Program Files\\PostgreSQL\\15\\bin\\pg_dump.exe',
+          'C:\\Program Files\\PostgreSQL\\14\\bin\\pg_dump.exe',
+          'C:\\Program Files\\PostgreSQL\\13\\bin\\pg_dump.exe',
+        ]
+      : ['pg_dump', '/usr/bin/pg_dump', '/usr/local/bin/pg_dump'];
+
+  for (const candidate of candidates) {
+    try {
+      const probe = spawnSync(candidate, ['--version'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (!probe.error && Number(probe.status) === 0) return candidate;
+    } catch (_err) {}
+  }
+  throw new Error('pg_dump is not available on this server. Set PG_DUMP_PATH in the environment first.');
+}
+
+async function createPostgresBackupFile() {
+  await fs.promises.mkdir(DB_BACKUP_DIR, { recursive: true });
+  const dbName = String(process.env.PGDATABASE || '').trim();
+  if (!dbName) throw new Error('PGDATABASE is not configured.');
+
+  const fileName = `${dbName}-backup-${backupTimestamp()}.sql`;
+  const outputPath = path.join(DB_BACKUP_DIR, fileName);
+  const pgDumpCommand = resolvePgDumpCommand();
+  const args = [
+    '--host', String(process.env.PGHOST || '127.0.0.1'),
+    '--port', String(process.env.PGPORT || '5432'),
+    '--username', String(process.env.PGUSER || ''),
+    '--dbname', dbName,
+    '--clean',
+    '--if-exists',
+    '--no-owner',
+    '--no-privileges',
+    '--encoding=UTF8',
+    '--file', outputPath,
+  ];
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(pgDumpCommand, args, {
+      env: {
+        ...process.env,
+        PGPASSWORD: String(process.env.PGPASSWORD || ''),
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk || '');
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (Number(code) === 0) return resolve();
+      reject(new Error(String(stderr || `pg_dump failed with exit code ${code}`).trim()));
+    });
+  });
+
+  const stats = await fs.promises.stat(outputPath);
+  return {
+    fileName,
+    outputPath,
+    size: Number(stats.size || 0),
+    createdAt: new Date().toISOString(),
+  };
+}
 
 function hashMobileVideoKey(target) {
   return crypto
@@ -9302,6 +9391,15 @@ router.get('/admin/public-stats', requireAdmin, async (req, res) => {
     res.json({ stats });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/database/backup/download', requireAdmin, async (_req, res) => {
+  try {
+    const backup = await createPostgresBackupFile();
+    res.download(backup.outputPath, backup.fileName);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not create database backup.' });
   }
 });
 
