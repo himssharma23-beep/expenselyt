@@ -22,10 +22,21 @@ const { sendContactAckEmail, sendContactEmail, isEmailEnabled } = require('./uti
 const { sendMonthlySummaryEmailsForCurrentMonth, sendRecurringAppliedEmailForUser } = require('./utils/user-email-events');
 const { runPushNotificationCycle } = require('./utils/user-push-events');
 const { verifyRecaptcha } = require('./utils/recaptcha');
+const {
+  assertSecureRuntimeConfig,
+  corsForApp,
+  enforceSameOriginForSessionWrites,
+  isProductionLike,
+  publicContactRateLimiter,
+  securityHeaders,
+} = require('./middleware/security');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 assertPostgresConfigured();
+assertSecureRuntimeConfig();
+app.disable('x-powered-by');
+if (isProductionLike()) app.set('trust proxy', 1);
 
 // Ensure data directory exists
 const fs = require('fs');
@@ -33,13 +44,8 @@ if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
 if (!fs.existsSync('./public/uploads/profile')) fs.mkdirSync('./public/uploads/profile', { recursive: true });
 
 // ─── CORS (for mobile app) ────────────────────────────────────
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-Platform, X-Client-Name, X-Device-Name');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+app.use(securityHeaders);
+app.use(corsForApp);
 
 // ─── Middleware ───────────────────────────────────────────────
 app.use(express.json({ limit: '25mb' }));
@@ -57,12 +63,15 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'expense-manager-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
+  name: process.env.SESSION_COOKIE_NAME || 'expense_lite.sid',
   cookie: {
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     httpOnly: true,
     sameSite: 'lax',
+    secure: isProductionLike(),
   }
 }));
+app.use(enforceSameOriginForSessionWrites);
 
 // Static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -235,7 +244,7 @@ app.get('/api/public/tenant-invoice-month/:token', (req, res) => {
   });
 });
 
-app.post('/api/public/contact', async (req, res) => {
+app.post('/api/public/contact', publicContactRateLimiter, async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();

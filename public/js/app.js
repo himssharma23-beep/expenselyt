@@ -13,6 +13,8 @@ let _currentUser = null;
 let dashFilters = { year: new Date().getFullYear() };
 let expFilters = { year: new Date().getFullYear(), month: new Date().getMonth(), search: '', spendType: 'all', sortField: 'date', sortDir: 'desc', page: 1, pageSize: 50 };
 let _expenseCache = [];
+let _expenseIncomeHistoryCache = [];
+let _expenseIncomeHistoryCacheUserId = null;
 let _expenseCategories = [];
 let _expenseCategoryLibrary = [];
 let _activeExpenseForm = null;
@@ -39,6 +41,89 @@ const EXPENSE_CATEGORY_ACTION_ICONS = {
   expand: '&#8595;',
   collapse: '&#8593;',
 };
+
+const EXPENSE_PAGE_PREFERENCES_STORAGE_KEY = 'expense_page_preferences_v1';
+
+function readExpensePagePreferences() {
+  try {
+    return JSON.parse(localStorage.getItem(EXPENSE_PAGE_PREFERENCES_STORAGE_KEY) || '{}') || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeExpensePagePreferences(value) {
+  localStorage.setItem(EXPENSE_PAGE_PREFERENCES_STORAGE_KEY, JSON.stringify(value || {}));
+}
+
+function getExpensePagePreferenceUserKey() {
+  return String(_currentUserId || _currentUser?.id || 'guest');
+}
+
+function getShowExpensePageIncomeHistoryPreference() {
+  const all = readExpensePagePreferences();
+  return !!all?.[getExpensePagePreferenceUserKey()]?.showExpensePageIncomeHistory;
+}
+
+function setShowExpensePageIncomeHistoryPreference(value) {
+  const all = readExpensePagePreferences();
+  all[getExpensePagePreferenceUserKey()] = {
+    ...(all?.[getExpensePagePreferenceUserKey()] || {}),
+    showExpensePageIncomeHistory: !!value,
+  };
+  writeExpensePagePreferences(all);
+}
+
+function bankHistoryDateOnly(value) {
+  const raw = String(value || '').trim();
+  const ymd = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (ymd) return ymd[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+async function ensureExpenseIncomeHistoryLoaded(force = false) {
+  const userKey = getExpensePagePreferenceUserKey();
+  if (!force && _expenseIncomeHistoryCacheUserId === userKey && Array.isArray(_expenseIncomeHistoryCache)) {
+    return _expenseIncomeHistoryCache;
+  }
+  if (!_bankAccounts.length) {
+    _expenseIncomeHistoryCache = [];
+    _expenseIncomeHistoryCacheUserId = userKey;
+    return _expenseIncomeHistoryCache;
+  }
+  const historyResults = await Promise.all(
+    _bankAccounts.map((bank) =>
+      api(`/api/banks/${Number(bank.id)}/history`)
+        .then((result) => [bank, Array.isArray(result?.history) ? result.history : []])
+        .catch(() => [bank, []])
+    )
+  );
+  _expenseIncomeHistoryCache = historyResults
+    .flatMap(([bank, rows]) =>
+      rows
+        .filter((entry) => String(entry?.entry_type || '').toLowerCase() === 'fund_added')
+        .map((entry) => ({
+          id: `income-${bank.id}-${entry.id || entry.created_at || Math.random()}`,
+          item_name: String(entry?.note || '').trim() || 'Income Added',
+          amount: Number(entry?.amount || 0),
+          purchase_date: bankHistoryDateOnly(entry?.created_at) || new Date().toISOString().slice(0, 10),
+          is_extra: false,
+          is_income_history: true,
+          bank_account_id: Number(bank?.id || 0) || null,
+          bank_name: bank?.bank_name || '',
+          account_name: bank?.account_name || '',
+          created_at: entry?.created_at || '',
+        }))
+    )
+    .filter((item) => Number(item.amount) > 0);
+  _expenseIncomeHistoryCacheUserId = userKey;
+  return _expenseIncomeHistoryCache;
+}
 let _expenseScanCommonDate = '';
 let _expenseScanCommonChargeMode = 'none';
 let _expenseScanCommonCardId = '';
@@ -1423,6 +1508,7 @@ async function checkAppUpdateStatus() {
 function showProfileSettings() {
   if (!_currentUser) return;
   const currencyCode = _currentUser.currency_code || 'INR';
+  const showIncomeHistory = getShowExpensePageIncomeHistoryPreference();
   openModal('Profile Settings', `
     <div class="fg">
       <label class="fl">Display Name<input class="fi" id="pfName" value="${escHtml(_currentUser.display_name || '')}"></label>
@@ -1443,6 +1529,16 @@ function showProfileSettings() {
         <label class="fl"><input class="fi" id="pfNewPwd" type="password" placeholder="New password"></label>
         <label class="fl full"><input class="fi" id="pfConfirmPwd" type="password" placeholder="Confirm new password"></label>
       </div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:12px">
+      <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:10px">APP PREFERENCES</div>
+      <label style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:#fff">
+        <div style="min-width:0">
+          <div style="font-weight:700;color:var(--t1)">Show income history in Expenses list</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">Show bank top-up history inside the Expenses list. These income rows do not affect expense totals.</div>
+        </div>
+        <input id="pfShowExpenseIncomeHistory" type="checkbox" ${showIncomeHistory ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--green);margin-top:2px">
+      </label>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
@@ -1576,6 +1672,7 @@ async function saveProfileSettings() {
   const email = document.getElementById('pfEmail').value.trim();
   const mobile = document.getElementById('pfMobile').value.trim();
   const currency_code = document.getElementById('pfCurrency').value;
+  const showExpenseIncomeHistory = !!document.getElementById('pfShowExpenseIncomeHistory')?.checked;
   const currencyPrefs = typeof getCurrencyPrefsForCode === 'function'
     ? getCurrencyPrefsForCode(currency_code, _currentUser?.locale_code)
     : { currency_code, locale_code: _currentUser?.locale_code || 'en-IN' };
@@ -1599,6 +1696,7 @@ async function saveProfileSettings() {
   });
   if (!profileRes?.success) { toast(profileRes?.error || 'Profile update failed', 'error'); return; }
   if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(profileRes.user || currencyPrefs);
+  setShowExpensePageIncomeHistoryPreference(showExpenseIncomeHistory);
 
   if (current_password || new_password || confirm_password) {
     if (!current_password || !new_password || !confirm_password) { toast('Fill all password fields to change password', 'warning'); return; }
@@ -1613,6 +1711,7 @@ async function saveProfileSettings() {
   await refreshCurrentUser();
   closeModal();
   toast('Profile updated', 'success');
+  if (currentTab === 'expenses') loadExpenses();
 }
 
 async function deleteOwnAccount() {
@@ -2056,6 +2155,23 @@ async function loadExpenses() {
   }
 
   let list = data.expenses || [];
+  if (getShowExpensePageIncomeHistoryPreference() && f.spendType === 'all') {
+    try {
+      const incomeRows = await ensureExpenseIncomeHistoryLoaded();
+      const q = String(f.search || '').trim().toLowerCase();
+      const filteredIncomeRows = incomeRows.filter((item) => {
+        const yearOk = f.year === null ? true : Number(String(item.purchase_date || '').slice(0, 4)) === Number(f.year);
+        const monthOk = f.month === null ? true : Number(String(item.purchase_date || '').slice(5, 7)) === (Number(f.month) + 1);
+        const searchOk =
+          !q ||
+          String(item.item_name || '').toLowerCase().includes(q) ||
+          String(item.bank_name || '').toLowerCase().includes(q) ||
+          String(item.account_name || '').toLowerCase().includes(q);
+        return yearOk && monthOk && searchOk;
+      });
+      list = [...list, ...filteredIncomeRows];
+    } catch (_) {}
+  }
   _expenseCache = list.slice();
   list.sort((a, b) => {
     let va, vb;
@@ -2170,9 +2286,9 @@ async function loadExpenses() {
                 ${expenseSourceLabel(e) ? `<div style="font-size:11px;color:var(--t3);margin-top:3px">${escHtml(expenseSourceLabel(e))}</div>` : ''}
               </td>
               <td>${expenseCategoryDisplayText(e.category, e.subcategory) ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(expenseCategoryDisplayText(e.category, e.subcategory))}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
-              <td class="td-m" style="font-weight:600">${fmtCur(e.amount)}</td>
-              <td><span class="badge ${e.is_extra?'b-extra':'b-fair'}">${e.is_extra?'Extra':'Fair'}</span></td>
-              <td><button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button></td>
+              <td class="td-m" style="font-weight:600;${e.is_income_history ? 'color:var(--green)' : ''}">${e.is_income_history ? '+' : ''}${fmtCur(e.amount)}</td>
+              <td><span class="badge ${e.is_income_history ? '' : e.is_extra?'b-extra':'b-fair'}" ${e.is_income_history ? 'style="background:#eaf8f0;color:var(--green)"' : ''}>${e.is_income_history ? 'Income' : e.is_extra?'Extra':'Fair'}</span></td>
+              <td>${e.is_income_history ? '<span style="font-size:12px;color:var(--t3)">Bank</span>' : `<button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button>`}</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -2390,6 +2506,8 @@ async function saveExpense(id) {
     toast(`${fmtCur(incomeAmount)} added to ${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`, 'success');
     const banksData = await api('/api/banks');
     _bankAccounts = banksData?.accounts || [];
+    _expenseIncomeHistoryCacheUserId = null;
+    _expenseIncomeHistoryCache = [];
     loadExpenses();
     return;
   }

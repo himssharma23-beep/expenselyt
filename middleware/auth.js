@@ -118,7 +118,17 @@ async function requireAdmin(req, res, next) {
   if (!req.session?.userId) return res.status(401).json({ error: 'Not authenticated' });
   try {
     const user = await pgDb.findUserById(req.session.userId);
-    if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    if (!user || !user.is_active) {
+      req.session.destroy?.(() => {});
+      return res.status(401).json({ error: 'Account unavailable' });
+    }
+    const currentAuthTag = await pgDb.getUserAuthTag(req.session.userId);
+    if (!currentAuthTag || req.session.authTag !== currentAuthTag) {
+      req.session.destroy?.(() => {});
+      return res.status(401).json({ error: 'Session expired. Please log in again.' });
+    }
+    updateWebSessionState(req);
+    if (user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     next();
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Admin check failed' });

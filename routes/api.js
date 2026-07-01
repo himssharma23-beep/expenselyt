@@ -21,6 +21,7 @@ const pgAdminNotificationsDb = require('../db/postgres-admin-notifications');
 const pgPortalAccessDb = require('../db/postgres-portal-access');
 const { assertPostgresConfigured } = require('../db/provider');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { adminRateLimiter } = require('../middleware/security');
 const { normalizeMessagePayload, sendExpoPushNotifications } = require('../utils/push-notifications');
 const {
   sendSplitShareEmailsToTargets,
@@ -53,6 +54,8 @@ const {
   notifyLiveSplitTripCreated,
   notifyLiveSplitSessionShared,
 } = require('../utils/live-split-notifications');
+const { writeAdminAuditEntry } = require('../utils/admin-audit');
+const { inferUploadKindFromRequest, validateUploadedFile } = require('../utils/upload-security');
 
 const VIDEO_MOBILE_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-mobile-cache');
 const VIDEO_AUDIO_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-audio-cache');
@@ -71,6 +74,34 @@ const videoPrepareActiveKeys = new Set();
 const videoPrepareCancelledKeys = new Set();
 const videoPrepareActiveProcesses = new Map();
 let videoPrepareWorkerPromise = null;
+
+router.use((req, res, next) => {
+  const routePath = String(req.path || '');
+  if (routePath.startsWith('/admin/') || routePath.startsWith('/v1/admin/')) {
+    return adminRateLimiter(req, res, next);
+  }
+  return next();
+});
+
+router.use((req, res, next) => {
+  const routePath = String(req.path || '');
+  const isAdminRoute = routePath.startsWith('/admin/') || routePath.startsWith('/v1/admin/');
+  const shouldAudit = isAdminRoute && (
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())
+    || routePath === '/admin/database/backup/download'
+  );
+  if (!shouldAudit) return next();
+  let handled = false;
+  res.on('finish', () => {
+    if (handled) return;
+    handled = true;
+    if (Number(res.statusCode || 500) >= 400) return;
+    writeAdminAuditEntry(req, res).catch((err) => {
+      console.error('[admin-audit]', err?.message || err);
+    });
+  });
+  next();
+});
 
 function backupTimestamp(date = new Date()) {
   const yyyy = date.getFullYear();
@@ -5150,7 +5181,18 @@ router.delete('/expenses/:id', async (req, res) => {
 // ─── FILE IMPORT ─────────────────────────────────────────────
 const XLSX = require('xlsx');
 const XlsxPopulate = require('xlsx-populate');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    try {
+      validateUploadedFile(file, inferUploadKindFromRequest(req));
+      cb(null, true);
+    } catch (err) {
+      cb(err);
+    }
+  },
+});
 
 router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
   try {

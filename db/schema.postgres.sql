@@ -279,6 +279,21 @@ CREATE INDEX IF NOT EXISTS idx_portal_access_logs_owner ON portal_access_logs (o
 CREATE INDEX IF NOT EXISTS idx_portal_access_logs_tenant ON portal_access_logs (tenant_id, logged_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_portal_access_logs_member ON portal_access_logs (member_id, logged_at DESC) WHERE deleted_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS admin_action_audit (
+  id BIGSERIAL PRIMARY KEY,
+  admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action_method TEXT NOT NULL,
+  action_path TEXT NOT NULL,
+  action_status INTEGER NOT NULL DEFAULT 200,
+  target_hint TEXT DEFAULT '',
+  request_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_action_audit_admin_user_id ON admin_action_audit (admin_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_action_audit_created_at ON admin_action_audit (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

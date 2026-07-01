@@ -7,6 +7,15 @@ const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
 const { assertPostgresConfigured } = require('../db/provider');
 const { guestOnly, requireAuth } = require('../middleware/auth');
+const {
+  clearFailedLoginAttempts,
+  loginLockoutMiddleware,
+  loginRateLimiter,
+  passwordResetRateLimiter,
+  publicContactRateLimiter,
+  registerFailedLoginAttempt,
+  registerRateLimiter,
+} = require('../middleware/security');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'expense-manager-jwt-secret-change-in-prod';
 
@@ -24,6 +33,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { multerFileFilterFor } = require('../utils/upload-security');
 const {
   sendAdminNewUserEmail,
   sendPasswordResetEmail,
@@ -356,10 +366,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (!file.mimetype || !file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed'));
-    cb(null, true);
-  },
+  fileFilter: multerFileFilterFor('image'),
 });
 
 assertPostgresConfigured();
@@ -400,7 +407,7 @@ router.get('/forgot-password', guestOnly, (req, res) => {
 });
 
 // POST /api/auth/register
-router.post('/api/auth/register', async (req, res) => {
+router.post('/api/auth/register', registerRateLimiter, async (req, res) => {
   try {
     const authDb = pgDb;
     const { username, email, password, display_name, mobile } = req.body;
@@ -472,7 +479,7 @@ router.post('/api/auth/register', async (req, res) => {
   }
 });
 
-router.post('/api/auth/forgot-password', guestOnly, async (req, res) => {
+router.post('/api/auth/forgot-password', guestOnly, passwordResetRateLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -498,7 +505,7 @@ router.post('/api/auth/forgot-password', guestOnly, async (req, res) => {
   }
 });
 
-router.post('/api/auth/forgot-password/reset', guestOnly, async (req, res) => {
+router.post('/api/auth/forgot-password/reset', guestOnly, passwordResetRateLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const code = String(req.body?.code || '').trim();
@@ -521,7 +528,7 @@ router.post('/api/auth/forgot-password/reset', guestOnly, async (req, res) => {
   }
 });
 
-router.post('/api/auth/phone-login-help', guestOnly, async (req, res) => {
+router.post('/api/auth/phone-login-help', guestOnly, publicContactRateLimiter, async (req, res) => {
   try {
     const phone = String(req.body?.phone || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -543,10 +550,11 @@ router.post('/api/auth/phone-login-help', guestOnly, async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/api/auth/login', async (req, res) => {
+router.post('/api/auth/login', loginRateLimiter, loginLockoutMiddleware, async (req, res) => {
   try {
     const authDb = pgDb;
     const { username, password } = req.body;
+    const normalizedIdentifier = String(username || '').trim().toLowerCase();
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Email or phone number and password required' });
@@ -557,8 +565,10 @@ router.post('/api/auth/login', async (req, res) => {
     if (!user) user = await authDb.findUserByMobile(username);
 
     if (!user || !authDb.verifyPassword(password, user.password_hash)) {
+      registerFailedLoginAttempt(req, normalizedIdentifier);
       return res.status(401).json({ error: 'Invalid email, phone number, or password' });
     }
+    clearFailedLoginAttempts(req, normalizedIdentifier);
 
     if (!user.currency_code || !user.locale_code) {
       const prefs = inferPreferences(req);
@@ -581,7 +591,7 @@ router.post('/api/auth/login', async (req, res) => {
   }
 });
 
-router.post('/api/auth/social', async (req, res) => {
+router.post('/api/auth/social', loginRateLimiter, async (req, res) => {
   try {
     const provider = String(req.body?.provider || '').trim().toLowerCase();
     const idToken = String(req.body?.id_token || '').trim();
@@ -945,7 +955,7 @@ router.get('/reset-password', async (req, res) => {
 });
 
 // POST /api/reset-password - process reset (no auth required)
-router.post('/api/reset-password', async (req, res) => {
+router.post('/api/reset-password', passwordResetRateLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password || password.length < 6) return res.status(400).json({ error: 'Invalid request' });
