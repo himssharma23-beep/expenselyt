@@ -188,6 +188,16 @@ function touchWebSessionState(req) {
   };
 }
 
+function saveSessionAsync(req) {
+  return new Promise((resolve, reject) => {
+    if (!req?.session?.save) return resolve();
+    req.session.save((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 function buildImpersonationState(session = {}) {
   const source = session?.impersonation;
   const adminUserId = Number(source?.original_admin_user_id || 0);
@@ -463,6 +473,7 @@ router.post('/api/auth/register', registerRateLimiter, async (req, res) => {
     if (transport === 'web') touchWebSessionState(req);
 
     const token = await issueAuthToken(req, userId, display_name, authTag);
+    if (transport === 'web') await saveSessionAsync(req);
     res.json({ success: true, redirect: '/', token, user: { id: userId, display_name, username, email: normalizedEmail, mobile: normalizedMobile, avatar_url: null, currency_code: prefs.currency_code, locale_code: prefs.locale_code } });
   } catch (err) {
     console.error('Register error:', err);
@@ -584,6 +595,7 @@ router.post('/api/auth/login', loginRateLimiter, loginLockoutMiddleware, async (
     if (transport === 'web') touchWebSessionState(req);
 
     const token = await issueAuthToken(req, user.id, user.display_name, authTag);
+    if (transport === 'web') await saveSessionAsync(req);
     res.json({ success: true, redirect: '/', token, user: { id: user.id, display_name: user.display_name, username: user.username, email: user.email, mobile: user.mobile || null, avatar_url: user.avatar_url || null, currency_code: user.currency_code, locale_code: user.locale_code } });
   } catch (err) {
     console.error('Login error:', err);
@@ -698,6 +710,7 @@ router.post('/api/auth/social', loginRateLimiter, async (req, res) => {
     if (transport === 'web') touchWebSessionState(req);
 
     const token = await issueAuthToken(req, user.id, user.display_name, authTag);
+    if (transport === 'web') await saveSessionAsync(req);
     res.json({
       success: true,
       redirect: '/',
