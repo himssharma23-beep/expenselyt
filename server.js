@@ -61,6 +61,7 @@ const sessionStore = new PgSession({
 app.use(session({
   store: sessionStore,
   secret: process.env.SESSION_SECRET || 'expense-manager-secret-change-in-production',
+  proxy: isProductionLike(),
   resave: false,
   saveUninitialized: false,
   name: process.env.SESSION_COOKIE_NAME || 'expense_lite.sid',
@@ -68,7 +69,7 @@ app.use(session({
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     httpOnly: true,
     sameSite: 'lax',
-    secure: isProductionLike(),
+    secure: isProductionLike() ? 'auto' : false,
   }
 }));
 app.use(enforceSameOriginForSessionWrites);
