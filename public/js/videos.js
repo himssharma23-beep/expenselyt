@@ -6773,8 +6773,6 @@ async function videoAdminUploadPublishedPoster(target, itemId, seasonKey = '', s
   toast('Poster uploaded successfully', 'success');
 }
 
-
-
 async function videoAdminTogglePublishedSeasonPaid(itemId, seasonKey = '', seasonLabel = '', seasonNumber = '', nextPaid = true, stateKey = '') {
   const normalizedItemId = Number(itemId || 0);
   const normalizedSeasonKey = String(seasonKey || '').trim();
