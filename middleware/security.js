@@ -106,11 +106,20 @@ function hasBearerAuth(req) {
   return /^Bearer\s+/i.test(authHeader);
 }
 
+function isTrustedNativeAppRequest(req) {
+  const platform = String(req.headers['x-client-platform'] || '').trim().toLowerCase();
+  if (!platform || platform === 'web') return false;
+  const origin = String(req.headers.origin || '').trim();
+  const referer = String(req.headers.referer || '').trim();
+  return !origin && !referer;
+}
+
 function enforceSameOriginForSessionWrites(req, res, next) {
   const method = String(req.method || 'GET').toUpperCase();
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return next();
   if (!String(req.originalUrl || '').startsWith('/api/')) return next();
   if (hasBearerAuth(req)) return next();
+  if (isTrustedNativeAppRequest(req)) return next();
   if (!req.session?.userId) return next();
 
   const origin = String(req.headers.origin || '').trim();
