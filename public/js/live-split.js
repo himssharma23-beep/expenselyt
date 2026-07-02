@@ -1163,12 +1163,17 @@
   }
 
   function createInitialTripForm() {
+    const firstCard = (state.creditCards || [])[0] || null;
     return {
       name: '',
       start_date: todayLocalIso(),
       end_date: '',
       bulk_date: todayLocalIso(),
       paid_by: 'You',
+      finance_target: 'none',
+      bank_account_id: null,
+      card_id: firstCard ? Number(firstCard.id) : null,
+      card_discount_pct: firstCard ? Number(firstCard.default_discount_pct || 0) : 0,
       show_add_to_expense_option: true,
       selected: new Set(),
       scan_files: [],
@@ -1593,6 +1598,39 @@
     if (cardsResult.status === 'fulfilled') {
       state.creditCards = Array.isArray(cardsResult.value?.cards) ? cardsResult.value.cards : [];
     }
+  }
+
+  function formatBankAccountLabel(bankId) {
+    const id = Number(bankId || 0);
+    if (!(id > 0)) return '';
+    const bank = (state.bankAccounts || []).find((item) => Number(item?.id || 0) === id);
+    if (!bank) return `Bank #${id}`;
+    const parts = [String(bank.bank_name || 'Bank').trim()];
+    const accountName = String(bank.account_name || bank.nick_name || bank.nickname || '').trim();
+    if (accountName) parts.push(accountName);
+    return parts.filter(Boolean).join(' - ');
+  }
+
+  function formatCardLabel(cardId) {
+    const id = Number(cardId || 0);
+    if (!(id > 0)) return '';
+    const card = (state.creditCards || []).find((item) => Number(item?.id || 0) === id);
+    if (!card) return `Card #${id}`;
+    const cardName = String(card.card_name || 'Card').trim();
+    const bankName = String(card.bank_name || 'Bank').trim();
+    const last4 = String(card.last4 || card.card_last4 || '').trim();
+    return `${cardName} (${bankName}${last4 ? ` **${last4}` : ''})`;
+  }
+
+  function formatFinanceSourceLabel(item = {}) {
+    const financeTarget = String(item?.finance_target || 'none');
+    if (financeTarget === 'card' || Number(item?.card_id || 0) > 0) {
+      return formatCardLabel(item?.card_id) || String(item?.card_name || '').trim() || 'Credit Card';
+    }
+    if (financeTarget === 'expense' || Number(item?.bank_account_id || 0) > 0) {
+      return formatBankAccountLabel(item?.bank_account_id) || String(item?.bank_name || '').trim() || 'Bank';
+    }
+    return '';
   }
 
   function peopleForForm(form) {
@@ -3022,7 +3060,7 @@
                               <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap;color:${tone}">${fmtCur(event.delta)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}`}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` · ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
                               <div style="display:flex;flex-shrink:0">${mobileActionHtml}</div>
@@ -3093,7 +3131,7 @@
                         <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
                         <div class="ls-mobile-event-amount" style="color:${tone}">${fmtCur(event.delta)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}`}</div>
+                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` · ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
                         <div class="ls-mobile-event-actions">${actionHtml}</div>
@@ -3288,7 +3326,7 @@
                               <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap">${fmtCur(event.total)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                             ${renderEventSplitHtml(event)}
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
@@ -3325,7 +3363,7 @@
                         <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
                         <div class="ls-mobile-event-amount">${fmtCur(event.total)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}</div>
+                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                       ${renderEventSplitHtml(event)}
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
@@ -3733,7 +3771,7 @@
               <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.details || 'Split expense'))}</div>
               <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} · ${escHtml(String(item?.paid_by || 'You'))}</div>
               <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml((item?.participants || []).map((p) => `${p.name}: ${p.share_value}`).join(', ') || 'No participants')}</div>
-              <div style="font-size:11px;color:var(--t2);margin-top:4px">${item?.card_id ? `Card: ${escHtml(String(item.card_id))}` : item?.bank_account_id ? `Bank: ${escHtml(String(item.bank_account_id))}` : 'No bank/card selected'}${item?.trip_name ? ` · Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` · ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${formatFinanceSourceLabel(item) ? `${escHtml(formatFinanceSourceLabel(item))}` : 'No bank/card selected'}${item?.trip_name ? ` · Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` · ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
               ${validation.valid ? '' : `<div style="font-size:11px;color:var(--red);font-weight:700;margin-top:6px">${escHtml(validation.error || 'Invalid split values')}</div>`}
             </div>
             <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.total_amount || 0))}</div>
@@ -4576,8 +4614,10 @@
   }
 
   function openTripCreateModal() {
-    state.tripCreate = createInitialTripForm();
-    renderTripCreateModal();
+    Promise.resolve(ensureFinanceOptionsLoaded()).catch(() => {}).finally(() => {
+      state.tripCreate = createInitialTripForm();
+      renderTripCreateModal();
+    });
   }
 
   function tripCreateSelectedFriends(form) {
@@ -5004,6 +5044,34 @@
             <input class="fi" type="date" value="${escHtml(form.bulk_date || form.start_date || todayLocalIso())}" onchange="liveSplitTripBulkDate(this.value)">
           </label>
         </div>
+        ${textKey(form.paid_by || 'You') === 'you' ? `
+          <div style="margin-top:10px">
+            <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Post Full Amount To (optional)</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="chip ${form.finance_target === 'none' ? 'active' : ''}" onclick="liveSplitTripSetFinanceTarget('none')">None</button>
+              <button class="chip ${form.finance_target === 'expense' ? 'active' : ''}" onclick="liveSplitTripSetFinanceTarget('expense')">Expense / Bank</button>
+              <button class="chip ${form.finance_target === 'card' ? 'active' : ''}" onclick="liveSplitTripSetFinanceTarget('card')">Credit Card</button>
+            </div>
+          </div>
+          ${form.finance_target === 'expense' ? `
+            <label class="fl" style="margin-top:8px">Deduct From Bank (optional)
+              <select class="fi" onchange="liveSplitTripSetFinanceBank(this.value)">
+                <option value="">Do not deduct</option>
+                ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(form.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join('')}
+              </select>
+            </label>
+          ` : form.finance_target === 'card' ? `
+            <label class="fl" style="margin-top:8px">Credit Card
+              <select class="fi" onchange="liveSplitTripSetFinanceCard(this.value)">
+                <option value="">None</option>
+                ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(form.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join('')}
+              </select>
+            </label>
+            <label class="fl">Discount % (optional)
+              <input class="fi" type="number" step="0.1" min="0" max="100" value="${escHtml(String(form.card_discount_pct ?? 0))}" onchange="liveSplitTripSetFinanceCardDiscount(this.value)">
+            </label>
+          ` : ``}
+        ` : ''}
       </div>
       <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
         <label class="fc" style="align-items:flex-start">
@@ -5371,6 +5439,12 @@
     const selectedScannedRows = (form.scan_items || []).filter((item) => item?.selected !== false);
     const appliedBulkDate = toLocalIsoDate(form.bulk_date || form.start_date, todayLocalIso());
     const appliedPaidBy = String(form.paid_by || 'You').trim() || 'You';
+    const appliedFinanceTarget = textKey(appliedPaidBy) === 'you'
+      ? (String(form.finance_target || 'none') === 'card' ? 'card' : String(form.finance_target || 'none') === 'expense' ? 'expense' : 'none')
+      : 'none';
+    const appliedBankAccountId = appliedFinanceTarget === 'expense' ? (Number(form.bank_account_id || 0) || null) : null;
+    const appliedCardId = appliedFinanceTarget === 'card' ? (Number(form.card_id || 0) || null) : null;
+    const appliedCardDiscountPct = appliedFinanceTarget === 'card' ? Number(form.card_discount_pct || 0) : 0;
     const manualRowsToSave = (form.manual_items || [])
       .filter((item) => String(item?.item_name || '').trim() || Number(item?.amount || 0) > 0)
       .map((item) => normalizeTripManualRowSplitState({
@@ -5477,7 +5551,10 @@
             category: String(row?.category || '').trim(),
             expense_type: row?.is_extra ? 'extra' : 'fair',
             addExpense: false,
-            finance_target: 'none',
+            finance_target: appliedFinanceTarget,
+            bank_account_id: appliedBankAccountId,
+            card_id: appliedCardId,
+            card_discount_pct: appliedCardDiscountPct,
           });
           savedTripItemCount += 1;
         }
@@ -6742,7 +6819,33 @@
   window.liveSplitTripBulkPaidBy = function liveSplitTripBulkPaidBy(value) {
     if (!state.tripCreate) return;
     state.tripCreate.paid_by = String(value || 'You').trim() || 'You';
+    if (textKey(state.tripCreate.paid_by || 'You') !== 'you') {
+      state.tripCreate.finance_target = 'none';
+      state.tripCreate.bank_account_id = null;
+      state.tripCreate.card_id = null;
+    }
     rerenderTripCreateModalPreservingUi();
+  };
+  window.liveSplitTripSetFinanceTarget = function liveSplitTripSetFinanceTarget(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.finance_target = value === 'card' ? 'card' : value === 'expense' ? 'expense' : 'none';
+    if (state.tripCreate.finance_target !== 'expense') state.tripCreate.bank_account_id = null;
+    if (state.tripCreate.finance_target !== 'card') state.tripCreate.card_id = null;
+    renderTripCreateModal();
+  };
+  window.liveSplitTripSetFinanceBank = function liveSplitTripSetFinanceBank(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.bank_account_id = value ? Number(value) : null;
+  };
+  window.liveSplitTripSetFinanceCard = function liveSplitTripSetFinanceCard(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.card_id = value ? Number(value) : null;
+    const selectedCard = (state.creditCards || []).find((card) => Number(card.id) === Number(state.tripCreate.card_id || 0));
+    if (selectedCard) state.tripCreate.card_discount_pct = Number(selectedCard.default_discount_pct || 0);
+  };
+  window.liveSplitTripSetFinanceCardDiscount = function liveSplitTripSetFinanceCardDiscount(value) {
+    if (!state.tripCreate) return;
+    state.tripCreate.card_discount_pct = Number(value || 0);
   };
   window.liveSplitTripBulkDate = function liveSplitTripBulkDate(value) {
     if (!state.tripCreate) return;

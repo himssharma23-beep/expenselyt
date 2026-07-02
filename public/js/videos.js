@@ -41,6 +41,7 @@ let _videoSubtitleLoadedTrackId = '';
 let _videoSeasonRequestSendingKey = '';
 let _videoSubtitleLoadRequestId = 0;
 const VIDEO_AUDIO_PREFS_STORAGE_KEY = 'videoLibraryAudioTrackPrefs';
+const VIDEO_DETAIL_STATE_STORAGE_KEY = 'videoLibraryDetailState';
 
 function videoControlIcon(kind) {
   const icons = {
@@ -218,6 +219,36 @@ function saveVideoAudioTrackPreference(video, trackId = '') {
   } catch (_err) {}
 }
 
+function loadVideoDetailState() {
+  try {
+    const raw = localStorage.getItem(VIDEO_DETAIL_STATE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_err) {
+    return {};
+  }
+}
+
+function saveVideoDetailState(state = {}) {
+  try {
+    const current = loadVideoDetailState();
+    const next = {
+      ...current,
+      ...state,
+    };
+    if (!String(next.series_id || '').trim()) delete next.series_id;
+    if (!String(next.episode_id || '').trim()) delete next.episode_id;
+    if (!String(next.season_key || '').trim()) delete next.season_key;
+    localStorage.setItem(VIDEO_DETAIL_STATE_STORAGE_KEY, JSON.stringify(next));
+  } catch (_err) {}
+}
+
+function clearVideoDetailState() {
+  try {
+    localStorage.removeItem(VIDEO_DETAIL_STATE_STORAGE_KEY);
+  } catch (_err) {}
+}
+
 function restoreVideoLibrarySearchFocus(selectionStart = null, selectionEnd = null) {
   requestAnimationFrame(() => {
     const input = document.getElementById('videoLibrarySearchInput');
@@ -270,6 +301,11 @@ function selectVideoLibraryItem(videoId) {
   flushVideoPlaybackProgress().finally(() => {
     _selectedVideoLibraryId = String(videoId || '');
     const selectedVideo = (Array.isArray(_videoLibraryData?.videos) ? _videoLibraryData.videos : []).find((video) => String(video?.id || '') === String(_selectedVideoLibraryId || '')) || null;
+    saveVideoDetailState({
+      series_id: selectedVideo && videoLibraryIsSeries(selectedVideo) ? videoLibrarySeriesKey(selectedVideo) : '',
+      episode_id: selectedVideo?.id || '',
+      season_key: selectedVideo && videoLibraryIsSeries(selectedVideo) ? videoLibrarySeasonKeyForVideo(selectedVideo) : '',
+    });
     _selectedVideoSubtitleId = videoLibraryDefaultSubtitleId(selectedVideo);
     _selectedVideoAudioTrackId = '';
     _videoPendingSourceState = null;
@@ -2138,6 +2174,11 @@ async function videoLibraryPlaySeriesEpisode(seriesId, episodeId) {
   const seasonGroups = videoLibrarySeasonGroups(group.entries, group.season_posters);
   const episodeSeasonKey = videoLibrarySeasonKeyForVideo(episode);
   const episodeSeason = seasonGroups.find((entry) => String(entry?.key || '') === String(episodeSeasonKey || '')) || null;
+  saveVideoDetailState({
+    series_id: String(seriesId || ''),
+    episode_id: String(episode?.id || ''),
+    season_key: String(episodeSeason?.key || episodeSeasonKey || ''),
+  });
   if (videoLibrarySeasonIsPaid(episodeSeason)) {
     _videoDetailSeasonKey = String(episodeSeason?.key || episodeSeasonKey || '');
     openVideoLibraryDetail(String(seriesId || ''), {
@@ -2298,13 +2339,23 @@ function openVideoLibraryDetail(videoId, options = {}) {
   const targetEpisodeId = String(options?.targetEpisodeId || '');
   const seriesMode = String(videoId || '').startsWith('series:');
   const seriesGroup = seriesMode ? videoLibraryFindSeriesGroupById(videoId, allVideos) : null;
+  const seriesStateKey = String(seriesGroup?.series_group_key || '').trim();
+  const storedDetailState = seriesMode ? loadVideoDetailState() : {};
+  const storedEpisodeId = seriesMode && String(storedDetailState?.series_id || '') === seriesStateKey
+    ? String(storedDetailState?.episode_id || '')
+    : '';
+  const storedSeasonKey = seriesMode && String(storedDetailState?.series_id || '') === seriesStateKey
+    ? String(storedDetailState?.season_key || '')
+    : '';
   let video = seriesMode
-    ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || _selectedVideoLibraryId)
+    ? videoLibrarySelectSeriesEpisode(seriesGroup, targetEpisodeId || storedEpisodeId || _selectedVideoLibraryId)
     : allVideos.find((item) => String(item?.id) === String(videoId || ''));
   const seasonGroups = (seriesGroup && videoLibraryGroupHasRealEpisodes(seriesGroup))
     ? videoLibrarySeasonGroups(seriesGroup.entries, seriesGroup.season_posters)
     : [];
-  const requestedSeasonKey = _videoDetailSeasonKey || ((targetEpisodeId && video) ? videoLibrarySeasonKeyForVideo(video) : '');
+  const requestedSeasonKey = _videoDetailSeasonKey
+    || storedSeasonKey
+    || ((targetEpisodeId || storedEpisodeId) && video ? videoLibrarySeasonKeyForVideo(video) : '');
   let activeSeasonGroup = seasonGroups.find((group) => String(group?.key || '') === String(requestedSeasonKey || ''))
     || seasonGroups.find((group) => group.entries.some((entry) => String(entry?.id || '') === String(video?.id || '')))
     || seasonGroups[0]
@@ -2316,7 +2367,7 @@ function openVideoLibraryDetail(videoId, options = {}) {
     const currentSeasonKey = video ? videoLibrarySeasonKeyForVideo(video) : '';
     const currentVideoMatchesSeason = !!(video && String(currentSeasonKey || '') === String(activeSeasonGroup?.key || ''));
     if (!currentVideoMatchesSeason || !video) {
-      video = videoLibrarySelectSeriesEpisode(activeSeasonGroup, targetEpisodeId || _selectedVideoLibraryId) || null;
+      video = videoLibrarySelectSeriesEpisode(activeSeasonGroup, targetEpisodeId || storedEpisodeId || _selectedVideoLibraryId) || null;
     }
   }
   const displayVideo = video || (seriesMode ? (seriesGroup?.entries?.[0] || null) : null);
@@ -2366,6 +2417,13 @@ function openVideoLibraryDetail(videoId, options = {}) {
       ...(hasAltAudio ? [['Audio', `${audioTracks.length} tracks`]] : []),
     ];
     if (activeSeasonGroup?.key) _videoDetailSeasonKey = String(activeSeasonGroup.key);
+    if (seriesMode) {
+      saveVideoDetailState({
+        series_id: seriesStateKey || String(videoId || '').replace(/^series:/, ''),
+        episode_id: String(video?.id || targetEpisodeId || storedEpisodeId || ''),
+        season_key: String(activeSeasonGroup?.key || _videoDetailSeasonKey || storedSeasonKey || ''),
+      });
+    }
     const activeSeasonPaid = videoLibrarySeasonIsPaid(activeSeasonGroup);
     const activeSeasonEmpty = !!(activeSeasonGroup && activeSeasonGroup.entries.length === 0);
     const playbackBlocked = !video || activeSeasonPaid || activeSeasonEmpty || video?.available === false;

@@ -86,6 +86,16 @@ function bankHistoryDateOnly(value) {
   return `${year}-${month}-${day}`;
 }
 
+function isIncomeHistoryEntry(entry) {
+  const type = String(entry?.entry_type || '').trim().toLowerCase();
+  const direction = String(entry?.direction || '').trim().toLowerCase();
+  const amount = Number(entry?.amount || 0);
+  if (!(amount > 0)) return false;
+  if (direction && direction !== 'credit') return false;
+  if (type === 'transfer_in' || type === 'transfer_out' || type === 'fund_removed') return false;
+  return type === 'fund_added' || type === 'opening_balance' || type === 'balance_set';
+}
+
 async function ensureExpenseIncomeHistoryLoaded(force = false) {
   const userKey = getExpensePagePreferenceUserKey();
   if (!force && _expenseIncomeHistoryCacheUserId === userKey && Array.isArray(_expenseIncomeHistoryCache)) {
@@ -106,7 +116,7 @@ async function ensureExpenseIncomeHistoryLoaded(force = false) {
   _expenseIncomeHistoryCache = historyResults
     .flatMap(([bank, rows]) =>
       rows
-        .filter((entry) => String(entry?.entry_type || '').toLowerCase() === 'fund_added')
+        .filter((entry) => isIncomeHistoryEntry(entry))
         .map((entry) => ({
           id: `income-${bank.id}-${entry.id || entry.created_at || Math.random()}`,
           item_name: String(entry?.note || '').trim() || 'Income Added',
@@ -2157,7 +2167,7 @@ async function loadExpenses() {
   let list = data.expenses || [];
   if (getShowExpensePageIncomeHistoryPreference() && f.spendType === 'all') {
     try {
-      const incomeRows = await ensureExpenseIncomeHistoryLoaded();
+      const incomeRows = await ensureExpenseIncomeHistoryLoaded(true);
       const q = String(f.search || '').trim().toLowerCase();
       const filteredIncomeRows = incomeRows.filter((item) => {
         const yearOk = f.year === null ? true : Number(String(item.purchase_date || '').slice(0, 4)) === Number(f.year);
