@@ -499,6 +499,7 @@ async function ensureTenantTables() {
       other_charge_items JSONB NOT NULL DEFAULT '[]'::jsonb,
       previous_electricity_units INTEGER NOT NULL DEFAULT 0,
       current_electricity_units INTEGER NOT NULL DEFAULT 0,
+      extra_electricity_units INTEGER NOT NULL DEFAULT 0,
       electricity_units_used INTEGER NOT NULL DEFAULT 0,
       electricity_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
       total_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -514,6 +515,7 @@ async function ensureTenantTables() {
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS roommate_count_snapshot INTEGER NOT NULL DEFAULT 1`);
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'`);
   await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE tenant_invoices ADD COLUMN IF NOT EXISTS extra_electricity_units INTEGER NOT NULL DEFAULT 0`);
   await query(`
     CREATE TABLE IF NOT EXISTS tenant_invoice_share_links (
       id BIGSERIAL PRIMARY KEY,
@@ -844,6 +846,7 @@ function mapInvoiceRow(row) {
     roommate_count_snapshot: Math.max(1, Number(row.roommate_count_snapshot || 1)),
     previous_electricity_units: Number(row.previous_electricity_units || 0),
     current_electricity_units: Number(row.current_electricity_units || 0),
+    extra_electricity_units: Number(row.extra_electricity_units || 0),
     electricity_units_used: Number(row.electricity_units_used || 0),
     electricity_amount: num(row.electricity_amount),
     total_amount: num(row.total_amount),
@@ -1836,6 +1839,27 @@ async function getLastInvoiceForTenant(tenantId) {
   return result.rows[0] || null;
 }
 
+async function getSameRoomInvoiceForMonth(roomId, invoiceMonth, excludeTenantId = null) {
+  const params = [roomId, invoiceMonth];
+  let excludeSql = '';
+  if (excludeTenantId != null) {
+    params.push(excludeTenantId);
+    excludeSql = 'AND inv.tenant_id <> $3';
+  }
+  const result = await query(
+    `SELECT inv.*
+     FROM tenant_invoices inv
+     INNER JOIN tenant_records t ON t.id = inv.tenant_id
+     WHERE t.room_id = $1
+       AND inv.invoice_month = $2
+       ${excludeSql}
+     ORDER BY inv.id DESC
+     LIMIT 1`,
+    params
+  );
+  return result.rows[0] || null;
+}
+
 async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   await ensureTenantTables();
   const tenant = await getTenantOwnedByUser(userId, tenantId);
@@ -1846,6 +1870,11 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   const invoiceReferenceDate = `${invoiceMonth}-01`;
   const chargeProfile = pickChargeProfileForDate(await listTenantChargeHistory({ query }, [tenantId]), invoiceReferenceDate);
   const currentUnits = normalizeInteger(data.current_electricity_units, 'Current electricity units', { min: 0, max: 100000000 });
+  const extraElectricityUnits = normalizeInteger(
+    data.extra_electricity_units != null && data.extra_electricity_units !== '' ? data.extra_electricity_units : 0,
+    'Extra electricity units',
+    { min: -100000000, max: 100000000 }
+  );
   const recurringChargeItemsBase = normalizeOtherChargeItems(
     Array.isArray(chargeProfile?.monthly_additional_charges) && chargeProfile.monthly_additional_charges.length
       ? chargeProfile.monthly_additional_charges
@@ -1895,12 +1924,18 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   let previousUnits = Number((chargeProfile?.opening_electricity_units ?? tenant.opening_electricity_units) || 0);
   if (existing) previousUnits = Number(existing.previous_electricity_units || 0);
   else {
-    const lastInvoice = await getLastInvoiceForTenant(tenantId);
-    if (lastInvoice) previousUnits = Number(lastInvoice.current_electricity_units || 0);
+    const sameRoomInvoice = await getSameRoomInvoiceForMonth(room.id, invoiceMonth, tenantId);
+    if (sameRoomInvoice) previousUnits = Number(sameRoomInvoice.current_electricity_units || 0);
+    else {
+      const lastInvoice = await getLastInvoiceForTenant(tenantId);
+      if (lastInvoice) previousUnits = Number(lastInvoice.current_electricity_units || 0);
+    }
   }
   if (currentUnits < previousUnits) throw validationError('Current electricity units cannot be less than previous units');
 
-  const unitsUsed = currentUnits - previousUnits;
+  const rawUnitsUsed = currentUnits - previousUnits;
+  const unitsUsed = rawUnitsUsed + extraElectricityUnits;
+  if (unitsUsed < 0) throw validationError('Extra electricity units cannot reduce total billed units below 0');
   const electricityUnitPrice = data.electricity_unit_price !== undefined
     ? normalizeAmount(data.electricity_unit_price, 'Electricity per unit price')
     : num((chargeProfile?.electricity_unit_price ?? tenant.electricity_unit_price) || 0);
@@ -1928,12 +1963,12 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
       tenant_id, invoice_month, due_date, tenant_name_snapshot, building_name_snapshot, room_label_snapshot,
       contact_number_snapshot, rent_amount_snapshot, electricity_unit_price_snapshot, sewerage_charge_snapshot,
       water_charge_snapshot, cleaning_charge_snapshot, other_charges_snapshot, other_charge_items, previous_electricity_units,
-      current_electricity_units, electricity_units_used, electricity_amount, total_amount, split_config, roommate_count_snapshot, payment_status, paid_amount, notes, updated_at
+      current_electricity_units, extra_electricity_units, electricity_units_used, electricity_amount, total_amount, split_config, roommate_count_snapshot, payment_status, paid_amount, notes, updated_at
      ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7, $8, $9, $10,
       $11, $12, $13, $14::jsonb,
-      $15, $16, $17, $18, $19, $20::jsonb, $21, $22, $23, $24, NOW()
+      $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23, $24, $25, NOW()
      )
      ON CONFLICT (tenant_id, invoice_month)
      DO UPDATE SET due_date = EXCLUDED.due_date,
@@ -1950,6 +1985,7 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
                    other_charge_items = EXCLUDED.other_charge_items,
                    previous_electricity_units = EXCLUDED.previous_electricity_units,
                    current_electricity_units = EXCLUDED.current_electricity_units,
+                   extra_electricity_units = EXCLUDED.extra_electricity_units,
                    electricity_units_used = EXCLUDED.electricity_units_used,
                    electricity_amount = EXCLUDED.electricity_amount,
                    total_amount = EXCLUDED.total_amount,
@@ -1977,6 +2013,7 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
       JSON.stringify(otherChargeItems),
       previousUnits,
       currentUnits,
+      extraElectricityUnits,
       unitsUsed,
       electricityAmount,
       totalAmount,
@@ -2327,6 +2364,13 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
       const dueDate = normalizeOptionalDateValue(entry.due_date, 'Due date');
       const previousUnits = normalizeInteger(entry.previous_electricity_units, 'Previous electricity units', { min: -100000000, max: 100000000 });
       const currentUnits = normalizeInteger(entry.current_electricity_units, 'Current electricity units', { min: 0, max: 100000000 });
+      const extraUnits = normalizeInteger(
+        entry.extra_electricity_units != null && entry.extra_electricity_units !== ''
+          ? entry.extra_electricity_units
+          : 0,
+        'Extra electricity units',
+        { min: -100000000, max: 100000000 }
+      );
       const unitsUsed = normalizeInteger(
         entry.electricity_units_used != null && entry.electricity_units_used !== ''
           ? entry.electricity_units_used
@@ -2354,12 +2398,12 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
           tenant_id, invoice_month, due_date, tenant_name_snapshot, building_name_snapshot, room_label_snapshot,
           contact_number_snapshot, rent_amount_snapshot, electricity_unit_price_snapshot, sewerage_charge_snapshot,
           water_charge_snapshot, cleaning_charge_snapshot, other_charges_snapshot, other_charge_items, previous_electricity_units,
-          current_electricity_units, electricity_units_used, electricity_amount, total_amount, payment_status, paid_amount, notes, updated_at
+          current_electricity_units, extra_electricity_units, electricity_units_used, electricity_amount, total_amount, payment_status, paid_amount, notes, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6,
           $7, $8, $9, $10,
           $11, $12, $13, $14::jsonb,
-          $15, $16, $17, $18, $19, $20, $21, $22, NOW()
+          $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW()
         )
         ON CONFLICT (tenant_id, invoice_month)
         DO UPDATE SET due_date = EXCLUDED.due_date,
@@ -2376,6 +2420,7 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
                       other_charge_items = EXCLUDED.other_charge_items,
                       previous_electricity_units = EXCLUDED.previous_electricity_units,
                       current_electricity_units = EXCLUDED.current_electricity_units,
+                      extra_electricity_units = EXCLUDED.extra_electricity_units,
                       electricity_units_used = EXCLUDED.electricity_units_used,
                       electricity_amount = EXCLUDED.electricity_amount,
                       total_amount = EXCLUDED.total_amount,
@@ -2400,6 +2445,7 @@ async function importTenantInvoiceRows(userId, tenantId, rows = []) {
           JSON.stringify(otherChargeItems),
           previousUnits,
           currentUnits,
+          extraUnits,
           unitsUsed,
           electricityAmount,
           totalAmount,
@@ -2693,12 +2739,12 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
           tenant_id, invoice_month, due_date, tenant_name_snapshot, building_name_snapshot, room_label_snapshot,
           contact_number_snapshot, rent_amount_snapshot, electricity_unit_price_snapshot, sewerage_charge_snapshot,
           water_charge_snapshot, cleaning_charge_snapshot, other_charges_snapshot, other_charge_items, previous_electricity_units,
-          current_electricity_units, electricity_units_used, electricity_amount, total_amount, payment_status, paid_amount, notes, updated_at
+          current_electricity_units, extra_electricity_units, electricity_units_used, electricity_amount, total_amount, payment_status, paid_amount, notes, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6,
           $7, $8, $9, $10,
           $11, $12, $13, $14::jsonb,
-          $15, $16, $17, $18, $19, $20, $21, $22, NOW()
+          $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW()
         )
         ON CONFLICT (tenant_id, invoice_month)
         DO UPDATE SET due_date = EXCLUDED.due_date,
@@ -2715,6 +2761,7 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
                       other_charge_items = EXCLUDED.other_charge_items,
                       previous_electricity_units = EXCLUDED.previous_electricity_units,
                       current_electricity_units = EXCLUDED.current_electricity_units,
+                      extra_electricity_units = EXCLUDED.extra_electricity_units,
                       electricity_units_used = EXCLUDED.electricity_units_used,
                       electricity_amount = EXCLUDED.electricity_amount,
                       total_amount = EXCLUDED.total_amount,
@@ -2739,6 +2786,7 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
           JSON.stringify([]),
           Math.round(Number(entry.previous_electricity_units || 0) || 0),
           Math.round(Number(entry.current_electricity_units || 0) || 0),
+          Math.round(Number(entry.extra_electricity_units || 0) || 0),
           Math.round(Number(entry.electricity_units_used || 0) || 0),
           Math.round((Number(entry.electricity_amount || 0) || 0) * 100) / 100,
           Math.round((Number(entry.total_amount || 0) || 0) * 100) / 100,

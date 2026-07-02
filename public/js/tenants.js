@@ -51,19 +51,37 @@ function tenantSharedRoomInvoiceForMonth(tenant, invoiceMonth, { excludeTenantId
     .sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0] || null;
 }
 
+function tenantChargeProfileForMonth(tenant, invoiceMonth) {
+  const targetDate = /^\d{4}-\d{2}$/.test(String(invoiceMonth || '').trim())
+    ? `${String(invoiceMonth).trim()}-01`
+    : '';
+  const history = Array.isArray(tenant?.charge_history) ? tenant.charge_history : [];
+  if (!targetDate) return history[0] || null;
+  return history.find((row) => {
+    const from = String(row?.effective_from || '').trim();
+    const to = String(row?.effective_to || '').trim();
+    if (!from || from > targetDate) return false;
+    if (to && to < targetDate) return false;
+    return true;
+  }) || history.find((row) => !String(row?.effective_to || '').trim()) || history[0] || null;
+}
+
 function tenantInvoiceReadingDefaults(tenant, invoiceMonth = tenantCurrentMonthKey()) {
   const monthKey = String(invoiceMonth || '').trim();
   const ownLatestInvoice = (tenant?.invoices || [])[0] || null;
   const roomInvoice = tenantSharedRoomInvoiceForMonth(tenant, monthKey, { excludeTenantId: tenant?.id });
+  const chargeProfile = tenantChargeProfileForMonth(tenant, monthKey);
   if (roomInvoice) {
     return {
-      previousUnits: Number(roomInvoice.previous_electricity_units || 0),
+      previousUnits: Number(roomInvoice.current_electricity_units || 0),
       currentUnits: Number(roomInvoice.current_electricity_units || 0),
       sourceLabel: `Copied from ${roomInvoice.tenant_name_snapshot || 'roommate'} invoice`,
     };
   }
   return {
-    previousUnits: ownLatestInvoice ? Number(ownLatestInvoice.current_electricity_units || 0) : Number(tenant?.opening_electricity_units || 0),
+    previousUnits: ownLatestInvoice
+      ? Number(ownLatestInvoice.current_electricity_units || 0)
+      : Number((chargeProfile?.opening_electricity_units ?? tenant?.opening_electricity_units) || 0),
     currentUnits: '',
     sourceLabel: '',
   };
@@ -169,12 +187,17 @@ function tenantElectricityUsageText(invoice = {}, {
 } = {}) {
   const previousUnits = Number(invoice.previous_electricity_units || 0);
   const currentUnits = Number(invoice.current_electricity_units || 0);
+  const extraUnits = Number(invoice.extra_electricity_units || 0);
   const usedUnits = Number(invoice.electricity_units_used || 0);
   const rateText = currencyFormatter(invoice.electricity_unit_price_snapshot || 0);
   const amountText = currencyFormatter(invoice.electricity_amount || 0);
-  const usageText = (previousUnits === 0 && currentUnits === 0)
+  const meterUnits = currentUnits - previousUnits;
+  const meterText = (previousUnits === 0 && currentUnits === 0)
     ? `${usedUnits} units`
-    : `${currentUnits} - ${previousUnits} = ${usedUnits} units`;
+    : `${currentUnits} - ${previousUnits} = ${meterUnits} units`;
+  const usageText = extraUnits
+    ? `${meterText} ${extraUnits > 0 ? '+' : '-'} extra ${Math.abs(extraUnits)} = ${usedUnits} units`
+    : meterText;
   if (compact) {
     return includeAmount ? `${usageText} • ${amountText}` : usageText;
   }
@@ -1005,6 +1028,7 @@ function downloadTenantInvoicePdf(invoiceId) {
   }
   body.push(['Previous Units', Number(invoice.previous_electricity_units || 0)]);
   body.push(['Current Units', Number(invoice.current_electricity_units || 0)]);
+  body.push(['Extra Units', Number(invoice.extra_electricity_units || 0)]);
   body.push(['Total', pdf.cur(invoice.total_amount || 0)]);
   if (invoice.notes) body.push(['Notes', invoice.notes]);
   pdf.table(doc, y, [['Field', 'Value']], body, {
@@ -2655,6 +2679,7 @@ function showTenantInvoiceModal(recordId, options = {}) {
       <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(dueDate)}"></label>
       <label class="fl">Previous Units<input class="fi" type="number" id="tenantInvoicePrevUnits" value="${previousUnits}" disabled></label>
       <label class="fl">Current Units *<input class="fi" type="number" min="${previousUnits}" step="1" id="tenantInvoiceCurrentUnits" value="${escHtml(String(currentUnits))}" placeholder="Enter current reading"></label>
+      <label class="fl">Extra Units (+/-)<input class="fi" type="number" step="1" id="tenantInvoiceExtraUnits" value="0" placeholder="0"></label>
       <label class="fl">Payment Status
         <select class="fi" id="tenantInvoiceStatus" onchange="toggleTenantInvoicePaidAmount()">
           <option value="pending">Pending</option>
@@ -2875,6 +2900,7 @@ function showTenantInvoiceEditModal(invoiceId) {
       <label class="fl">Due Date<input class="fi" type="date" id="tenantInvoiceDueDate" value="${escHtml(String(invoice.due_date || '').slice(0, 10))}"></label>
       <label class="fl">Previous Units<input class="fi" type="number" id="tenantInvoicePrevUnits" value="${Number(invoice.previous_electricity_units || 0)}" disabled></label>
       <label class="fl">Current Units *<input class="fi" type="number" min="${Number(invoice.previous_electricity_units || 0)}" step="1" id="tenantInvoiceCurrentUnits" value="${Number(invoice.current_electricity_units || 0)}"></label>
+      <label class="fl">Extra Units (+/-)<input class="fi" type="number" step="1" id="tenantInvoiceExtraUnits" value="${Number(invoice.extra_electricity_units || 0)}" placeholder="0"></label>
       <label class="fl">Payment Status
         <select class="fi" id="tenantInvoiceStatus" onchange="toggleTenantInvoicePaidAmount()">
           <option value="pending" ${invoice.payment_status === 'pending' ? 'selected' : ''}>Pending</option>
@@ -2913,6 +2939,7 @@ async function saveTenantInvoice(recordId, invoiceId = null) {
     invoice_month: existingInvoice?.invoice_month || document.getElementById('tenantInvoiceMonth')?.value || '',
     due_date: document.getElementById('tenantInvoiceDueDate')?.value || '',
     current_electricity_units: Number(document.getElementById('tenantInvoiceCurrentUnits')?.value || 0),
+    extra_electricity_units: Number(document.getElementById('tenantInvoiceExtraUnits')?.value || 0),
     payment_status: document.getElementById('tenantInvoiceStatus')?.value || 'pending',
     paid_amount: Number(document.getElementById('tenantInvoicePaidAmount')?.value || 0),
     split_config: tenantReadSplitConfig('tenantInvoice'),
@@ -2921,6 +2948,10 @@ async function saveTenantInvoice(recordId, invoiceId = null) {
   };
   if (!body.invoice_month || !Number.isFinite(body.current_electricity_units)) {
     toast('Invoice month and current units are required', 'warning');
+    return;
+  }
+  if (!Number.isInteger(body.extra_electricity_units)) {
+    toast('Extra units must be a whole number.', 'warning');
     return;
   }
   const result = await api(`/api/tenants/records/${Number(recordId)}/invoices`, { method: 'POST', body });
