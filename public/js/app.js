@@ -20394,6 +20394,7 @@ function renderSocietiesPage() {
       ['members', 'Members'],
       ['matrix', 'Matrix'],
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
+      ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
       ['expenses', 'Expenses'],
       ['report', 'Report'],
     ];
@@ -20860,12 +20861,84 @@ function renderSocietiesPage() {
         </div>
       </div>`;
 
+    const electionsSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Society Elections</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Secretary Elections</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Add candidates, set voting dates, and track anonymous votes.</div>
+          </div>
+          <button class="btn btn-p btn-sm" onclick="showSocietyElectionModal()">+ Election</button>
+        </div>
+        <div style="padding:18px 20px">
+          ${(Array.isArray(selected.elections) && selected.elections.length) ? selected.elections.map((election) => {
+            const runtime = String(election.runtime_status || 'draft').toLowerCase();
+            const statusLabel = runtime === 'open' ? 'Open' : (runtime === 'closed' ? 'Closed' : 'Scheduled');
+            const candidateRows = (election.candidates || []).map((candidate) => `
+              <div style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--border-l)">
+                <div>
+                  <div style="font-weight:800;color:var(--t1)">${escHtml(candidate.candidate_name || 'Candidate')}</div>
+                  <div style="font-size:12px;color:var(--t3)">${escHtml(candidate.candidate_unit_label || '-')}</div>
+                </div>
+                <div style="font-weight:900;color:var(--green)">${Number(candidate.vote_count || 0)}</div>
+              </div>`).join('');
+            const voterRows = (election.voters || []).map((voter) => `
+              <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px dashed var(--border-l)">
+                <div style="font-weight:700;color:var(--t1)">${escHtml(voter.voter_member_name || 'Voter')}</div>
+                <div style="font-size:12px;color:var(--t3)">${escHtml(voter.voter_unit_label || '-')}</div>
+              </div>`).join('');
+            return `
+              <div class="card" style="padding:18px 20px;margin-bottom:14px">
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                  <div>
+                    <div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(election.title || 'Election')}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(election.description || '')}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:6px">Open: ${escHtml(election.opens_on ? fmtDate(election.opens_on) : '-')} · Close: ${escHtml(election.closes_on ? fmtDate(election.closes_on) : '-')}</div>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <span class="badge" style="background:${runtime === 'open' ? '#e6f8ee' : runtime === 'closed' ? '#fff1ee' : '#fff6db'};color:${runtime === 'open' ? '#17784a' : runtime === 'closed' ? '#d64735' : '#b87807'}">${escHtml(statusLabel)}</span>
+                    <button class="btn btn-s btn-sm" onclick="showSocietyElectionModal(${Number(election.id)})">Edit</button>
+                    <button class="btn btn-s btn-sm" onclick="deleteSocietyElection(${Number(election.id)})">Delete</button>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px">
+                  <div class="card" style="padding:12px 14px">
+                    <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Votes</div>
+                    <div style="font-size:22px;font-weight:900;color:var(--green);margin-top:4px">${Number(election.total_votes || 0)}</div>
+                  </div>
+                  <div class="card" style="padding:12px 14px">
+                    <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Candidates</div>
+                    <div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${Number(election.candidate_count || 0)}</div>
+                  </div>
+                  <div class="card" style="padding:12px 14px">
+                    <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800">Voters</div>
+                    <div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${(election.voters || []).length}</div>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:16px">
+                  <div>
+                    <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800;margin-bottom:10px">Candidates</div>
+                    <div style="display:grid;gap:4px">${candidateRows || '<div style="color:var(--t3)">No candidates selected yet.</div>'}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:800;margin-bottom:10px">Voters</div>
+                    <div style="display:grid;gap:4px;max-height:220px;overflow:auto;padding-right:4px">${voterRows || '<div style="color:var(--t3)">No votes yet.</div>'}</div>
+                  </div>
+                </div>
+              </div>`;
+          }).join('') : '<div class="card" style="padding:24px;color:var(--t3)">No elections created yet.</div>'}
+        </div>
+      </div>`;
+
     const activeSection = _societyTab === 'members'
       ? membersSection
       : _societyTab === 'matrix'
       ? matrixSectionEnhanced
       : _societyTab === 'requests'
       ? requestsSection
+      : _societyTab === 'elections'
+      ? electionsSection
       : _societyTab === 'expenses'
       ? expensesSectionEnhanced
       : _societyTab === 'report'
@@ -21258,6 +21331,79 @@ async function deleteSocietyExpense(expenseId) {
   const result = await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
   if (!result?.success) { toast(result?.error || 'Could not delete expense.', 'error'); return; }
   toast('Expense deleted', 'success');
+  await loadSocieties();
+}
+
+  function showSocietyElectionModal(electionId = null) {
+    if (!_selectedSocietyId) return;
+    const election = electionId ? (((_societyDetail?.elections || []).find((item) => String(item.id) === String(electionId))) || {}) : {};
+    const electionDateValue = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string') {
+        const raw = value.trim();
+        if (!raw) return '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        const parsed = new Date(raw);
+        return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+    };
+    const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+    const candidateOptions = members.map((member) => {
+      const checked = Array.isArray(election.candidates) && election.candidates.some((candidate) => String(candidate.member_id) === String(member.id));
+    return `
+      <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border-l);border-radius:12px;margin-bottom:8px;background:#fff">
+        <input type="checkbox" class="society-election-candidate" value="${Number(member.id)}" ${checked ? 'checked' : ''} style="margin-top:4px">
+        <div>
+          <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name || 'Member')}</div>
+          <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}${member.phone_number ? ` · ${escHtml(member.phone_number)}` : ''}</div>
+        </div>
+      </label>`;
+  }).join('');
+  openModal(electionId ? 'Edit Election' : 'Add Election', `
+    <div class="fg">
+      <label class="fl full">Election Title *<input class="fi" id="societyElectionTitle" value="${escHtml(election.title || 'Secretary Election')}" placeholder="e.g. Secretary Election"></label>
+      <label class="fl full">Description<textarea class="fi" rows="3" id="societyElectionDescription" placeholder="Optional description">${escHtml(election.description || '')}</textarea></label>
+      <label class="fl">Opens On<input class="fi" id="societyElectionOpen" type="date" value="${escHtml(electionDateValue(election.opens_on))}"></label>
+      <label class="fl">Closes On<input class="fi" id="societyElectionClose" type="date" value="${escHtml(electionDateValue(election.closes_on))}"></label>
+      <div class="fl full">
+        <div style="font-size:12px;font-weight:800;color:var(--t2);margin-bottom:8px">Candidates</div>
+        <div style="max-height:320px;overflow:auto;padding-right:4px">${candidateOptions || '<div style="color:var(--t3)">Add members first.</div>'}</div>
+      </div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyElection(${electionId || 'null'})">${electionId ? 'Update Election' : 'Create Election'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyElection(electionId));
+}
+
+async function saveSocietyElection(electionId = null) {
+  if (!_selectedSocietyId) return;
+  const body = {
+    title: document.getElementById('societyElectionTitle')?.value?.trim() || '',
+    description: document.getElementById('societyElectionDescription')?.value?.trim() || '',
+    opens_on: document.getElementById('societyElectionOpen')?.value || '',
+    closes_on: document.getElementById('societyElectionClose')?.value || '',
+    candidate_member_ids: [...document.querySelectorAll('.society-election-candidate:checked')].map((input) => Number(input.value)).filter((value) => Number.isFinite(value) && value > 0),
+  };
+  if (!body.title) { toast('Election title is required', 'warning'); return; }
+  if (body.opens_on && body.closes_on && body.closes_on < body.opens_on) { toast('Closing date must be on or after opening date', 'warning'); return; }
+  const result = electionId
+    ? await api(`/api/societies/${Number(_selectedSocietyId)}/elections/${Number(electionId)}`, { method: 'PUT', body })
+    : await api(`/api/societies/${Number(_selectedSocietyId)}/elections`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save election.', 'error'); return; }
+  closeModal();
+  toast(electionId ? 'Election updated' : 'Election created', 'success');
+  await loadSocieties();
+}
+
+async function deleteSocietyElection(electionId) {
+  if (!await confirmDialog('Delete this election?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/elections/${Number(electionId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete election.', 'error'); return; }
+  toast('Election deleted', 'success');
   await loadSocieties();
 }
 

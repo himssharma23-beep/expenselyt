@@ -60,6 +60,25 @@ function normalizeDateValue(value, label = 'Date') {
   return normalized;
 }
 
+function formatDateOnlyValue(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10) || null;
+    return parsed.toISOString().slice(0, 10);
+  }
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return value.toISOString().slice(0, 10);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10) || null;
+  return parsed.toISOString().slice(0, 10);
+}
+
 function normalizeText(value, label, maxLength = 160) {
   const normalized = String(value || '').trim().replace(/\s+/g, ' ');
   if (!normalized) throw validationError(`${label} is required`);
@@ -6417,12 +6436,49 @@ async function ensureSocietyTables() {
   await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS review_note TEXT`);
   await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL`);
   await query(`ALTER TABLE society_payment_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_elections (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      opens_on DATE,
+      closes_on DATE,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_election_candidates (
+      id BIGSERIAL PRIMARY KEY,
+      election_id BIGINT NOT NULL REFERENCES society_elections(id) ON DELETE CASCADE,
+      member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+      candidate_name TEXT NOT NULL,
+      candidate_unit_label TEXT,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (election_id, member_id)
+    )`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_election_votes (
+      id BIGSERIAL PRIMARY KEY,
+      election_id BIGINT NOT NULL REFERENCES society_elections(id) ON DELETE CASCADE,
+      candidate_id BIGINT NOT NULL REFERENCES society_election_candidates(id) ON DELETE CASCADE,
+      voter_member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (election_id, voter_member_id)
+    )`);
   await query(`CREATE INDEX IF NOT EXISTS idx_societies_user_id ON societies(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_members_society_id ON society_members(society_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_contributions_society_month ON society_contributions(society_id, month_key)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_expenses_society_month ON society_expenses(society_id, month_key)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_payment_requests_society_status ON society_payment_requests(society_id, status, month_key)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_payment_requests_member_month ON society_payment_requests(member_id, month_key, status)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_elections_society_id ON society_elections(society_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_election_candidates_election_id ON society_election_candidates(election_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_election_votes_election_id ON society_election_votes(election_id)`);
   societySchemaEnsured = true;
 }
 
@@ -6459,6 +6515,82 @@ function normalizeSocietyPortalPhoneDigits(value) {
   if (digits.length === 10) return digits;
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(-10);
   return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+function currentDateKey() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  } catch (err) {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function normalizeSocietyElectionStatus(value, fallback = 'draft') {
+  const normalized = String(value || fallback || 'draft').trim().toLowerCase();
+  if (['draft', 'open', 'closed'].includes(normalized)) return normalized;
+  if (['active', 'live', 'published', 'publish'].includes(normalized)) return 'open';
+  if (['ended', 'finish', 'finished', 'paused', 'locked'].includes(normalized)) return 'closed';
+  return fallback || 'draft';
+}
+
+function getSocietyElectionRuntimeStatus(election, todayKey = currentDateKey()) {
+  const status = normalizeSocietyElectionStatus(election?.status || 'draft');
+  const opensOn = formatDateOnlyValue(election?.opens_on);
+  const closesOn = formatDateOnlyValue(election?.closes_on);
+  if (status === 'closed') return 'closed';
+  if (closesOn && todayKey > closesOn) return 'closed';
+  if (opensOn && todayKey < opensOn) return 'scheduled';
+  if (status === 'open') return 'open';
+  if (opensOn && closesOn && todayKey >= opensOn && todayKey <= closesOn) return 'open';
+  return status;
+}
+
+function mapSocietyElectionCandidateRow(row, { revealVotes = false } = {}) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    election_id: Number(row.election_id),
+    member_id: Number(row.member_id),
+    candidate_name: row.candidate_name || '',
+    candidate_unit_label: row.candidate_unit_label || '',
+    vote_count: revealVotes ? Number(row.vote_count || 0) : null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function mapSocietyElectionRow(row, { revealVotes = false, includeVoters = false, memberVoteMap = new Map(), candidateRowsByElection = new Map(), votersByElection = new Map() } = {}) {
+  if (!row) return null;
+  const runtimeStatus = getSocietyElectionRuntimeStatus(row);
+  const candidates = (candidateRowsByElection.get(Number(row.id)) || []).map((candidate) => mapSocietyElectionCandidateRow(candidate, { revealVotes: revealVotes || runtimeStatus === 'closed' }));
+  const memberVote = memberVoteMap.get(Number(row.id)) || null;
+  const voters = includeVoters ? (votersByElection.get(Number(row.id)) || []).map((vote) => ({
+    id: Number(vote.id),
+    election_id: Number(vote.election_id),
+    voter_member_id: Number(vote.voter_member_id),
+    voter_member_name: vote.voter_member_name || '',
+    voter_unit_label: vote.voter_unit_label || '',
+    created_at: vote.created_at || null,
+  })) : [];
+    return {
+      id: Number(row.id),
+      society_id: Number(row.society_id),
+      title: row.title || '',
+      description: row.description || '',
+      opens_on: formatDateOnlyValue(row.opens_on),
+      closes_on: formatDateOnlyValue(row.closes_on),
+      status: row.status || 'draft',
+      runtime_status: runtimeStatus,
+    total_votes: Number(row.total_votes || 0),
+    candidate_count: candidates.length,
+    has_voted: !!memberVote,
+    member_vote_at: memberVote?.created_at || null,
+    candidates,
+    voters,
+    created_by: row.created_by != null ? Number(row.created_by) : null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
 }
 
 async function getSocietyOwnedByUser(userId, societyId) {
@@ -6959,10 +7091,275 @@ async function deleteSocietyExpense(userId, societyId, expenseId) {
   return result.rowCount > 0;
 }
 
+async function loadSocietyElectionsForDashboard(societyId, { includeVoters = false, memberId = null, revealVotes = false } = {}) {
+  await ensureSocietyTables();
+  const electionsResult = await query(
+    `SELECT e.id,
+            e.society_id,
+            e.title,
+            e.description,
+            e.opens_on,
+            e.closes_on,
+            e.status,
+            e.created_by,
+            e.created_at,
+            e.updated_at,
+            COALESCE(vc.total_votes, 0) AS total_votes
+     FROM society_elections e
+     LEFT JOIN (
+       SELECT election_id, COUNT(*)::int AS total_votes
+       FROM society_election_votes
+       GROUP BY election_id
+     ) vc ON vc.election_id = e.id
+     WHERE e.society_id = $1
+     ORDER BY COALESCE(e.opens_on, e.created_at::date) DESC, e.id DESC`,
+    [societyId]
+  );
+  const electionRows = electionsResult.rows || [];
+  if (!electionRows.length) return [];
+  const electionIds = electionRows.map((row) => Number(row.id));
+  const [candidateRowsR, memberVotesR, votersR] = await Promise.all([
+    query(
+      `SELECT c.id,
+              c.election_id,
+              c.member_id,
+              c.candidate_name,
+              c.candidate_unit_label,
+              c.order_index,
+              c.created_at,
+              c.updated_at,
+              COALESCE(v.vote_count, 0) AS vote_count
+       FROM society_election_candidates c
+       LEFT JOIN (
+         SELECT candidate_id, COUNT(*)::int AS vote_count
+         FROM society_election_votes
+         GROUP BY candidate_id
+       ) v ON v.candidate_id = c.id
+       WHERE c.election_id = ANY($1::bigint[])
+       ORDER BY c.election_id ASC, c.order_index ASC, c.id ASC`,
+      [electionIds]
+    ),
+    memberId
+      ? query(
+        `SELECT election_id, candidate_id, created_at
+         FROM society_election_votes
+         WHERE voter_member_id = $1
+           AND election_id = ANY($2::bigint[])`,
+        [memberId, electionIds]
+      )
+      : Promise.resolve({ rows: [] }),
+    includeVoters
+      ? query(
+        `SELECT v.id,
+                v.election_id,
+                v.candidate_id,
+                v.voter_member_id,
+                v.created_at,
+                m.member_name AS voter_member_name,
+                m.unit_label AS voter_unit_label
+         FROM society_election_votes v
+         INNER JOIN society_members m ON m.id = v.voter_member_id
+         WHERE v.election_id = ANY($1::bigint[])
+         ORDER BY v.created_at ASC, v.id ASC`,
+        [electionIds]
+      )
+      : Promise.resolve({ rows: [] }),
+  ]);
+  const candidatesByElection = new Map();
+  (candidateRowsR.rows || []).forEach((row) => {
+    const electionKey = Number(row.election_id);
+    const list = candidatesByElection.get(electionKey) || [];
+    list.push(row);
+    candidatesByElection.set(electionKey, list);
+  });
+  const memberVoteMap = new Map((memberVotesR.rows || []).map((row) => [Number(row.election_id), row]));
+  const votersByElection = new Map();
+  (votersR.rows || []).forEach((row) => {
+    const electionKey = Number(row.election_id);
+    const list = votersByElection.get(electionKey) || [];
+    list.push(row);
+    votersByElection.set(electionKey, list);
+  });
+  return electionRows.map((row) => mapSocietyElectionRow(row, {
+    revealVotes,
+    includeVoters,
+    memberVoteMap,
+    candidateRowsByElection: candidatesByElection,
+    votersByElection,
+  }));
+}
+
+async function saveSocietyElection(userId, societyId, data = {}, electionId = null) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const title = normalizeText(data.title, 'Election title', 160);
+  const description = normalizeOptionalText(data.description, 1000);
+  const opensOn = data.opens_on ? normalizeDateValue(data.opens_on, 'Opening date') : null;
+  const closesOn = data.closes_on ? normalizeDateValue(data.closes_on, 'Closing date') : null;
+  if (opensOn && closesOn && closesOn < opensOn) throw validationError('Closing date must be on or after the opening date');
+  const candidateMemberIds = [...new Set((Array.isArray(data.candidate_member_ids) ? data.candidate_member_ids : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0))];
+  return withTransaction(async (client) => {
+    let electionRow = null;
+    if (electionId) {
+      const currentResult = await client.query(
+        `SELECT id, society_id, title, description, opens_on, closes_on, status, created_by, created_at, updated_at
+         FROM society_elections
+         WHERE id = $1 AND society_id = $2
+         LIMIT 1`,
+        [electionId, societyId]
+      );
+      electionRow = currentResult.rows[0] || null;
+      if (!electionRow) throw validationError('Election not found');
+      const votesResult = await client.query(
+        `SELECT COUNT(*)::int AS count
+         FROM society_election_votes
+         WHERE election_id = $1`,
+        [electionId]
+      );
+      const voteCount = Number(votesResult.rows[0]?.count || 0);
+      if (voteCount > 0 && candidateMemberIds.length) {
+        const currentCandidatesResult = await client.query(
+          `SELECT member_id
+           FROM society_election_candidates
+           WHERE election_id = $1
+           ORDER BY order_index, id`,
+          [electionId]
+        );
+        const currentCandidateIds = currentCandidatesResult.rows.map((row) => Number(row.member_id));
+        const nextCandidateIds = candidateMemberIds.slice().sort((a, b) => a - b);
+        const currentSorted = currentCandidateIds.slice().sort((a, b) => a - b);
+        const sameCandidates = currentSorted.length === nextCandidateIds.length
+          && currentSorted.every((value, index) => value === nextCandidateIds[index]);
+        if (!sameCandidates) {
+          throw validationError('Candidate list cannot be changed after voting starts');
+        }
+      }
+      const updatedResult = await client.query(
+        `UPDATE society_elections
+         SET title = $1,
+             description = $2,
+             opens_on = $3,
+             closes_on = $4,
+             updated_at = NOW()
+         WHERE id = $5 AND society_id = $6
+         RETURNING id, society_id, title, description, opens_on, closes_on, status, created_by, created_at, updated_at`,
+        [title, description, opensOn, closesOn, electionId, societyId]
+      );
+      electionRow = updatedResult.rows[0] || electionRow;
+    } else {
+      const insertedResult = await client.query(
+        `INSERT INTO society_elections (society_id, title, description, opens_on, closes_on, status, created_by, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'draft', $6, NOW())
+         RETURNING id, society_id, title, description, opens_on, closes_on, status, created_by, created_at, updated_at`,
+        [societyId, title, description, opensOn, closesOn, userId]
+      );
+      electionRow = insertedResult.rows[0];
+    }
+
+    const targetElectionId = Number(electionRow.id);
+    if (candidateMemberIds.length || !electionId) {
+      const memberResult = await client.query(
+        `SELECT id, member_name, unit_label
+         FROM society_members
+         WHERE society_id = $1
+           AND id = ANY($2::bigint[])`,
+        [societyId, candidateMemberIds]
+      );
+      if (memberResult.rows.length !== candidateMemberIds.length) {
+        throw validationError('One or more selected candidates were not found');
+      }
+      await client.query('DELETE FROM society_election_candidates WHERE election_id = $1', [targetElectionId]);
+      for (let index = 0; index < candidateMemberIds.length; index += 1) {
+        const memberId = candidateMemberIds[index];
+        const memberRow = memberResult.rows.find((row) => Number(row.id) === Number(memberId));
+        if (!memberRow) continue;
+        await client.query(
+          `INSERT INTO society_election_candidates (
+             election_id, member_id, candidate_name, candidate_unit_label, order_index, updated_at
+           ) VALUES (
+             $1, $2, $3, $4, $5, NOW()
+           )`,
+          [
+            targetElectionId,
+            Number(memberRow.id),
+            memberRow.member_name || '',
+            memberRow.unit_label || '',
+            index,
+          ]
+        );
+      }
+    }
+    const elections = await loadSocietyElectionsForDashboard(societyId, { includeVoters: true, revealVotes: true });
+    return elections.find((item) => Number(item.id) === Number(targetElectionId)) || null;
+  });
+}
+
+async function deleteSocietyElection(userId, societyId, electionId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query('DELETE FROM society_elections WHERE id = $1 AND society_id = $2', [electionId, societyId]);
+  return result.rowCount > 0;
+}
+
+async function castSocietyElectionVote(memberId, electionId, candidateId) {
+  await ensureSocietyTables();
+  return withTransaction(async (client) => {
+    const memberResult = await client.query(
+      `SELECT m.id, m.society_id, m.member_name, s.name AS society_name
+       FROM society_members m
+       INNER JOIN societies s ON s.id = m.society_id
+       WHERE m.id = $1
+       LIMIT 1`,
+      [memberId]
+    );
+    const member = memberResult.rows[0];
+    if (!member) throw validationError('Society member not found');
+    const electionResult = await client.query(
+      `SELECT id, society_id, title, description, opens_on, closes_on, status
+       FROM society_elections
+       WHERE id = $1 AND society_id = $2
+       LIMIT 1`,
+      [electionId, member.society_id]
+    );
+    const election = electionResult.rows[0];
+    if (!election) throw validationError('Election not found');
+    if (getSocietyElectionRuntimeStatus(election) !== 'open') {
+      throw validationError('Voting is closed for this election');
+    }
+    const existingVoteResult = await client.query(
+      `SELECT id
+       FROM society_election_votes
+       WHERE election_id = $1
+         AND voter_member_id = $2
+       LIMIT 1`,
+      [electionId, memberId]
+    );
+    if (existingVoteResult.rows[0]) throw validationError('You have already voted in this election');
+    const candidateResult = await client.query(
+      `SELECT id
+       FROM society_election_candidates
+       WHERE id = $1
+         AND election_id = $2
+       LIMIT 1`,
+      [candidateId, electionId]
+    );
+    if (!candidateResult.rows[0]) throw validationError('Candidate not found');
+    const inserted = await client.query(
+      `INSERT INTO society_election_votes (election_id, candidate_id, voter_member_id)
+       VALUES ($1, $2, $3)
+       RETURNING id, election_id, candidate_id, voter_member_id, created_at`,
+      [electionId, candidateId, memberId]
+    );
+    return inserted.rows[0];
+  });
+}
+
 async function getSocietyDetail(userId, societyId, options = {}) {
   const society = await getSocietyOwnedByUser(userId, societyId);
   if (!society) throw validationError('Society not found');
-  const [membersR, contributionsR, expensesR, requestsR] = await Promise.all([
+  const [membersR, contributionsR, expensesR, requestsR, elections] = await Promise.all([
     query(
       `SELECT id, society_id, member_name, phone_number, unit_label, property_type, monthly_due, is_active, created_at, updated_at
        FROM society_members
@@ -6991,6 +7388,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
        ORDER BY created_at DESC, id DESC`,
       [societyId]
     ),
+    loadSocietyElectionsForDashboard(societyId, { includeVoters: true, revealVotes: true }),
   ]);
   const members = membersR.rows.map((row) => ({
     id: Number(row.id),
@@ -7110,6 +7508,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     expenses,
     month_expenses: monthExpenses,
     month_summary: monthSummary,
+    elections,
     payment_status: {
       paid_members: paidMembers,
       pending_members: pendingMembers,
@@ -7162,6 +7561,11 @@ async function getSocietyMemberPortalDashboard(memberId) {
   if (!member) return null;
 
   const requests = (detail.payment_requests || []).filter((item) => Number(item.member_id) === Number(memberId));
+  const elections = await loadSocietyElectionsForDashboard(Number(memberRow.society_id), {
+    memberId: Number(memberId),
+    revealVotes: false,
+    includeVoters: false,
+  });
   const monthKeys = [...new Set([currentMonthKey(), ...(detail.matrix_months || [])])].sort().reverse();
   const contributionHistory = monthKeys.map((monthKey) => {
     const amount = num((member.contributions_by_month || {})[monthKey] || 0);
@@ -7211,6 +7615,7 @@ async function getSocietyMemberPortalDashboard(memberId) {
     expenses: detail.expenses || [],
     recent_expenses: recentExpenses,
     month_summary: detail.month_summary || [],
+    elections,
     totals: detail.totals || {},
     payment_status: detail.payment_status || {},
   };
@@ -8362,6 +8767,10 @@ module.exports = {
   addSocietyExpense,
   updateSocietyExpense,
   deleteSocietyExpense,
+  loadSocietyElectionsForDashboard,
+  saveSocietyElection,
+  deleteSocietyElection,
+  castSocietyElectionVote,
   listSchoolKids,
   getSchoolKidsOverview,
   getSchoolKidDetail,

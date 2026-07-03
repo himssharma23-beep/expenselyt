@@ -5024,6 +5024,24 @@ router.post('/public/society-portal/payment-requests', requireSocietyPortalAuth,
   }
 });
 
+router.post('/public/society-portal/elections/:electionId/vote', requireSocietyPortalAuth, async (req, res) => {
+  try {
+    const electionId = Number(req.params.electionId);
+    const candidateId = Number(req.body?.candidate_id || req.body?.candidateId || 0);
+    if (!(electionId > 0)) return res.status(400).json({ error: 'Invalid election id.' });
+    if (!(candidateId > 0)) return res.status(400).json({ error: 'Select a candidate to vote.' });
+    const vote = await pgCoreDb.castSocietyElectionVote(req.societyPortal.memberId, electionId, candidateId);
+    const response = await buildSocietyPortalSessionResponse(req);
+    return res.json({
+      success: true,
+      vote,
+      dashboard: response.dashboard,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not submit vote.' });
+  }
+});
+
 // All API routes require auth
 router.use(requireAuth);
 
@@ -12201,6 +12219,33 @@ router.post('/societies/:id/expenses', async (req, res) => {
     res.json({ success: true, expense });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not add expense.' });
+  }
+});
+
+router.post('/societies/:id/elections', async (req, res) => {
+  try {
+    const election = await Promise.resolve(pgCoreDb.saveSocietyElection(req.session.userId, req.params.id, req.body || {}, null));
+    res.json({ success: true, election });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save election.' });
+  }
+});
+
+router.put('/societies/:id/elections/:electionId', async (req, res) => {
+  try {
+    const election = await Promise.resolve(pgCoreDb.saveSocietyElection(req.session.userId, req.params.id, req.body || {}, req.params.electionId));
+    res.json({ success: true, election });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update election.' });
+  }
+});
+
+router.delete('/societies/:id/elections/:electionId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyElection(req.session.userId, req.params.id, req.params.electionId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete election.' });
   }
 });
 

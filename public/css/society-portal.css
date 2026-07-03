@@ -467,6 +467,156 @@ body {
   color: #fff;
 }
 
+.sp-election-list {
+  display: grid;
+  gap: 14px;
+}
+
+.sp-election-card {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.sp-election-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.sp-election-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.sp-election-meta,
+.sp-election-desc,
+.sp-election-note {
+  color: var(--sp-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sp-election-badge {
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sp-election-badge.open {
+  background: #e8f8ee;
+  color: #17784a;
+}
+
+.sp-election-badge.closed {
+  background: #fff1ee;
+  color: #c64a3d;
+}
+
+.sp-election-badge.scheduled {
+  background: #fff8e6;
+  color: #b87807;
+}
+
+.sp-election-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sp-election-stats > div {
+  border: 1px solid var(--sp-border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.sp-election-stats span {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a3aca6;
+  font-weight: 700;
+}
+
+.sp-election-stats strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--sp-text);
+}
+
+.sp-election-candidates {
+  display: grid;
+  gap: 10px;
+}
+
+.sp-election-candidate {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--sp-border);
+  background: #fff;
+  border-radius: 14px;
+  padding: 14px 16px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.sp-election-candidate:disabled {
+  cursor: default;
+  opacity: 0.86;
+}
+
+.sp-election-candidate.selected {
+  border-color: var(--sp-green-700);
+  background: #f1fbf5;
+}
+
+.sp-election-candidate-main {
+  display: grid;
+  gap: 2px;
+}
+
+.sp-election-candidate-name {
+  font-weight: 800;
+  color: var(--sp-text);
+}
+
+.sp-election-candidate-sub,
+.sp-election-candidate-votes {
+  font-size: 12px;
+  color: var(--sp-text-soft);
+}
+
+.sp-election-candidate-votes {
+  font-weight: 800;
+  color: var(--sp-green-700);
+}
+
+.sp-election-candidate-votes.muted {
+  color: var(--sp-text-soft);
+}
+
+.sp-election-vote-btn {
+  align-self: flex-start;
+}
+
+.sp-election-results {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
 .sp-section-head h2 {
   margin: 0;
   font-size: 16px;

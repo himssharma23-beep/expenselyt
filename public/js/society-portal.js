@@ -16,6 +16,8 @@
     requestNote: '',
     submittingRequest: false,
     dashboardTab: 'history',
+    electionSelections: {},
+    submittingElectionId: null,
     notice: '',
     noticeType: '',
     requestModalOpen: false,
@@ -146,7 +148,7 @@
 
   function setDashboardTab(tab) {
     const nextTab = String(tab || '').trim().toLowerCase();
-    if (!['history', 'expenses', 'collections'].includes(nextTab)) return;
+    if (!['history', 'expenses', 'collections', 'elections'].includes(nextTab)) return;
     state.dashboardTab = nextTab;
     render();
   }
@@ -202,6 +204,37 @@
         : (Number(contributionItem?.amount || 0) > 0 ? String(contributionItem.amount) : '');
     }
     if (!state.requestPaidOn) state.requestPaidOn = new Date().toISOString().slice(0, 10);
+  }
+
+  function setElectionSelection(electionId, candidateId) {
+    const key = String(electionId);
+    state.electionSelections = { ...(state.electionSelections || {}), [key]: Number(candidateId) };
+    render();
+  }
+
+  async function submitElectionVote(electionId) {
+    const key = String(electionId);
+    const candidateId = Number((state.electionSelections || {})[key] || 0);
+    if (!(candidateId > 0)) {
+      showNotice('Select a candidate before voting.', 'error');
+      return;
+    }
+    state.submittingElectionId = Number(electionId);
+    render();
+    try {
+      const result = await publicApi(`/api/public/society-portal/elections/${Number(electionId)}/vote`, {
+        method: 'POST',
+        body: { candidate_id: candidateId },
+      });
+      state.dashboard = result.dashboard || state.dashboard;
+      state.submittingElectionId = null;
+      state.electionSelections = {};
+      showNotice('Your vote has been recorded.', 'success');
+      render();
+    } catch (err) {
+      state.submittingElectionId = null;
+      showNotice(err.message || 'Could not submit vote.', 'error');
+    }
   }
 
   async function sendOtp() {
@@ -625,6 +658,7 @@
           ['history', 'My Contribution'],
           ['expenses', 'Expenses'],
           ['collections', 'Collections'],
+          ['elections', 'Elections'],
         ].map(([key, label]) => `
           <button type="button" class="sp-tab-btn ${state.dashboardTab === key ? 'active' : ''}" data-sp-tab="${key}">${esc(label)}</button>
         `).join('')}
@@ -670,6 +704,66 @@
             <div class="sp-month-grid">
               ${monthSummary || '<div class="sp-empty">No monthly collection data yet.</div>'}
             </div>
+          </div>
+        </section>`;
+    } else if (state.dashboardTab === 'elections') {
+      const elections = Array.isArray(dashboard.elections) ? dashboard.elections : [];
+      const electionRows = elections.length ? elections.map((election) => {
+        const runtime = String(election.runtime_status || 'draft').toLowerCase();
+        const selectedCandidateId = Number((state.electionSelections || {})[String(election.id)] || 0);
+        const hasVoted = !!election.has_voted;
+        const canVote = runtime === 'open' && !hasVoted;
+        const showResults = runtime === 'closed' || hasVoted;
+        const candidateCount = Number(election.candidate_count || 0);
+        const candidateCards = (election.candidates || []).map((candidate) => {
+          const candidateId = Number(candidate.id);
+          const voteCount = Number(candidate.vote_count || 0);
+          const selected = selectedCandidateId === candidateId;
+          return `
+            <button type="button" class="sp-election-candidate ${selected ? 'selected' : ''}" ${canVote ? '' : 'disabled'} data-election-id="${Number(election.id)}" data-candidate-id="${candidateId}" onclick="setElectionSelection(${Number(election.id)}, ${candidateId})">
+              <div class="sp-election-candidate-main">
+                <div class="sp-election-candidate-name">${esc(candidate.candidate_name || 'Candidate')}</div>
+                <div class="sp-election-candidate-sub">${esc(candidate.candidate_unit_label || '-')}</div>
+              </div>
+              ${showResults ? `<div class="sp-election-candidate-votes">${voteCount} vote${voteCount === 1 ? '' : 's'}</div>` : `<div class="sp-election-candidate-votes muted">Anonymous</div>`}
+            </button>`;
+        }).join('');
+        const voterInfo = (election.voters || []).length
+          ? `<div class="sp-election-note">Recorded voters are visible to admin only. Members only see anonymous totals.</div>`
+          : '';
+        return `
+          <div class="sp-card sp-election-card">
+            <div class="sp-election-head">
+              <div>
+                <div class="sp-election-title">${esc(election.title || 'Election')}</div>
+                <div class="sp-election-meta">Opens ${esc(fmtDate(election.opens_on || ''))} · Closes ${esc(fmtDate(election.closes_on || ''))}</div>
+              </div>
+              <div class="sp-election-badge ${runtime}">${runtime === 'open' ? 'Voting open' : runtime === 'closed' ? 'Closed' : 'Scheduled'}</div>
+            </div>
+            ${election.description ? `<div class="sp-election-desc">${esc(election.description)}</div>` : ''}
+            <div class="sp-election-stats">
+              <div><span>Total votes</span><strong>${Number(election.total_votes || 0)}</strong></div>
+              <div><span>Candidates</span><strong>${candidateCount}</strong></div>
+              <div><span>Your vote</span><strong>${hasVoted ? 'Submitted' : 'Not yet'}</strong></div>
+            </div>
+            <div class="sp-election-candidates">${candidateCards || '<div class="sp-empty">No candidates added yet.</div>'}</div>
+            ${canVote ? `
+              <button type="button" class="sp-pill-btn sp-election-vote-btn" ${state.submittingElectionId === Number(election.id) ? 'disabled' : ''} onclick="submitElectionVote(${Number(election.id)})">
+                ${state.submittingElectionId === Number(election.id) ? 'Submitting...' : 'Cast Vote'}
+              </button>
+            ` : ''}
+            ${hasVoted && !showResults ? `<div class="sp-election-note">Your vote is recorded and will stay anonymous.</div>` : ''}
+            ${showResults ? `<div class="sp-election-results">${voterInfo}</div>` : `<div class="sp-election-note">Results are visible after voting closes.</div>`}
+          </div>`;
+      }).join('') : '<div class="sp-card sp-empty-card"><div class="sp-empty">No elections are available right now.</div></div>';
+      activeSection = `
+        <section>
+          <div class="sp-section-head">
+            <h2>Society Elections</h2>
+            <p>Vote once for your preferred candidate. Results appear after the voting window closes.</p>
+          </div>
+          <div class="sp-election-list">
+            ${electionRows}
           </div>
         </section>`;
     }
@@ -786,6 +880,9 @@
     }
     render();
   }
+
+  window.setElectionSelection = setElectionSelection;
+  window.submitElectionVote = submitElectionVote;
 
   bootstrap();
 }());
