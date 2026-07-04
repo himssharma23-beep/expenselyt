@@ -1,4 +1,4 @@
-(function attachLiveSplit() {
+﻿(function attachLiveSplit() {
   const MODES = [
     { key: 'equal', label: 'Equal' },
     { key: 'percent', label: '% Percent' },
@@ -53,6 +53,11 @@
     tripCreate: null,
     tripManage: null,
     tripBulkEdit: null,
+    tripBulkEditFinanceTarget: 'none',
+    tripBulkEditBankAccountId: null,
+    tripBulkEditCardId: null,
+    tripBulkEditCardDiscountPct: 0,
+    tripBulkEditRows: [],
     voiceRecorder: null,
     voiceStream: null,
     voiceChunks: [],
@@ -679,6 +684,23 @@
     return {
       paid_by: String(latestGroup?.paid_by || 'You').trim() || 'You',
       divide_date: toLocalIsoDate(latestGroup?.divide_date || trip?.latest_divide_date || trip?.start_date, todayLocalIso()),
+    };
+  }
+
+  function resolveTripBulkEditFinanceDefaults(trip) {
+    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip?.id || 0));
+    const latestGroup = [...tripGroups]
+      .sort((a, b) => {
+        const dateCmp = String(b?.divide_date || '').localeCompare(String(a?.divide_date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      })[0] || null;
+    const financeTarget = String(latestGroup?.finance_target || 'none');
+    return {
+      finance_target: financeTarget === 'card' || financeTarget === 'expense' ? financeTarget : 'none',
+      bank_account_id: Number(latestGroup?.bank_account_id || 0) || null,
+      card_id: Number(latestGroup?.card_id || 0) || null,
+      card_discount_pct: Number(latestGroup?.card_discount_pct || 0) || 0,
     };
   }
 
@@ -2022,10 +2044,12 @@
     }
 
     const doc = _P.init(true);
-    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  ·  ${filteredEvents.length} entries`;
+    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  Â·  ${filteredEvents.length} entries`;
+    const balanceValue = r2(scoped.total || 0);
+    const balanceLabel = balanceValue > 0.005 ? 'To pay' : balanceValue < -0.005 ? 'To receive' : 'Settled';
     let y = _P.header(doc, `Live Split - ${row?.name || 'Friend'}`, subtitle);
     y = _P.cards(doc, y, [
-      { label: 'Net Balance', value: _P.cur(scoped.total || 0), color: (scoped.total || 0) > 0 ? 'green' : (scoped.total || 0) < 0 ? 'red' : '' },
+      { label: balanceLabel, value: _P.cur(Math.abs(balanceValue)), color: balanceValue > 0.005 ? 'green' : balanceValue < -0.005 ? 'red' : '' },
       { label: 'Entries', value: String(filteredEvents.length), color: '' },
       { label: 'Trips', value: String((scoped.tripSections || []).length), color: '' },
       { label: 'Friend', value: String(row?.name || '-'), color: '' },
@@ -2053,6 +2077,7 @@
     );
 
     (scoped.tripSections || []).forEach((section) => {
+      const focusKey = String(row?.name || '').trim().toLowerCase();
       y = _P.section(doc, y, `Trip Details - ${section.title}`);
       y = _P.note(
         doc,
@@ -2068,14 +2093,70 @@
           _P.dt(event?.date),
           String(event?.details || '-'),
           String(event?.payer || '-'),
-          (Array.isArray(event?.participants) ? event.participants : [])
-            .filter((participant) => String(participant?.name || '').trim())
-            .map((participant) => `${participant.name}: ${participant.paid ? 'paid' : 'owes'} ${_P.cur(participant.share || 0)}`)
-            .join('\n') || '-',
+          (() => {
+            const participants = (Array.isArray(event?.participants) ? event.participants : [])
+              .filter((participant) => String(participant?.name || '').trim())
+              .map((participant) => {
+                const name = String(participant?.name || '').trim();
+                return {
+                  name,
+                  matched: name.toLowerCase() === focusKey,
+                  paid: !!participant.paid,
+                  share: _P.cur(participant.share || 0),
+                };
+              });
+            const splitText = participants.length
+              ? participants.map((participant) => `${participant.name}: ${participant.paid ? 'paid' : 'owes'} ${participant.share}`).join('\n')
+              : '-';
+            return {
+              content: splitText,
+              raw: {
+                focusKey,
+                participants,
+              },
+            };
+          })(),
           _P.cur(event?.total || 0),
         ]),
         { 0: { cellWidth: 24 }, 1: { cellWidth: 62 }, 2: { cellWidth: 30 }, 3: { cellWidth: 64 }, 4: { cellWidth: 24, halign: 'right' } },
-        true
+        true,
+        {
+          didDrawCell: (data) => {
+            if (data.section !== 'body' || data.column.index !== 3) return;
+            const raw = data.cell.raw || {};
+            const participants = Array.isArray(raw.participants) ? raw.participants : [];
+            if (!participants.length) return;
+
+            const x = data.cell.x + 1.6;
+            const y0 = data.cell.y + 3.6;
+            const w = data.cell.width - 3.2;
+            const h = data.cell.height - 2.6;
+            const fill = Array.isArray(data.cell.styles?.fillColor)
+              ? data.cell.styles.fillColor
+              : [255, 255, 255];
+
+            doc.setFillColor(fill[0], fill[1], fill[2]);
+            doc.rect(x - 0.8, data.cell.y + 0.8, w + 1.6, h, 'F');
+
+            let lineY = y0;
+            participants.forEach((participant) => {
+              const isFocus = !!participant.matched;
+              const paid = !!participant.paid;
+              const color = isFocus
+                ? [20, 90, 60]
+                : paid
+                  ? [100, 116, 139]
+                  : [100, 116, 139];
+              doc.setTextColor(color[0], color[1], color[2]);
+              doc.setFont('helvetica', isFocus ? 'bold' : 'normal');
+              doc.setFontSize(isFocus ? 8.4 : 7.6);
+              doc.text(`${participant.name}: ${paid ? 'paid' : 'owes'} ${participant.share}`, x + 1.0, lineY, { maxWidth: w - 2.0 });
+              lineY += isFocus ? 4.6 : 4.0;
+            });
+            doc.setTextColor(0, 0, 0);
+            doc.setFont('helvetica', 'normal');
+          },
+        }
       );
     });
 
@@ -3001,7 +3082,7 @@
                 <table class="live-split-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
                   <tbody>
-                    ${monthData.events.map((event) => {
+                    ${monthData.events.map((event, index) => {
                       const tone = event.delta > 0 ? 'var(--green)' : event.delta < 0 ? 'var(--red)' : 'var(--t3)';
                       const canManage = Number(event.group_id) > 0;
                       const isTripSummary = String(event?.type || '') === 'trip_summary' && Number(event?.trip_id || 0) > 0;
@@ -3060,7 +3141,7 @@
                               <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap;color:${tone}">${fmtCur(event.delta)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` · ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
                               <div style="display:flex;flex-shrink:0">${mobileActionHtml}</div>
@@ -3131,7 +3212,7 @@
                         <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
                         <div class="ls-mobile-event-amount" style="color:${tone}">${fmtCur(event.delta)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` · ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
+                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
                         <div class="ls-mobile-event-actions">${actionHtml}</div>
@@ -3206,8 +3287,8 @@
               const tone = isPayer ? 'var(--green)' : (contextOnly ? 'var(--t2)' : 'var(--red)');
               const bg = isPayer ? '#edfbf3' : (contextOnly ? '#f4f7f5' : '#fff1f1');
               const label = contextOnly
-                ? `${escHtml(p.name)} · ${fmtCur(share)} in split`
-                : `${escHtml(p.name)} · ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
+                ? `${escHtml(p.name)} Â· ${fmtCur(share)} in split`
+                : `${escHtml(p.name)} Â· ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
               return `<span class="ls-trip-inline-split-chip" style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:${bg};color:${tone};font-size:11px;font-weight:600;line-height:1.2">${label}</span>`;
             }).join('')}
           </div>
@@ -3227,7 +3308,7 @@
           </div>
           <div class="ls-trip-top-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
             ${trip.added_to_expense
-              ? `<span class="ls-trip-toolbar-pill" title="Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}" aria-label="Added to expenses${trip.added_to_expense_is_extra ? ' · Extra' : ' · Fair'}">
+              ? `<span class="ls-trip-toolbar-pill" title="Added to expenses${trip.added_to_expense_is_extra ? ' Â· Extra' : ' Â· Fair'}" aria-label="Added to expenses${trip.added_to_expense_is_extra ? ' Â· Extra' : ' Â· Fair'}">
                   <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 4v5c0 4.2-2.7 8-7 9-4.3-1-7-4.8-7-9V7l7-4z"/></svg>
                 </span>`
               : `<button class="live-split-icon-btn soft" title="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" aria-label="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>
@@ -3289,6 +3370,10 @@
                       <div style="font-size:10px;color:var(--t3);font-weight:600;text-transform:uppercase;margin-bottom:2px">Share</div>
                       <div style="font-size:13px;font-weight:600;color:var(--t1)">${fmtCur(m.share)}</div>
                     </div>
+                    <div>
+                      <div style="font-size:10px;color:var(--t3);font-weight:600;text-transform:uppercase;margin-bottom:2px">Items</div>
+                      <div style="font-size:13px;font-weight:600;color:var(--t1)">${Number(m.items || 0)} item${Number(m.items || 0) === 1 ? '' : 's'}</div>
+                    </div>
                   </div>
                 </div>`;
             }).join('')}
@@ -3305,7 +3390,7 @@
                 <table class="live-split-event-table ls-trip-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
                   <tbody>
-                    ${monthData.events.map((event) => {
+                    ${monthData.events.map((event, index) => {
                       const canManage = Number(event.group_id) > 0;
                       const openCall = `liveSplitOpenTripEvent(${tid}, ${Number(event.group_id) || 0})`;
                       const actionHtml = canManage ? `
@@ -3323,10 +3408,13 @@
                           <td class="live-split-date-col ls-trip-date-col" style="cursor:pointer" onclick="${openCall}">${escHtml(shortDate(event.date))}</td>
                           <td class="live-split-details-col ls-trip-details-col" style="cursor:pointer" onclick="${openCall}">
                             <div style="display:flex;width:100%;align-items:flex-start;justify-content:space-between;gap:10px">
-                              <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
+                              <div style="display:flex;align-items:flex-start;gap:8px;flex:1;min-width:0">
+                                <span style="display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:#eef8f0;border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--green);white-space:nowrap">Sr. No. ${index + 1}</span>
+                                <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
+                              </div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap">${fmtCur(event.total)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                             ${renderEventSplitHtml(event)}
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
@@ -3344,7 +3432,7 @@
                 </table>
               </div>
               <div class="ls-mobile-event-list">
-                ${monthData.events.map((event) => {
+                ${monthData.events.map((event, index) => {
                   const canManage = Number(event.group_id) > 0;
                   const openCall = `liveSplitOpenTripEvent(${tid}, ${Number(event.group_id) || 0})`;
                   const actionHtml = canManage ? `
@@ -3360,10 +3448,13 @@
                   return `
                     <div class="ls-mobile-event-card ls-trip-mobile-card" onclick="${openCall}">
                       <div class="ls-mobile-event-head">
-                        <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
+                        <div style="display:flex;align-items:flex-start;gap:8px;min-width:0;flex:1">
+                          <span style="display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:#eef8f0;border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--green);white-space:nowrap;flex-shrink:0">Sr. No. ${index + 1}</span>
+                          <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
+                        </div>
                         <div class="ls-mobile-event-amount">${fmtCur(event.total)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
+                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                       ${renderEventSplitHtml(event)}
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
@@ -3411,9 +3502,10 @@
     events.forEach((event) => {
       (event.participants || []).forEach((p) => {
         if (!p?.name) return;
-        if (!memberSummaryMap[p.name]) memberSummaryMap[p.name] = { name: p.name, paid: 0, share: 0 };
+        if (!memberSummaryMap[p.name]) memberSummaryMap[p.name] = { name: p.name, paid: 0, share: 0, items: 0 };
         memberSummaryMap[p.name].share = r2(memberSummaryMap[p.name].share + r2(p.share));
         if (p.paid) memberSummaryMap[p.name].paid = r2(memberSummaryMap[p.name].paid + r2(event.total));
+        memberSummaryMap[p.name].items = r2(memberSummaryMap[p.name].items + 1);
       });
     });
     const memberSummary = Object.values(memberSummaryMap);
@@ -3428,14 +3520,14 @@
     if (createdDate && createdDate !== '-') subtitleParts.unshift(createdDate);
 
     const doc = _P.init(true);
-    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  ·  '));
+    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  Â·  '));
     y = _P.cards(doc, y, [
       { label: 'Trip Total', value: _P.cur(trip.total_amount || 0), color: '' },
       { label: 'My Share', value: _P.cur(trip.my_share_amount || 0), color: 'amber' },
       { label: 'Expenses', value: String(Number(trip.expense_count || events.length || 0)), color: '' },
       { label: 'Members', value: String(members.length || memberSummary.length || 0), color: '' },
     ]);
-    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  ·  ')}`);
+    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  Â·  ')}`);
 
     if (memberSummary.length) {
       y = _P.section(doc, y, 'Member Summary');
@@ -3769,9 +3861,9 @@
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
             <div style="min-width:0">
               <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.details || 'Split expense'))}</div>
-              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} · ${escHtml(String(item?.paid_by || 'You'))}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} Â· ${escHtml(String(item?.paid_by || 'You'))}</div>
               <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml((item?.participants || []).map((p) => `${p.name}: ${p.share_value}`).join(', ') || 'No participants')}</div>
-              <div style="font-size:11px;color:var(--t2);margin-top:4px">${formatFinanceSourceLabel(item) ? `${escHtml(formatFinanceSourceLabel(item))}` : 'No bank/card selected'}${item?.trip_name ? ` · Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` · ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${formatFinanceSourceLabel(item) ? `${escHtml(formatFinanceSourceLabel(item))}` : 'No bank/card selected'}${item?.trip_name ? ` Â· Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` Â· ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
               ${validation.valid ? '' : `<div style="font-size:11px;color:var(--red);font-weight:700;margin-top:6px">${escHtml(validation.error || 'Invalid split values')}</div>`}
             </div>
             <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.total_amount || 0))}</div>
@@ -5171,7 +5263,7 @@
               </div>
             ` : ''}
           </div>
-          <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} • Receipt tax ${fmtCur(scanTaxTotal)} • Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
+          <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} â€¢ Receipt tax ${fmtCur(scanTaxTotal)} â€¢ Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
           ${form.scan_debug ? `
             <details style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fcfdfc;padding:10px">
               <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--t1)">Scan Debug View</summary>
@@ -5284,7 +5376,7 @@
                   <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
                     <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
                     ${splitPreview?.valid
-                      ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} • ${fmtCur(share.share)}</span>`).join('')}</div>`
+                      ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} â€¢ ${fmtCur(share.share)}</span>`).join('')}</div>`
                       : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                   </div>
                 </div>
@@ -5366,7 +5458,7 @@
                 <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
                   <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
                   ${splitPreview?.valid
-                    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} • ${fmtCur(share.share)}</span>`).join('')}</div>`
+                    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} â€¢ ${fmtCur(share.share)}</span>`).join('')}</div>`
                     : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                 </div>
               </div>
@@ -5584,12 +5676,202 @@
       toast('Only trip owner can bulk edit trip rows', 'warning');
       return;
     }
+    const tripGroups = [...(state.groups || [])]
+      .filter((group) => Number(group?.trip_id || 0) === Number(trip.id))
+      .sort((a, b) => {
+        const dateCmp = String(a?.divide_date || '').localeCompare(String(b?.divide_date || ''));
+        if (dateCmp !== 0) return dateCmp;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      });
     const defaults = resolveTripBulkEditDefaults(trip);
+    const financeDefaults = resolveTripBulkEditFinanceDefaults(trip);
     state.tripBulkEdit = {
       trip_id: tid,
       paid_by: defaults.paid_by,
       divide_date: defaults.divide_date,
+      finance_target: financeDefaults.finance_target,
+      bank_account_id: financeDefaults.bank_account_id,
+      card_id: financeDefaults.card_id,
+      card_discount_pct: financeDefaults.card_discount_pct,
     };
+    state.tripBulkEditMembers = Array.isArray(trip.members) ? trip.members.map((member) => ({ ...member })) : [];
+    state.tripBulkEditRows = tripGroups.map((group, index) => {
+      const editor = createExpenseEditorState(group);
+      return {
+        ...editor,
+        id: Number(group.id),
+        index: index + 1,
+        paid_by: String(group?.paid_by || defaults.paid_by || editor.paid_by || 'You').trim() || 'You',
+        divide_date: toLocalIsoDate(group?.divide_date || defaults.divide_date || trip?.start_date || todayLocalIsoDate()),
+        details: String(group?.details || group?.heading || editor.details || 'Split expense').trim(),
+        total_amount: Number(group?.total_amount || 0),
+        finance_target: String(group?.finance_target || financeDefaults.finance_target || 'none'),
+        bank_account_id: Number(group?.bank_account_id || financeDefaults.bank_account_id || 0) || null,
+        card_id: Number(group?.card_id || financeDefaults.card_id || 0) || null,
+        card_discount_pct: Number(group?.card_discount_pct || financeDefaults.card_discount_pct || 0) || 0,
+      };
+    });
+    renderTripBulkEditModal();
+  }
+
+  function tripBulkEditRowSelectablePeople(row) {
+    if (!row) return [];
+    const list = [];
+    const ownerKey = String(row.owner_key || 'owner');
+    const ownerName = String(row.owner_name || window._currentUser?.display_name || window._currentUser?.username || 'You').trim() || 'You';
+    list.push({ key: ownerKey, name: ownerName, owner: true, friend_id: null });
+    const tripMembers = Array.isArray(state.tripBulkEditMembers) ? state.tripBulkEditMembers : [];
+    tripMembers.forEach((member, index) => {
+      if (!member) return;
+      const memberKey = String(
+        Number(member?.friend_id || 0) > 0
+          ? `friend:${Number(member.friend_id)}`
+          : Number(member?.target_user_id || 0) > 0
+            ? `user:${Number(member.target_user_id)}`
+            : String(member?.member_name || member?.name || '').trim() || `member:${index}`,
+      ).trim();
+      if (!memberKey) return;
+      const memberName = String(member?.member_name || member?.name || '').trim() || 'Member';
+      const friendId = Number(member?.friend_id || 0) || null;
+      const targetUserId = Number(member?.target_user_id || 0) || null;
+      const friend_id = friendId || targetUserId || null;
+      if (list.some((person) => String(person.key) === memberKey)) return;
+      list.push({
+        key: memberKey,
+        name: memberName,
+        owner: false,
+        friend_id,
+        linked_user_id: targetUserId,
+      });
+    });
+    (Array.isArray(row.splits) ? row.splits : []).forEach((split, index) => {
+      list.push({
+        key: Number(split?.friend_id || 0) > 0 ? String(Number(split.friend_id)) : `friend:${index}`,
+        name: String(split?.friend_name || '').trim() || 'Friend',
+        owner: false,
+        friend_id: Number(split?.friend_id || 0) || null,
+      });
+    });
+    return list.filter((person, index, arr) => arr.findIndex((item) => String(item.key) === String(person.key)) === index);
+  }
+
+  function tripBulkEditRowPeople(row) {
+    const selected = new Set((row?.selected_keys || []).map((key) => String(key)));
+    return tripBulkEditRowSelectablePeople(row).filter((person) => selected.has(String(person.key)));
+  }
+
+  function updateTripBulkEditRowField(index, patch) {
+    if (!(Number(index) >= 0)) return;
+    state.tripBulkEditRows = (state.tripBulkEditRows || []).map((row, idx) => (idx === Number(index) ? { ...row, ...(patch || {}) } : row));
+  }
+
+  function tripBulkEditRowPreview(row) {
+    return computeShares(
+      n(row?.total_amount || 0),
+      String(row?.splitMode || row?.split_mode || 'equal'),
+      tripBulkEditRowPeople(row),
+      row?.splitValues || row?.split_values || {},
+    );
+  }
+
+  function tripBulkEditRowProgress(row) {
+    return splitProgress(
+      n(row?.total_amount || 0),
+      String(row?.splitMode || row?.split_mode || 'equal'),
+      tripBulkEditRowPeople(row),
+      row?.splitValues || row?.split_values || {},
+    );
+  }
+
+  function tripBulkEditToggleParticipant(index, participantKey) {
+    const row = (state.tripBulkEditRows || [])[Number(index)];
+    if (!row) return;
+    const nextKeys = new Set((row.selected_keys || []).map((key) => String(key)));
+    const key = String(participantKey || '');
+    if (nextKeys.has(key)) nextKeys.delete(key);
+    else nextKeys.add(key);
+    const people = tripBulkEditRowSelectablePeople(row).filter((person) => nextKeys.has(String(person.key)));
+    const splitMode = String(row.splitMode || row.split_mode || 'equal');
+    updateTripBulkEditRowField(index, {
+      selected_keys: [...nextKeys],
+      splitValues: splitMode === 'equal' ? {} : autoFillValues(splitMode, people, n(row.total_amount || 0)),
+    });
+    renderTripBulkEditModal();
+  }
+
+  function tripBulkEditSetSplitMode(index, nextMode) {
+    const row = (state.tripBulkEditRows || [])[Number(index)];
+    if (!row) return;
+    const people = tripBulkEditRowPeople(row);
+    updateTripBulkEditRowField(index, {
+      splitMode: nextMode,
+      splitValues: nextMode === 'equal' ? {} : autoFillValues(nextMode, people, n(row.total_amount || 0)),
+    });
+    renderTripBulkEditModal();
+  }
+
+  function tripBulkEditSetSplitValue(index, personKey, value) {
+    const row = (state.tripBulkEditRows || [])[Number(index)];
+    if (!row) return;
+    updateTripBulkEditRowField(index, {
+      splitValues: {
+        ...(row.splitValues || row.split_values || {}),
+        [personKey]: value,
+      },
+    });
+    renderTripBulkEditModal();
+  }
+
+  function applyTripBulkEditHeaderToRows() {
+    const form = state.tripBulkEdit;
+    const rows = Array.isArray(state.tripBulkEditRows) ? state.tripBulkEditRows : [];
+    if (!form || !rows.length) return;
+    const financeTarget = String(form.finance_target || 'none') === 'card'
+      ? 'card'
+      : String(form.finance_target || 'none') === 'expense'
+        ? 'expense'
+        : 'none';
+    const bankAccountId = financeTarget === 'expense' ? (Number(form.bank_account_id || 0) || null) : null;
+    const cardId = financeTarget === 'card' ? (Number(form.card_id || 0) || null) : null;
+    const cardDiscountPct = financeTarget === 'card' ? Number(form.card_discount_pct || 0) : 0;
+    state.tripBulkEditRows = rows.map((row) => ({
+      ...row,
+      paid_by: String(form.paid_by || 'You').trim() || 'You',
+      divide_date: toLocalIsoDate(form.divide_date || row.divide_date || todayLocalIsoDate(), todayLocalIsoDate()),
+      finance_target: financeTarget,
+      bank_account_id: bankAccountId,
+      card_id: cardId,
+      card_discount_pct: cardDiscountPct,
+    }));
+  }
+
+  function setTripBulkEditHeaderField(field, value) {
+    if (!state.tripBulkEdit) return;
+    if (field === 'finance_target') {
+      const next = value === 'card' ? 'card' : value === 'expense' ? 'expense' : 'none';
+      state.tripBulkEdit.finance_target = next;
+      if (next !== 'expense') state.tripBulkEdit.bank_account_id = null;
+      if (next !== 'card') {
+        state.tripBulkEdit.card_id = null;
+        state.tripBulkEdit.card_discount_pct = 0;
+      }
+    } else if (field === 'bank_account_id' || field === 'card_id') {
+      state.tripBulkEdit[field] = value ? Number(value) : null;
+    } else if (field === 'card_discount_pct') {
+      state.tripBulkEdit.card_discount_pct = Number(value || 0);
+    } else if (field === 'paid_by') {
+      const next = String(value || 'You').trim() || 'You';
+      state.tripBulkEdit.paid_by = next;
+      if (textKey(next) !== 'you') {
+        state.tripBulkEdit.finance_target = 'none';
+        state.tripBulkEdit.bank_account_id = null;
+        state.tripBulkEdit.card_id = null;
+        state.tripBulkEdit.card_discount_pct = 0;
+      }
+    } else {
+      state.tripBulkEdit[field] = value || '';
+    }
+    applyTripBulkEditHeaderToRows();
     renderTripBulkEditModal();
   }
 
@@ -5598,6 +5880,7 @@
     if (!form) return;
     const trip = (state.liveTrips || []).find((item) => Number(item.id) === Number(form.trip_id));
     if (!trip) return;
+    const rows = Array.isArray(state.tripBulkEditRows) ? state.tripBulkEditRows : [];
     const payerOptions = [
       'You',
       ...(trip.members || [])
@@ -5605,26 +5888,153 @@
         .map((member) => String(member?.member_name || '').trim())
         .filter(Boolean),
     ].filter((name, index, arr) => arr.findIndex((item) => textKey(item) === textKey(name)) === index);
-    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip.id));
     openModal(`Bulk Edit - ${escHtml(trip.name || 'Trip')}`, `
       <div style="display:grid;gap:12px">
         <div style="padding:14px;border:1px solid #d8deea;border-radius:14px;background:linear-gradient(180deg,#f8fbff 0%,#f4faf7 100%)">
-          <div style="font-size:15px;font-weight:900;color:var(--t1)">Update All Trip Rows</div>
-          <div style="font-size:12px;color:var(--t2);margin-top:4px">This updates every saved trip entry in this Live Split trip with one payer and one date. Split shares and amounts stay unchanged.</div>
+          <div style="font-size:15px;font-weight:900;color:var(--t1)">Edit Trip Rows</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:4px">Edit each saved trip row on one page. Dates, payer names, participants, and split mode can be updated row by row.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-            <span class="badge" style="background:#fff;color:#35518f">${tripGroups.length} rows</span>
+            <span class="badge" style="background:#fff;color:#35518f">${rows.length} rows</span>
             <span class="badge" style="background:#fff;color:#145a3c">${fmtCur(trip.total_amount || 0)} total</span>
           </div>
         </div>
-        <div class="fg">
-          <label class="fl">Paid By
-            <select class="fi" onchange="liveSplitTripBulkEditField('paid_by', this.value)">
-              ${payerOptions.map((name) => `<option value="${escHtml(name)}" ${textKey(form.paid_by || 'You') === textKey(name) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
-            </select>
-          </label>
-          <label class="fl">Date For All Rows
-            <input class="fi" type="date" value="${escHtml(form.divide_date || trip.start_date || todayLocalIso())}" onchange="liveSplitTripBulkEditField('divide_date', this.value)">
-          </label>
+        <div style="padding:14px;border:1px solid #d8deea;border-radius:14px;background:#fff;display:grid;gap:12px">
+          <div style="font-size:13px;font-weight:900;color:var(--t1)">Apply To All Rows</div>
+          <div class="fg">
+            <label class="fl">Date for All
+              <input class="fi" type="date" value="${escHtml(state.tripBulkEdit?.divide_date || trip.start_date || todayLocalIso())}" onchange="liveSplitTripBulkEditField('divide_date', this.value)">
+            </label>
+            <label class="fl">Paid By for All
+              <select class="fi" onchange="liveSplitTripBulkEditField('paid_by', this.value)">
+                ${payerOptions.map((name) => `<option value="${escHtml(name)}" ${textKey((state.tripBulkEdit?.paid_by || 'You')) === textKey(name) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Deduct From / Credit Source</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              ${[
+                ['none', 'None'],
+                ['expense', 'Expense / Bank'],
+                ['card', 'Credit Card'],
+              ].map(([modeKey, label]) => `<button class="chip ${String(state.tripBulkEdit?.finance_target || 'none') === modeKey ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditField('finance_target','${modeKey}')">${label}</button>`).join('')}
+            </div>
+          </div>
+          ${String(state.tripBulkEdit?.finance_target || 'none') === 'expense' ? `
+            <div>
+              <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Deduct From Bank</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <button class="chip ${!state.tripBulkEdit?.bank_account_id ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditField('bank_account_id','')">None</button>
+                ${(state.bankAccounts || []).map((bank) => `<button class="chip ${Number(state.tripBulkEdit?.bank_account_id || 0) === Number(bank.id) ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditField('bank_account_id','${Number(bank.id)}')">${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</button>`).join('')}
+              </div>
+            </div>
+          ` : String(state.tripBulkEdit?.finance_target || 'none') === 'card' ? `
+            <div style="display:grid;gap:8px">
+              <div>
+                <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Credit Card</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  ${(state.creditCards || []).map((card) => `<button class="chip ${Number(state.tripBulkEdit?.card_id || 0) === Number(card.id) ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditField('card_id','${Number(card.id)}')">${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())}${String(card.last4 || '').trim() ? ` **${escHtml(String(card.last4 || '').trim())}` : ''})</button>`).join('')}
+                </div>
+              </div>
+              <label class="fl">Discount % (optional)
+                <input class="fi" type="number" step="0.1" min="0" max="100" value="${escHtml(String(state.tripBulkEdit?.card_discount_pct ?? 0))}" onchange="liveSplitTripBulkEditField('card_discount_pct', this.value)">
+              </label>
+            </div>
+          ` : ''}
+          <div class="fa" style="justify-content:flex-end">
+            <button class="btn btn-s" onclick="liveSplitTripBulkEditApplyHeader()">Apply To All Rows</button>
+          </div>
+        </div>
+        <div style="display:grid;gap:10px">
+          ${rows.map((row, rowIndex) => {
+            const people = tripBulkEditRowSelectablePeople(row);
+            const visiblePeople = people.filter((person) => !person.owner && textKey(person.name || '') !== 'you');
+            const selectedPeople = tripBulkEditRowPeople(row);
+            const selectedKeys = new Set((row.selected_keys || []).map((key) => String(key)));
+            const preview = tripBulkEditRowPreview(row);
+            const progress = tripBulkEditRowProgress(row);
+            const activeMode = String(row.splitMode || row.split_mode || 'equal');
+            const includeSelf = selectedKeys.has(String(row.owner_key || 'owner'));
+            return `
+            <div style="border:1px solid #d8deea;border-radius:14px;padding:12px;background:#fff;display:grid;gap:10px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="badge" style="background:#eff7f2;color:#145a3c;font-weight:900">Sr. No. ${row.index}</span>
+                  <div>
+                    <div style="font-size:13px;font-weight:900;color:var(--t1)">${escHtml(row.details || 'Trip row')}</div>
+                    <div style="font-size:11px;color:var(--t2)">${escHtml(fmtCur(row.total_amount || row.amount || 0))}</div>
+                  </div>
+                </div>
+                <span class="badge" style="background:#fff;color:#35518f">${escHtml(String(row.divide_date || '').slice(0, 10))}</span>
+              </div>
+              <div class="fg">
+                <label class="fl">Date
+                  <input class="fi" type="date" value="${escHtml(row.divide_date || trip.start_date || todayLocalIso())}" onchange="liveSplitTripBulkEditRowField(${rowIndex}, 'divide_date', this.value)">
+                </label>
+                <label class="fl">Paid By
+                  <select class="fi" onchange="liveSplitTripBulkEditRowField(${rowIndex}, 'paid_by', this.value)">
+                    ${payerOptions.map((name) => `<option value="${escHtml(name)}" ${textKey(row.paid_by || 'You') === textKey(name) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
+                  </select>
+                </label>
+              </div>
+              <label class="fa" style="justify-content:flex-start;gap:10px;align-items:center">
+                <input type="checkbox" ${includeSelf ? 'checked' : ''} onchange="liveSplitTripBulkEditIncludeSelf(${rowIndex}, this.checked)">
+                <span style="font-size:13px;color:var(--t1);font-weight:700">Include me in this item</span>
+                <span style="font-size:11px;color:var(--t3)">${visiblePeople.length} participant${visiblePeople.length === 1 ? '' : 's'}</span>
+              </label>
+              <div style="padding:10px 12px;border:1px dashed #d8deea;border-radius:12px;background:#fafcff">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                  <div style="font-size:11px;color:var(--t3);font-weight:800;letter-spacing:.08em;text-transform:uppercase">Participants</div>
+                  <div style="font-size:11px;color:var(--t3);font-weight:700">${escHtml(visiblePeople.length ? `${visiblePeople.length} participant${visiblePeople.length === 1 ? '' : 's'}` : 'No participants')}</div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+                  ${(visiblePeople.length
+                    ? visiblePeople.map((person) => {
+                        const active = selectedKeys.has(String(person.key));
+                        return `
+                          <button class="chip ${active ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditToggleParticipant(${rowIndex}, '${escHtml(String(person.key))}')">
+                            ${escHtml(person.name)}
+                          </button>
+                        `;
+                      }).join('')
+                    : '<span class="badge" style="background:#f4f6f4;color:var(--t3)">No participants</span>')}
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Mode</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  ${[
+                    ['equal', 'Equal'],
+                    ['percent', '%'],
+                    ['fraction', 'Fraction'],
+                    ['amount', 'Direct'],
+                    ['parts', 'Parts'],
+                  ].map(([modeKey, label]) => `<button class="chip ${activeMode === modeKey ? 'active' : ''}" style="cursor:pointer" onclick="liveSplitTripBulkEditSplitMode(${rowIndex}, '${modeKey}')">${label}</button>`).join('')}
+                </div>
+              </div>
+              ${activeMode !== 'equal' ? `
+                <div style="display:grid;gap:8px">
+                  ${visiblePeople.map((person) => `
+                    <div style="display:grid;gap:4px">
+                      <div style="font-size:11px;color:var(--t2);font-weight:700">${escHtml(person.name)}</div>
+                      <input class="fi" type="number" step="0.01" value="${escHtml(String((row.splitValues || {})[person.key] ?? ''))}" placeholder="0" onchange="liveSplitTripBulkEditSplitValue(${rowIndex}, '${escHtml(String(person.key))}', this.value)">
+                    </div>
+                  `).join('')}
+                </div>
+              ` : ''}
+              <div style="padding:10px 12px;border-radius:12px;background:#f7fbf8;border:1px solid #dcebe1">
+                <div style="font-size:11px;color:var(--t3);font-weight:800;text-transform:uppercase">Split Preview</div>
+                <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:4px;line-height:1.45">
+                  ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
+                </div>
+                ${progress ? `<div style="margin-top:6px;font-size:12px;color:var(--t2)">${escHtml(progress.unit === 'amount' ? `${progress.label}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} · Remaining: ${fmtCur(progress.remaining)}` : progress.unit === '%' ? `${progress.label}: ${progress.entered.toFixed(2)}% / 100% · Remaining: ${progress.remaining.toFixed(2)}%` : progress.unit === 'parts' ? `${progress.label}: ${progress.entered.toFixed(2)}` : `${progress.label}: ${progress.entered.toFixed(4)} / 1.0000 · Remaining: ${progress.remaining.toFixed(4)}`)}</div>` : ''}
+              </div>
+              <label class="fl">Item / Details
+                <input class="fi" value="${escHtml(row.details || '')}" onchange="liveSplitTripBulkEditRowField(${rowIndex}, 'details', this.value)">
+              </label>
+            </div>
+          `;
+          }).join('')}
         </div>
       </div>
       <div class="fa" style="margin-top:14px">
@@ -5642,32 +6052,57 @@
       toast('Trip not found', 'error');
       return;
     }
-    const divideDate = toLocalIsoDate(form.divide_date, trip.start_date || todayLocalIso());
-    const paidBy = String(form.paid_by || 'You').trim() || 'You';
-    const tripGroups = [...(state.groups || [])].filter((group) => Number(group?.trip_id || 0) === Number(trip.id));
-    if (!tripGroups.length) {
+    const rows = Array.isArray(state.tripBulkEditRows) ? state.tripBulkEditRows : [];
+    if (!rows.length) {
       toast('No trip rows found to update', 'warning');
       return;
     }
     try {
       state.tripActionBusy = Number(trip.id);
       renderTripBulkEditModal();
-      for (const group of tripGroups) {
+      for (const row of rows) {
+        const group = [...(state.groups || [])].find((item) => Number(item?.id || 0) === Number(row.id));
+        if (!group) continue;
+        const preview = tripBulkEditRowPreview(row);
+        if (!preview?.valid) throw new Error(`Row ${row.index}: ${preview?.error || 'Invalid split values'}`);
+        const people = tripBulkEditRowSelectablePeople(row);
+        const byKey = new Map(people.map((person) => [String(person.key), person]));
+        const ownerKey = String(row.owner_key || 'owner');
+        const splits = preview.shares
+          .filter((share) => String(share.key) !== ownerKey)
+          .map((share) => {
+            const person = byKey.get(String(share.key)) || { friend_id: 0, name: String(share.name || '').trim() };
+            return {
+              friend_id: Number(person.friend_id || 0),
+              friend_name: String(person.name || share.name || '').trim(),
+              share_amount: Number(share.share || 0),
+            };
+          });
         const result = await api(`/api/live-split/groups/${Number(group.id)}`, {
           method: 'PUT',
           body: {
-            divide_date: divideDate,
-            details: String(group?.details || group?.heading || 'Split expense').trim(),
-            paid_by: paidBy,
+            divide_date: toLocalIsoDate(row.divide_date, trip.start_date || todayLocalIso()),
+            details: String(row.details || group?.details || group?.heading || 'Split expense').trim(),
+            paid_by: String(row.paid_by || 'You').trim() || 'You',
             total_amount: Number(group?.total_amount || 0),
-            split_mode: String(group?.split_mode || 'equal'),
+            split_mode: String(row.splitMode || row.split_mode || group?.split_mode || 'equal'),
             trip_id: Number(group?.trip_id || 0) || null,
             heading: String(group?.heading || group?.details || '').trim() || null,
-            splits: Array.isArray(group?.splits) ? group.splits.map((split) => ({
-              friend_id: Number(split?.friend_id || 0),
-              friend_name: String(split?.friend_name || '').trim(),
-              share_amount: Number(split?.share_amount || 0),
-            })) : [],
+            splits,
+            finance_target: String(row.finance_target || form.finance_target || 'none') === 'card'
+              ? 'card'
+              : String(row.finance_target || form.finance_target || 'none') === 'expense'
+                ? 'expense'
+                : 'none',
+            bank_account_id: String(row.finance_target || form.finance_target || 'none') === 'expense'
+              ? (Number(row.bank_account_id || form.bank_account_id || 0) || null)
+              : null,
+            card_id: String(row.finance_target || form.finance_target || 'none') === 'card'
+              ? (Number(row.card_id || form.card_id || 0) || null)
+              : null,
+            card_discount_pct: String(row.finance_target || form.finance_target || 'none') === 'card'
+              ? Number(row.card_discount_pct || form.card_discount_pct || 0)
+              : 0,
             allow_duplicate: true,
           },
         });
@@ -5675,17 +6110,22 @@
       }
       state.tripActionBusy = false;
       state.tripBulkEdit = null;
+      state.tripBulkEditFinanceTarget = 'none';
+      state.tripBulkEditBankAccountId = null;
+      state.tripBulkEditCardId = null;
+      state.tripBulkEditCardDiscountPct = 0;
+      state.tripBulkEditRows = [];
+      state.tripBulkEditMembers = [];
       closeModal();
       await fetchData();
       await openTripDetails(trip.id);
-      toast(`Updated ${tripGroups.length} trip row${tripGroups.length === 1 ? '' : 's'}`, 'success');
+      toast(`Updated ${rows.length} trip row${rows.length === 1 ? '' : 's'}`, 'success');
     } catch (error) {
       state.tripActionBusy = false;
       if (state.tripBulkEdit) renderTripBulkEditModal();
       toast(error?.message || 'Could not bulk update trip rows', 'error');
     }
   }
-
   async function openCreateFromTrip(tripId) {
     const id = Number(tripId);
     const trip = (state.liveTrips || []).find((item) => Number(item.id) === id);
@@ -6812,10 +7252,43 @@
   };
   window.liveSplitTripBulkEditField = function liveSplitTripBulkEditField(field, value) {
     if (!state.tripBulkEdit) return;
-    state.tripBulkEdit[field] = value || '';
+    setTripBulkEditHeaderField(field, value);
+  };
+  window.liveSplitTripBulkEditApplyHeader = function liveSplitTripBulkEditApplyHeader() {
+    applyTripBulkEditHeaderToRows();
+    renderTripBulkEditModal();
   };
   window.liveSplitOpenTripBulkEdit = openTripBulkEditModal;
   window.liveSplitTripBulkEditSave = saveTripBulkEditModal;
+  window.liveSplitTripBulkEditRowField = function liveSplitTripBulkEditRowField(index, field, value) {
+    if (!state.tripBulkEditRows || !state.tripBulkEditRows[index]) return;
+    state.tripBulkEditRows[index][field] = value || '';
+    renderTripBulkEditModal();
+  };
+  window.liveSplitTripBulkEditToggleParticipant = function liveSplitTripBulkEditToggleParticipant(index, participantKey) {
+    tripBulkEditToggleParticipant(index, participantKey);
+  };
+  window.liveSplitTripBulkEditIncludeSelf = function liveSplitTripBulkEditIncludeSelf(index, checked) {
+    const row = (state.tripBulkEditRows || [])[Number(index)];
+    if (!row) return;
+    const ownerKey = String(row.owner_key || 'owner');
+    const nextKeys = new Set((row.selected_keys || []).map((key) => String(key)));
+    if (checked) nextKeys.add(ownerKey);
+    else nextKeys.delete(ownerKey);
+    const people = tripBulkEditRowSelectablePeople(row).filter((person) => nextKeys.has(String(person.key)));
+    const splitMode = String(row.splitMode || row.split_mode || 'equal');
+    updateTripBulkEditRowField(index, {
+      selected_keys: [...nextKeys],
+      splitValues: splitMode === 'equal' ? {} : autoFillValues(splitMode, people, n(row.total_amount || 0)),
+    });
+    renderTripBulkEditModal();
+  };
+  window.liveSplitTripBulkEditSplitMode = function liveSplitTripBulkEditSplitMode(index, nextMode) {
+    tripBulkEditSetSplitMode(index, nextMode);
+  };
+  window.liveSplitTripBulkEditSplitValue = function liveSplitTripBulkEditSplitValue(index, personKey, value) {
+    tripBulkEditSetSplitValue(index, personKey, value);
+  };
   window.liveSplitTripBulkPaidBy = function liveSplitTripBulkPaidBy(value) {
     if (!state.tripCreate) return;
     state.tripCreate.paid_by = String(value || 'You').trim() || 'You';
@@ -7295,3 +7768,5 @@
   window.liveSplitOpenEvent = openEventDetails;
   bindAvatarPreviewClicks();
 })();
+
+

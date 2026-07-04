@@ -5342,7 +5342,12 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .live-split-icon-btn svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .live-split-icon-btn.soft {
   background: #fff;
@@ -9617,11 +9622,11 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   background:rgba(255,255,255,.12);
 }
 .ls-trip-top-actions .live-split-icon-btn {
-  width:40px;
-  height:40px;
-  border-color:rgba(255,255,255,.16);
-  background:rgba(9,73,46,.34);
-  color:#eefcf3;
+  width:42px;
+  height:42px;
+  border-color:rgba(255,255,255,.24);
+  background:rgba(255,255,255,.10);
+  color:#f7fff9;
   box-shadow:none;
 }
 .ls-trip-top-actions .live-split-icon-btn svg {
@@ -9629,7 +9634,7 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
   height:18px;
 }
 .ls-trip-top-actions .live-split-icon-btn:hover {
-  background:rgba(255,255,255,.14);
+  background:rgba(255,255,255,.18);
 }
 .ls-trip-toolbar-pill {
   width:40px;

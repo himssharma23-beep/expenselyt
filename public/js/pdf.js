@@ -37,6 +37,7 @@ const _P = (() => {
       if (value.styles && typeof value.styles === 'object') next.styles = { ...value.styles };
       if (value.rowSpan) next.rowSpan = value.rowSpan;
       if (value.colSpan) next.colSpan = value.colSpan;
+      if (Object.prototype.hasOwnProperty.call(value, 'raw')) next.raw = value.raw;
       return next;
     }
     return cleanCellValue(value);
@@ -82,7 +83,7 @@ const _P = (() => {
     doc.setTextColor(0, 0, 0);
   }
 
-  function table(doc, y, head, body, colStyles, landscape) {
+  function table(doc, y, head, body, colStyles, landscape, opts = {}) {
     const safeHead = (head || []).map((row) => (row || []).map(cleanCellValue));
     const safeBody = (body || []).map((row) => (row || []).map(cleanTableCell));
     doc.autoTable({
@@ -93,6 +94,12 @@ const _P = (() => {
       bodyStyles: { fontSize: 8, cellPadding: 2.5 },
       margin: { left: 14, right: 14, bottom: 14 },
       columnStyles: colStyles || {},
+      didParseCell: (data) => {
+        if (typeof opts.didParseCell === 'function') opts.didParseCell(data);
+      },
+      didDrawCell: (data) => {
+        if (typeof opts.didDrawCell === 'function') opts.didDrawCell(data);
+      },
       didDrawPage: (d) => {
         if (d.pageNumber > 1) {
           const pw = doc.internal.pageSize.getWidth();
@@ -102,6 +109,7 @@ const _P = (() => {
           doc.text('EXPENSE LITE AI (cont.)', 14, 5);
           doc.setTextColor(0,0,0); doc.setFont('helvetica','normal');
         }
+        if (typeof opts.didDrawPage === 'function') opts.didDrawPage(d);
       }
     });
     return doc.lastAutoTable.finalY + 6;
@@ -280,8 +288,13 @@ function downloadFriendDetailPdf() {
 
   const doc = _P.init(true);
   let y = _P.header(doc, `Transactions — ${f.name}`, filterLabel);
+  const focusName = String(f.name || '').trim().toLowerCase();
   y = _P.cards(doc, y, [
-    { label:'Overall Balance',   value:_P.cur(balance||0),   color:(balance||0)>0?'green':(balance||0)<0?'red':'' },
+    {
+      label: balance > 0.005 ? 'To receive' : balance < -0.005 ? 'To pay' : 'Settled',
+      value: _P.cur(Math.abs(balance || 0)),
+      color: (balance || 0) > 0 ? 'green' : (balance || 0) < 0 ? 'red' : '',
+    },
     { label:'Total Paid/Given',  value:_P.cur(paidF),        color:'red' },
     { label:'Total Received',    value:_P.cur(rcvdF),        color:'green' },
     { label:'Transactions',      value:txns.length,           color:'' },

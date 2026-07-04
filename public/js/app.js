@@ -18360,7 +18360,6 @@ function renderTrackerToolbar(extraActions = '') {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn ${_trackerViewMode === 'daily' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='daily';_selectedExpenseBucketId=null;renderTrackerGrid()">Daily Trackers</button>
           <button class="btn ${_trackerViewMode === 'bucket' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='bucket';_selectedTrackerId=null;renderTrackerGrid()">Expense Buckets</button>
-          <button class="btn ${_trackerViewMode === 'fd' ? 'btn-p' : 'btn-s'} btn-sm" onclick="_trackerViewMode='fd';_selectedTrackerId=null;_selectedExpenseBucketId=null;renderTrackerGrid()">Fixed Deposits</button>
           ${extraActions}
         </div>
       </div>`;
@@ -23265,7 +23264,6 @@ async function doHabitImport(trackerId) {
 
 async function renderTrackerGrid() {
   if (_trackerViewMode === 'bucket') return renderExpenseBucketGrid();
-  if (_trackerViewMode === 'fd') return renderFixedDepositsGrid();
   const cards = _trackers.length ? _trackers.map((t) => `
     <div class="cc-tile tracker-tile" data-tracker-id="${t.id}" onclick="openTrackerDetail(${t.id})" style="cursor:pointer" role="button" tabindex="0" onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); openTrackerDetail(${t.id}); }">
       <div class="cc-tile-header">
