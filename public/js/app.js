@@ -1204,10 +1204,14 @@ let _societyMonth = currentMonthStr();
 let _societiesLoading = false;
 let _societyMemberFilter = 'all';
 let _societyMemberSearch = '';
+let _societyShowInactiveMembers = false;
 let _societyTab = 'overview';
 let _societyRange = 'month';
 let _societyRequestFilter = 'all';
 let _societyRequestSearch = '';
+let _societyExpenseDraftType = 'expense';
+let _societyExpenseDraftPaidById = '';
+let _societyExpenseDraftForcedType = '';
 let _schoolKidsOverview = null;
 let _schoolKidsList = [];
 let _selectedSchoolKidId = null;
@@ -20216,9 +20220,72 @@ function setSocietyMemberSearch(value) {
   renderSocietiesPage();
 }
 
+function setSocietyShowInactiveMembers(value) {
+  _societyShowInactiveMembers = !!value;
+  renderSocietiesPage();
+}
+
 function setSocietyTab(value) {
   _societyTab = String(value || 'overview');
   renderSocietiesPage();
+}
+
+function societyEntryTypeLabel(type) {
+  const value = normalizeSocietyEntryTypeClient(type);
+  if (value === 'balance_add') return 'Balance Add';
+  if (value === 'balance_subtract') return 'Balance Subtract';
+  return 'Expense';
+}
+
+function normalizeSocietyEntryTypeClient(type) {
+  const raw = String(type || 'expense').trim().toLowerCase().replace(/\s+/g, ' ');
+  const compact = raw.replace(/[\s_-]+/g, '');
+  if (compact === 'balanceadd' || ['credit', 'add', 'topup', 'top-up', 'top up', 'deposit', 'bank add', 'balance credit'].includes(raw)) return 'balance_add';
+  if (compact === 'balancesubtract' || ['debit', 'subtract', 'withdraw', 'withdrawal', 'remove', 'deduct', 'deduction', 'bank subtract', 'balance debit'].includes(raw)) return 'balance_subtract';
+  return 'expense';
+}
+
+function societyEntryTypeBadge(type) {
+  const value = normalizeSocietyEntryTypeClient(type);
+  if (value === 'balance_add') return 'background:#e9f5ef;color:#1f734c';
+  if (value === 'balance_subtract') return 'background:#fff0ed;color:#b63b2d';
+  return 'background:#eef3ff;color:#4869b7';
+}
+
+function societyEntryTypeAmount(entry) {
+  const type = normalizeSocietyEntryTypeClient(entry?.entry_type || 'expense');
+  const amount = Number(entry?.amount || 0);
+  if (type === 'balance_subtract') return -amount;
+  return amount;
+}
+
+function societyMemberContributionValue(member, isAllTime) {
+  return Number(isAllTime ? (member?.total_contributed || 0) : (member?.selected_month_amount || 0));
+}
+
+function societyMemberShouldShow(member, isAllTime) {
+  if (!member) return false;
+  return member.is_active !== false || societyMemberContributionValue(member, isAllTime) > 0;
+}
+
+function societyMemberDisplayLabel(member) {
+  const name = String(member?.member_name || 'Member').trim() || 'Member';
+  return member?.is_active === false ? `${name} (Inactive)` : name;
+}
+
+function societyMemberPhoneList(member) {
+  const extras = Array.isArray(member?.phone_numbers) ? member.phone_numbers : [];
+  const primary = String(member?.phone_number || '').trim();
+  return [...new Set([primary, ...extras].map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function societyMemberPhoneDisplay(member) {
+  const phones = societyMemberPhoneList(member);
+  return phones.length ? phones.join(', ') : '-';
+}
+
+function parseSocietyMemberPhoneInput(value) {
+  return [...new Set(String(value || '').split(/[\n,;|]+/g).map((item) => item.trim()).filter(Boolean))];
 }
 
 function setSocietyRequestFilter(value) {
@@ -20309,8 +20376,10 @@ function renderSocietiesPage() {
     const monthLabel = societyMonthLabel(_societyMonth);
     const periodLabel = isAllTime ? 'All Time' : monthLabel;
     const allMembers = Array.isArray(selected.members) ? selected.members : [];
+    const visibleMembers = sortSocietyMembersForDisplay(allMembers.filter((member) => _societyShowInactiveMembers || societyMemberShouldShow(member, isAllTime)));
+    const visibleMemberIds = new Set(visibleMembers.map((member) => String(member.id)));
     const searchNeedle = _societyMemberSearch.trim().toLowerCase();
-    const filteredMembers = sortSocietyMembersForDisplay(allMembers.filter((member) => {
+    const filteredMembers = visibleMembers.filter((member) => {
       const status = String(isAllTime
         ? ((Number(member.total_contributed || 0) > 0) ? 'paid' : 'pending')
         : (member.selected_month_status || '')).toLowerCase();
@@ -20325,14 +20394,14 @@ function renderSocietiesPage() {
         member.unit_label,
         member.phone_number,
       ].some((value) => String(value || '').toLowerCase().includes(searchNeedle));
-    }));
+    });
 
     const paidMembers = isAllTime
-      ? allMembers.filter((member) => Number(member.total_contributed || 0) > 0)
-      : (selected.payment_status?.paid_members || []);
+      ? visibleMembers.filter((member) => Number(member.total_contributed || 0) > 0)
+      : (selected.payment_status?.paid_members || []).filter((member) => visibleMemberIds.has(String(member.id)));
     const pendingMembers = isAllTime
-      ? allMembers.filter((member) => Number(member.total_contributed || 0) <= 0)
-      : (selected.payment_status?.pending_members || []);
+      ? visibleMembers.filter((member) => Number(member.total_contributed || 0) <= 0)
+      : (selected.payment_status?.pending_members || []).filter((member) => visibleMemberIds.has(String(member.id)));
     const paymentRequests = Array.isArray(selected.payment_requests) ? selected.payment_requests : [];
     const pendingPaymentRequests = Array.isArray(selected.pending_payment_requests) ? selected.pending_payment_requests : [];
     const requestSearchNeedle = _societyRequestSearch.trim().toLowerCase();
@@ -20362,7 +20431,10 @@ function renderSocietiesPage() {
     const collectedTotal = Number(isAllTime ? (selected.totals?.overall_collected || 0) : (selected.totals?.selected_month_collected || 0));
     const spentTotal = Number(isAllTime ? (selected.totals?.overall_spent || 0) : (selected.totals?.selected_month_spent || 0));
     const balanceTotal = Number(isAllTime ? (selected.totals?.overall_balance || 0) : (selected.totals?.selected_month_balance || 0));
+    const overallBalanceTotal = Number(selected.totals?.overall_balance || 0);
     const scopeExpenses = isAllTime ? (selected.expenses || []) : (selected.month_expenses || []);
+    const scopeExpenseRows = scopeExpenses.filter((entry) => normalizeSocietyEntryTypeClient(entry?.entry_type || 'expense') === 'expense');
+    const scopeExpenseTotal = scopeExpenseRows.reduce((sum, entry) => sum + societyEntryTypeAmount(entry), 0);
     const collectionPct = dueTotal > 0 ? Math.max(0, Math.min(100, Math.round((collectedTotal / dueTotal) * 100))) : 0;
     const donutCollectedPct = Math.max(0, Math.min(100, Math.round(((collectedTotal || 0) / Math.max((collectedTotal || 0) + (spentTotal || 0), 1)) * 100)));
     const donutStyle = `background:conic-gradient(#248f5b 0 ${donutCollectedPct}%, #c83b2b ${donutCollectedPct}% 100%)`;
@@ -20373,6 +20445,7 @@ function renderSocietiesPage() {
         <td style="color:var(--green);font-weight:700">${fmtCur(row.collected || 0)}</td>
         <td style="color:var(--red);font-weight:700">${fmtCur(row.spent || 0)}</td>
         <td style="font-weight:700;color:${Number(row.balance || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(row.balance || 0)}</td>
+        <td style="font-weight:700;color:var(--green)">${fmtCur(row.balance_adjustment || 0)}</td>
       </tr>`).join('');
     const allTimeMax = Math.max(1, ...(selected.month_summary || []).flatMap((row) => [Number(row.collected || 0), Number(row.spent || 0)]));
     const chartBars = (selected.month_summary || []).map((row) => {
@@ -20395,6 +20468,7 @@ function renderSocietiesPage() {
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
       ['expenses', 'Expenses'],
+      ['balances', 'Balances'],
       ['report', 'Report'],
     ];
     const tabsHtml = tabItems.map(([key, label]) => `
@@ -20424,7 +20498,7 @@ function renderSocietiesPage() {
                 ${paidMembers.length ? paidMembers.map((member) => `
                   <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
                     <div>
-                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(societyMemberDisplayLabel(member))}</div>
                       <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}</div>
                     </div>
                     <div style="font-weight:800;color:#17784a">${fmtCur(member.selected_month_amount || 0)}</div>
@@ -20437,7 +20511,7 @@ function renderSocietiesPage() {
                 ${pendingMembers.length ? pendingMembers.map((member) => `
                   <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
                     <div>
-                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(societyMemberDisplayLabel(member))}</div>
                       <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}</div>
                     </div>
                     <div style="font-weight:800;color:#d64735">${fmtCur(member.selected_month_pending || 0)} due</div>
@@ -20481,6 +20555,10 @@ function renderSocietiesPage() {
             <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
             <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
           </select>
+          <label class="fi" style="display:flex;align-items:center;gap:8px;max-width:180px;padding:0 12px;cursor:pointer">
+            <input type="checkbox" ${_societyShowInactiveMembers ? 'checked' : ''} onchange="setSocietyShowInactiveMembers(this.checked)">
+            <span>Show inactive</span>
+          </label>
           <input class="fi" style="max-width:260px" value="${escHtml(_societyMemberSearch)}" oninput="setSocietyMemberSearch(this.value)" placeholder="Search name or unit...">
         </div>
         <div class="table-wrap">
@@ -20493,7 +20571,10 @@ function renderSocietiesPage() {
                 const paid = Number(isAllTime ? (member.total_contributed || 0) : (member.selected_month_amount || 0));
                 const due = Number(member.selected_month_due || 0);
                 const pending = Number(member.selected_month_pending || 0);
-                const statusChip = isAllTime
+                const isInactive = member.is_active === false;
+                const statusChip = isInactive && paid <= 0
+                  ? `<span class="badge" style="background:#f2f3f5;color:#69707d">Inactive</span>`
+                  : isAllTime
                   ? (paid > 0
                     ? `<span class="badge" style="background:#e6f8ee;color:#18784a">&#10003; Paid</span>`
                     : `<span class="badge" style="background:#fff1ee;color:#d64735">&#8987; Unpaid</span>`)
@@ -20508,15 +20589,15 @@ function renderSocietiesPage() {
                   : `<span class="badge" style="background:var(--bg2);color:var(--t3)">No Due</span>`;
                 return `
                   <tr>
-                    <td><div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name)}</div></td>
+                    <td><div style="font-weight:800;color:var(--t1)">${escHtml(societyMemberDisplayLabel(member))}</div></td>
                     <td>${escHtml(member.property_type === 'shop' ? 'Shop' : 'Home')}</td>
                     <td>${escHtml(member.unit_label || '-')}</td>
-                    <td>${escHtml(member.phone_number || '-')}</td>
+                    <td>${escHtml(societyMemberPhoneDisplay(member))}</td>
                     <td style="text-align:right;font-weight:800;color:${paid > 0 ? 'var(--green)' : 'var(--t2)'}">${fmtCur(paid)}</td>
                     <td style="text-align:right;font-weight:800;color:${isAllTime ? 'var(--t1)' : (pending > 0 ? 'var(--red)' : 'var(--t1)')}">${fmtCur(due)}</td>
                     <td>${statusChip}</td>
                     <td style="white-space:nowrap">
-                      ${member.phone_number ? `<button class="trip-icon-btn" title="Open Society Portal" aria-label="Open Society Portal" onclick='openSocietyPortalForPhone(${JSON.stringify(String(member.phone_number || ''))})'>
+                      ${societyMemberPhoneList(member)[0] ? `<button class="trip-icon-btn" title="Open Society Portal" aria-label="Open Society Portal" onclick='openSocietyPortalForPhone(${JSON.stringify(String(societyMemberPhoneList(member)[0] || ''))})'>
                         <svg class="tenant-action-icon" viewBox="0 0 24 24" aria-hidden="true">
                           <path d="M14 3h7v7"></path>
                           <path d="M10 14 21 3"></path>
@@ -20582,7 +20663,7 @@ function renderSocietiesPage() {
               ${filteredMembers.length ? filteredMembers.map((member) => `
                 <tr>
                   <td style="position:sticky;left:0;z-index:3;background:#fff;min-width:220px">
-                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(member.member_name)}</div>
+                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(societyMemberDisplayLabel(member))}</div>
                     <div style="font-size:12px;color:var(--t3);margin-top:3px">${escHtml(member.unit_label || '-')}</div>
                   </td>
                   ${(selected.matrix_months || []).map((monthKey) => {
@@ -20614,12 +20695,18 @@ function renderSocietiesPage() {
             <div style="font-size:16px;font-weight:900;color:var(--t1)">All Months Matrix</div>
             <div style="font-size:12px;color:var(--t3);margin-top:4px">Every member x every month</div>
           </div>
-          <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
-            <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
-            <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
-            <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
-            <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
-          </select>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
+              <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
+              <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
+              <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
+              <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
+            </select>
+            <label class="fi" style="display:flex;align-items:center;gap:8px;max-width:180px;padding:0 12px;cursor:pointer">
+              <input type="checkbox" ${_societyShowInactiveMembers ? 'checked' : ''} onchange="setSocietyShowInactiveMembers(this.checked)">
+              <span>Show inactive</span>
+            </label>
+          </div>
         </div>
         <div class="table-wrap" style="max-height:72vh;overflow:auto">
           <table>
@@ -20642,7 +20729,7 @@ function renderSocietiesPage() {
               ${filteredMembers.length ? filteredMembers.map((member) => `
                 <tr>
                   <td style="position:sticky;left:0;z-index:3;background:#fff;min-width:220px">
-                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(member.member_name)}</div>
+                    <div style="font-weight:800;color:var(--t1);line-height:1.2">${escHtml(societyMemberDisplayLabel(member))}</div>
                     <div style="font-size:12px;color:var(--t3);margin-top:3px">${escHtml(member.unit_label || '-')}</div>
                   </td>
                   ${(selected.matrix_months || []).map((monthKey) => {
@@ -20671,25 +20758,30 @@ function renderSocietiesPage() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th>Type</th><th>Paid By</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
             <tbody>
-              ${(selected.month_expenses || []).length ? selected.month_expenses.map((expense) => `
+              ${((selected.month_expenses || []).filter((entry) => normalizeSocietyEntryTypeClient(entry?.entry_type || 'expense') === 'expense').length) ? (selected.month_expenses || []).filter((entry) => normalizeSocietyEntryTypeClient(entry?.entry_type || 'expense') === 'expense').map((expense) => `
                 <tr>
                   <td>${fmtDate(expense.expense_date)}</td>
-                  <td><strong>${escHtml(expense.title)}</strong></td>
+                  <td>
+                    <strong>${escHtml(expense.title)}</strong>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+                  </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
-                  <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(expense.amount || 0)}</td>
+                  <td><span class="badge" style="${societyEntryTypeBadge(expense.entry_type)}">${societyEntryTypeLabel(expense.entry_type)}</span></td>
+                  <td>${expense.paid_by_member_name ? escHtml(expense.paid_by_member_name) : '-'}</td>
+                  <td style="text-align:right;font-weight:900;color:${normalizeSocietyEntryTypeClient(expense.entry_type || 'expense') === 'balance_add' ? 'var(--green)' : 'var(--red)'}">${fmtCur(societyEntryTypeAmount(expense))}</td>
                   <td style="white-space:nowrap">
                     <button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSocietyExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
                     <button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSocietyExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
                   </td>
-                </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--t3)">No society expenses in this month.</td></tr>'}
+                </tr>`).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--t3)">No society expenses in this month.</td></tr>'}
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="4" style="text-align:right;color:var(--t3)">Total this month</td>
-                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(spentTotal)}</td>
+                <td colspan="6" style="text-align:right;color:var(--t3)">Total expenses this month</td>
+                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(scopeExpenseTotal)}</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -20712,29 +20804,104 @@ function renderSocietiesPage() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Notes</th><th>Type</th><th>Paid By</th><th style="text-align:right">Amount</th><th class="td-m">Action</th></tr></thead>
             <tbody>
-              ${scopeExpenses.length ? scopeExpenses.map((expense) => `
+              ${scopeExpenseRows.length ? scopeExpenseRows.map((expense) => `
                 <tr>
                   <td>${fmtDate(expense.expense_date)}</td>
-                  <td><strong>${escHtml(expense.title)}</strong></td>
+                  <td>
+                    <strong>${escHtml(expense.title)}</strong>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+                  </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
-                  <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(expense.amount || 0)}</td>
+                  <td><span class="badge" style="${societyEntryTypeBadge(expense.entry_type)}">${societyEntryTypeLabel(expense.entry_type)}</span></td>
+                  <td>${expense.paid_by_member_name ? escHtml(expense.paid_by_member_name) : '-'}</td>
+                  <td style="text-align:right;font-weight:900;color:${normalizeSocietyEntryTypeClient(expense.entry_type || 'expense') === 'balance_add' ? 'var(--green)' : 'var(--red)'}">${fmtCur(societyEntryTypeAmount(expense))}</td>
                   <td style="white-space:nowrap">
                     <button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSocietyExpenseModal(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
                     <button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSocietyExpense(${Number(expense.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
                   </td>
-                </tr>`).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--t3)">No society expenses ${isAllTime ? 'yet' : 'in this month'}.</td></tr>`}
+                </tr>`).join('') : `<tr><td colspan="8" style="text-align:center;color:var(--t3)">No society expenses ${isAllTime ? 'yet' : 'in this month'}.</td></tr>`}
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="4" style="text-align:right;color:var(--t3)">${isAllTime ? 'Total till today' : 'Total this month'}</td>
-                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(spentTotal)}</td>
+                <td colspan="6" style="text-align:right;color:var(--t3)">${isAllTime ? 'Total till today' : 'Total this month'}</td>
+                <td style="text-align:right;font-weight:900;color:var(--red)">${fmtCur(scopeExpenseTotal)}</td>
                 <td></td>
               </tr>
             </tfoot>
           </table>
+        </div>
+      </div>`;
+
+    const balancesSection = `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Balances · ${escHtml(periodLabel)}</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:20px 22px;border-bottom:1px solid var(--border-l);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:16px;font-weight:900;color:var(--t1)">Member Ledger</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Track how much each member is owed, what has been settled, and the remaining balance</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-p btn-sm" onclick="showSocietyExpenseModal(null, { entry_type: 'balance_add', force_entry_type: 'balance_add' })">+ Add Balance Entry</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Unit</th><th style="text-align:right">Gross Owed</th><th style="text-align:right">Settled</th><th style="text-align:right">Remaining</th><th class="td-m" style="text-align:right">Expense Count</th><th>Actions</th></tr></thead>
+            <tbody>
+              ${(selected.member_balances || []).length ? selected.member_balances.map((row) => `
+                <tr>
+                  <td>
+                    <strong>${escHtml(row.member_name || 'Member')}</strong>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${Number(row.settlement_count || 0)} settlement${Number(row.settlement_count || 0) === 1 ? '' : 's'}</div>
+                  </td>
+                  <td>${escHtml(row.unit_label || '-')}</td>
+                  <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(row.amount || 0)}</td>
+                  <td style="text-align:right;font-weight:900;color:${Number(row.settled_amount || 0) > 0 ? 'var(--t1)' : 'var(--t3)'}">${fmtCur(row.settled_amount || 0)}</td>
+                  <td style="text-align:right;font-weight:900;color:${Number(row.remaining_amount || 0) > 0 ? 'var(--red)' : 'var(--green)'}">${fmtCur(row.remaining_amount || 0)}</td>
+                  <td class="td-m" style="text-align:right">${Number(row.expense_count || 0)}</td>
+                  <td style="white-space:nowrap">
+                    <button class="trip-icon-btn" title="View Ledger" aria-label="View Ledger" onclick="showSocietyMemberLedgerModal(${Number(row.member_id)})"><span class="trip-icon-btn-glyph">&#128221;</span></button>
+                    <button class="trip-icon-btn" title="Add Settlement" aria-label="Add Settlement" onclick="showSocietyMemberLedgerModal(${Number(row.member_id)})"><span class="trip-icon-btn-glyph">&#8377;</span></button>
+                  </td>
+                </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--t3)">No member balances yet.</td></tr>'}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="2" style="text-align:right;color:var(--t3)">Gross owed</td>
+                <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(Number(selected.totals?.member_owed_gross_total || 0))}</td>
+                <td style="text-align:right;font-weight:900;color:${Number(selected.totals?.member_settled_total || 0) > 0 ? 'var(--t1)' : 'var(--t3)'}">${fmtCur(Number(selected.totals?.member_settled_total || 0))}</td>
+                <td style="text-align:right;font-weight:900;color:${Number(selected.totals?.member_owed_total || 0) > 0 ? 'var(--red)' : 'var(--green)'}">${fmtCur(Number(selected.totals?.member_owed_total || 0))}</td>
+                <td class="td-m"></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div style="padding:18px 22px;border-top:1px solid var(--border-l)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+            <div>
+              <div style="font-size:14px;font-weight:900;color:var(--t1)">Bank Balance Adjustments</div>
+              <div style="font-size:12px;color:var(--t3);margin-top:4px">Top-ups and deductions that change the society balance</div>
+            </div>
+            <div style="font-size:12px;color:var(--t3)">Net adjustment: <strong style="color:${Number(selected.totals?.overall_balance_adjustment || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(Number(selected.totals?.overall_balance_adjustment || 0))}</strong></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Title</th><th>Type</th><th style="text-align:right">Amount</th></tr></thead>
+              <tbody>
+                ${(selected.balance_entries || []).length ? selected.balance_entries.map((entry) => `
+                  <tr>
+                    <td>${fmtDate(entry.expense_date)}</td>
+                    <td><strong>${escHtml(entry.title || 'Balance Entry')}</strong>${entry.notes ? `<div style="font-size:11px;color:var(--t3);margin-top:4px">${escHtml(entry.notes)}</div>` : ''}</td>
+                    <td><span class="badge" style="${societyEntryTypeBadge(entry.entry_type)}">${societyEntryTypeLabel(entry.entry_type)}</span></td>
+                    <td style="text-align:right;font-weight:900;color:${normalizeSocietyEntryTypeClient(entry.entry_type || 'expense') === 'balance_add' ? 'var(--green)' : 'var(--red)'}">${fmtCur(societyEntryTypeAmount(entry))}</td>
+                  </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--t3)">No bank balance adjustments yet.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>`;
 
@@ -20751,19 +20918,41 @@ function renderSocietiesPage() {
             <button class="btn btn-s btn-sm" onclick="downloadSocietyReportPdf()">Report PDF</button>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:18px 18px 4px">
-          <div style="background:#eaf8ef;border-radius:16px;padding:16px 18px;text-align:center">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;padding:18px 18px 4px">
+          ${(() => {
+            const formatCompactAmount = (value) => {
+              const numValue = Number(value || 0);
+              if (!Number.isFinite(numValue)) return '₹0';
+              const absValue = Math.abs(numValue);
+              const sign = numValue < 0 ? '-' : '';
+              const withSuffix = (scaled, suffix) => {
+                const text = Number.isInteger(scaled) ? String(scaled.toFixed(0)) : scaled.toFixed(2).replace(/\.?0+$/, '');
+                return `₹${sign}${text} ${suffix}`.trim();
+              };
+              if (absValue >= 10000000) return withSuffix((absValue / 10000000), 'Cr');
+              if (absValue >= 100000) return withSuffix((absValue / 100000), 'L');
+              if (absValue >= 1000) return withSuffix((absValue / 1000), 'K');
+              return `₹${sign}${absValue % 1 === 0 ? absValue.toFixed(0) : absValue.toFixed(2).replace(/\.?0+$/, '')}`;
+            };
+            return `
+          <div style="background:#eaf8ef;border-radius:16px;padding:16px 14px;text-align:center;min-height:118px;display:flex;flex-direction:column;justify-content:center;overflow:hidden">
             <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#248f5b;font-weight:800">Total Collected</div>
-            <div style="font-size:34px;font-weight:900;color:#18784a;margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_collected || 0)}</div>
+            <div style="font-size:26px;font-weight:900;color:#18784a;margin-top:6px;line-height:1.05;letter-spacing:-0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${moneyStyle}">${formatCompactAmount(selected.totals?.overall_collected || 0)}</div>
           </div>
-          <div style="background:#fff3f1;border-radius:16px;padding:16px 18px;text-align:center">
+          <div style="background:#fff3f1;border-radius:16px;padding:16px 14px;text-align:center;min-height:118px;display:flex;flex-direction:column;justify-content:center;overflow:hidden">
             <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#d64735;font-weight:800">Total Expenses</div>
-            <div style="font-size:34px;font-weight:900;color:#d64735;margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_spent || 0)}</div>
+            <div style="font-size:26px;font-weight:900;color:#d64735;margin-top:6px;line-height:1.05;letter-spacing:-0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${moneyStyle}">${formatCompactAmount(selected.totals?.overall_spent || 0)}</div>
           </div>
-          <div style="background:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#eef8f0' : '#fff3f1'};border-radius:16px;padding:16px 18px;text-align:center">
+          <div style="background:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#eef8f0' : '#fff3f1'};border-radius:16px;padding:16px 14px;text-align:center;min-height:118px;display:flex;flex-direction:column;justify-content:center;overflow:hidden">
             <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#248f5b' : '#d64735'};font-weight:800">Net Balance</div>
-            <div style="font-size:34px;font-weight:900;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#18784a' : '#d64735'};margin-top:6px;${moneyStyle}">${fmtCur(selected.totals?.overall_balance || 0)}</div>
+            <div style="font-size:26px;font-weight:900;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? '#18784a' : '#d64735'};margin-top:6px;line-height:1.05;letter-spacing:-0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${moneyStyle}">${formatCompactAmount(selected.totals?.overall_balance || 0)}</div>
           </div>
+          <div style="background:#eef8f0;border-radius:16px;padding:16px 14px;text-align:center;min-height:118px;display:flex;flex-direction:column;justify-content:center;overflow:hidden">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#248f5b;font-weight:800">Owed to Members</div>
+            <div style="font-size:26px;font-weight:900;color:#18784a;margin-top:6px;line-height:1.05;letter-spacing:-0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${moneyStyle}">${formatCompactAmount(selected.totals?.member_owed_total || 0)}</div>
+          </div>
+            `;
+          })()}
         </div>
         <div style="padding:18px 18px 8px">
           <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;overflow:auto;padding:18px 8px 10px;border-top:1px solid var(--border-l);border-bottom:1px solid var(--border-l)">
@@ -20776,8 +20965,8 @@ function renderSocietiesPage() {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Month</th><th>Paid Members</th><th>Collected</th><th>Expenses</th><th>Balance</th></tr></thead>
-            <tbody>${reportRows || '<tr><td colspan="5" style="text-align:center;color:var(--t3)">No report data available.</td></tr>'}</tbody>
+            <thead><tr><th>Month</th><th>Paid Members</th><th>Collected</th><th>Expenses</th><th>Balance</th><th>Adjustment</th></tr></thead>
+            <tbody>${reportRows || '<tr><td colspan="6" style="text-align:center;color:var(--t3)">No report data available.</td></tr>'}</tbody>
             <tfoot>
               <tr style="background:#edf8f1">
                 <td style="font-weight:900">All Time</td>
@@ -20785,6 +20974,7 @@ function renderSocietiesPage() {
                 <td style="font-weight:900;color:var(--green)">${fmtCur(selected.totals?.overall_collected || 0)}</td>
                 <td style="font-weight:900;color:var(--red)">${fmtCur(selected.totals?.overall_spent || 0)}</td>
                 <td style="font-weight:900;color:${Number(selected.totals?.overall_balance || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(selected.totals?.overall_balance || 0)}</td>
+                <td style="font-weight:900;color:var(--green)">${fmtCur(selected.totals?.overall_balance_adjustment || 0)}</td>
               </tr>
             </tfoot>
           </table>
@@ -20833,9 +21023,9 @@ function renderSocietiesPage() {
                 return `
                   <tr>
                     <td>
-                      <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name || 'Member')}</div>
-                      <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(member.unit_label || '-')}</div>
-                    </td>
+                      <div style="font-weight:800;color:var(--t1)">${escHtml(societyMemberDisplayLabel(member))}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(member.unit_label || '-')}${societyMemberPhoneList(member).length ? ` · ${escHtml(societyMemberPhoneDisplay(member))}` : ''}</div>
+                  </td>
                     <td>${escHtml(societyMonthLabel(request.month_key || ''))}</td>
                     <td style="text-align:right;font-weight:800;color:var(--green)">${fmtCur(request.requested_amount || 0)}</td>
                     <td>${request.requested_paid_on ? escHtml(fmtDate(request.requested_paid_on)) : '-'}</td>
@@ -20874,6 +21064,7 @@ function renderSocietiesPage() {
           ${(Array.isArray(selected.elections) && selected.elections.length) ? selected.elections.map((election) => {
             const runtime = String(election.runtime_status || 'draft').toLowerCase();
             const statusLabel = runtime === 'open' ? 'Open' : (runtime === 'closed' ? 'Closed' : 'Scheduled');
+            const visibilityLabel = election.show_in_portal === false ? 'Hidden in portal' : 'Visible in portal';
             const candidateRows = (election.candidates || []).map((candidate) => `
               <div style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--border-l)">
                 <div>
@@ -20897,6 +21088,7 @@ function renderSocietiesPage() {
                   </div>
                   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <span class="badge" style="background:${runtime === 'open' ? '#e6f8ee' : runtime === 'closed' ? '#fff1ee' : '#fff6db'};color:${runtime === 'open' ? '#17784a' : runtime === 'closed' ? '#d64735' : '#b87807'}">${escHtml(statusLabel)}</span>
+                    <span class="badge" style="background:${election.show_in_portal === false ? '#fff1ee' : '#edf8f1'};color:${election.show_in_portal === false ? '#d64735' : '#17784a'}">${escHtml(visibilityLabel)}</span>
                     <button class="btn btn-s btn-sm" onclick="showSocietyElectionModal(${Number(election.id)})">Edit</button>
                     <button class="btn btn-s btn-sm" onclick="deleteSocietyElection(${Number(election.id)})">Delete</button>
                   </div>
@@ -20940,6 +21132,8 @@ function renderSocietiesPage() {
       ? electionsSection
       : _societyTab === 'expenses'
       ? expensesSectionEnhanced
+      : _societyTab === 'balances'
+      ? balancesSection
       : _societyTab === 'report'
       ? reportSection
       : overviewSection;
@@ -20957,9 +21151,14 @@ function renderSocietiesPage() {
           <div style="position:relative;display:grid;grid-template-columns:minmax(220px,1fr) minmax(420px,1.7fr);gap:14px;align-items:start">
             <div style="display:flex;flex-direction:column;justify-content:flex-start;min-width:0;padding-top:2px">
               <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800">Society</div>
-              <div style="font-size:18px;line-height:1.05;font-weight:900;color:#fff;margin-top:6px">${escHtml(selected.society?.name || 'Society')}</div>
-              <div style="font-size:12px;color:rgba(255,255,255,.75);margin-top:6px">${escHtml(selected.society?.location || 'Location not added yet')}</div>
+            <div style="font-size:18px;line-height:1.05;font-weight:900;color:#fff;margin-top:6px">${escHtml(selected.society?.name || 'Society')}</div>
+            <div style="font-size:12px;color:rgba(255,255,255,.75);margin-top:6px">${escHtml(selected.society?.location || 'Location not added yet')}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span>Start month:</span>
+              <strong style="color:#fff">${selected.society?.start_month ? escHtml(societyMonthLabel(selected.society.start_month)) : 'Not set'}</strong>
+              ${_userRole === 'admin' ? '<button class="trip-icon-btn" title="Edit Society" aria-label="Edit Society" style="width:28px;height:28px;min-width:28px;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#fff" onclick="showSocietyModal(' + Number(selected.society?.id || 0) + ')"><span class="trip-icon-btn-glyph">&#9998;</span></button>' : ''}
             </div>
+          </div>
             <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap">
               <div style="display:flex;align-items:center;gap:4px;padding:4px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
                 <button class="chip ${!isAllTime ? 'active' : ''}" onclick="setSocietyRange('month')" style="${!isAllTime ? 'background:#ffffff;color:#175d3e;border-color:#ffffff;' : 'background:transparent;color:#fff;border-color:rgba(255,255,255,.16);'}min-width:74px">Month</button>
@@ -20967,7 +21166,7 @@ function renderSocietiesPage() {
               </div>
               <label style="display:flex;align-items:center;gap:10px;padding:0 14px;height:38px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);color:#fff;min-width:205px;max-width:250px;opacity:${isAllTime ? '.55' : '1'}">
                 <span style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Month</span>
-                <input class="fi" type="month" value="${escHtml(_societyMonth)}" onchange="changeSocietyMonth(this.value)" ${isAllTime ? 'disabled' : ''} style="background:transparent;border:none;box-shadow:none;padding:0;color:#fff;font-weight:800">
+                <input class="fi" type="month" value="${escHtml(_societyMonth)}" onchange="changeSocietyMonth(this.value)" ${isAllTime ? 'disabled' : ''} ${selected.society?.start_month ? `min="${escHtml(selected.society.start_month)}"` : ''} style="background:transparent;border:none;box-shadow:none;padding:0;color:#fff;font-weight:800">
               </label>
               <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
                 <button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>
@@ -21001,7 +21200,8 @@ function renderSocietiesPage() {
             <div style="padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);min-height:82px">
               <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Balance</div>
               <div style="font-size:20px;font-weight:900;color:${balanceTotal >= 0 ? '#d6ffe6' : '#ffd3cc'};line-height:1;margin-top:5px;${moneyStyle}">${fmtCur(balanceTotal)}</div>
-              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">${balanceTotal >= 0 ? 'surplus' : 'deficit'}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.72);margin-top:5px">${isAllTime ? 'all-time net balance' : (balanceTotal >= 0 ? 'monthly surplus' : 'monthly deficit')}</div>
+              ${!isAllTime ? `<div style="font-size:11px;color:rgba(255,255,255,.82);margin-top:6px">Till now: <strong style="color:${overallBalanceTotal >= 0 ? '#d6ffe6' : '#ffd3cc'};font-weight:900;${moneyStyle}">${fmtCur(overallBalanceTotal)}</strong></div>` : ''}
             </div>
           </div>
         </div>
@@ -21139,6 +21339,13 @@ function showSocietyModal(id = null) {
     <div class="fg">
       <label class="fl full">Society Name *<input class="fi" id="societyName" value="${escHtml(society.name || '')}" placeholder="e.g. Green Avenue RWA"></label>
       <label class="fl full">Location<input class="fi" id="societyLocation" value="${escHtml(society.location || '')}" placeholder="e.g. Sector 22, Chandigarh"></label>
+      <label class="fl">Start Month (optional)<input class="fi" type="month" id="societyStartMonth" value="${escHtml(society.start_month || '')}"></label>
+      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
+        <input type="checkbox" id="societyShowElectionsInPortal" ${society.id ? (society.show_elections_in_portal !== false ? 'checked' : '') : 'checked'}>
+        <span>Show elections tab in portal/mobile</span>
+      </label>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">If set, collections, expenses, balances, reports, and PDFs will start from this month for this society.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">You can hide elections completely from the member portal/mobile app, or control visibility per election below.</div>
     </div>
     <div class="fa" style="margin-top:16px">
       <button class="btn btn-p" onclick="saveSociety(${id || 'null'})">${id ? 'Update' : 'Add Society'}</button>
@@ -21152,6 +21359,8 @@ async function saveSociety(id = null) {
   const body = {
     name: document.getElementById('societyName')?.value?.trim() || '',
     location: document.getElementById('societyLocation')?.value?.trim() || '',
+    start_month: document.getElementById('societyStartMonth')?.value || '',
+    show_elections_in_portal: document.getElementById('societyShowElectionsInPortal')?.checked !== false,
   };
   if (!body.name) { toast('Society name is required', 'warning'); return; }
   const result = id
@@ -21176,12 +21385,19 @@ async function deleteSociety(id) {
 
 function showSocietyMemberModal(memberId = null) {
   const member = memberId ? ((_societyDetail?.members || []).find((item) => String(item.id) === String(memberId)) || {}) : {};
+  const memberPhones = societyMemberPhoneList(member);
   openModal(memberId ? 'Edit Society Member' : 'Add Society Member', `
     <div class="fg">
       <label class="fl">Member Name *<input class="fi" id="societyMemberName" value="${escHtml(member.member_name || '')}"></label>
-      <label class="fl">Phone Number<input class="fi" id="societyMemberPhone" value="${escHtml(member.phone_number || '')}"></label>
+      <label class="fl">Mobile Number(s)<input class="fi" id="societyMemberPhone" value="${escHtml(memberPhones.join(', '))}" placeholder="9876543210, 9123456780"></label>
+      <div style="font-size:12px;color:var(--t3);margin-top:-6px">Add one or more numbers separated by comma, line break, or semicolon. Any saved number can be used to log in.</div>
       <label class="fl">House Number / Shop Name *<input class="fi" id="societyMemberUnit" value="${escHtml(member.unit_label || '')}"></label>
       <label class="fl">Monthly Due *<input class="fi" type="number" step="0.01" min="0" id="societyMemberDue" value="${escHtml(String(member.monthly_due || 0))}"></label>
+      <label class="fl" style="display:flex;flex-direction:row;align-items:center;gap:10px;padding-top:6px">
+        <input type="checkbox" id="societyMemberActive" ${memberId ? (member.is_active !== false ? 'checked' : '') : 'checked'}>
+        <span>Active member</span>
+      </label>
+      <div style="font-size:12px;color:var(--t3);margin-top:-6px">Inactive members stay hidden unless they already have contribution in the selected period, and they cannot log in to the society portal.</div>
       <label class="fl">Property Type
         <select class="fi" id="societyMemberType">
           <option value="home" ${String(member.property_type || 'home') === 'home' ? 'selected' : ''}>Home</option>
@@ -21198,12 +21414,15 @@ function showSocietyMemberModal(memberId = null) {
 
 async function saveSocietyMember(memberId = null) {
   if (!_selectedSocietyId) return;
+  const phoneNumbers = parseSocietyMemberPhoneInput(document.getElementById('societyMemberPhone')?.value || '');
   const body = {
     member_name: document.getElementById('societyMemberName')?.value?.trim() || '',
-    phone_number: document.getElementById('societyMemberPhone')?.value?.trim() || '',
+    phone_number: phoneNumbers[0] || '',
+    phone_numbers: phoneNumbers,
     unit_label: document.getElementById('societyMemberUnit')?.value?.trim() || '',
     monthly_due: Number(document.getElementById('societyMemberDue')?.value || 0),
     property_type: document.getElementById('societyMemberType')?.value || 'home',
+    is_active: document.getElementById('societyMemberActive')?.checked !== false,
   };
   if (!body.member_name || !body.unit_label) { toast('Member name and house/shop field are required', 'warning'); return; }
   const result = memberId
@@ -21257,7 +21476,7 @@ function showSocietyContributionModal(memberId, monthKey = _societyMonth) {
   const paidOnValue = targetMonth === _societyMonth
     ? (normalizeInputDate(member.selected_month_paid_on) || todayStr())
     : todayStr();
-  openModal(`Contribution - ${escHtml(member.member_name)}`, `
+  openModal(`Contribution - ${escHtml(societyMemberDisplayLabel(member))}`, `
     <div class="fg">
       <label class="fl">Month *<input class="fi" type="month" id="societyContributionMonth" value="${escHtml(targetMonth)}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0" id="societyContributionAmount" value="${escHtml(String(monthValue || (targetMonth === _societyMonth ? (member.selected_month_amount || member.selected_month_due || member.monthly_due || 0) : (member.monthly_due || 0))))}"></label>
@@ -21287,18 +21506,73 @@ async function saveSocietyContribution(memberId) {
   await loadSocieties();
 }
 
-function showSocietyExpenseModal(expenseId = null) {
+function showSocietyExpenseModal(expenseId = null, defaults = {}) {
   const expense = expenseId ? ((_societyDetail?.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
-  openModal(expenseId ? 'Edit Society Expense' : 'Add Society Expense', `
+  const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+  const forcedEntryType = defaults.force_entry_type || defaults.fixed_entry_type
+    ? normalizeSocietyEntryTypeClient(defaults.force_entry_type || defaults.fixed_entry_type)
+    : '';
+  const selectedEntryType = normalizeSocietyEntryTypeClient(forcedEntryType || expense.entry_type || defaults.entry_type || 'expense');
+  const paidByMemberId = expense.paid_by_member_id != null
+    ? String(expense.paid_by_member_id)
+    : (defaults.paid_by_member_id != null ? String(defaults.paid_by_member_id) : '');
+  _societyExpenseDraftType = selectedEntryType || 'expense';
+  _societyExpenseDraftPaidById = paidByMemberId;
+  _societyExpenseDraftForcedType = forcedEntryType || '';
+  const modalTitle = expenseId
+    ? 'Edit Society Expense'
+    : (selectedEntryType === 'balance_add'
+      ? 'Add Balance Entry'
+      : selectedEntryType === 'balance_subtract'
+        ? 'Add Balance Deduction'
+        : 'Add Society Expense');
+  const saveLabel = expenseId
+    ? 'Update Expense'
+    : (selectedEntryType === 'balance_add'
+      ? 'Save Balance Entry'
+      : selectedEntryType === 'balance_subtract'
+        ? 'Save Balance Deduction'
+        : 'Add Expense');
+  const memberOptions = [
+    `<option value="">-- No member --</option>`,
+    ...members.map((member) => `<option value="${Number(member.id)}" ${paidByMemberId === String(member.id) ? 'selected' : ''}>${escHtml(societyMemberDisplayLabel(member))}</option>`),
+  ].join('');
+  openModal(modalTitle, `
     <div class="fg">
+      <label class="fl">Type
+        <select class="fi" id="societyExpenseType">
+          <option value="expense" ${selectedEntryType === 'expense' ? 'selected' : ''}>Expense</option>
+          <option value="balance_add" ${selectedEntryType === 'balance_add' ? 'selected' : ''}>Balance Add</option>
+          <option value="balance_subtract" ${selectedEntryType === 'balance_subtract' ? 'selected' : ''}>Balance Subtract</option>
+        </select>
+      </label>
+      ${forcedEntryType ? `<div style="margin-top:-2px;font-size:12px;color:var(--t3)">Opened from balance flow. Default type is ${escHtml(societyEntryTypeLabel(forcedEntryType))}.</div>` : ''}
       <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || `${_societyMonth}-01`)}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
       <label class="fl full">Title *<input class="fi" id="societyExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Security Guard Salary"></label>
       <label class="fl">Category<input class="fi" id="societyExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Salary, Repair"></label>
+      <label class="fl">Paid By Member
+        <select class="fi" id="societyExpensePaidByMember">
+          ${memberOptions}
+        </select>
+      </label>
       <label class="fl full">Notes<textarea class="fi" rows="3" id="societyExpenseNotes" placeholder="Optional note">${escHtml(expense.notes || '')}</textarea></label>
+      <label class="fl full">Attachment / Receipt
+        <input class="fi" type="file" id="societyExpenseAttachment" accept="image/*,application/pdf">
+      </label>
+      ${expense.attachment_path ? `
+        <div class="fl full" style="font-size:12px;color:var(--t3);line-height:1.6">
+          Current file: <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">${escHtml(expense.attachment_name || 'View attachment')}</a>
+          <input type="hidden" id="societyExpenseExistingAttachmentPath" value="${escHtml(expense.attachment_path || '')}">
+          <input type="hidden" id="societyExpenseExistingAttachmentName" value="${escHtml(expense.attachment_name || '')}">
+        </div>
+      ` : `
+        <input type="hidden" id="societyExpenseExistingAttachmentPath" value="">
+        <input type="hidden" id="societyExpenseExistingAttachmentName" value="">
+      `}
     </div>
     <div class="fa" style="margin-top:16px">
-      <button class="btn btn-p" onclick="saveSocietyExpense(${expenseId || 'null'})">${expenseId ? 'Update Expense' : 'Add Expense'}</button>
+      <button class="btn btn-p" onclick="saveSocietyExpense(${expenseId || 'null'})">${saveLabel}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
   bindModalSubmit(() => saveSocietyExpense(expenseId));
@@ -21306,6 +21580,13 @@ function showSocietyExpenseModal(expenseId = null) {
 
 async function saveSocietyExpense(expenseId = null) {
   const expenseDate = document.getElementById('societyExpenseDate')?.value || `${_societyMonth}-01`;
+  const entryTypeSelect = document.getElementById('societyExpenseType');
+  const paidBySelect = document.getElementById('societyExpensePaidByMember');
+  const attachmentInput = document.getElementById('societyExpenseAttachment');
+  const selectedEntryType = normalizeSocietyEntryTypeClient(entryTypeSelect?.value || _societyExpenseDraftForcedType || _societyExpenseDraftType || 'expense');
+  const selectedPaidByMemberId = paidBySelect?.value != null && String(paidBySelect.value).trim() !== ''
+    ? Number(paidBySelect.value)
+    : (_societyExpenseDraftPaidById !== '' ? Number(_societyExpenseDraftPaidById) : null);
   const body = {
     expense_date: expenseDate,
     month_key: String(expenseDate).slice(0, 7),
@@ -21313,15 +21594,52 @@ async function saveSocietyExpense(expenseId = null) {
     category: document.getElementById('societyExpenseCategory')?.value?.trim() || '',
     amount: Number(document.getElementById('societyExpenseAmount')?.value || 0),
     notes: document.getElementById('societyExpenseNotes')?.value?.trim() || '',
+    entry_type: selectedEntryType,
+    type: selectedEntryType,
+    entry_kind: selectedEntryType,
+    kind: selectedEntryType,
+    balance_type: selectedEntryType,
+    society_entry_type: selectedEntryType,
+    balance_direction: selectedEntryType,
+    is_balance_entry: selectedEntryType !== 'expense',
+    paid_by_member_id: selectedPaidByMemberId,
+    attachment_path: document.getElementById('societyExpenseExistingAttachmentPath')?.value || '',
+    attachment_name: document.getElementById('societyExpenseExistingAttachmentName')?.value || '',
   };
-  if (!body.title || !(body.amount > 0)) { toast('Expense title and amount are required', 'warning'); return; }
-  const result = expenseId
-    ? await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'PUT', body })
-    : await api(`/api/societies/${Number(_selectedSocietyId)}/expenses`, { method: 'POST', body });
-  if (!result?.success) { toast(result?.error || 'Could not save expense.', 'error'); return; }
+  const normalizedEntryType = normalizeSocietyEntryTypeClient(body.entry_type || body.entryType || body.entry_kind || body.kind || body.balance_type || body.type || 'expense');
+  const payload = {
+    ...body,
+    entry_type: normalizedEntryType,
+    type: normalizedEntryType,
+    entry_kind: normalizedEntryType,
+    kind: normalizedEntryType,
+    balance_type: normalizedEntryType,
+    society_entry_type: normalizedEntryType,
+    balance_direction: normalizedEntryType,
+    is_balance_entry: normalizedEntryType !== 'expense',
+  };
+  if (!body.title || !(body.amount > 0)) { toast(`${societyEntryTypeLabel(normalizedEntryType)} title and amount are required`, 'warning'); return; }
+  const fd = new FormData();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      fd.append(key, JSON.stringify(value));
+      return;
+    }
+    fd.append(key, String(value));
+  });
+  if (attachmentInput?.files?.[0]) fd.append('attachment', attachmentInput.files[0]);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/expenses${expenseId ? `/${Number(expenseId)}` : ''}`, {
+    method: expenseId ? 'PUT' : 'POST',
+    body: fd,
+    credentials: 'same-origin',
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result?.success) { toast(result?.error || `Could not save ${societyEntryTypeLabel(normalizedEntryType).toLowerCase()}.`, 'error'); return; }
   closeModal();
-  _societyMonth = body.month_key || _societyMonth;
-  toast(expenseId ? 'Expense updated' : 'Expense added', 'success');
+  _societyMonth = payload.month_key || _societyMonth;
+  _societyExpenseDraftForcedType = '';
+  toast(expenseId ? `${societyEntryTypeLabel(normalizedEntryType)} updated` : `${societyEntryTypeLabel(normalizedEntryType)} added`, 'success');
   await loadSocieties();
 }
 
@@ -21330,6 +21648,113 @@ async function deleteSocietyExpense(expenseId) {
   const result = await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
   if (!result?.success) { toast(result?.error || 'Could not delete expense.', 'error'); return; }
   toast('Expense deleted', 'success');
+  await loadSocieties();
+}
+
+function showSocietyMemberLedgerModal(memberId, settlementId = null) {
+  if (!_selectedSocietyId) return;
+  const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+  if (!members.length) return;
+  const member = members.find((item) => String(item.id) === String(memberId)) || members[0];
+  const balances = Array.isArray(_societyDetail?.member_balances) ? _societyDetail.member_balances : [];
+  const balanceRow = balances.find((item) => String(item.member_id) === String(member.id)) || {
+    amount: 0,
+    settled_amount: 0,
+    remaining_amount: 0,
+    expense_count: 0,
+    settlements: [],
+  };
+  const settlement = settlementId
+    ? (Array.isArray(balanceRow.settlements) ? balanceRow.settlements : []).find((item) => String(item.id) === String(settlementId)) || null
+    : null;
+  const memberOptions = members.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(member.id) ? 'selected' : ''}>${escHtml(societyMemberDisplayLabel(item))} · ${escHtml(item.unit_label || '-')}</option>`).join('');
+  const methodValue = String(settlement?.method || 'cash').trim().toLowerCase() || 'cash';
+  const methodLabel = (value) => ({
+    cash: 'Cash',
+    monthly_contribution: 'Monthly Contribution',
+    bank_transfer: 'Bank Transfer',
+    cheque: 'Cheque',
+    adjustment: 'Adjustment',
+    other: 'Other',
+  }[String(value || '').trim().toLowerCase()] || 'Other');
+  const settlementsHtml = (Array.isArray(balanceRow.settlements) ? balanceRow.settlements : []).length ? balanceRow.settlements.map((item) => `
+    <tr>
+      <td>${escHtml(fmtDate(item.settlement_date || ''))}</td>
+      <td><strong>${escHtml(methodLabel(item.method))}</strong>${item.notes ? `<div style="font-size:11px;color:var(--t3);margin-top:4px">${escHtml(item.notes)}</div>` : ''}</td>
+      <td style="text-align:right;font-weight:900;color:var(--green)">${fmtCur(item.amount || 0)}</td>
+      <td style="white-space:nowrap">
+        <button class="trip-icon-btn" title="Edit Settlement" aria-label="Edit Settlement" onclick="showSocietyMemberLedgerModal(${Number(member.id)}, ${Number(item.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button>
+        <button class="trip-icon-btn danger" title="Delete Settlement" aria-label="Delete Settlement" onclick="deleteSocietyMemberBalanceSettlement(${Number(item.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--t3)">No settlements recorded yet.</td></tr>';
+  openModal(`${settlement ? 'Edit Settlement' : 'Member Ledger'} · ${escHtml(societyMemberDisplayLabel(member))}`, `
+    <div class="fg">
+      <label class="fl full">Member
+        <select class="fi" id="societySettlementMember">${memberOptions}</select>
+      </label>
+      <label class="fl">Settlement Date
+        <input class="fi" type="date" id="societySettlementDate" value="${escHtml(normalizeInputDate(settlement?.settlement_date) || todayStr())}">
+      </label>
+      <label class="fl">Amount *
+        <input class="fi" type="number" step="0.01" min="0.01" id="societySettlementAmount" value="${escHtml(String(settlement?.amount ?? balanceRow.remaining_amount ?? 0))}">
+      </label>
+      <label class="fl full">Settlement Method
+        <select class="fi" id="societySettlementMethod">
+          <option value="cash" ${methodValue === 'cash' ? 'selected' : ''}>Cash</option>
+          <option value="monthly_contribution" ${methodValue === 'monthly_contribution' ? 'selected' : ''}>Monthly Contribution</option>
+          <option value="bank_transfer" ${methodValue === 'bank_transfer' ? 'selected' : ''}>Bank Transfer</option>
+          <option value="cheque" ${methodValue === 'cheque' ? 'selected' : ''}>Cheque</option>
+          <option value="adjustment" ${methodValue === 'adjustment' ? 'selected' : ''}>Adjustment</option>
+          <option value="other" ${methodValue === 'other' ? 'selected' : ''}>Other</option>
+        </select>
+      </label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societySettlementNotes" placeholder="Optional note">${escHtml(settlement?.notes || '')}</textarea></label>
+      <div class="card" style="grid-column:1/-1;padding:14px 16px;background:#f8fbf9">
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+          <div><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Gross Owed</div><div style="font-size:18px;font-weight:900;color:var(--green);margin-top:4px">${fmtCur(balanceRow.amount || 0)}</div></div>
+          <div><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Settled</div><div style="font-size:18px;font-weight:900;color:var(--t1);margin-top:4px">${fmtCur(balanceRow.settled_amount || 0)}</div></div>
+          <div><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Remaining</div><div style="font-size:18px;font-weight:900;color:${Number(balanceRow.remaining_amount || 0) > 0 ? 'var(--red)' : 'var(--green)'};margin-top:4px">${fmtCur(balanceRow.remaining_amount || 0)}</div></div>
+        </div>
+      </div>
+      <div class="fl full">
+        <div style="font-size:12px;font-weight:800;color:var(--t2);margin-bottom:8px">Settlement History</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Method / Notes</th><th style="text-align:right">Amount</th><th>Action</th></tr></thead>
+            <tbody>${settlementsHtml}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyMemberBalanceSettlement(${settlement ? Number(settlement.id) : 'null'})">${settlement ? 'Update Settlement' : 'Save Settlement'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyMemberBalanceSettlement(settlement ? Number(settlement.id) : null));
+}
+
+async function saveSocietyMemberBalanceSettlement(settlementId = null) {
+  const memberId = Number(document.getElementById('societySettlementMember')?.value || 0);
+  const settlementDate = document.getElementById('societySettlementDate')?.value || todayStr();
+  const amount = Number(document.getElementById('societySettlementAmount')?.value || 0);
+  const method = document.getElementById('societySettlementMethod')?.value || 'cash';
+  const notes = document.getElementById('societySettlementNotes')?.value?.trim() || '';
+  const body = { member_id: memberId, settlement_date: settlementDate, amount, method, notes };
+  const endpoint = settlementId
+    ? `/api/societies/${Number(_selectedSocietyId)}/member-balance-settlements/${Number(settlementId)}`
+    : `/api/societies/${Number(_selectedSocietyId)}/member-balance-settlements`;
+  const result = await api(endpoint, { method: settlementId ? 'PUT' : 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save settlement.', 'error'); return; }
+  closeModal();
+  toast(settlementId ? 'Settlement updated' : 'Settlement saved', 'success');
+  await loadSocieties();
+}
+
+async function deleteSocietyMemberBalanceSettlement(settlementId) {
+  if (!await confirmDialog('Delete this settlement entry?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/member-balance-settlements/${Number(settlementId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete settlement.', 'error'); return; }
+  toast('Settlement deleted', 'success');
   await loadSocieties();
 }
 
@@ -21355,8 +21780,8 @@ async function deleteSocietyExpense(expenseId) {
       <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border-l);border-radius:12px;margin-bottom:8px;background:#fff">
         <input type="checkbox" class="society-election-candidate" value="${Number(member.id)}" ${checked ? 'checked' : ''} style="margin-top:4px">
         <div>
-          <div style="font-weight:800;color:var(--t1)">${escHtml(member.member_name || 'Member')}</div>
-          <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}${member.phone_number ? ` · ${escHtml(member.phone_number)}` : ''}</div>
+          <div style="font-weight:800;color:var(--t1)">${escHtml(societyMemberDisplayLabel(member))}</div>
+          <div style="font-size:12px;color:var(--t3)">${escHtml(member.unit_label || '-')}${societyMemberPhoneList(member).length ? ` · ${escHtml(societyMemberPhoneDisplay(member))}` : ''}</div>
         </div>
       </label>`;
   }).join('');
@@ -21366,6 +21791,10 @@ async function deleteSocietyExpense(expenseId) {
       <label class="fl full">Description<textarea class="fi" rows="3" id="societyElectionDescription" placeholder="Optional description">${escHtml(election.description || '')}</textarea></label>
       <label class="fl">Opens On<input class="fi" id="societyElectionOpen" type="date" value="${escHtml(electionDateValue(election.opens_on))}"></label>
       <label class="fl">Closes On<input class="fi" id="societyElectionClose" type="date" value="${escHtml(electionDateValue(election.closes_on))}"></label>
+      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
+        <input type="checkbox" id="societyElectionShowInPortal" ${electionId ? (election.show_in_portal !== false ? 'checked' : '') : 'checked'}>
+        <span>Show this election in portal/mobile</span>
+      </label>
       <div class="fl full">
         <div style="font-size:12px;font-weight:800;color:var(--t2);margin-bottom:8px">Candidates</div>
         <div style="max-height:320px;overflow:auto;padding-right:4px">${candidateOptions || '<div style="color:var(--t3)">Add members first.</div>'}</div>
@@ -21385,6 +21814,7 @@ async function saveSocietyElection(electionId = null) {
     description: document.getElementById('societyElectionDescription')?.value?.trim() || '',
     opens_on: document.getElementById('societyElectionOpen')?.value || '',
     closes_on: document.getElementById('societyElectionClose')?.value || '',
+    show_in_portal: document.getElementById('societyElectionShowInPortal')?.checked !== false,
     candidate_member_ids: [...document.querySelectorAll('.society-election-candidate:checked')].map((input) => Number(input.value)).filter((value) => Number.isFinite(value) && value > 0),
   };
   if (!body.title) { toast('Election title is required', 'warning'); return; }
@@ -21621,7 +22051,7 @@ async function previewSocietyExcelImport() {
     <tr>
       <td>${escHtml(member.property_type === 'shop' ? 'Shop' : 'Home')}</td>
       <td>${escHtml(member.unit_label || '-')}</td>
-      <td>${escHtml(member.phone_number || '-')}</td>
+      <td>${escHtml((Array.isArray(member.phone_numbers) && member.phone_numbers.length ? member.phone_numbers.join(', ') : member.phone_number) || '-')}</td>
       <td style="font-weight:700;color:var(--t1)">${escHtml(member.member_name || '-')}</td>
       <td style="text-align:right">${fmtCur(member.monthly_due || 0)}</td>
       <td>${(member.contributions || []).map((entry) => `<span class="badge" style="background:#f4f8ff;color:#3a5ca8;margin:0 6px 6px 0">${escHtml(entry.month_key)}: ${fmtCur(entry.amount || 0)}</span>`).join('') || '<span style="color:var(--t3)">No payments</span>'}</td>

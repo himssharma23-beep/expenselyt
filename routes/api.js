@@ -55,7 +55,7 @@ const {
   notifyLiveSplitSessionShared,
 } = require('../utils/live-split-notifications');
 const { writeAdminAuditEntry } = require('../utils/admin-audit');
-const { inferUploadKindFromRequest, validateUploadedFile } = require('../utils/upload-security');
+const { inferUploadKindFromRequest, multerFileFilterFor, validateUploadedFile } = require('../utils/upload-security');
 
 const VIDEO_MOBILE_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-mobile-cache');
 const VIDEO_AUDIO_CACHE_DIR = path.resolve(process.cwd(), 'data', 'video-audio-cache');
@@ -4936,7 +4936,8 @@ router.post('/public/society-portal/send-otp', async (req, res) => {
     const phone = normalizeIndianMobile(req.body?.phone || req.body?.mobile || req.body?.contact_number || '');
     if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
     const member = await pgCoreDb.getSocietyMemberPortalRecordByPhone(phone);
-    if (!member) return res.status(404).json({ error: 'No active society member found for this mobile number.' });
+    if (!member) return res.status(404).json({ error: 'No society member found for this mobile number.' });
+    if (!member.is_active) return res.status(403).json({ error: 'Your account is inactive.' });
     clearSocietyPortalSession(req);
     const result = await sendSocietyPortalOtp(req, member, phone);
     return res.json(result);
@@ -4951,7 +4952,8 @@ router.post('/public/society-portal/resend-otp', async (req, res) => {
     const phone = normalizeIndianMobile(req.body?.phone || pending?.phoneDigits || '');
     if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
     const member = await pgCoreDb.getSocietyMemberPortalRecordByPhone(phone);
-    if (!member) return res.status(404).json({ error: 'No active society member found for this mobile number.' });
+    if (!member) return res.status(404).json({ error: 'No society member found for this mobile number.' });
+    if (!member.is_active) return res.status(403).json({ error: 'Your account is inactive.' });
     const result = await sendSocietyPortalOtp(req, member, phone);
     return res.json(result);
   } catch (err) {
@@ -4963,6 +4965,13 @@ router.post('/public/society-portal/verify-otp', async (req, res) => {
   try {
     const pending = req.session?.societyPortalPending || null;
     if (!pending?.memberId) return res.status(400).json({ error: 'Send OTP first.' });
+    const member = await pgCoreDb.getSocietyMemberPortalRecordById(pending.memberId);
+    if (!member) return res.status(404).json({ error: 'No society member found for this mobile number.' });
+    if (!member.is_active) {
+      clearSocietyPortalSession(req);
+      delete req.session.societyPortalPending;
+      return res.status(403).json({ error: 'Your account is inactive.' });
+    }
     const otp = normalizeSocietyPortalOtp(req.body?.otp || req.body?.code || '');
     if (!otp) return res.status(400).json({ error: 'Enter the OTP.' });
     if (pending.otpCode) {
@@ -4981,6 +4990,32 @@ router.post('/public/society-portal/verify-otp', async (req, res) => {
     return res.json(response);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not verify OTP.' });
+  }
+});
+
+router.post('/public/society-portal/switch-member', requireSocietyPortalAuth, async (req, res) => {
+  try {
+    const targetMemberId = Number(req.body?.member_id || req.body?.memberId || 0);
+    if (!(targetMemberId > 0)) return res.status(400).json({ error: 'Choose a valid house to switch to.' });
+    const currentMember = await pgCoreDb.getSocietyMemberPortalRecordById(req.societyPortal.memberId);
+    const targetMember = await pgCoreDb.getSocietyMemberPortalRecordById(targetMemberId);
+    if (!currentMember || !targetMember || Number(currentMember.society_id) !== Number(targetMember.society_id)) {
+      return res.status(404).json({ error: 'House not found.' });
+    }
+    const sessionPhoneDigits = normalizeIndianMobile(req.societyPortal.phoneDigits || '');
+    const targetPhoneDigits = [
+      normalizeIndianMobile(targetMember.phone_number || ''),
+      ...(Array.isArray(targetMember.phone_numbers) ? targetMember.phone_numbers : []).map((value) => normalizeIndianMobile(value || '')),
+    ].filter(Boolean);
+    if (sessionPhoneDigits && !targetPhoneDigits.includes(sessionPhoneDigits)) {
+      return res.status(403).json({ error: 'You are not allowed to switch to this house.' });
+    }
+    req.session.societyPortal.memberId = targetMemberId;
+    const response = await buildSocietyPortalSessionResponse(req);
+    await logSocietyPortalAccess(req, 'member_switch', response?.dashboard);
+    return res.json(response);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not switch house.' });
   }
 });
 
@@ -5210,6 +5245,11 @@ const upload = multer({
       cb(err);
     }
   },
+});
+const societyExpenseUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: multerFileFilterFor('societyAttachment'),
 });
 
 router.post('/expenses/scan-image', upload.single('file'), async (req, res) => {
@@ -5504,6 +5544,12 @@ function ensureTenantUploadDir() {
   return uploadDir;
 }
 
+function ensureSocietyUploadDir() {
+  const uploadDir = path.join(__dirname, '..', 'public', 'uploads', 'societies');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  return uploadDir;
+}
+
 function sanitizeUploadBaseName(name) {
   return String(name || 'file')
     .replace(/\.[^.]+$/, '')
@@ -5525,6 +5571,27 @@ function saveTenantUploadFile(file) {
     path: `/uploads/tenants/${filename}`,
     name: String(file.originalname || filename).trim() || filename,
   };
+}
+
+function saveSocietyUploadFile(file) {
+  if (!file) throw Object.assign(new Error('No file uploaded'), { statusCode: 400 });
+  const ext = path.extname(String(file.originalname || '')).slice(0, 12).toLowerCase() || '.bin';
+  const baseName = sanitizeUploadBaseName(file.originalname || 'society-file');
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${baseName}${ext}`;
+  const uploadDir = ensureSocietyUploadDir();
+  const absPath = path.join(uploadDir, filename);
+  fs.writeFileSync(absPath, file.buffer);
+  return {
+    path: `/uploads/societies/${filename}`,
+    name: String(file.originalname || filename).trim() || filename,
+  };
+}
+
+function withSocietyExpenseUpload(req, res, next) {
+  societyExpenseUpload.single('attachment')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: 'Upload error: ' + err.message });
+    next();
+  });
 }
 
 // Return sheet names — uses xlsx-populate which supports AES-encrypted xlsx
@@ -12213,9 +12280,20 @@ router.post('/societies/payment-requests/:id/review', async (req, res) => {
   }
 });
 
-router.post('/societies/:id/expenses', async (req, res) => {
+router.post('/societies/:id/expenses', withSocietyExpenseUpload, async (req, res) => {
   try {
-    const expense = await Promise.resolve(pgCoreDb.addSocietyExpense(req.session.userId, req.params.id, req.body || {}));
+    const body = req.body || {};
+    const entryType = body.entry_type ?? body.entryType ?? body.entry_kind ?? body.kind ?? body.balance_type ?? body.society_entry_type ?? body.societyEntryType ?? body.type;
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const normalizedBody = {
+      ...body,
+      entry_type: entryType,
+      society_entry_type: entryType,
+      is_balance_entry: body.is_balance_entry ?? body.balance_entry ?? (String(entryType || '').toLowerCase().includes('balance')),
+      attachment_path: attachment?.path || body.attachment_path || '',
+      attachment_name: attachment?.name || body.attachment_name || '',
+    };
+    const expense = await Promise.resolve(pgCoreDb.addSocietyExpense(req.session.userId, req.params.id, normalizedBody));
     res.json({ success: true, expense });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not add expense.' });
@@ -12249,9 +12327,20 @@ router.delete('/societies/:id/elections/:electionId', async (req, res) => {
   }
 });
 
-router.put('/societies/:id/expenses/:expenseId', async (req, res) => {
+router.put('/societies/:id/expenses/:expenseId', withSocietyExpenseUpload, async (req, res) => {
   try {
-    const expense = await Promise.resolve(pgCoreDb.updateSocietyExpense(req.session.userId, req.params.id, req.params.expenseId, req.body || {}));
+    const body = req.body || {};
+    const entryType = body.entry_type ?? body.entryType ?? body.entry_kind ?? body.kind ?? body.balance_type ?? body.society_entry_type ?? body.societyEntryType ?? body.type;
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const normalizedBody = {
+      ...body,
+      entry_type: entryType,
+      society_entry_type: entryType,
+      is_balance_entry: body.is_balance_entry ?? body.balance_entry ?? (String(entryType || '').toLowerCase().includes('balance')),
+      attachment_path: attachment?.path || body.attachment_path || '',
+      attachment_name: attachment?.name || body.attachment_name || '',
+    };
+    const expense = await Promise.resolve(pgCoreDb.updateSocietyExpense(req.session.userId, req.params.id, req.params.expenseId, normalizedBody));
     res.json({ success: true, expense });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not update expense.' });
@@ -12264,6 +12353,33 @@ router.delete('/societies/:id/expenses/:expenseId', async (req, res) => {
     res.json({ success });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete expense.' });
+  }
+});
+
+router.post('/societies/:id/member-balance-settlements', async (req, res) => {
+  try {
+    const settlement = await Promise.resolve(pgCoreDb.saveSocietyMemberBalanceSettlement(req.session.userId, req.params.id, req.body || {}, null));
+    res.json({ success: true, settlement });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save settlement.' });
+  }
+});
+
+router.put('/societies/:id/member-balance-settlements/:settlementId', async (req, res) => {
+  try {
+    const settlement = await Promise.resolve(pgCoreDb.saveSocietyMemberBalanceSettlement(req.session.userId, req.params.id, req.body || {}, req.params.settlementId));
+    res.json({ success: true, settlement });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update settlement.' });
+  }
+});
+
+router.delete('/societies/:id/member-balance-settlements/:settlementId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyMemberBalanceSettlement(req.session.userId, req.params.id, req.params.settlementId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete settlement.' });
   }
 });
 

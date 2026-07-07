@@ -1340,7 +1340,20 @@ function societyPdfCompactMoney(value) {
 function societyPdfMemberLabel(member) {
   const name = String(member?.member_name || '').trim() || 'Member';
   const unit = String(member?.unit_label || '').trim();
-  return unit ? `${name} (${unit})` : name;
+  const label = unit ? `${name} (${unit})` : name;
+  return member?.is_active === false ? `${label} (Inactive)` : label;
+}
+
+function societyPdfMemberContributionValue(member, monthKeys = []) {
+  const keys = Array.isArray(monthKeys) ? monthKeys.filter(Boolean) : [];
+  if (!keys.length) return Number(member?.total_contributed || 0);
+  return keys.reduce((sum, monthKey) => Math.round((sum + Number((member?.contributions_by_month || {})[monthKey] || 0)) * 100) / 100, 0);
+}
+
+function societyPdfVisibleMembers(detail = _societyDetail, monthKeys = []) {
+  const members = Array.isArray(detail?.members) ? detail.members : [];
+  const keys = Array.isArray(monthKeys) ? monthKeys.filter(Boolean) : [];
+  return societyPdfSortMembers(members.filter((member) => member?.is_active !== false || societyPdfMemberContributionValue(member, keys) > 0));
 }
 
 function societyPdfUnitSortValue(unitLabel) {
@@ -1485,13 +1498,14 @@ function societyPdfStatCardsData(detail = _societyDetail, mode = 'overall') {
       { label: 'Total Collected', value: _P.cur(totals.selected_month_collected || 0), accent: [61, 125, 84], note: `${Number(totals.selected_month_paid_count || 0)}/${Number(totals.member_count || 0)} paid` },
       { label: 'Total Expenses', value: _P.cur(totals.selected_month_spent || 0), accent: [197, 83, 68], note: `${Number(totals.selected_month_expense_count || 0) || 0} entries` },
       { label: 'Net Balance', value: _P.cur(totals.selected_month_balance || 0), accent: Number(totals.selected_month_balance || 0) >= 0 ? [64, 96, 181] : [197, 83, 68], note: Number(totals.selected_month_balance || 0) >= 0 ? 'surplus' : 'deficit' },
+      { label: 'Net Bank Balance', value: _P.cur(totals.overall_balance || 0), accent: Number(totals.overall_balance || 0) >= 0 ? [64, 96, 181] : [197, 83, 68], note: 'till today' },
       { label: 'Members', value: String(Number(totals.member_count || 0)), accent: [102, 102, 102], note: 'registered' },
     ];
   }
   return [
     { label: 'Total Collected', value: _P.cur(totals.overall_collected || 0), accent: [61, 125, 84], note: `+${Number(detail?.month_summary?.length || 0)} months` },
     { label: 'Total Expenses', value: _P.cur(totals.overall_spent || 0), accent: [197, 83, 68], note: `${Array.isArray(detail?.expenses) ? detail.expenses.length : 0} entries` },
-    { label: 'Net Balance', value: _P.cur(totals.overall_balance || 0), accent: [64, 96, 181], note: Number(totals.overall_balance || 0) >= 0 ? 'surplus' : 'deficit' },
+    { label: 'Net Bank Balance', value: _P.cur(totals.overall_balance || 0), accent: [64, 96, 181], note: Number(totals.overall_balance || 0) >= 0 ? 'surplus' : 'deficit' },
     { label: 'Members', value: String(Number(totals.member_count || 0)), accent: [102, 102, 102], note: 'registered' },
   ];
 }
@@ -1635,6 +1649,7 @@ function downloadSocietyMonthPdf() {
     { label: 'Collected', value: _P.cur(_societyDetail.totals?.selected_month_collected || 0), color: 'green' },
     { label: 'Spent', value: _P.cur(_societyDetail.totals?.selected_month_spent || 0), color: 'red' },
     { label: 'Balance', value: _P.cur(_societyDetail.totals?.selected_month_balance || 0), color: Number(_societyDetail.totals?.selected_month_balance || 0) >= 0 ? 'green' : 'red' },
+    { label: 'Net Bank', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
   ]);
   societyPdfTable(doc, y,
     [['Member', 'Property', 'Unit', 'Phone', 'Amount', 'Paid On', 'Notes']],
@@ -1642,7 +1657,7 @@ function downloadSocietyMonthPdf() {
       societyPdfMemberLabel(member),
       member.property_type === 'shop' ? 'Shop' : 'Home',
       member.unit_label || '-',
-      member.phone_number || '-',
+      (Array.isArray(member.phone_numbers) && member.phone_numbers.length ? member.phone_numbers.join(', ') : member.phone_number) || '-',
       _P.cur(member.selected_month_amount || 0),
       member.selected_month_paid_on ? _P.dt(member.selected_month_paid_on) : '-',
       member.selected_month_notes || '-',
@@ -1668,7 +1683,7 @@ function downloadSocietyMemberPdf(memberId) {
   if (!member) return;
   const doc = _P.init(true);
   let y = _P.header(doc, `Society Member - ${societyPdfMemberLabel(member)}`, _societyDetail.society.name || 'Society');
-  y = _P.note(doc, y, `${member.property_type === 'shop' ? 'Shop' : 'Home'} · ${member.unit_label || '-'} · ${member.phone_number || 'No phone'}`);
+  y = _P.note(doc, y, `${member.property_type === 'shop' ? 'Shop' : 'Home'} · ${member.unit_label || '-'} · ${(Array.isArray(member.phone_numbers) && member.phone_numbers.length ? member.phone_numbers.join(', ') : member.phone_number) || 'No phone'}`);
   y = _P.cards(doc, y, [
     { label: 'Total Contribution', value: _P.cur(member.total_contributed || 0), color: 'green' },
     { label: 'Selected Month', value: _P.cur(member.selected_month_amount || 0), color: 'green' },
@@ -1720,6 +1735,7 @@ function downloadSocietyExpensesPdf() {
   y = _P.cards(doc, y, [
     { label: 'Spent This Month', value: _P.cur(_societyDetail.totals?.selected_month_spent || 0), color: 'red' },
     { label: 'Collected This Month', value: _P.cur(_societyDetail.totals?.selected_month_collected || 0), color: 'green' },
+    { label: 'Net Bank', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
   ]);
   societyPdfTable(doc, y,
     [['Date', 'Title', 'Category', 'Notes', 'Amount']],
@@ -1758,7 +1774,7 @@ function downloadSocietyReportPdf() {
   y = _P.cards(doc, y, [
     { label: 'Total Collected', value: _P.cur(_societyDetail.totals?.overall_collected || 0), color: 'green' },
     { label: 'Total Expenses', value: _P.cur(_societyDetail.totals?.overall_spent || 0), color: 'red' },
-    { label: 'Net Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
+    { label: 'Net Bank Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
   ]);
   societyPdfTable(doc, y,
     [['Month', 'Paid Members', 'Collected', 'Expenses', 'Balance']],
@@ -1805,7 +1821,6 @@ function downloadSocietyCustomPdf(options = {}) {
   const selectedExpenseMonths = (options.expense_months || []).filter((monthKey) => monthKeys.includes(monthKey));
   const expenses = Array.isArray(_societyDetail.expenses) ? _societyDetail.expenses : [];
   const monthExpenses = Array.isArray(_societyDetail.month_expenses) ? _societyDetail.month_expenses : [];
-  const allMembers = Array.isArray(_societyDetail.members) ? _societyDetail.members : [];
   const memberScopeAmount = (member) => memberScopeMonths.reduce((sum, monthKey) => (
     Math.round((sum + Number((member?.contributions_by_month || {})[monthKey] || 0)) * 100) / 100
   ), 0);
@@ -1838,7 +1853,7 @@ function downloadSocietyCustomPdf(options = {}) {
     y = _P.cards(doc, y, [
       { label: 'Total Collected', value: _P.cur(_societyDetail.totals?.overall_collected || 0), color: 'green' },
       { label: 'Total Expenses', value: _P.cur(_societyDetail.totals?.overall_spent || 0), color: 'red' },
-      { label: 'Net Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
+      { label: 'Net Bank Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), color: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'green' : 'red' },
     ]);
   }
 
@@ -1940,22 +1955,24 @@ function downloadSocietyMonthPdf() {
   if (!_societyDetail?.society) return;
   const doc = _P.init(true);
   const society = _societyDetail.society;
+  const monthKey = String(_societyDetail.selected_month || _societyMonth || '');
   const monthLabel = societyMonthLabel(_societyDetail.selected_month || _societyMonth);
+  const visibleMembers = societyPdfVisibleMembers(_societyDetail, [monthKey]);
   let y = societyPdfHero(doc, {
     title: society.name,
     location: society.location || 'Not added',
-    metaRight: `${Number(_societyDetail.totals?.member_count || 0)} Members`,
+    metaRight: `${visibleMembers.length} Members`,
     period: monthLabel,
     cards: societyPdfStatCardsData(_societyDetail, 'month'),
   });
   y = societyPdfSectionBand(doc, y, 'Monthly Contributions', monthLabel);
   societyPdfTable(doc, y,
     [['Member', 'Property', 'Unit', 'Phone', 'Amount', 'Paid On', 'Notes']],
-    societyPdfSortMembers(_societyDetail.members || []).map((member) => [
+    visibleMembers.map((member) => [
       societyPdfMemberLabel(member),
       member.property_type === 'shop' ? 'Shop' : 'Home',
       member.unit_label || '-',
-      member.phone_number || '-',
+      (Array.isArray(member.phone_numbers) && member.phone_numbers.length ? member.phone_numbers.join(', ') : member.phone_number) || '-',
       _P.cur(member.selected_month_amount || 0),
       member.selected_month_paid_on ? _P.dt(member.selected_month_paid_on) : '-',
       member.selected_month_notes || '-',
@@ -1979,16 +1996,24 @@ function downloadSocietyMemberPdf(memberId) {
   if (!_societyDetail?.society) return;
   const member = (_societyDetail.members || []).find((item) => Number(item.id) === Number(memberId));
   if (!member) return;
+  const balanceRow = (_societyDetail.member_balances || []).find((item) => Number(item.member_id) === Number(member.id)) || {
+    amount: 0,
+    settled_amount: 0,
+    remaining_amount: 0,
+    settlement_count: 0,
+    settlements: [],
+  };
   const doc = _P.init(true);
   let y = societyPdfHero(doc, {
     title: societyPdfMemberLabel(member),
     location: _societyDetail.society.name || 'Society',
     metaRight: member.property_type === 'shop' ? 'Shop' : 'Home',
-    period: member.phone_number || 'No phone',
+    period: (Array.isArray(member.phone_numbers) && member.phone_numbers.length ? member.phone_numbers.join(', ') : member.phone_number) || 'No phone',
     cards: [
       { label: 'Total Contribution', value: _P.cur(member.total_contributed || 0), accent: [61, 125, 84], note: 'all months' },
-      { label: 'Current Month', value: _P.cur(member.selected_month_amount || 0), accent: [64, 96, 181], note: societyMonthLabel(_societyDetail.selected_month || _societyMonth) },
-      { label: 'Unit', value: member.unit_label || '-', accent: [102, 102, 102], note: 'house / shop' },
+      { label: 'Gross Owed', value: _P.cur(balanceRow.amount || 0), accent: [64, 96, 181], note: 'paid by member' },
+      { label: 'Settled', value: _P.cur(balanceRow.settled_amount || 0), accent: [102, 102, 102], note: `${Number(balanceRow.settlement_count || 0)} entries` },
+      { label: 'Remaining', value: _P.cur(balanceRow.remaining_amount || 0), accent: Number(balanceRow.remaining_amount || 0) > 0 ? [197, 83, 68] : [61, 125, 84], note: 'to settle' },
     ],
   });
   y = societyPdfSectionBand(doc, y, 'Member Contribution Timeline', societyPdfPeriodRange());
@@ -2004,6 +2029,26 @@ function downloadSocietyMemberPdf(memberId) {
       headFontSize: 8,
     }
   );
+  if (Array.isArray(balanceRow.settlements) && balanceRow.settlements.length) {
+    y = societyPdfSectionBand(doc, y, 'Balance Settlements', 'How this ledger was adjusted');
+    societyPdfTable(doc, y,
+      [['Date', 'Method', 'Amount', 'Notes']],
+      balanceRow.settlements.map((settlement) => [
+        _P.dt(settlement.settlement_date),
+        String(settlement.method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        _P.cur(settlement.amount || 0),
+        settlement.notes || '-',
+      ]),
+      {
+        columnStyles: {
+          2: { halign: 'right' },
+          3: { fontSize: 7.2 },
+        },
+        fontSize: 7.6,
+        headFontSize: 7.6,
+      }
+    );
+  }
   _P.save(doc, `Society_Member_${societyPdfMemberLabel(member)}`);
 }
 
@@ -2011,7 +2056,7 @@ function downloadSocietyMatrixPdf() {
   if (!_societyDetail?.society) return;
   const doc = _P.init(true);
   const monthKeys = _societyDetail.matrix_months || [];
-  const sortedMembers = societyPdfSortMembers(_societyDetail.members || []);
+  const sortedMembers = societyPdfVisibleMembers(_societyDetail, monthKeys);
   let y = societyPdfHero(doc, {
     title: 'Member Contribution Matrix',
     location: `${monthKeys.length} months`,
@@ -2020,7 +2065,7 @@ function downloadSocietyMatrixPdf() {
     cards: [
       { label: 'Collected', value: _P.cur(_societyDetail.totals?.overall_collected || 0), accent: [61, 125, 84], note: 'all months' },
       { label: 'Expenses', value: _P.cur(_societyDetail.totals?.overall_spent || 0), accent: [197, 83, 68], note: 'society spend' },
-      { label: 'Net Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), accent: [64, 96, 181], note: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'surplus' : 'deficit' },
+      { label: 'Net Bank Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), accent: [64, 96, 181], note: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? 'surplus' : 'deficit' },
     ],
   });
   y = societyPdfSectionBand(doc, y, 'Contribution Matrix', societyPdfPeriodRange());
@@ -2055,6 +2100,7 @@ function downloadSocietyExpensesPdf() {
       { label: 'Spent This Month', value: _P.cur(_societyDetail.totals?.selected_month_spent || 0), accent: [197, 83, 68], note: `${(_societyDetail.month_expenses || []).length} entries` },
       { label: 'Collected This Month', value: _P.cur(_societyDetail.totals?.selected_month_collected || 0), accent: [61, 125, 84], note: `${Number(_societyDetail.totals?.selected_month_paid_count || 0)}/${Number(_societyDetail.totals?.member_count || 0)} paid` },
       { label: 'Net Balance', value: _P.cur(_societyDetail.totals?.selected_month_balance || 0), accent: Number(_societyDetail.totals?.selected_month_balance || 0) >= 0 ? [64, 96, 181] : [197, 83, 68], note: Number(_societyDetail.totals?.selected_month_balance || 0) >= 0 ? 'surplus' : 'deficit' },
+      { label: 'Net Bank Balance', value: _P.cur(_societyDetail.totals?.overall_balance || 0), accent: Number(_societyDetail.totals?.overall_balance || 0) >= 0 ? [64, 96, 181] : [197, 83, 68], note: 'till today' },
     ],
   });
   y = societyPdfSectionBand(doc, y, 'All Expenses', `Current month: ${monthLabel}`);
@@ -2091,6 +2137,8 @@ function downloadSocietyReportPdf() {
   if (!_societyDetail?.society) return;
   const doc = _P.init(false);
   const society = _societyDetail.society;
+  const memberBalances = Array.isArray(_societyDetail.member_balances) ? _societyDetail.member_balances : [];
+  const settlements = Array.isArray(_societyDetail.member_balance_settlements) ? _societyDetail.member_balance_settlements : [];
   const allExpenses = Array.isArray(_societyDetail.expenses) ? _societyDetail.expenses : [];
   let y = societyPdfHero(doc, {
     title: society.name,
@@ -2131,6 +2179,57 @@ function downloadSocietyReportPdf() {
       headFontSize: 8.2,
     }
   );
+  if (memberBalances.length) {
+    y = societyPdfSectionBand(doc, y, 'Member Ledger', 'Gross owed, settled, remaining');
+    y = societyPdfTable(doc, y,
+      [['Member', 'Gross Owed', 'Settled', 'Remaining', 'Settlements']],
+      memberBalances.map((row) => [
+        societyPdfMemberLabel(row),
+        _P.cur(row.amount || 0),
+        _P.cur(row.settled_amount || 0),
+        _P.cur(row.remaining_amount || 0),
+        Number(row.settlement_count || 0),
+      ]),
+      {
+        columnStyles: {
+          1: { halign: 'right' },
+          2: { halign: 'right' },
+          3: { halign: 'right' },
+          4: { halign: 'center' },
+        },
+        foot: [[
+          'All Time Total',
+          _P.cur(_societyDetail.totals?.member_owed_gross_total || 0),
+          _P.cur(_societyDetail.totals?.member_settled_total || 0),
+          _P.cur(_societyDetail.totals?.member_owed_total || 0),
+          String(memberBalances.reduce((sum, row) => sum + Number(row.settlement_count || 0), 0)),
+        ]],
+        fontSize: 8,
+        headFontSize: 8,
+      }
+    );
+  }
+  if (settlements.length) {
+    y = societyPdfSectionBand(doc, y, 'Settlement History', 'How member balances were adjusted');
+    y = societyPdfTable(doc, y,
+      [['Date', 'Member', 'Method', 'Amount', 'Notes']],
+      settlements.map((row) => [
+        _P.dt(row.settlement_date),
+        societyPdfMemberLabel((memberBalances.find((member) => Number(member.member_id) === Number(row.member_id)) || row)),
+        String(row.method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        _P.cur(row.amount || 0),
+        row.notes || '-',
+      ]),
+      {
+        columnStyles: {
+          3: { halign: 'right' },
+          4: { fontSize: 7.2 },
+        },
+        fontSize: 7.4,
+        headFontSize: 7.4,
+      }
+    );
+  }
   y = societyPdfSectionBand(doc, y, 'All Expenses', 'Till today');
   y = societyPdfTable(doc, y,
     [['Date', 'Description', 'Category', 'Amount']],
@@ -2176,16 +2275,19 @@ function downloadSocietyCustomPdf(options = {}) {
   const memberScopeAmount = (member) => memberScopeMonths.reduce((sum, monthKey) => (
     Math.round((sum + Number((member?.contributions_by_month || {})[monthKey] || 0)) * 100) / 100
   ), 0);
+  const visibleScopedMembers = societyPdfVisibleMembers(_societyDetail, memberScopeMonths);
   const scopedMembers = memberScope === 'paid'
-    ? allMembers.filter((member) => memberScopeAmount(member) > 0)
+    ? visibleScopedMembers.filter((member) => memberScopeAmount(member) > 0)
     : memberScope === 'unpaid'
-    ? allMembers.filter((member) => memberScopeAmount(member) <= 0)
-    : allMembers;
+    ? visibleScopedMembers.filter((member) => memberScopeAmount(member) <= 0)
+    : visibleScopedMembers;
   const scopedExpenses = expenseScope === 'all'
     ? expenses
     : expenseScope === 'selected'
     ? expenses.filter((expense) => selectedExpenseMonths.includes(String(expense.month_key || '').slice(0, 7)))
     : monthExpenses;
+  const memberBalances = Array.isArray(_societyDetail.member_balances) ? _societyDetail.member_balances : [];
+  const settlements = Array.isArray(_societyDetail.member_balance_settlements) ? _societyDetail.member_balance_settlements : [];
   const includeSummary = options.include_summary !== false;
   const includeReport = !!options.include_report;
   const includeMatrix = !!options.include_matrix;
@@ -2243,6 +2345,48 @@ function downloadSocietyCustomPdf(options = {}) {
           headFontSize: 8.1,
         }
       );
+      if (memberBalances.length) {
+        y = societyPdfSectionBand(doc, y, 'Member Ledger', 'Gross owed, settled, remaining');
+        y = societyPdfTable(doc, y,
+          [['Member', 'Gross Owed', 'Settled', 'Remaining']],
+          memberBalances.map((row) => [
+            societyPdfMemberLabel(row),
+            _P.cur(row.amount || 0),
+            _P.cur(row.settled_amount || 0),
+            _P.cur(row.remaining_amount || 0),
+          ]),
+          {
+            columnStyles: {
+              1: { halign: 'right', cellWidth: 30 },
+              2: { halign: 'right', cellWidth: 28 },
+              3: { halign: 'right', cellWidth: 28 },
+            },
+            fontSize: 7.8,
+            headFontSize: 7.8,
+          }
+        );
+      }
+      if (settlements.length) {
+        y = societyPdfSectionBand(doc, y, 'Settlement History', 'How member balances were adjusted');
+        y = societyPdfTable(doc, y,
+          [['Date', 'Member', 'Method', 'Amount', 'Notes']],
+          settlements.map((row) => [
+            _P.dt(row.settlement_date),
+            societyPdfMemberLabel((memberBalances.find((member) => Number(member.member_id) === Number(row.member_id)) || row)),
+            String(row.method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            _P.cur(row.amount || 0),
+            row.notes || '-',
+          ]),
+          {
+            columnStyles: {
+              3: { halign: 'right' },
+              4: { fontSize: 7.2 },
+            },
+            fontSize: 7.4,
+            headFontSize: 7.4,
+          }
+        );
+      }
       y = societyPdfSectionBand(doc, y, 'All Expenses', expenseScope === 'all'
         ? 'Till today'
         : expenseScope === 'selected'

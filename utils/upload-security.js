@@ -39,6 +39,10 @@ const ALLOWED = {
     mimes: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
     exts: ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'],
   },
+  societyAttachment: {
+    mimes: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'],
+    exts: ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'],
+  },
 };
 
 function extOf(file) {
@@ -79,6 +83,7 @@ function inferUploadKindFromRequest(req) {
   if (rawPath.includes('/voice-prefill') || rawPath.includes('/ai/lookup/voice')) return 'audio';
   if (rawPath.includes('/poster-upload') || rawPath.includes('/profile-photo') || rawPath.includes('/scan-image')) return 'image';
   if (rawPath.includes('/upload') && rawPath.includes('/tenants')) return 'tenantDoc';
+  if (rawPath.includes('/societies') && rawPath.includes('/expenses')) return 'societyAttachment';
   if (rawPath.includes('/bill-match')) return 'pdf';
   if (rawPath.includes('/import') || rawPath.includes('/excel') || rawPath.includes('/sheets') || rawPath.includes('/preview')) return 'spreadsheet';
   return 'image';

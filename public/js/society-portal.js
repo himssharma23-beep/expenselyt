@@ -153,6 +153,30 @@
     render();
   }
 
+  async function switchDashboardMember(memberId) {
+    const nextMemberId = Number(memberId || 0);
+    const currentMemberId = Number(state.dashboard?.member?.id || 0);
+    if (!(nextMemberId > 0) || nextMemberId === currentMemberId) return;
+    try {
+      const result = await publicApi('/api/public/society-portal/switch-member', {
+        method: 'POST',
+        body: { member_id: nextMemberId },
+      });
+      if (!result?.authenticated || !result?.dashboard) throw new Error('Could not switch house.');
+      state.dashboard = result.dashboard;
+      state.requestModalOpen = false;
+      state.selectedRequestMonth = '';
+      state.requestAmount = '';
+      state.requestPaidOn = '';
+      state.requestNote = '';
+      syncRequestForm(state.dashboard);
+      showNotice('Switched to the selected house.', 'success');
+      render();
+    } catch (err) {
+      showNotice(err.message || 'Could not switch house.', 'error');
+    }
+  }
+
   function openRequestModal(monthKey) {
     state.selectedRequestMonth = String(monthKey || '').trim();
     state.requestAmount = '';
@@ -189,7 +213,11 @@
   function getRequestPresetMonth(dashboard) {
     const pendingRequest = (dashboard?.pending_requests || [])[0];
     if (pendingRequest?.month_key) return pendingRequest.month_key;
-    const unpaid = (dashboard?.contribution_history || []).find((item) => String(item.status || '').toLowerCase() !== 'paid');
+    const startMonth = String(dashboard?.summary?.start_month || '').trim();
+    const unpaid = (dashboard?.contribution_history || []).find((item) => {
+      if (startMonth && String(item.month_key || '') < startMonth) return false;
+      return String(item.status || '').toLowerCase() !== 'paid';
+    });
     return unpaid?.month_key || dashboard?.summary?.current_month || currentMonthKey();
   }
 
@@ -509,6 +537,10 @@
       btn.addEventListener('click', () => setDashboardTab(btn.getAttribute('data-sp-tab')));
     });
 
+    document.querySelectorAll('[data-sp-switch-member]').forEach((btn) => {
+      btn.addEventListener('click', () => switchDashboardMember(btn.getAttribute('data-sp-switch-member')));
+    });
+
     updateResendButtonUi();
   }
 
@@ -560,12 +592,33 @@
     const member = dashboard.member || {};
     const society = dashboard.society || {};
     const summary = dashboard.summary || {};
+    const balanceSummary = dashboard.balance_summary || {};
+    const elections = Array.isArray(dashboard.elections) ? dashboard.elections : [];
+    const linkedMembers = Array.isArray(dashboard.linked_members) && dashboard.linked_members.length ? dashboard.linked_members : [member];
     syncRequestForm(dashboard);
     const requestMonths = [...new Set([state.selectedRequestMonth || '', ...(dashboard.contribution_history || []).map((item) => item.month_key).filter(Boolean)])].filter(Boolean).sort().reverse();
     const selectedRequest = (dashboard.payment_requests || []).find((item) => item.month_key === state.selectedRequestMonth && String(item.status || '').toLowerCase() === 'pending') || null;
     const latestPending = selectedRequest || (dashboard.pending_requests || [])[0] || null;
     const lastPaidValue = summary.last_paid_month ? fmtMonth(summary.last_paid_month, false).replace(' ', "'") : '-';
     const memberStatusText = summary.pending_month_count > 0 ? `${summary.pending_month_count} month${summary.pending_month_count === 1 ? '' : 's'} pending` : 'Active Member';
+    const showElectionsTab = society.show_elections_in_portal !== false && elections.length > 0;
+    const dashboardTab = showElectionsTab || state.dashboardTab !== 'elections' ? state.dashboardTab : 'history';
+    if (dashboardTab !== state.dashboardTab) state.dashboardTab = dashboardTab;
+    const balanceSettlements = Array.isArray(balanceSummary.settlements) ? balanceSummary.settlements : [];
+    const memberSwitcher = linkedMembers.length > 1 ? `
+      <div style="margin-top:12px">
+        <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800;margin-bottom:8px">Other linked houses</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${linkedMembers.map((linkedMember) => {
+            const active = Number(linkedMember.id) === Number(member.id);
+            const propertyLabel = String(linkedMember.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home';
+            return `<button type="button" data-sp-switch-member="${Number(linkedMember.id)}" style="border-radius:16px;border:1px solid ${active ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.14)'};background:${active ? 'rgba(255,255,255,.18)' : 'rgba(255,255,255,.08)'};color:#fff;padding:10px 14px;min-width:120px;text-align:left;box-shadow:none">
+              <div style="font-weight:800;line-height:1.2">${esc(linkedMember.unit_label || 'Unit')}</div>
+              <div style="font-size:12px;opacity:.82;margin-top:3px">${esc(propertyLabel)}${linkedMember.is_active === false ? ' · Inactive' : ''}</div>
+            </button>`;
+          }).join('')}
+        </div>
+      </div>` : '';
 
     const contributionRows = (dashboard.contribution_history || []).slice(0, 12).map((item) => {
       const meta = contributionStatus(item);
@@ -598,6 +651,19 @@
         </div>`;
     }).join('');
 
+    const settlementRows = balanceSettlements.length ? balanceSettlements.map((item) => `
+      <div class="sp-row sp-contribution-row">
+        <div class="sp-row-badge paid"><div>ADJ</div><div>${esc(String(item.settlement_date || '').slice(0, 4) || '--')}</div></div>
+        <div>
+          <div class="sp-row-title">${esc(String(item.method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))}</div>
+          <div class="sp-row-sub">${esc(fmtDate(item.settlement_date || ''))}${item.notes ? ` â€¢ ${esc(item.notes)}` : ''}</div>
+        </div>
+        <div class="sp-row-right">
+          <div class="sp-row-amount green">${fmtMoney(item.amount || 0)}</div>
+          <div class="sp-row-chip paid">Settled</div>
+        </div>
+      </div>`).join('') : '';
+
     const expenseRows = (dashboard.expenses || dashboard.recent_expenses || []).map((expense) => {
       const cls = expenseCategoryClass(expense.category);
       return `
@@ -605,7 +671,7 @@
           <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
           <div>
             <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
-            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}</div>
+            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.attachment_path ? ` • <a href="${esc(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
           </div>
           <div class="sp-row-right">
             <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
@@ -658,14 +724,14 @@
           ['history', 'My Contribution'],
           ['expenses', 'Expenses'],
           ['collections', 'Collections'],
-          ['elections', 'Elections'],
+          ...(showElectionsTab ? [['elections', 'Elections']] : []),
         ].map(([key, label]) => `
-          <button type="button" class="sp-tab-btn ${state.dashboardTab === key ? 'active' : ''}" data-sp-tab="${key}">${esc(label)}</button>
+          <button type="button" class="sp-tab-btn ${dashboardTab === key ? 'active' : ''}" data-sp-tab="${key}">${esc(label)}</button>
         `).join('')}
       </div>`;
 
     let activeSection = '';
-    if (state.dashboardTab === 'history') {
+    if (dashboardTab === 'history') {
       activeSection = `
         <section>
           <div class="sp-section-head">
@@ -681,8 +747,20 @@
             </div>
             ${contributionRows || '<div class="sp-empty">No contribution history yet.</div>'}
           </div>
+          ${balanceSettlements.length ? `
+            <div class="sp-card sp-list-card sp-history-list" style="margin-top:16px">
+              <div class="sp-list-head compact">
+                <div>
+                  <div class="sp-total-label">Balance Settlements</div>
+                  <div class="sp-total-sub">Adjustments applied to your member ledger</div>
+                </div>
+                <div class="sp-list-total">${fmtMoney(balanceSummary.remaining_amount || 0)}</div>
+              </div>
+              ${settlementRows}
+            </div>
+          ` : ''}
         </section>`;
-    } else if (state.dashboardTab === 'expenses') {
+    } else if (dashboardTab === 'expenses') {
       activeSection = `
         <section>
           <div class="sp-section-head">
@@ -693,7 +771,7 @@
             ${expenseRows || '<div class="sp-empty">No expenses added yet.</div>'}
           </div>
         </section>`;
-    } else if (state.dashboardTab === 'collections') {
+    } else if (dashboardTab === 'collections') {
       activeSection = `
         <section>
           <div class="sp-section-head">
@@ -706,8 +784,7 @@
             </div>
           </div>
         </section>`;
-    } else if (state.dashboardTab === 'elections') {
-      const elections = Array.isArray(dashboard.elections) ? dashboard.elections : [];
+    } else if (dashboardTab === 'elections' && showElectionsTab) {
       const electionRows = elections.length ? elections.map((election) => {
         const runtime = String(election.runtime_status || 'draft').toLowerCase();
         const selectedCandidateId = Number((state.electionSelections || {})[String(election.id)] || 0);
@@ -821,22 +898,23 @@
               <div class="sp-hero-pill">${esc(member.unit_label || 'Unit')} • ${esc(String(member.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home')}</div>
               <div class="sp-hero-pill">${esc(memberStatusText)}</div>
             </div>
+            ${memberSwitcher}
             <div class="sp-summary-grid">
-              <div class="sp-summary-card">
-                <div class="sp-summary-label">Monthly Due</div>
-                <div class="sp-summary-value">${fmtMoney(member.monthly_due || 0)}</div>
-              </div>
               <div class="sp-summary-card">
                 <div class="sp-summary-label">My Total</div>
                 <div class="sp-summary-value green">${fmtMoney(summary.my_total || 0)}</div>
               </div>
               <div class="sp-summary-card compact">
-                <div class="sp-summary-label">Pending</div>
+                <div class="sp-summary-label">Request Pending</div>
                 <div class="sp-summary-value amber">${fmtMoney(summary.pending_amount || 0)}</div>
               </div>
               <div class="sp-summary-card compact">
                 <div class="sp-summary-label">Last Paid</div>
                 <div class="sp-summary-value">${esc(lastPaidValue)}</div>
+              </div>
+              <div class="sp-summary-card compact">
+                <div class="sp-summary-label">Balance Remaining</div>
+                <div class="sp-summary-value ${toNumber(balanceSummary.remaining_amount || 0) > 0 ? 'amber' : 'green'}">${fmtMoney(balanceSummary.remaining_amount || 0)}</div>
               </div>
             </div>
             <div class="sp-hero-overview">
