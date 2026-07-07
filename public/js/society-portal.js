@@ -57,6 +57,16 @@
     return dateFmt.format(parsed);
   }
 
+  function monthKeyFromDate(value) {
+    const raw = String(value || '').trim();
+    if (/^\d{4}-\d{2}/.test(raw)) return raw.slice(0, 7);
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }
+
   function normalizePhoneDigits(value) {
     return String(value || '').replace(/\D+/g, '').slice(-10);
   }
@@ -674,7 +684,61 @@
             <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.attachment_path ? ` • <a href="${esc(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
           </div>
           <div class="sp-row-right">
-            <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
+          <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    const expenseItems = dashboard.expenses || dashboard.recent_expenses || [];
+    const expenseMonthGroups = [];
+    const expenseMonthMap = new Map();
+    expenseItems.forEach((expense) => {
+      const monthKey = monthKeyFromDate(expense.expense_date) || 'unknown';
+      if (!expenseMonthMap.has(monthKey)) {
+        const group = { monthKey, total: 0, items: [] };
+        expenseMonthMap.set(monthKey, group);
+        expenseMonthGroups.push(group);
+      }
+      const group = expenseMonthMap.get(monthKey);
+      group.items.push(expense);
+      group.total = Math.round((group.total + toNumber(expense.amount || 0)) * 100) / 100;
+    });
+    const expenseGroupsHtml = expenseMonthGroups.map((group) => {
+      const groupRows = group.items.map((expense) => {
+        const cls = expenseCategoryClass(expense.category);
+        const rawDate = String(expense.expense_date || '').trim();
+        const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? new Date(`${rawDate}T00:00:00`) : new Date(rawDate);
+        const dayLabel = Number.isNaN(parsedDate.getTime())
+          ? fmtDate(expense.expense_date)
+          : parsedDate.toLocaleDateString('en-IN', { month: 'short', day: '2-digit' });
+        return `
+          <div class="sp-row sp-expense-row grouped">
+            <div class="sp-expense-date">${esc(dayLabel)}</div>
+            <div class="sp-expense-main">
+              <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
+              <div>
+                <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
+                <div class="sp-row-sub">${expense.category ? esc(expense.category) : 'No category'}${expense.attachment_path ? ` â€¢ <a href="${esc(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+              </div>
+            </div>
+            <div class="sp-row-right">
+              <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      return `
+        <div class="sp-expense-month-group">
+          <div class="sp-expense-month-head">
+            <div class="sp-expense-month-title">${esc(group.monthKey === 'unknown' ? 'Unknown Month' : fmtMonth(group.monthKey, true))}</div>
+            <div class="sp-expense-month-total">${fmtMoney(group.total)}</div>
+          </div>
+          <div class="sp-card sp-list-card sp-expenses-month-card">
+            <div class="sp-expense-table-head">
+              <div>Date</div>
+              <div>Details</div>
+              <div>Amount</div>
+            </div>
+            ${groupRows}
           </div>
         </div>`;
     }).join('');
@@ -765,10 +829,10 @@
         <section>
           <div class="sp-section-head">
             <h2>Society Expenses</h2>
-            <p>All recorded society expenses</p>
+            <p>Month-wise society expenses</p>
           </div>
-          <div class="sp-card sp-list-card sp-expenses-list">
-            ${expenseRows || '<div class="sp-empty">No expenses added yet.</div>'}
+          <div class="sp-expenses-list">
+            ${expenseGroupsHtml || '<div class="sp-card sp-list-card"><div class="sp-empty">No expenses added yet.</div></div>'}
           </div>
         </section>`;
     } else if (dashboardTab === 'collections') {

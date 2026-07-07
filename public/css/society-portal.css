@@ -941,6 +941,77 @@ body {
 .sp-expense-icon.security { background: #f1edff; color: #724dd0; }
 .sp-expense-icon.other { background: #edf4ef; color: #52725f; }
 
+.sp-expenses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sp-expense-month-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sp-expense-month-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sp-expense-month-title {
+  font-size: 30px;
+  line-height: 1.08;
+  font-weight: 900;
+  color: #13241d;
+}
+
+.sp-expense-month-total {
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--sp-green-700);
+}
+
+.sp-expenses-month-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.sp-expense-table-head {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 140px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #f0fbf5 0%, #e7f6ec 100%);
+  color: #64806f;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sp-expense-row.grouped {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 140px;
+  gap: 12px;
+  align-items: center;
+}
+
+.sp-expense-date {
+  font-size: 15px;
+  font-weight: 700;
+  color: #13241d;
+}
+
+.sp-expense-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .sp-month-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1836,7 +1907,7 @@ body {
 
 @media (max-width: 540px) {
   .sp-history-list,
-  .sp-expenses-list {
+  .sp-expenses-month-card {
     padding: 0;
     background: #fff;
     border: 1px solid #e2ebe5;
@@ -1853,7 +1924,7 @@ body {
   }
 
   .sp-history-list .sp-contribution-row,
-  .sp-expenses-list .sp-expense-row {
+  .sp-expenses-month-card .sp-expense-row {
     margin-top: 0;
     border: 0;
     border-top: 1px solid #edf1ee;
@@ -1870,7 +1941,7 @@ body {
   }
 
   .sp-history-list .sp-contribution-row:first-of-type,
-  .sp-expenses-list .sp-expense-row:first-of-type {
+  .sp-expenses-month-card .sp-expense-row:first-of-type {
     border-top: 0;
   }
 
@@ -1944,30 +2015,61 @@ body {
     white-space: nowrap;
   }
 
-  .sp-expenses-list .sp-expense-row {
+  .sp-expenses-month-card .sp-expense-row {
     grid-template-columns: auto 1fr auto;
     align-items: center;
   }
 
-  .sp-expenses-list .sp-expense-icon {
+  .sp-expenses-month-card .sp-expense-icon {
     width: 44px;
     height: 44px;
     border-radius: 14px;
   }
 
-  .sp-expenses-list .sp-row-title {
+  .sp-expenses-month-card .sp-row-title {
     font-size: 14px;
     line-height: 1.2;
   }
 
-  .sp-expenses-list .sp-row-sub {
+  .sp-expenses-month-card .sp-row-sub {
     margin-top: 3px;
   }
 
-  .sp-expenses-list .sp-row-right {
+  .sp-expenses-month-card .sp-row-right {
     grid-column: auto;
     text-align: right;
     justify-items: end;
+  }
+
+  .sp-expense-month-head {
+    padding: 0 4px;
+  }
+
+  .sp-expense-month-title {
+    font-size: 22px;
+  }
+
+  .sp-expense-month-total {
+    font-size: 18px;
+  }
+
+  .sp-expense-table-head,
+  .sp-expense-row.grouped {
+    grid-template-columns: 66px minmax(0, 1fr) 92px;
+    gap: 10px;
+  }
+
+  .sp-expense-table-head {
+    padding: 12px 14px;
+    font-size: 10px;
+  }
+
+  .sp-expense-date {
+    font-size: 13px;
+  }
+
+  .sp-expense-main {
+    gap: 10px;
   }
 
   .sp-collections-card {
