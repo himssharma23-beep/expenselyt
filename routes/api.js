@@ -890,6 +890,110 @@ function cancelVideoPrepareTasks(cacheKeys = []) {
   return { queued_removed: queuedRemoved, active_stopped: activeStopped };
 }
 
+async function buildActivePreparedVideoCacheKeys() {
+  const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
+  const mobileKeys = new Set();
+  const hlsKeys = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    for (const file of (Array.isArray(item?.files) ? item.files : [])) {
+      if (file?.file_exists === false) continue;
+      const fileId = Number(file?.id || 0);
+      if (!(fileId > 0)) continue;
+      try {
+        const token = Buffer.from(JSON.stringify({
+          type: 'catalog_file',
+          file_id: fileId,
+        }), 'utf8').toString('base64url');
+        const target = await Promise.resolve(pgVideoDb.resolveVideoStreamTarget(token));
+        if (!target || !videoNeedsBrowserCompatibleTranscode(target)) continue;
+        mobileKeys.add(hashMobileVideoKey(target));
+        hlsKeys.add(hashHlsCacheKey(target, ''));
+      } catch (_err) {
+      }
+    }
+  }
+  return { mobileKeys, hlsKeys };
+}
+
+async function prunePreparedVideoCacheDirectory(cacheDir, validKeys, options = {}) {
+  const shouldInspectDirectories = options?.directories === true;
+  let removedCount = 0;
+  let freedBytes = 0;
+  let skippedCount = 0;
+  try {
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    const entries = await fs.promises.readdir(cacheDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryName = String(entry?.name || '').trim();
+      if (!entryName) continue;
+      const entryPath = path.join(cacheDir, entryName);
+      if (!entry.isDirectory() && /\.tmp(\.|$)/i.test(entryName)) {
+        try {
+          const sizeBytes = await getPathSizeBytes(entryPath);
+          await fs.promises.rm(entryPath, { recursive: true, force: true });
+          removedCount += 1;
+          freedBytes += Number(sizeBytes || 0);
+        } catch (_err) {
+          skippedCount += 1;
+        }
+        continue;
+      }
+      if (shouldInspectDirectories && entry.isDirectory()) {
+        if (validKeys.has(entryName)) continue;
+        try {
+          const sizeBytes = await getPathSizeBytes(entryPath);
+          await fs.promises.rm(entryPath, { recursive: true, force: true });
+          removedCount += 1;
+          freedBytes += Number(sizeBytes || 0);
+        } catch (_err) {
+          skippedCount += 1;
+        }
+        continue;
+      }
+      if (!shouldInspectDirectories && entry.isFile()) {
+        const cacheKey = entryName.replace(/\.[^.]+$/, '');
+        if (validKeys.has(cacheKey)) continue;
+        try {
+          const sizeBytes = await getPathSizeBytes(entryPath);
+          await fs.promises.rm(entryPath, { recursive: true, force: true });
+          removedCount += 1;
+          freedBytes += Number(sizeBytes || 0);
+        } catch (_err) {
+          skippedCount += 1;
+        }
+      }
+    }
+  } catch (_err) {
+  }
+  return { removedCount, freedBytes, skippedCount };
+}
+
+async function getPathSizeBytes(targetPath) {
+  const stats = await fs.promises.stat(targetPath).catch(() => null);
+  if (!stats) return 0;
+  if (stats.isFile()) return Number(stats.size || 0);
+  if (!stats.isDirectory()) return 0;
+  const entries = await fs.promises.readdir(targetPath, { withFileTypes: true }).catch(() => []);
+  let total = 0;
+  for (const entry of entries) {
+    total += await getPathSizeBytes(path.join(targetPath, entry.name));
+  }
+  return total;
+}
+
+async function pruneStalePreparedVideoCaches() {
+  const { mobileKeys, hlsKeys } = await buildActivePreparedVideoCacheKeys();
+  const mobile = await prunePreparedVideoCacheDirectory(VIDEO_MOBILE_CACHE_DIR, mobileKeys, { directories: false });
+  const hls = await prunePreparedVideoCacheDirectory(VIDEO_HLS_CACHE_DIR, hlsKeys, { directories: true });
+  return {
+    mobile,
+    hls,
+    removed_count: Number(mobile.removedCount || 0) + Number(hls.removedCount || 0),
+    freed_bytes: Number(mobile.freedBytes || 0) + Number(hls.freedBytes || 0),
+    skipped_count: Number(mobile.skippedCount || 0) + Number(hls.skippedCount || 0),
+  };
+}
+
 function normalizeOcrAmount(value) {
   if (value === null || value === undefined) return null;
   const normalized = String(value)
@@ -7020,8 +7124,11 @@ router.post('/live-split/friends/:id/nudge', async (req, res) => {
     const targetLocale = String(req.body?.locale_code || me?.locale_code || 'en-IN').trim() || 'en-IN';
     const amountLabel = formatNotificationCurrency(amountValue, targetCurrency, targetLocale);
     const sameFriendDailyLimit = Number(nudgeAccess?.same_friend_daily_limit || 1);
+    const baseFriendId = Number(friend?.friend_id || 0) > 0 ? Number(friend.friend_id) : null;
     if (sameFriendDailyLimit !== -1) {
-      const sameFriendDayUsed = await Promise.resolve(pgDb.countUserLiveSplitNudgesForFriendOnDay(req.session.userId, friendId));
+      const sameFriendDayUsed = await Promise.resolve(
+        pgDb.countUserLiveSplitNudgesForFriendOnDay(req.session.userId, baseFriendId, null, { live_split_friend_id: friendId })
+      );
       if (sameFriendDayUsed >= sameFriendDailyLimit) {
         return res.status(429).json({
           error: `You can nudge the same person only ${sameFriendDailyLimit} time${sameFriendDailyLimit === 1 ? '' : 's'} per day on your current plan.`,
@@ -7057,7 +7164,9 @@ router.post('/live-split/friends/:id/nudge', async (req, res) => {
 
     if (!result?.created) throw new Error('Could not create Live Split nudge notification.');
 
-    const usageAccess = await Promise.resolve(pgDb.consumeUserLiveSplitNudgeUsage(req.session.userId, friendId, nudgeDirection)).then(() => pgDb.getUserLiveSplitAccess(req.session.userId));
+    const usageAccess = await Promise.resolve(
+      pgDb.consumeUserLiveSplitNudgeUsage(req.session.userId, baseFriendId, nudgeDirection, { live_split_friend_id: friendId })
+    ).then(() => pgDb.getUserLiveSplitAccess(req.session.userId));
 
     res.json({
       success: true,
@@ -8780,10 +8889,12 @@ router.post('/admin/videos/catalog/delete', requireAdmin, async (req, res) => {
   try {
     const itemIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids : [];
     const result = await Promise.resolve(pgVideoDb.deleteVideoCatalogItems(itemIds));
+    const cache_cleanup = await pruneStalePreparedVideoCaches();
     const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'all' }));
     res.json({
       success: true,
       result,
+      cache_cleanup,
       items,
     });
   } catch (err) {
@@ -8795,14 +8906,28 @@ router.post('/admin/videos/catalog/file-delete', requireAdmin, async (req, res) 
   try {
     const fileId = Number(req.body?.file_id || 0);
     const result = await Promise.resolve(pgVideoDb.deleteVideoCatalogFile(fileId, { delete_from_disk: true }));
+    const cache_cleanup = await pruneStalePreparedVideoCaches();
     const items = await Promise.resolve(pgVideoDb.listVideoCatalogItems({ status: 'published' }));
     res.json({
       success: true,
       result,
+      cache_cleanup,
       items,
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete the selected episode' });
+  }
+});
+
+router.post('/admin/videos/cache/prune', requireAdmin, async (_req, res) => {
+  try {
+    const result = await pruneStalePreparedVideoCaches();
+    res.json({
+      success: true,
+      result,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not clean stale prepared video cache' });
   }
 });
 

@@ -192,6 +192,15 @@ function isMissingLiveSplitNudgeUsageTableError(err) {
   return err?.code === '42P01' && message.includes('live_split_nudge_usage');
 }
 
+function isMissingLiveSplitNudgeUsageSchemaError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return isMissingLiveSplitNudgeUsageTableError(err)
+    || (err?.code === '42703' && (
+      message.includes('live_split_nudge_usage')
+      || message.includes('live_split_friend_id')
+    ));
+}
+
 function normalizeSubscription(row) {
   if (!row) return null;
   return {
@@ -1714,13 +1723,22 @@ async function ensureLiveSplitNudgeUsageTable() {
        id BIGSERIAL PRIMARY KEY,
        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
        friend_id BIGINT REFERENCES friends(id) ON DELETE SET NULL,
+       live_split_friend_id BIGINT REFERENCES live_split_friends(id) ON DELETE SET NULL,
        direction TEXT NOT NULL DEFAULT 'they_owe_me',
        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )`
   );
   await query(
+    `ALTER TABLE live_split_nudge_usage
+     ADD COLUMN IF NOT EXISTS live_split_friend_id BIGINT REFERENCES live_split_friends(id) ON DELETE SET NULL`
+  );
+  await query(
     `CREATE INDEX IF NOT EXISTS idx_live_split_nudge_usage_user_created
      ON live_split_nudge_usage (user_id, created_at DESC)`
+  );
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_live_split_nudge_usage_user_live_friend_created
+     ON live_split_nudge_usage (user_id, live_split_friend_id, created_at DESC)`
   );
 }
 
@@ -2009,58 +2027,59 @@ async function consumeUserVoiceAiUsage(userId, featureKey = 'expense_voice', sou
   return true;
 }
 
-async function consumeUserLiveSplitNudgeUsage(userId, friendId = null, direction = 'they_owe_me') {
+async function consumeUserLiveSplitNudgeUsage(userId, friendId = null, direction = 'they_owe_me', options = {}) {
   const userResult = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [userId]);
   if (userResult.rows[0]?.role === 'admin') return true;
+  const liveSplitFriendId = Number(options?.live_split_friend_id || 0) > 0 ? Number(options.live_split_friend_id) : null;
   const params = [
     userId,
     Number(friendId || 0) > 0 ? Number(friendId) : null,
+    liveSplitFriendId,
     String(direction || 'they_owe_me').trim().toLowerCase() === 'i_owe_them' ? 'i_owe_them' : 'they_owe_me',
   ];
   try {
     await query(
-      `INSERT INTO live_split_nudge_usage (user_id, friend_id, direction)
-       VALUES ($1, $2, $3)`,
+      `INSERT INTO live_split_nudge_usage (user_id, friend_id, live_split_friend_id, direction)
+       VALUES ($1, $2, $3, $4)`,
       params
     );
   } catch (err) {
-    if (!isMissingLiveSplitNudgeUsageTableError(err)) throw err;
+    if (!isMissingLiveSplitNudgeUsageSchemaError(err)) throw err;
     await ensureLiveSplitNudgeUsageTable();
     await query(
-      `INSERT INTO live_split_nudge_usage (user_id, friend_id, direction)
-       VALUES ($1, $2, $3)`,
+      `INSERT INTO live_split_nudge_usage (user_id, friend_id, live_split_friend_id, direction)
+       VALUES ($1, $2, $3, $4)`,
       params
     );
   }
   return true;
 }
 
-async function countUserLiveSplitNudgesForFriendOnDay(userId, friendId, dayStart = null) {
+async function countUserLiveSplitNudgesForFriendOnDay(userId, friendId, dayStart = null, options = {}) {
   const uid = Number(userId || 0);
   const fid = Number(friendId || 0);
-  if (!(uid > 0) || !(fid > 0)) return 0;
+  const liveSplitFriendId = Number(options?.live_split_friend_id || 0);
+  if (!(uid > 0) || !(fid > 0) && !(liveSplitFriendId > 0)) return 0;
   const rangeStart = dayStart instanceof Date ? dayStart : usageRangeStart('day');
+  const queryText = liveSplitFriendId > 0
+    ? `SELECT COUNT(*)::int AS used
+       FROM live_split_nudge_usage
+       WHERE user_id = $1
+         AND live_split_friend_id = $2
+         AND created_at >= $3`
+    : `SELECT COUNT(*)::int AS used
+       FROM live_split_nudge_usage
+       WHERE user_id = $1
+         AND friend_id = $2
+         AND created_at >= $3`;
+  const queryParams = [uid, liveSplitFriendId > 0 ? liveSplitFriendId : fid, rangeStart.toISOString()];
   let result;
   try {
-    result = await query(
-      `SELECT COUNT(*)::int AS used
-       FROM live_split_nudge_usage
-       WHERE user_id = $1
-         AND friend_id = $2
-         AND created_at >= $3`,
-      [uid, fid, rangeStart.toISOString()]
-    );
+    result = await query(queryText, queryParams);
   } catch (err) {
-    if (!isMissingLiveSplitNudgeUsageTableError(err)) throw err;
+    if (!isMissingLiveSplitNudgeUsageSchemaError(err)) throw err;
     await ensureLiveSplitNudgeUsageTable();
-    result = await query(
-      `SELECT COUNT(*)::int AS used
-       FROM live_split_nudge_usage
-       WHERE user_id = $1
-         AND friend_id = $2
-         AND created_at >= $3`,
-      [uid, fid, rangeStart.toISOString()]
-    );
+    result = await query(queryText, queryParams);
   }
   return Number(result.rows[0]?.used || 0);
 }

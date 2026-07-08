@@ -5741,6 +5741,7 @@ function renderVideoAdminPublishedTab() {
         </div>
         <div class="video-admin-editor-actions">
           <button class="btn btn-s" type="button" onclick="window.videoAdminRefreshPublished()">Refresh</button>
+          <button class="btn btn-s" type="button" onclick="window.videoAdminPrunePreparedCache()">Clean Cache</button>
           <button class="btn btn-s danger" type="button" onclick="window.videoAdminClearPublished()">Clear Published</button>
         </div>
       </div>
@@ -6293,7 +6294,8 @@ async function videoAdminDeletePublished(itemId) {
   await videoAdminRefreshPublished(false);
   await loadVideosPage();
   renderVideoAdminPanel();
-  toast('Published entry removed', 'success');
+  const freedBytes = Number(result?.cache_cleanup?.freed_bytes || 0);
+  toast(`Published entry removed${freedBytes > 0 ? ` and ${videoLibraryFormatBytes(freedBytes)} of stale cache was cleared` : ''}`, 'success');
 }
 
 async function videoAdminDeleteEpisode(fileId, label = '') {
@@ -6318,7 +6320,8 @@ async function videoAdminDeleteEpisode(fileId, label = '') {
     await videoAdminRefreshPublished(false);
     await loadVideosPage();
     renderVideoAdminPanel();
-    toast('Episode deleted from server', 'success');
+    const freedBytes = Number(result?.cache_cleanup?.freed_bytes || 0);
+    toast(`Episode deleted from server${freedBytes > 0 ? ` and ${videoLibraryFormatBytes(freedBytes)} of stale cache was cleared` : ''}`, 'success');
   } finally {
     _videoAdminPanelState.deletingEpisodeId = 0;
     renderVideoAdminPanel();
@@ -6339,7 +6342,28 @@ async function videoAdminClearPublished() {
   _videoAdminPanelState.publishedItems = [];
   await loadVideosPage();
   renderVideoAdminPanel();
-  toast('Published library cleared', 'success');
+  const freedBytes = Number(result?.cache_cleanup?.freed_bytes || 0);
+  toast(`Published library cleared${freedBytes > 0 ? ` and ${videoLibraryFormatBytes(freedBytes)} of stale cache was cleared` : ''}`, 'success');
+}
+
+async function videoAdminPrunePreparedCache() {
+  const result = await api('/api/admin/videos/cache/prune', {
+    method: 'POST',
+    body: {},
+  });
+  if (!result?.success) {
+    toast(result?.error || 'Could not clean stale prepared cache.', 'error');
+    return;
+  }
+  const cleanup = result?.result || {};
+  const removedCount = Number(cleanup.removed_count || 0);
+  const freedBytes = Number(cleanup.freed_bytes || 0);
+  toast(
+    removedCount > 0
+      ? `Cleaned ${removedCount} stale cache item${removedCount === 1 ? '' : 's'}${freedBytes > 0 ? ` and freed ${videoLibraryFormatBytes(freedBytes)}` : ''}.`
+      : 'No stale prepared cache was found.',
+    'success'
+  );
 }
 
 async function videoAdminRefreshPublished(reRender = true) {
@@ -6974,6 +6998,7 @@ window.videoAdminDeleteDraft = videoAdminDeleteDraft;
 window.videoAdminDeletePublished = videoAdminDeletePublished;
 window.videoAdminDeleteEpisode = videoAdminDeleteEpisode;
 window.videoAdminClearPublished = videoAdminClearPublished;
+window.videoAdminPrunePreparedCache = videoAdminPrunePreparedCache;
 window.videoAdminRefreshPublished = videoAdminRefreshPublished;
 window.videoAdminUploadPoster = videoAdminUploadPoster;
 window.videoAdminUploadPublishedPoster = videoAdminUploadPublishedPoster;
