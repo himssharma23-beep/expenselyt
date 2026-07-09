@@ -6003,6 +6003,105 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
       const variants = [base, ...pieces];
       return [...new Set(variants.map((item) => item.trim()).filter(Boolean))];
     };
+    const pickCanonicalLiveSplitFriendId = async (ownerId, linkedUserId, candidateDisplayName, candidateNames = []) => {
+      const normalizedNames = [...new Set((Array.isArray(candidateNames) ? candidateNames : [])
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean))];
+      const preferredName = String(candidateDisplayName || '').trim();
+      const activeLinkedR = await client.query(
+        `SELECT id
+         FROM live_split_friends
+         WHERE user_id = $1
+           AND linked_user_id = $2
+           AND deleted_at IS NULL
+         ORDER BY id ASC
+         LIMIT 1`,
+        [ownerId, linkedUserId]
+      );
+      if (activeLinkedR.rows[0]?.id) return Number(activeLinkedR.rows[0].id);
+
+      if (normalizedNames.length) {
+        const activeNameR = await client.query(
+          `SELECT id
+           FROM live_split_friends
+           WHERE user_id = $1
+             AND deleted_at IS NULL
+             AND lower(name) = ANY($2::text[])
+           ORDER BY
+             CASE WHEN lower(name) = lower($3) THEN 0 ELSE 1 END,
+             id ASC
+           LIMIT 1`,
+          [ownerId, normalizedNames, preferredName || '']
+        );
+        if (activeNameR.rows[0]?.id) return Number(activeNameR.rows[0].id);
+      }
+
+      const deletedLinkedR = await client.query(
+        `SELECT id
+         FROM live_split_friends
+         WHERE user_id = $1
+           AND linked_user_id = $2
+           AND deleted_at IS NOT NULL
+         ORDER BY id ASC
+         LIMIT 1`,
+        [ownerId, linkedUserId]
+      );
+      if (deletedLinkedR.rows[0]?.id) {
+        const revivedId = Number(deletedLinkedR.rows[0].id);
+        await client.query(
+          `UPDATE live_split_friends
+           SET name = COALESCE(NULLIF($1, ''), name),
+               deleted_at = NULL,
+               deleted_by = NULL,
+               is_active = TRUE,
+               updated_at = NOW(),
+               updated_by = $2
+           WHERE id = $3
+             AND user_id = $2`,
+          [preferredName, ownerId, revivedId]
+        );
+        return revivedId;
+      }
+
+      if (normalizedNames.length) {
+        const deletedNameR = await client.query(
+          `SELECT id
+           FROM live_split_friends
+           WHERE user_id = $1
+             AND deleted_at IS NOT NULL
+             AND lower(name) = ANY($2::text[])
+           ORDER BY
+             CASE WHEN lower(name) = lower($3) THEN 0 ELSE 1 END,
+             id ASC
+           LIMIT 1`,
+          [ownerId, normalizedNames, preferredName || '']
+        );
+        if (deletedNameR.rows[0]?.id) {
+          const revivedId = Number(deletedNameR.rows[0].id);
+          await client.query(
+            `UPDATE live_split_friends
+             SET name = COALESCE(NULLIF($1, ''), name),
+                 deleted_at = NULL,
+                 deleted_by = NULL,
+                 is_active = TRUE,
+                 updated_at = NOW(),
+                 updated_by = $2
+             WHERE id = $3
+               AND user_id = $2`,
+            [preferredName, ownerId, revivedId]
+          );
+          return revivedId;
+        }
+      }
+
+      const insertR = await client.query(
+        `INSERT INTO live_split_friends (user_id, name)
+         VALUES ($1, $2)
+         RETURNING id`,
+        [ownerId, preferredName || 'Friend']
+      );
+      return Number(insertR.rows[0].id);
+    };
 
     const inviteR = await client.query('SELECT * FROM live_split_invites WHERE id = $1 LIMIT 1', [inviteId]);
     const invite = inviteR.rows[0];
@@ -6059,37 +6158,8 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
         .filter(Boolean)
     )];
 
-    const linkedRowsR = await client.query(
-      `SELECT id
-       FROM live_split_friends
-       WHERE user_id = $1
-         AND linked_user_id = $2
-         AND deleted_at IS NULL`,
-      [inviterId, uid]
-    );
-    const linkedIds = linkedRowsR.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
-
-    let nameIds = [];
-    if (candidateNames.length) {
-      const nameRowsR = await client.query(
-        `SELECT id
-         FROM live_split_friends
-         WHERE user_id = $1
-           AND deleted_at IS NULL
-           AND lower(name) = ANY($2::text[])`,
-        [inviterId, candidateNames]
-      );
-      nameIds = nameRowsR.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
-    }
-
-    let friendIds = [...new Set([...linkedIds, ...nameIds])];
-    if (!friendIds.length) {
-      const insertR = await client.query(
-        'INSERT INTO live_split_friends (user_id, name) VALUES ($1, $2) RETURNING id',
-        [inviterId, name]
-      );
-      friendIds = [Number(insertR.rows[0].id)];
-    }
+    const canonicalFriendId = await pickCanonicalLiveSplitFriendId(inviterId, uid, name, candidateNames);
+    let friendIds = canonicalFriendId > 0 ? [canonicalFriendId] : [];
 
     await client.query(
       `UPDATE live_split_friends
@@ -6101,29 +6171,40 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
     );
 
     // Backfill split participants that were saved under short-name aliases
-    // (for example "Rohit" vs "Rohit Sharma"), so old splits map to this app user.
+    // (for example "Rohit" vs "Rohit Sharma") by remapping their split rows
+    // to the canonical friend entry instead of linking multiple active rows.
     if (candidateNames.length) {
       const aliasRowsR = await client.query(
-        `UPDATE live_split_friends f
-         SET linked_user_id = $1, updated_at = NOW(), updated_by = $1
-         WHERE f.user_id = $2
+        `SELECT DISTINCT f.id
+         FROM live_split_friends f
+         WHERE f.user_id = $1
            AND f.deleted_at IS NULL
+           AND f.id <> $2
            AND (
              lower(f.name) = ANY($3::text[])
              OR EXISTS (
                SELECT 1
                FROM live_split_splits s
                JOIN live_split_groups g ON g.id = s.group_id
-               WHERE g.user_id = $2
+               WHERE g.user_id = $1
                  AND s.friend_id = f.id
                  AND lower(trim(s.friend_name)) = ANY($3::text[])
              )
-           )
-         RETURNING f.id`,
-        [uid, inviterId, candidateNames]
+           )`,
+        [inviterId, canonicalFriendId, candidateNames]
       );
       const aliasIds = aliasRowsR.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
       if (aliasIds.length) {
+        await client.query(
+          `UPDATE live_split_splits s
+           SET friend_id = $1,
+               friend_name = COALESCE(NULLIF($2, ''), s.friend_name)
+           FROM live_split_groups g
+           WHERE g.user_id = $3
+             AND g.id = s.group_id
+             AND s.friend_id = ANY($4::bigint[])`,
+          [canonicalFriendId, name, inviterId, aliasIds]
+        );
         friendIds = [...new Set([...friendIds, ...aliasIds])];
       }
     }
@@ -6131,33 +6212,23 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
 
     // Ensure reciprocal linked friend exists for accepter as well,
     // so inviter appears in "Select Friends" list on both sides.
-    const reverseLinkedR = await client.query(
-      `SELECT id FROM live_split_friends
-       WHERE user_id = $1 AND linked_user_id = $2 AND deleted_at IS NULL
-       LIMIT 1`,
-      [uid, inviterId]
+    const reverseCandidateNames = [...new Set(
+      [
+        ...expandNameCandidates(inviterDisplay),
+        ...expandHandleCandidates(String(inviterUserR.rows[0]?.username || '').trim()),
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+    )];
+    const reverseFriendId = await pickCanonicalLiveSplitFriendId(uid, inviterId, inviterDisplay, reverseCandidateNames);
+    await client.query(
+      `UPDATE live_split_friends
+       SET linked_user_id = $1, updated_at = NOW(), updated_by = $2
+       WHERE id = $3
+         AND user_id = $2
+         AND deleted_at IS NULL`,
+      [inviterId, uid, reverseFriendId]
     );
-    let reverseFriendId = reverseLinkedR.rows[0] ? Number(reverseLinkedR.rows[0].id) : null;
-    if (!reverseLinkedR.rows[0]) {
-      const reverseNameR = await client.query(
-        `SELECT id FROM live_split_friends
-         WHERE user_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL
-         LIMIT 1`,
-        [uid, inviterDisplay]
-      );
-      reverseFriendId = reverseNameR.rows[0] ? Number(reverseNameR.rows[0].id) : null;
-      if (!reverseFriendId) {
-        const reverseInsertR = await client.query(
-          'INSERT INTO live_split_friends (user_id, name) VALUES ($1, $2) RETURNING id',
-          [uid, inviterDisplay]
-        );
-        reverseFriendId = Number(reverseInsertR.rows[0].id);
-      }
-      await client.query(
-        'UPDATE live_split_friends SET linked_user_id = $1, updated_at = NOW(), updated_by = $2 WHERE id = $3 AND user_id = $2',
-        [inviterId, uid, reverseFriendId]
-      );
-    }
 
     // Backfill shared visibility for historical splits that were created
     // before this invite was accepted.
