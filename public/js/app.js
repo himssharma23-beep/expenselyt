@@ -211,6 +211,138 @@ function expenseSourceLabel(entry) {
   return '';
 }
 
+function societyAttachmentIsPdf(path = '', name = '') {
+  const target = `${String(path || '').trim()} ${String(name || '').trim()}`.toLowerCase();
+  return /\.pdf(?:$|[?#\s])/i.test(target) || target.includes('application/pdf');
+}
+
+function societyAttachmentExtension(path = '', name = '') {
+  const source = String(name || path || '').trim();
+  const match = source.match(/\.([a-z0-9]{2,8})(?:$|[?#])/i);
+  return (match?.[1] || '').toUpperCase() || 'FILE';
+}
+
+function societyAttachmentViewerSrc(path = '', zoom = 100) {
+  const attachmentPath = String(path || '').trim();
+  const safeZoom = Math.max(50, Math.min(200, Number(zoom || 100)));
+  return `${attachmentPath}#toolbar=0&navpanes=0&scrollbar=1&zoom=${safeZoom}`;
+}
+
+function updateSocietyAttachmentViewerUi() {
+  const viewer = window.__societyAttachmentViewerState || null;
+  if (!viewer) return;
+  const zoomLabel = document.getElementById('societyAttachmentZoomLabel');
+  if (zoomLabel) zoomLabel.textContent = `${Number(viewer.zoom || 100)}%`;
+  if (viewer.isPdf) {
+    const pdfObject = document.getElementById('societyAttachmentPdfObject');
+    const pdfEmbed = document.getElementById('societyAttachmentPdfEmbed');
+    const nextSrc = societyAttachmentViewerSrc(viewer.path, viewer.zoom);
+    if (pdfObject) pdfObject.data = nextSrc;
+    if (pdfEmbed) pdfEmbed.src = nextSrc;
+    return;
+  }
+  const image = document.getElementById('societyAttachmentImage');
+  if (image) image.style.transform = `scale(${Number(viewer.zoom || 100) / 100})`;
+}
+
+function setSocietyAttachmentZoom(nextZoom = 100) {
+  if (!window.__societyAttachmentViewerState) return;
+  window.__societyAttachmentViewerState.zoom = Math.max(50, Math.min(200, Math.round(Number(nextZoom || 100))));
+  updateSocietyAttachmentViewerUi();
+}
+
+function zoomInSocietyAttachment() {
+  const current = Number(window.__societyAttachmentViewerState?.zoom || 100);
+  setSocietyAttachmentZoom(current + 25);
+}
+
+function zoomOutSocietyAttachment() {
+  const current = Number(window.__societyAttachmentViewerState?.zoom || 100);
+  setSocietyAttachmentZoom(current - 25);
+}
+
+function resetSocietyAttachmentZoom() {
+  setSocietyAttachmentZoom(100);
+}
+
+function showSocietyAttachmentViewer(path = '', name = '') {
+  const attachmentPath = String(path || '').trim();
+  if (!attachmentPath) {
+    toast('Attachment not found.', 'error');
+    return;
+  }
+  const attachmentName = String(name || '').trim() || 'Attachment / Receipt';
+  const isPdf = societyAttachmentIsPdf(attachmentPath, attachmentName);
+  const extension = societyAttachmentExtension(attachmentPath, attachmentName);
+  window.__societyAttachmentViewerState = { path: attachmentPath, name: attachmentName, isPdf, zoom: 100 };
+  const viewerBody = isPdf
+    ? `
+      <div class="society-attachment-pdf-wrap">
+        <div class="society-attachment-pdf-surface">
+          <object
+            id="societyAttachmentPdfObject"
+            class="society-attachment-frame"
+            data="${escHtml(societyAttachmentViewerSrc(attachmentPath, 100))}"
+            type="application/pdf"
+          >
+            <embed
+              id="societyAttachmentPdfEmbed"
+              class="society-attachment-frame"
+              src="${escHtml(societyAttachmentViewerSrc(attachmentPath, 100))}"
+              type="application/pdf"
+            >
+            <div class="society-attachment-fallback">
+              <div class="society-attachment-fallback-icon">PDF</div>
+              <div class="society-attachment-fallback-title">Inline PDF preview is unavailable</div>
+              <div class="society-attachment-fallback-copy">Your browser can still open or download this receipt safely from the buttons above.</div>
+              <div class="society-attachment-fallback-actions">
+                <a class="btn btn-s" href="${escHtml(attachmentPath)}" target="_blank" rel="noopener">Open Full File</a>
+                <a class="btn btn-s" href="${escHtml(attachmentPath)}" download="${escHtml(attachmentName)}">Download PDF</a>
+              </div>
+            </div>
+          </object>
+        </div>
+      </div>`
+    : `<div class="society-attachment-image-wrap"><img id="societyAttachmentImage" class="society-attachment-image" src="${escHtml(attachmentPath)}" alt="${escHtml(attachmentName)}"></div>`;
+  window.__modalClassName = 'modal-wide society-attachment-modal';
+  showModal(`
+    <div class="society-attachment-shell" role="dialog" aria-modal="true" aria-label="${escHtml(attachmentName)}">
+      <div class="society-attachment-header">
+        <div class="society-attachment-badge">${escHtml(extension.slice(0, 4))}</div>
+        <div class="society-attachment-meta">
+          <div class="society-attachment-name">${escHtml(attachmentName)}</div>
+          <div class="society-attachment-type">
+            <span>${isPdf ? 'PDF' : 'Image'}</span>
+            <span class="society-attachment-dot">&bull;</span>
+            <span>${escHtml(extension)}</span>
+            <span class="society-attachment-dot">&bull;</span>
+            <span>${isPdf ? 'Inline preview' : 'Zoom and pan preview'}</span>
+          </div>
+        </div>
+        <div class="society-attachment-header-actions">
+          <a class="btn btn-s" href="${escHtml(attachmentPath)}" download="${escHtml(attachmentName)}">Download</a>
+          <a class="btn btn-p" href="${escHtml(attachmentPath)}" target="_blank" rel="noopener">Open Full</a>
+          <button type="button" class="btn btn-g society-attachment-close-btn" onclick="closeModal();window.__modalClassName='';window.__societyAttachmentViewerState=null;">x</button>
+        </div>
+      </div>
+      <div class="society-attachment-stage-shell">
+        <div class="society-attachment-stage">
+          ${viewerBody}
+          <div class="society-attachment-toolbar">
+            <button type="button" class="society-attachment-tool-btn" onclick="zoomOutSocietyAttachment()">-</button>
+            <span id="societyAttachmentZoomLabel" class="society-attachment-zoom-label">100%</span>
+            <button type="button" class="society-attachment-tool-btn" onclick="zoomInSocietyAttachment()">+</button>
+            <div class="society-attachment-tool-divider"></div>
+            <button type="button" class="society-attachment-tool-btn" onclick="resetSocietyAttachmentZoom()">Reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+  updateSocietyAttachmentViewerUi();
+  window.__modalClassName = '';
+}
+
 function syncExpenseCategoryInputs() {
   const categoryInput = document.getElementById('eCategory');
   const subcategoryInput = document.getElementById('eSubcategory');
@@ -20690,21 +20822,27 @@ function renderSocietiesPage() {
     const matrixSectionEnhanced = `
       <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">All Months Matrix</div>
       <div class="card" style="padding:0;overflow:hidden">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:20px 22px;border-bottom:1px solid var(--border-l)">
-          <div>
-            <div style="font-size:16px;font-weight:900;color:var(--t1)">All Months Matrix</div>
-            <div style="font-size:12px;color:var(--t3);margin-top:4px">Every member x every month</div>
+        <div class="society-matrix-toolbar">
+          <div class="society-matrix-toolbar-copy">
+            <div class="society-matrix-title">All Months Matrix</div>
+            <div class="society-matrix-subtitle">Every member x every month</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <select class="fi" style="max-width:180px" onchange="setSocietyMemberFilter(this.value)">
-              <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
-              <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
-              <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
-              <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
-            </select>
-            <label class="fi" style="display:flex;align-items:center;gap:8px;max-width:180px;padding:0 12px;cursor:pointer">
+          <div class="society-matrix-filters">
+            <label class="society-matrix-filter">
+              <span class="society-matrix-filter-label">Members</span>
+              <select class="fi society-matrix-select" onchange="setSocietyMemberFilter(this.value)">
+                <option value="all" ${_societyMemberFilter === 'all' ? 'selected' : ''}>All Members</option>
+                <option value="paid" ${_societyMemberFilter === 'paid' ? 'selected' : ''}>Paid</option>
+                <option value="pending" ${_societyMemberFilter === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="not_set" ${_societyMemberFilter === 'not_set' ? 'selected' : ''}>No due set</option>
+              </select>
+            </label>
+            <label class="society-matrix-toggle">
               <input type="checkbox" ${_societyShowInactiveMembers ? 'checked' : ''} onchange="setSocietyShowInactiveMembers(this.checked)">
-              <span>Show inactive</span>
+              <span class="society-matrix-toggle-copy">
+                <strong>Show inactive</strong>
+                <small>Include archived members in matrix</small>
+              </span>
             </label>
           </div>
         </div>
@@ -20765,7 +20903,7 @@ function renderSocietiesPage() {
                   <td>${fmtDate(expense.expense_date)}</td>
                   <td>
                     <strong>${escHtml(expense.title)}</strong>
-                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button>` : ''}</div>
                   </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
@@ -20811,7 +20949,7 @@ function renderSocietiesPage() {
                   <td>${fmtDate(expense.expense_date)}</td>
                   <td>
                     <strong>${escHtml(expense.title)}</strong>
-                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button>` : ''}</div>
                   </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
@@ -21562,7 +21700,7 @@ function showSocietyExpenseModal(expenseId = null, defaults = {}) {
       </label>
       ${expense.attachment_path ? `
         <div class="fl full" style="font-size:12px;color:var(--t3);line-height:1.6">
-          Current file: <a href="${escHtml(expense.attachment_path)}" target="_blank" rel="noopener">${escHtml(expense.attachment_name || 'View attachment')}</a>
+          Current file: <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>${escHtml(expense.attachment_name || 'View attachment')}</button>
           <input type="hidden" id="societyExpenseExistingAttachmentPath" value="${escHtml(expense.attachment_path || '')}">
           <input type="hidden" id="societyExpenseExistingAttachmentName" value="${escHtml(expense.attachment_name || '')}">
         </div>

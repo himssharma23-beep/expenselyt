@@ -1,6 +1,8 @@
 (function () {
   const app = document.getElementById('societyPortalApp');
   let resendCooldownTimer = null;
+  let houseStackScrollTimer = null;
+  let switchingDashboardMember = false;
   const state = {
     view: 'loading',
     phone: new URLSearchParams(window.location.search).get('phone') ? String(new URLSearchParams(window.location.search).get('phone') || '').replace(/\D+/g, '').slice(-10) : '',
@@ -21,6 +23,7 @@
     notice: '',
     noticeType: '',
     requestModalOpen: false,
+    attachmentViewer: null,
   };
 
   const moneyFmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
@@ -81,6 +84,65 @@
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
+  }
+
+  function attachmentViewerName(item = {}) {
+    return String(item?.name || item?.title || 'Attachment / Receipt').trim() || 'Attachment / Receipt';
+  }
+
+  function attachmentViewerExtension(path = '', name = '') {
+    const source = String(name || path || '').trim();
+    const match = source.match(/\.([a-z0-9]{2,8})(?:$|[?#])/i);
+    return (match?.[1] || '').toUpperCase() || 'FILE';
+  }
+
+  function attachmentIsPdf(path = '', name = '') {
+    const target = `${String(path || '').trim()} ${String(name || '').trim()}`.toLowerCase();
+    return /\.pdf(?:$|[?#\s])/i.test(target) || target.includes('application/pdf');
+  }
+
+  function attachmentViewerSrc(viewer = null) {
+    const path = String(viewer?.path || '').trim();
+    const zoom = Math.max(50, Math.min(200, Number(viewer?.zoom || 100)));
+    return `${path}#toolbar=0&navpanes=0&scrollbar=1&zoom=${zoom}`;
+  }
+
+  function openAttachmentViewer(path = '', name = '') {
+    const attachmentPath = String(path || '').trim();
+    if (!attachmentPath) return;
+    state.attachmentViewer = {
+      path: attachmentPath,
+      name: attachmentViewerName({ name }),
+      isPdf: attachmentIsPdf(attachmentPath, name),
+      zoom: 100,
+    };
+    render();
+  }
+
+  function closeAttachmentViewer() {
+    state.attachmentViewer = null;
+    render();
+  }
+
+  function setAttachmentViewerZoom(nextZoom = 100) {
+    if (!state.attachmentViewer) return;
+    state.attachmentViewer = {
+      ...state.attachmentViewer,
+      zoom: Math.max(50, Math.min(200, Math.round(Number(nextZoom || 100)))),
+    };
+    render();
+  }
+
+  function zoomInAttachmentViewer() {
+    setAttachmentViewerZoom(Number(state.attachmentViewer?.zoom || 100) + 25);
+  }
+
+  function zoomOutAttachmentViewer() {
+    setAttachmentViewerZoom(Number(state.attachmentViewer?.zoom || 100) - 25);
+  }
+
+  function resetAttachmentViewerZoom() {
+    setAttachmentViewerZoom(100);
   }
 
   function showNotice(message, type) {
@@ -166,7 +228,8 @@
   async function switchDashboardMember(memberId) {
     const nextMemberId = Number(memberId || 0);
     const currentMemberId = Number(state.dashboard?.member?.id || 0);
-    if (!(nextMemberId > 0) || nextMemberId === currentMemberId) return;
+    if (!(nextMemberId > 0) || nextMemberId === currentMemberId || switchingDashboardMember) return;
+    switchingDashboardMember = true;
     try {
       const result = await publicApi('/api/public/society-portal/switch-member', {
         method: 'POST',
@@ -174,6 +237,7 @@
       });
       if (!result?.authenticated || !result?.dashboard) throw new Error('Could not switch house.');
       state.dashboard = result.dashboard;
+      state.dashboardTab = 'history';
       state.requestModalOpen = false;
       state.selectedRequestMonth = '';
       state.requestAmount = '';
@@ -184,6 +248,34 @@
       render();
     } catch (err) {
       showNotice(err.message || 'Could not switch house.', 'error');
+    } finally {
+      switchingDashboardMember = false;
+    }
+  }
+
+  function syncHouseFromSwipe() {
+    const stack = document.querySelector('.sp-house-stack');
+    if (!stack) return;
+    const cards = Array.from(stack.querySelectorAll('.sp-house-card[data-sp-switch-member]'));
+    if (cards.length < 2) return;
+    const stackRect = stack.getBoundingClientRect();
+    const stackCenter = stackRect.left + (stackRect.width / 2);
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    cards.forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      const center = rect.left + (rect.width / 2);
+      const distance = Math.abs(center - stackCenter);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = card;
+      }
+    });
+    if (!nearest) return;
+    const targetMemberId = Number(nearest.getAttribute('data-sp-switch-member') || 0);
+    const currentMemberId = Number(state.dashboard?.member?.id || 0);
+    if (targetMemberId > 0 && targetMemberId !== currentMemberId) {
+      switchDashboardMember(targetMemberId);
     }
   }
 
@@ -539,8 +631,30 @@
     const requestCancelBtn = document.getElementById('spRequestModalCancel');
     if (requestCancelBtn) requestCancelBtn.addEventListener('click', closeRequestModal);
 
+    const attachmentCloseBtn = document.getElementById('spAttachmentModalClose');
+    if (attachmentCloseBtn) attachmentCloseBtn.addEventListener('click', closeAttachmentViewer);
+
+    const attachmentDoneBtn = document.getElementById('spAttachmentModalDone');
+    if (attachmentDoneBtn) attachmentDoneBtn.addEventListener('click', closeAttachmentViewer);
+
+    const attachmentZoomInBtn = document.getElementById('spAttachmentZoomIn');
+    if (attachmentZoomInBtn) attachmentZoomInBtn.addEventListener('click', zoomInAttachmentViewer);
+
+    const attachmentZoomOutBtn = document.getElementById('spAttachmentZoomOut');
+    if (attachmentZoomOutBtn) attachmentZoomOutBtn.addEventListener('click', zoomOutAttachmentViewer);
+
+    const attachmentZoomResetBtn = document.getElementById('spAttachmentZoomReset');
+    if (attachmentZoomResetBtn) attachmentZoomResetBtn.addEventListener('click', resetAttachmentViewerZoom);
+
     document.querySelectorAll('[data-sp-request-month]').forEach((btn) => {
       btn.addEventListener('click', () => openRequestModal(btn.getAttribute('data-sp-request-month')));
+    });
+
+    document.querySelectorAll('[data-sp-attachment]').forEach((btn) => {
+      btn.addEventListener('click', () => openAttachmentViewer(
+        btn.getAttribute('data-sp-attachment'),
+        btn.getAttribute('data-sp-attachment-name'),
+      ));
     });
 
     document.querySelectorAll('[data-sp-tab]').forEach((btn) => {
@@ -550,6 +664,16 @@
     document.querySelectorAll('[data-sp-switch-member]').forEach((btn) => {
       btn.addEventListener('click', () => switchDashboardMember(btn.getAttribute('data-sp-switch-member')));
     });
+
+    const houseStack = document.querySelector('.sp-house-stack');
+    if (houseStack) {
+      houseStack.addEventListener('scroll', () => {
+        if (houseStackScrollTimer) clearTimeout(houseStackScrollTimer);
+        houseStackScrollTimer = setTimeout(() => {
+          syncHouseFromSwipe();
+        }, 140);
+      }, { passive: true });
+    }
 
     updateResendButtonUi();
   }
@@ -604,31 +728,108 @@
     const summary = dashboard.summary || {};
     const balanceSummary = dashboard.balance_summary || {};
     const elections = Array.isArray(dashboard.elections) ? dashboard.elections : [];
-    const linkedMembers = Array.isArray(dashboard.linked_members) && dashboard.linked_members.length ? dashboard.linked_members : [member];
+    const linkedMembersRaw = Array.isArray(dashboard.linked_members) && dashboard.linked_members.length ? dashboard.linked_members : [member];
+    const linkedMembers = linkedMembersRaw.slice().sort((a, b) => {
+      const aActive = Number(a?.id) === Number(member?.id) ? 1 : 0;
+      const bActive = Number(b?.id) === Number(member?.id) ? 1 : 0;
+      return bActive - aActive;
+    });
     syncRequestForm(dashboard);
     const requestMonths = [...new Set([state.selectedRequestMonth || '', ...(dashboard.contribution_history || []).map((item) => item.month_key).filter(Boolean)])].filter(Boolean).sort().reverse();
     const selectedRequest = (dashboard.payment_requests || []).find((item) => item.month_key === state.selectedRequestMonth && String(item.status || '').toLowerCase() === 'pending') || null;
     const latestPending = selectedRequest || (dashboard.pending_requests || [])[0] || null;
     const lastPaidValue = summary.last_paid_month ? fmtMonth(summary.last_paid_month, false).replace(' ', "'") : '-';
     const memberStatusText = summary.pending_month_count > 0 ? `${summary.pending_month_count} month${summary.pending_month_count === 1 ? '' : 's'} pending` : 'Active Member';
+    const memberPropertyLabel = String(member.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home';
+    const memberInitials = String(member.member_name || 'Member')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('') || 'M';
+    const pendingRequestCount = (dashboard.pending_requests || []).filter((item) => String(item.status || '').toLowerCase() === 'pending').length;
     const showElectionsTab = society.show_elections_in_portal !== false && elections.length > 0;
     const dashboardTab = showElectionsTab || state.dashboardTab !== 'elections' ? state.dashboardTab : 'history';
     if (dashboardTab !== state.dashboardTab) state.dashboardTab = dashboardTab;
     const balanceSettlements = Array.isArray(balanceSummary.settlements) ? balanceSummary.settlements : [];
-    const memberSwitcher = linkedMembers.length > 1 ? `
-      <div style="margin-top:12px">
-        <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:800;margin-bottom:8px">Other linked houses</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${linkedMembers.map((linkedMember) => {
-            const active = Number(linkedMember.id) === Number(member.id);
-            const propertyLabel = String(linkedMember.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home';
-            return `<button type="button" data-sp-switch-member="${Number(linkedMember.id)}" style="border-radius:16px;border:1px solid ${active ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.14)'};background:${active ? 'rgba(255,255,255,.18)' : 'rgba(255,255,255,.08)'};color:#fff;padding:10px 14px;min-width:120px;text-align:left;box-shadow:none">
-              <div style="font-weight:800;line-height:1.2">${esc(linkedMember.unit_label || 'Unit')}</div>
-              <div style="font-size:12px;opacity:.82;margin-top:3px">${esc(propertyLabel)}${linkedMember.is_active === false ? ' · Inactive' : ''}</div>
-            </button>`;
-          }).join('')}
+    const overallCollected = toNumber(dashboard.totals?.overall_collected || 0);
+    const overallSpent = toNumber(dashboard.totals?.overall_spent || 0);
+    const overallBalance = toNumber(dashboard.totals?.overall_balance || 0);
+    const overallMembers = toNumber(dashboard.totals?.member_count || 0);
+    const pendingMembers = toNumber(dashboard.payment_status?.pending_count || 0);
+    const communityProgress = Math.max(8, Math.min(100, Math.round((overallSpent / Math.max(overallCollected + overallSpent, 1)) * 100)));
+    const houseCards = linkedMembers.map((linkedMember) => {
+      const active = Number(linkedMember.id) === Number(member.id);
+      const propertyLabel = String(linkedMember.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home';
+      const linkedPendingMonths = active
+        ? toNumber(summary.pending_month_count || 0)
+        : toNumber(linkedMember.pending_month_count || linkedMember.summary?.pending_month_count || 0);
+      const linkedStatusText = linkedPendingMonths > 0
+        ? `${linkedPendingMonths} month${linkedPendingMonths === 1 ? '' : 's'} pending`
+        : 'All paid up';
+      const linkedTotalPaid = active
+        ? toNumber(summary.my_total || 0)
+        : toNumber(linkedMember.total_paid || linkedMember.my_total || linkedMember.summary?.my_total || 0);
+      const linkedLastPaid = active
+        ? lastPaidValue
+        : (linkedMember.last_paid_month ? fmtMonth(linkedMember.last_paid_month, false).replace(' ', "'") : '-');
+      const linkedRequests = active
+        ? pendingRequestCount
+        : toNumber(linkedMember.pending_request_count || linkedMember.requests_count || 0);
+      return `<button type="button" class="sp-house-card ${active ? 'active' : 'inactive'}" data-sp-switch-member="${Number(linkedMember.id)}" aria-pressed="${active ? 'true' : 'false'}" ${active ? 'disabled' : ''}>
+        <div class="sp-house-card-top">
+          <div class="sp-house-card-id">
+            <div class="sp-house-card-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 10.5 12 4l8 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M6.5 9.5V20h11V9.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </div>
+            <div>
+              <div class="sp-house-card-unit">${esc(linkedMember.unit_label || 'Unit')} &bull; ${esc(propertyLabel)}</div>
+              <div class="sp-house-card-copy">Unit account</div>
+            </div>
+          </div>
+          <div class="sp-house-status ${linkedPendingMonths > 0 ? 'warn' : 'ok'}">
+            <span class="sp-house-status-dot"></span>${esc(linkedStatusText)}
+          </div>
         </div>
+        <div class="sp-house-card-label">Total Paid</div>
+        <div class="sp-house-card-total">${fmtMoney(linkedTotalPaid || 0)}</div>
+        <div class="sp-house-card-meta">
+          <div><span>Last Paid</span><strong>${esc(linkedLastPaid)}</strong></div>
+          <div><span>Requests</span><strong>${linkedRequests}</strong></div>
+        </div>
+      </button>`;
+    }).join('');
+    const housePager = linkedMembers.length > 1 ? `
+      <div class="sp-house-pager">
+        ${linkedMembers.map((linkedMember) => {
+          const active = Number(linkedMember.id) === Number(member.id);
+          return `<button type="button" class="sp-house-pager-dot ${active ? 'active' : ''}" data-sp-switch-member="${Number(linkedMember.id)}" aria-label="Show ${esc(linkedMember.unit_label || 'linked house')}"></button>`;
+        }).join('')}
       </div>` : '';
+    const communityPot = `
+      <div class="sp-community-pot">
+        <div class="sp-community-pot-head">
+          <div>
+            <div class="sp-community-pot-label">Community Pot</div>
+            <div class="sp-community-pot-chip">${overallMembers} members &bull; ${pendingMembers} pending</div>
+          </div>
+          <div class="sp-community-pot-balance">
+            <span>Net Balance</span>
+            <strong>${fmtMoney(overallBalance || 0)}</strong>
+          </div>
+        </div>
+        <div class="sp-community-pot-bar">
+          <span class="spent" style="width:${communityProgress}%"></span>
+          <span class="free"></span>
+        </div>
+        <div class="sp-community-pot-legend">
+          <span><i class="spent"></i>Spent <b>${fmtMoney(overallSpent || 0)}</b></span>
+          <span><i class="collected"></i>Collected <b>${fmtMoney(overallCollected || 0)}</b></span>
+        </div>
+      </div>`;
 
     const contributionRows = (dashboard.contribution_history || []).slice(0, 12).map((item) => {
       const meta = contributionStatus(item);
@@ -681,7 +882,7 @@
           <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
           <div>
             <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
-            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.attachment_path ? ` • <a href="${esc(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.attachment_path ? ` • <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
           </div>
           <div class="sp-row-right">
           <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
@@ -718,7 +919,7 @@
               <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
               <div>
                 <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
-                <div class="sp-row-sub">${expense.category ? esc(expense.category) : 'No category'}${expense.attachment_path ? ` â€¢ <a href="${esc(expense.attachment_path)}" target="_blank" rel="noopener">Attachment</a>` : ''}</div>
+                <div class="sp-row-sub">${expense.category ? esc(expense.category) : 'No category'}${expense.attachment_path ? ` &bull; <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
               </div>
             </div>
             <div class="sp-row-right">
@@ -759,7 +960,7 @@
     }).join('');
 
     const overviewCards = `
-      <div class="sp-overview-grid">
+      <div class="sp-overview-strip">
         <div class="sp-overview-tile">
           <div class="sp-total-label">Total Collected</div>
           <div class="sp-total-value green">${fmtMoney(dashboard.totals?.overall_collected || 0)}</div>
@@ -785,7 +986,7 @@
     const tabsHtml = `
       <div class="sp-tabs">
         ${[
-          ['history', 'My Contribution'],
+          ['history', 'My contribution'],
           ['expenses', 'Expenses'],
           ['collections', 'Collections'],
           ...(showElectionsTab ? [['elections', 'Elections']] : []),
@@ -798,9 +999,12 @@
     if (dashboardTab === 'history') {
       activeSection = `
         <section>
-          <div class="sp-section-head">
-            <h2>My Contributions</h2>
-            <p>Your month-wise contribution history</p>
+          <div class="sp-section-head sp-mobile-section-head">
+            <div>
+              <h2>My statement</h2>
+              <p>House ${esc(member.unit_label || 'Unit')} &bull; ${esc(memberPropertyLabel)}</p>
+            </div>
+            <div class="sp-section-stat">All-time paid <strong>${fmtMoney(summary.my_total || 0)}</strong></div>
           </div>
           <div class="sp-card sp-list-card sp-history-list">
             <div class="sp-list-head compact">
@@ -828,8 +1032,8 @@
       activeSection = `
         <section>
           <div class="sp-section-head">
-            <h2>Society Expenses</h2>
-            <p>Month-wise society expenses</p>
+            <h2>Society expenses</h2>
+            <p>Where the collected funds went</p>
           </div>
           <div class="sp-expenses-list">
             ${expenseGroupsHtml || '<div class="sp-card sp-list-card"><div class="sp-empty">No expenses added yet.</div></div>'}
@@ -839,8 +1043,8 @@
       activeSection = `
         <section>
           <div class="sp-section-head">
-            <h2>Monthly Collection</h2>
-            <p>Society-wide collection per month</p>
+            <h2>Monthly collections</h2>
+            <p>How many members paid each month</p>
           </div>
           <div class="sp-card sp-collections-card">
             <div class="sp-month-grid">
@@ -948,40 +1152,106 @@
         </div>
       </div>` : '';
 
+    const attachmentViewer = state.attachmentViewer ? `
+      <div class="sp-modal-backdrop">
+        <div class="sp-modal-card sp-attachment-modal-card">
+          <div class="sp-attachment-head">
+            <div class="sp-attachment-badge">${esc(attachmentViewerExtension(state.attachmentViewer.path, state.attachmentViewer.name).slice(0, 4))}</div>
+            <div class="sp-attachment-copy">
+              <div class="sp-row-title">${esc(state.attachmentViewer.name || 'Attachment / Receipt')}</div>
+              <div class="sp-row-sub">
+                <span>${state.attachmentViewer.isPdf ? 'PDF' : 'Image'}</span>
+                <span class="sp-attachment-dot">&bull;</span>
+                <span>${esc(attachmentViewerExtension(state.attachmentViewer.path, state.attachmentViewer.name))}</span>
+                <span class="sp-attachment-dot">&bull;</span>
+                <span>${state.attachmentViewer.isPdf ? 'Inline preview' : 'Zoom and pan preview'}</span>
+              </div>
+            </div>
+            <div class="sp-attachment-header-actions">
+              <button type="button" class="sp-modal-close" id="spAttachmentModalClose" aria-label="Close">&times;</button>
+            </div>
+          </div>
+          <div class="sp-attachment-stage-shell">
+            <div class="sp-attachment-viewer-stage">
+              ${state.attachmentViewer.isPdf
+                ? `
+                  <div class="sp-attachment-pdf-wrap">
+                    <div class="sp-attachment-pdf-surface">
+                      <object
+                        class="sp-attachment-frame"
+                        data="${esc(attachmentViewerSrc(state.attachmentViewer))}"
+                        type="application/pdf"
+                      >
+                        <embed
+                          class="sp-attachment-frame"
+                          src="${esc(attachmentViewerSrc(state.attachmentViewer))}"
+                          type="application/pdf"
+                        >
+                        <div class="sp-attachment-fallback">
+                          <div class="sp-attachment-fallback-icon">PDF</div>
+                          <div class="sp-attachment-fallback-title">Inline PDF preview is unavailable</div>
+                          <div class="sp-attachment-fallback-copy">Your browser can still open or download this receipt safely from the buttons above.</div>
+                          <div class="sp-attachment-fallback-actions">
+                            <a class="sp-outline-btn" href="${esc(state.attachmentViewer.path)}" target="_blank" rel="noopener">Open Full File</a>
+                            <a class="sp-outline-btn" href="${esc(state.attachmentViewer.path)}" download="${esc(state.attachmentViewer.name || 'attachment')}">Download PDF</a>
+                          </div>
+                        </div>
+                      </object>
+                    </div>
+                  </div>`
+                : `<div class="sp-attachment-image-wrap"><img class="sp-attachment-image" src="${esc(state.attachmentViewer.path)}" alt="${esc(state.attachmentViewer.name || 'Attachment')}" style="transform:scale(${Number(state.attachmentViewer.zoom || 100) / 100})"></div>`}
+              <div class="sp-attachment-actions">
+                <button id="spAttachmentZoomOut" class="sp-attachment-tool-btn" type="button">-</button>
+                <span class="sp-attachment-zoom-label">${Number(state.attachmentViewer.zoom || 100)}%</span>
+                <button id="spAttachmentZoomIn" class="sp-attachment-tool-btn" type="button">+</button>
+                <div class="sp-attachment-tool-divider"></div>
+                <button id="spAttachmentZoomReset" class="sp-attachment-tool-btn" type="button">Reset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>` : '';
+
     return `
       <div class="sp-dashboard">
         <div class="sp-hero">
           <div class="sp-hero-inner">
             <div class="sp-topbar">
-              <div class="sp-hero-brand">${esc(society.name || 'Society')} ${society.location ? `• ${esc(society.location)}` : ''}</div>
-              <button id="spLogoutBtn" class="sp-outline-btn" type="button">Logout</button>
+              <div class="sp-estate-brand">
+                <div class="sp-estate-pin">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                    <circle cx="12" cy="11" r="2.3" fill="currentColor"></circle>
+                  </svg>
+                </div>
+                <div>
+                  <div class="sp-estate-name">${esc(society.name || 'Society')}</div>
+                  ${society.location ? `<div class="sp-estate-location">${esc(society.location)}</div>` : ''}
+                </div>
+              </div>
+              <div class="sp-topbar-actions">
+                <div class="sp-top-avatar">${esc(memberInitials)}</div>
+                <button id="spLogoutBtn" class="sp-icon-btn" type="button" aria-label="Logout">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M10 7V5.5A2.5 2.5 0 0 1 12.5 3h5A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 10 18.5V17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                    <path d="M4 12h11m-4-4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </button>
+              </div>
             </div>
             <div class="sp-greeting">Welcome back,</div>
             <div class="sp-member-name">${esc(member.member_name || 'Member')}</div>
-            <div class="sp-hero-info">
-              <div class="sp-hero-pill">${esc(member.unit_label || 'Unit')} • ${esc(String(member.property_type || 'home').toLowerCase() === 'shop' ? 'Shop' : 'Home')}</div>
-              <div class="sp-hero-pill">${esc(memberStatusText)}</div>
+            <div class="sp-house-stack-wrap">
+              <div class="sp-house-stack">
+                ${houseCards}
+              </div>
+              ${housePager}
             </div>
-            ${memberSwitcher}
-            <div class="sp-summary-grid">
-              <div class="sp-summary-card">
-                <div class="sp-summary-label">My Total</div>
-                <div class="sp-summary-value green">${fmtMoney(summary.my_total || 0)}</div>
+            <div class="sp-hero-overview sp-desktop-overview">
+              <div class="sp-overview-head">
+                <div class="sp-overview-kicker">Society Overview</div>
+                <div class="sp-overview-hint">swipe &rarr;</div>
               </div>
-              <div class="sp-summary-card compact">
-                <div class="sp-summary-label">Request Pending</div>
-                <div class="sp-summary-value amber">${fmtMoney(summary.pending_amount || 0)}</div>
-              </div>
-              <div class="sp-summary-card compact">
-                <div class="sp-summary-label">Last Paid</div>
-                <div class="sp-summary-value">${esc(lastPaidValue)}</div>
-              </div>
-              <div class="sp-summary-card compact">
-                <div class="sp-summary-label">Balance Remaining</div>
-                <div class="sp-summary-value ${toNumber(balanceSummary.remaining_amount || 0) > 0 ? 'amber' : 'green'}">${fmtMoney(balanceSummary.remaining_amount || 0)}</div>
-              </div>
-            </div>
-            <div class="sp-hero-overview">
               ${overviewCards}
             </div>
           </div>
@@ -989,10 +1259,12 @@
 
         <div class="sp-main">
           ${renderNotice()}
+          ${communityPot}
           ${tabsHtml}
           ${activeSection}
         </div>
         ${requestModal}
+        ${attachmentViewer}
       </div>`;
   }
 
@@ -1028,3 +1300,4 @@
 
   bootstrap();
 }());
+
