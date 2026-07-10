@@ -19,6 +19,7 @@
     userSearch: '',
     selectedUsers: new Set(),
     plans: [],
+    savingCampaign: false,
   };
 
   function esc(value) {
@@ -601,7 +602,7 @@
         </div>
         <div class="fa admin-push-modal-actions">
           <button class="btn btn-g" onclick="closeModal()">Close</button>
-          ${(!editMode && id) ? '' : `<button class="btn btn-p" onclick="adminPushSaveCampaign(${id || 'null'})">${id ? 'Save Changes' : 'Save Notification'}</button>`}
+          ${(!editMode && id) ? '' : `<button id="adminPushSaveCampaignBtn" class="btn btn-p" onclick="adminPushSaveCampaign(${id || 'null'})" ${state.savingCampaign ? 'disabled' : ''}>${state.savingCampaign ? 'Saving...' : (id ? 'Save Changes' : 'Save Notification')}</button>`}
         </div>`);
       renderUserPicker();
     } catch (err) {
@@ -610,6 +611,13 @@
   }
 
   async function adminPushSaveCampaign(id) {
+    if (state.savingCampaign) return;
+    state.savingCampaign = true;
+    const saveButton = document.getElementById('adminPushSaveCampaignBtn');
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.textContent = 'Saving...';
+    }
     try {
       const result = await fetchWithBody(id ? `/api/v1/admin/push-notifications/campaigns/${id}` : '/api/v1/admin/push-notifications/campaigns', id ? 'PUT' : 'POST', collectCampaignForm(id));
       closeModal();
@@ -620,6 +628,12 @@
       await loadAdminNotifications();
     } catch (err) {
       toast(err?.message || 'Could not save notification', 'error');
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = id ? 'Save Changes' : 'Save Notification';
+      }
+    } finally {
+      state.savingCampaign = false;
     }
   }
 

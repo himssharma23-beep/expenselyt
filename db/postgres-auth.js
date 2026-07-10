@@ -471,6 +471,20 @@ async function getMobileAuthSession(sessionId) {
   return result.rows[0] || null;
 }
 
+async function revokeStaleMobileAuthSessions(userId, currentAuthTag) {
+  if (!userId || !currentAuthTag) return 0;
+  await ensureMobileAuthSessionsTable();
+  const result = await query(
+    `UPDATE ${MOBILE_AUTH_SESSION_TABLE}
+     SET revoked_at = NOW()
+     WHERE user_id = $1
+       AND revoked_at IS NULL
+       AND COALESCE(auth_tag, '') <> $2`,
+    [userId, String(currentAuthTag || '')]
+  );
+  return Number(result.rowCount || 0);
+}
+
 async function touchMobileAuthSession(sessionId, userId) {
   if (!sessionId || !userId) return;
   await ensureMobileAuthSessionsTable();
@@ -528,8 +542,11 @@ async function revokeOtherMobileAuthSessions(userId, currentSessionId = null) {
   return Number(result.rowCount || 0);
 }
 
-async function listMobileAuthSessions(userId, currentSessionId = null) {
+async function listMobileAuthSessions(userId, currentSessionId = null, currentAuthTag = null) {
   await ensureMobileAuthSessionsTable();
+  if (currentAuthTag) {
+    await revokeStaleMobileAuthSessions(userId, currentAuthTag);
+  }
   const result = await query(
     `SELECT
         sid AS id,
@@ -551,13 +568,14 @@ async function listMobileAuthSessions(userId, currentSessionId = null) {
      FROM ${MOBILE_AUTH_SESSION_TABLE}
      WHERE user_id = $1
        AND revoked_at IS NULL
+       ${currentAuthTag ? 'AND COALESCE(auth_tag, \'\') = $2' : ''}
      ORDER BY last_seen_at DESC NULLS LAST, created_at DESC NULLS LAST`,
-    [userId]
+    currentAuthTag ? [userId, String(currentAuthTag || '')] : [userId]
   );
   return result.rows.map((row) => normalizeSessionRow(row, currentSessionId));
 }
 
-async function listBrowserSessions(userId, currentSessionId = null, currentSessionData = null) {
+async function listBrowserSessions(userId, currentSessionId = null, currentSessionData = null, currentAuthTag = null) {
   const tableName = getPgSessionTableName();
   const result = await query(
     `SELECT sid, sess, expire
@@ -568,9 +586,14 @@ async function listBrowserSessions(userId, currentSessionId = null, currentSessi
 
   const rows = [];
   const seen = new Set();
+  const staleSessionIds = [];
   for (const row of result.rows) {
     const sess = parsePgSessionPayload(row.sess);
     if (!sess || Number(sess.userId || 0) !== Number(userId || 0)) continue;
+    if (currentAuthTag && String(sess.authTag || '') !== String(currentAuthTag || '')) {
+      staleSessionIds.push(String(row.sid));
+      continue;
+    }
     const deviceInfo = sess.deviceInfo && typeof sess.deviceInfo === 'object' ? sess.deviceInfo : {};
     const normalized = normalizeSessionRow({
       id: row.sid,
@@ -587,6 +610,10 @@ async function listBrowserSessions(userId, currentSessionId = null, currentSessi
     }, currentSessionId);
     rows.push(normalized);
     seen.add(String(row.sid));
+  }
+
+  if (staleSessionIds.length) {
+    await query(`DELETE FROM ${tableName} WHERE sid = ANY($1::text[])`, [staleSessionIds]);
   }
 
   if (currentSessionId && currentSessionData && !seen.has(String(currentSessionId))) {
@@ -846,7 +873,7 @@ async function upsertPushDeviceToken(userId, data = {}) {
 }
 
 async function deactivatePushDeviceToken(userId, token) {
-  const normalized = String(token || '').trim();
+  const normalized = normalizeExpoPushToken(token);
   if (!normalized) return false;
   const result = await query(
     `UPDATE push_device_tokens
@@ -858,6 +885,24 @@ async function deactivatePushDeviceToken(userId, token) {
     [userId, normalized]
   );
   return (result.rowCount || 0) > 0;
+}
+
+async function deactivatePushDeviceTokens(tokens = []) {
+  const normalizedTokens = [...new Set(
+    (Array.isArray(tokens) ? tokens : [])
+      .map((token) => normalizeExpoPushToken(token))
+      .filter(Boolean)
+  )];
+  if (!normalizedTokens.length) return 0;
+  const result = await query(
+    `UPDATE push_device_tokens
+     SET deleted_at = NOW(),
+         updated_at = NOW()
+     WHERE expo_push_token = ANY($1::text[])
+       AND deleted_at IS NULL`,
+    [normalizedTokens]
+  );
+  return Number(result.rowCount || 0);
 }
 
 async function getAdminPushUsers(search = '', planId = null) {
@@ -2200,6 +2245,7 @@ module.exports = {
   normalizeExpoPushToken,
   upsertPushDeviceToken,
   deactivatePushDeviceToken,
+  deactivatePushDeviceTokens,
   getAdminPushUsers,
   getPushTokensForUsers,
   getLatestPushDeviceForUser,

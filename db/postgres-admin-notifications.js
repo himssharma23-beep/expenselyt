@@ -9,6 +9,7 @@ const RETRY_DELAY_MINUTES = 5;
 let _schemaEnsured = false;
 let _schemaPromise = null;
 let _processorRunning = false;
+const DUPLICATE_IMMEDIATE_WINDOW_MINUTES = 2;
 
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -36,6 +37,117 @@ function normalizeIntegerArray(values = []) {
 function normalizePriority(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return ['low', 'normal', 'high', 'critical'].includes(normalized) ? normalized : 'normal';
+}
+
+function jsonStableString(value) {
+  return JSON.stringify(value == null ? null : value);
+}
+
+async function cleanupDuplicateActiveSchedules(client = { query }) {
+  await client.query(
+    `WITH ranked AS (
+       SELECT
+         id,
+         ROW_NUMBER() OVER (
+           PARTITION BY notification_id
+           ORDER BY
+             CASE WHEN status = 'running' THEN 0 ELSE 1 END,
+             created_at DESC,
+             id DESC
+         ) AS rn
+       FROM notification_schedules
+       WHERE deleted_at IS NULL
+         AND recurrence_type = 'none'
+         AND status IN ('pending', 'running')
+     )
+     UPDATE notification_schedules ns
+     SET status = 'cancelled',
+         completed_at = NOW(),
+         updated_at = NOW(),
+         last_error = 'Cancelled duplicate active schedule during queue cleanup.'
+     FROM ranked
+     WHERE ns.id = ranked.id
+       AND ranked.rn > 1`
+  );
+}
+
+async function cleanupDuplicateImmediateCampaigns(client = { query }) {
+  await client.query(
+    `WITH duplicate_campaigns AS (
+       SELECT
+         id,
+         ROW_NUMBER() OVER (
+           PARTITION BY
+             COALESCE(created_by, 0),
+             title,
+             body,
+             COALESCE(image_url, ''),
+             COALESCE(redirect_url, ''),
+             notification_type,
+             priority,
+             target_mode,
+             target_config::text,
+             payload_data::text
+           ORDER BY created_at ASC, id ASC
+         ) AS rn
+       FROM notification_campaigns
+       WHERE deleted_at IS NULL
+         AND is_active = TRUE
+         AND send_mode = 'immediate'
+         AND status IN ('queued', 'scheduled', 'processing')
+     )
+     UPDATE notification_campaigns nc
+     SET status = 'cancelled',
+         updated_at = NOW()
+     FROM duplicate_campaigns dc
+     WHERE nc.id = dc.id
+       AND dc.rn > 1`
+  );
+  await client.query(
+    `UPDATE notification_schedules ns
+     SET status = 'cancelled',
+         completed_at = NOW(),
+         updated_at = NOW(),
+         last_error = 'Cancelled because the parent immediate campaign was identified as a duplicate.'
+     FROM notification_campaigns nc
+     WHERE ns.notification_id = nc.id
+       AND ns.deleted_at IS NULL
+       AND ns.status IN ('pending', 'running')
+       AND nc.deleted_at IS NULL
+       AND nc.send_mode = 'immediate'
+       AND nc.status = 'cancelled'`
+  );
+}
+
+async function cleanupDuplicateActiveRecipients(client = { query }) {
+  await client.query(
+    `WITH ranked AS (
+       SELECT
+         id,
+         ROW_NUMBER() OVER (
+           PARTITION BY notification_id, schedule_id, user_id
+           ORDER BY
+             CASE
+               WHEN status = 'sent' THEN 0
+               WHEN status = 'processing' THEN 1
+               WHEN status = 'pending' THEN 2
+               WHEN status = 'failed' THEN 3
+               ELSE 4
+             END,
+             updated_at DESC,
+             id DESC
+         ) AS rn
+       FROM notification_recipients
+       WHERE deleted_at IS NULL
+     )
+     UPDATE notification_recipients nr
+     SET deleted_at = NOW(),
+         updated_at = NOW(),
+         last_error = COALESCE(NULLIF(last_error, ''), 'Superseded duplicate recipient row was retired during queue cleanup.')
+     FROM ranked
+     WHERE nr.id = ranked.id
+       AND ranked.rn > 1`
+  );
 }
 
 function normalizeNotificationType(value) {
@@ -336,6 +448,7 @@ async function ensureSchema() {
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_campaigns_status ON notification_campaigns (status, is_active, scheduled_for) WHERE deleted_at IS NULL`);
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_campaigns_created ON notification_campaigns (created_at DESC) WHERE deleted_at IS NULL`);
+    await cleanupDuplicateImmediateCampaigns({ query });
 
     await query(`
       CREATE TABLE IF NOT EXISTS notification_schedules (
@@ -359,6 +472,14 @@ async function ensureSchema() {
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_schedules_due ON notification_schedules (status, run_at) WHERE deleted_at IS NULL`);
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_schedules_notification ON notification_schedules (notification_id, created_at DESC) WHERE deleted_at IS NULL`);
+    await cleanupDuplicateActiveSchedules({ query });
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_schedules_single_active_nonrecurring
+      ON notification_schedules (notification_id)
+      WHERE deleted_at IS NULL
+        AND recurrence_type = 'none'
+        AND status IN ('pending', 'running')
+    `);
 
     await query(`
       CREATE TABLE IF NOT EXISTS notification_recipients (
@@ -385,8 +506,14 @@ async function ensureSchema() {
         UNIQUE (notification_id, schedule_id, user_id)
       )
     `);
+    await cleanupDuplicateActiveRecipients({ query });
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_recipients_status ON notification_recipients (status, next_retry_at, created_at) WHERE deleted_at IS NULL`);
     await query(`CREATE INDEX IF NOT EXISTS idx_notification_recipients_user ON notification_recipients (user_id, created_at DESC) WHERE deleted_at IS NULL`);
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_recipients_unique_active
+      ON notification_recipients (notification_id, schedule_id, user_id)
+      WHERE deleted_at IS NULL
+    `);
 
     await query(`
       CREATE TABLE IF NOT EXISTS notification_delivery_logs (
@@ -685,6 +812,52 @@ async function saveCampaign(input = {}, actorUserId = null, campaignId = null) {
         [campaignId]
       );
     } else {
+      if (
+        actorUserId
+        && payload.is_active
+        && status !== 'draft'
+        && status !== 'cancelled'
+        && schedule.send_mode === 'immediate'
+      ) {
+        const duplicateResult = await client.query(
+          `SELECT *
+           FROM notification_campaigns
+           WHERE deleted_at IS NULL
+             AND created_by = $1
+             AND is_active = TRUE
+             AND send_mode = 'immediate'
+             AND status IN ('queued', 'scheduled', 'processing')
+             AND title = $2
+             AND body = $3
+             AND COALESCE(image_url, '') = $4
+             AND COALESCE(redirect_url, '') = $5
+             AND notification_type = $6
+             AND priority = $7
+             AND target_mode = $8
+             AND target_config = $9::jsonb
+             AND payload_data = $10::jsonb
+             AND created_at >= NOW() - ($11::text || ' minutes')::interval
+           ORDER BY id DESC
+           LIMIT 1`,
+          [
+            Number(actorUserId),
+            payload.title,
+            payload.body,
+            payload.image_url || '',
+            payload.redirect_url || '',
+            payload.notification_type,
+            payload.priority,
+            target.target_mode,
+            jsonStableString(target),
+            jsonStableString(payload.data || {}),
+            String(DUPLICATE_IMMEDIATE_WINDOW_MINUTES),
+          ]
+        );
+        const duplicate = duplicateResult.rows[0];
+        if (duplicate) {
+          return normalizeCampaignRow(duplicate);
+        }
+      }
       const result = await client.query(
         `INSERT INTO notification_campaigns
            (template_id, title, body, image_url, redirect_url, notification_type, priority, status, is_active, send_mode, recurrence_type, recurrence_interval, schedule_date, schedule_time, timezone, scheduled_for, start_date, end_date, expiry_at, target_mode, target_config, payload_data, created_by, updated_by)
@@ -698,10 +871,32 @@ async function saveCampaign(input = {}, actorUserId = null, campaignId = null) {
 
     if (saved && payload.is_active && status !== 'draft' && status !== 'cancelled') {
       const scheduleStatus = schedule.send_mode === 'immediate' ? 'pending' : 'pending';
+      if (schedule.send_mode !== 'recurring') {
+        await client.query(
+          `UPDATE notification_schedules
+           SET status = 'cancelled',
+               completed_at = NOW(),
+               updated_at = NOW(),
+               last_error = 'Superseded by a newer schedule for the same campaign.'
+           WHERE notification_id = $1
+             AND deleted_at IS NULL
+             AND recurrence_type = 'none'
+             AND status IN ('pending', 'running')`,
+          [saved.id]
+        );
+      }
       await client.query(
         `INSERT INTO notification_schedules
            (notification_id, run_at, timezone, recurrence_type, recurrence_interval, start_date, end_date, schedule_config, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9
+         WHERE NOT EXISTS (
+           SELECT 1
+           FROM notification_schedules
+           WHERE notification_id = $1
+             AND deleted_at IS NULL
+             AND recurrence_type = 'none'
+             AND status IN ('pending', 'running')
+         )`,
         [
           saved.id,
           scheduledFor ? scheduledFor.toISOString() : new Date().toISOString(),
@@ -1275,11 +1470,11 @@ async function finalizeRecipientStatus(recipientId, summary = {}) {
          success_device_count = $3,
          failed_device_count = $4,
          retry_count = $5,
-         next_retry_at = $6,
+         next_retry_at = $6::timestamptz,
          last_error = $7,
          sent_at = CASE WHEN $2 = 'sent' THEN NOW() ELSE sent_at END,
          delivered_at = CASE WHEN $2 = 'sent' THEN NOW() ELSE delivered_at END,
-         failed_at = CASE WHEN $2 = 'failed' AND $6 IS NULL THEN NOW() ELSE failed_at END,
+         failed_at = CASE WHEN $2 = 'failed' AND $6::timestamptz IS NULL THEN NOW() ELSE failed_at END,
          updated_at = NOW()
      WHERE id = $1`,
     [
@@ -1292,6 +1487,40 @@ async function finalizeRecipientStatus(recipientId, summary = {}) {
       summary.last_error || null,
     ]
   );
+}
+
+async function failRecipientSafely(context = {}) {
+  const recipientId = Number(context.recipient_id || 0);
+  if (!(recipientId > 0)) return;
+  const retryCount = context.disable_retry
+    ? MAX_RETRY_ATTEMPTS
+    : Math.max(1, Math.trunc(toNumber(context.retry_count, 1) || 1));
+  const errorMessage = String(context.error_message || 'Notification delivery failed').trim() || 'Notification delivery failed';
+
+  try {
+    await writeDeliveryLog({
+      notification_id: context.notification_id || null,
+      schedule_id: context.schedule_id || null,
+      recipient_id: recipientId,
+      user_id: context.user_id || null,
+      device_token_id: context.device_token_id || null,
+      provider: context.provider || 'internal',
+      provider_message_id: context.provider_message_id || null,
+      status: 'failed',
+      attempt_no: context.attempt_no || retryCount,
+      error_message: errorMessage,
+      response_payload: context.response_payload || {},
+    });
+  } catch (_err) {}
+
+  try {
+    await finalizeRecipientStatus(recipientId, {
+      success_count: Number(context.success_count || 0),
+      failed_count: Math.max(1, Number(context.failed_count || 1)),
+      retry_count: retryCount,
+      last_error: errorMessage,
+    });
+  } catch (_err) {}
 }
 
 async function refreshCampaignCounters(campaignId) {
@@ -1420,6 +1649,7 @@ async function completeSchedule(scheduleId, campaign, scheduleRow, lastError = n
 
 async function processSchedule(scheduleRow) {
   const campaign = await getCampaignById(scheduleRow.notification_id);
+  const disableAutoRetry = String(campaign?.send_mode || '').toLowerCase() === 'immediate';
   if (!campaign || !campaign.is_active || campaign.status === 'cancelled') {
     await query(`UPDATE notification_schedules SET status = 'cancelled', completed_at = NOW(), updated_at = NOW() WHERE id = $1`, [scheduleRow.id]);
     return;
@@ -1428,6 +1658,20 @@ async function processSchedule(scheduleRow) {
     await query(`UPDATE notification_campaigns SET status = 'cancelled', updated_at = NOW() WHERE id = $1`, [campaign.id]);
     await query(`UPDATE notification_schedules SET status = 'cancelled', completed_at = NOW(), updated_at = NOW(), last_error = 'Notification expired before delivery' WHERE id = $1`, [scheduleRow.id]);
     return;
+  }
+  if (String(campaign.send_mode || '').toLowerCase() !== 'recurring') {
+    await query(
+      `UPDATE notification_schedules
+       SET status = 'cancelled',
+           completed_at = NOW(),
+           updated_at = NOW(),
+           last_error = 'Superseded by another active schedule for the same campaign.'
+       WHERE notification_id = $1
+         AND id <> $2
+         AND deleted_at IS NULL
+         AND status IN ('pending', 'running')`,
+      [campaign.id, scheduleRow.id]
+    );
   }
   await queueRecipientsForSchedule(campaign, scheduleRow.id);
   const recipients = await listPendingRecipients(scheduleRow.id, 250);
@@ -1446,97 +1690,134 @@ async function processSchedule(scheduleRow) {
 
   const messages = [];
   for (const recipient of recipients) {
-    await createInAppNotification(recipient.user_id, campaign, recipient.id);
-    const recipientDevices = devicesByUserId.get(recipient.user_id) || [];
-    if (!recipientDevices.length) {
-      await writeDeliveryLog({
+    try {
+      await createInAppNotification(recipient.user_id, campaign, recipient.id);
+      const recipientDevices = devicesByUserId.get(recipient.user_id) || [];
+      if (!recipientDevices.length) {
+        await failRecipientSafely({
+          notification_id: campaign.id,
+          schedule_id: scheduleRow.id,
+          recipient_id: recipient.id,
+          user_id: recipient.user_id,
+          provider: 'none',
+          attempt_no: recipient.retry_count + 1,
+          retry_count: recipient.retry_count + 1,
+          disable_retry: disableAutoRetry,
+          error_message: 'No active device tokens',
+        });
+        continue;
+      }
+      for (const device of recipientDevices) {
+        messages.push({
+          to: device.token,
+          title: campaign.title,
+          body: campaign.body,
+          platform: device.platform,
+          user_id: recipient.user_id,
+          data: {
+            ...(campaign.payload_data || {}),
+            campaign_id: campaign.id,
+            recipient_id: recipient.id,
+            image_url: campaign.image_url || '',
+            redirect_url: campaign.redirect_url || '',
+          },
+          meta: {
+            recipient_id: recipient.id,
+            user_id: recipient.user_id,
+            schedule_id: scheduleRow.id,
+            notification_id: campaign.id,
+            device_token_id: device.id,
+            token: device.token,
+            attempt_no: recipient.retry_count + 1,
+            retry_count: recipient.retry_count,
+          },
+        });
+      }
+    } catch (err) {
+      await failRecipientSafely({
         notification_id: campaign.id,
         schedule_id: scheduleRow.id,
         recipient_id: recipient.id,
         user_id: recipient.user_id,
-        provider: 'none',
-        status: 'failed',
+        provider: 'internal',
         attempt_no: recipient.retry_count + 1,
-        error_message: 'No active device tokens',
-      });
-      await finalizeRecipientStatus(recipient.id, {
-        success_count: 0,
-        failed_count: 1,
         retry_count: recipient.retry_count + 1,
-        last_error: 'No active device tokens',
+        disable_retry: disableAutoRetry,
+        error_message: err?.message || 'Recipient preparation failed',
       });
       continue;
-    }
-    for (const device of recipientDevices) {
-      messages.push({
-        to: device.token,
-        title: campaign.title,
-        body: campaign.body,
-        platform: device.platform,
-        user_id: recipient.user_id,
-        data: {
-          ...(campaign.payload_data || {}),
-          campaign_id: campaign.id,
-          recipient_id: recipient.id,
-          image_url: campaign.image_url || '',
-          redirect_url: campaign.redirect_url || '',
-        },
-        meta: {
-          recipient_id: recipient.id,
-          schedule_id: scheduleRow.id,
-          notification_id: campaign.id,
-          device_token_id: device.id,
-          token: device.token,
-        },
-      });
     }
   }
 
   if (messages.length) {
     const delivery = await sendExpoPushNotifications(messages);
     const summaryByRecipient = new Map();
+    const attemptedRecipientIds = new Set(messages.map((message) => Number(message?.meta?.recipient_id || 0)).filter((value) => value > 0));
     for (const result of (delivery.results || [])) {
-      const recipientId = Number(result?.meta?.recipient_id || 0);
-      if (!recipientId) continue;
-      const current = summaryByRecipient.get(recipientId) || { success_count: 0, failed_count: 0, retry_count: 0, last_error: null };
-      if (result.success) current.success_count += 1;
-      else {
-        current.failed_count += 1;
-        current.last_error = result.error || current.last_error;
+      try {
+        const recipientId = Number(result?.meta?.recipient_id || 0);
+        if (!recipientId) continue;
+        const current = summaryByRecipient.get(recipientId) || { success_count: 0, failed_count: 0, retry_count: 0, last_error: null };
+        if (result.success) current.success_count += 1;
+        else {
+          current.failed_count += 1;
+          current.last_error = result.error || current.last_error;
+        }
+        current.retry_count = Math.max(current.retry_count, Number(result?.meta?.retry_count || 0));
+        summaryByRecipient.set(recipientId, current);
+        await writeDeliveryLog({
+          notification_id: campaign.id,
+          schedule_id: scheduleRow.id,
+          recipient_id: recipientId,
+          user_id: result?.meta?.user_id || null,
+          device_token_id: result?.meta?.device_token_id || null,
+          provider: result.provider || 'unknown',
+          provider_message_id: result.provider_message_id || null,
+          status: result.success ? 'sent' : 'failed',
+          attempt_no: Number(result?.meta?.attempt_no || 1),
+          error_message: result.error || null,
+          response_payload: result.response || {},
+          delivered_at: result.success ? new Date().toISOString() : null,
+        });
+      } catch (_err) {
+        continue;
       }
-      current.retry_count = Math.max(current.retry_count, Number(result?.meta?.retry_count || 0));
-      summaryByRecipient.set(recipientId, current);
-      await writeDeliveryLog({
-        notification_id: campaign.id,
-        schedule_id: scheduleRow.id,
-        recipient_id: recipientId,
-        user_id: result?.meta?.user_id || null,
-        device_token_id: result?.meta?.device_token_id || null,
-        provider: result.provider || 'unknown',
-        provider_message_id: result.provider_message_id || null,
-        status: result.success ? 'sent' : 'failed',
-        attempt_no: Number(result?.meta?.attempt_no || 1),
-        error_message: result.error || null,
-        response_payload: result.response || {},
-        delivered_at: result.success ? new Date().toISOString() : null,
-      });
     }
     for (const recipient of recipients) {
       const summary = summaryByRecipient.get(recipient.id);
-      if (!summary) continue;
-      await finalizeRecipientStatus(recipient.id, {
-        success_count: summary.success_count,
-        failed_count: summary.failed_count,
-        retry_count: recipient.retry_count + (summary.failed_count > 0 && summary.success_count === 0 ? 1 : 0),
-        last_error: summary.last_error,
-      });
+      if (!summary) {
+        if (!attemptedRecipientIds.has(Number(recipient.id || 0))) continue;
+        await failRecipientSafely({
+          notification_id: campaign.id,
+          schedule_id: scheduleRow.id,
+          recipient_id: recipient.id,
+          user_id: recipient.user_id,
+          provider: 'internal',
+          attempt_no: recipient.retry_count + 1,
+          retry_count: recipient.retry_count + 1,
+          disable_retry: disableAutoRetry,
+          error_message: 'Push provider returned no final delivery result for this recipient.',
+        });
+        continue;
+      }
+      try {
+        await finalizeRecipientStatus(recipient.id, {
+          success_count: summary.success_count,
+          failed_count: summary.failed_count,
+          retry_count: disableAutoRetry && summary.failed_count > 0 && summary.success_count === 0
+            ? MAX_RETRY_ATTEMPTS
+            : recipient.retry_count + (summary.failed_count > 0 && summary.success_count === 0 ? 1 : 0),
+          last_error: summary.last_error,
+        });
+      } catch (_err) {
+        continue;
+      }
     }
   }
 
   await refreshCampaignCounters(campaign.id);
-  const refreshedCampaign = await getCampaignById(campaign.id);
-  if (Number(refreshedCampaign?.pending_count || 0) > 0) {
-    const nextRunAt = await getNextRecipientRetryAt(scheduleRow.id);
+  const nextRunAt = await getNextRecipientRetryAt(scheduleRow.id);
+  if (nextRunAt) {
     await query(
       `UPDATE notification_schedules
        SET status = 'pending',
@@ -1555,7 +1836,7 @@ async function processSchedule(scheduleRow) {
     );
     return;
   }
-  await completeSchedule(scheduleRow.id, refreshedCampaign, scheduleRow, null);
+  await completeSchedule(scheduleRow.id, campaign, scheduleRow, null);
 }
 
 async function processDueNotifications() {
@@ -1564,6 +1845,9 @@ async function processDueNotifications() {
   _processorRunning = true;
   let processed = 0;
   try {
+    await cleanupDuplicateImmediateCampaigns();
+    await cleanupDuplicateActiveSchedules();
+    await cleanupDuplicateActiveRecipients();
     while (true) {
       const scheduleRow = await lockNextDueSchedule();
       if (!scheduleRow) break;

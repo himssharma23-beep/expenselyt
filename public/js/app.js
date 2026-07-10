@@ -21685,7 +21685,7 @@ function showSocietyExpenseModal(expenseId = null, defaults = {}) {
         </select>
       </label>
       ${forcedEntryType ? `<div style="margin-top:-2px;font-size:12px;color:var(--t3)">Opened from balance flow. Default type is ${escHtml(societyEntryTypeLabel(forcedEntryType))}.</div>` : ''}
-      <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || `${_societyMonth}-01`)}"></label>
+      <label class="fl">Date *<input class="fi" type="date" id="societyExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || todayStr())}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
       <label class="fl full">Title *<input class="fi" id="societyExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Security Guard Salary"></label>
       <label class="fl">Category<input class="fi" id="societyExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Salary, Repair"></label>
@@ -21717,7 +21717,7 @@ function showSocietyExpenseModal(expenseId = null, defaults = {}) {
 }
 
 async function saveSocietyExpense(expenseId = null) {
-  const expenseDate = document.getElementById('societyExpenseDate')?.value || `${_societyMonth}-01`;
+  const expenseDate = document.getElementById('societyExpenseDate')?.value || todayStr();
   const entryTypeSelect = document.getElementById('societyExpenseType');
   const paidBySelect = document.getElementById('societyExpensePaidByMember');
   const attachmentInput = document.getElementById('societyExpenseAttachment');

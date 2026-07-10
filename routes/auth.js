@@ -736,7 +736,11 @@ router.post('/api/auth/social', loginRateLimiter, async (req, res) => {
 
 // POST /api/auth/logout
 router.post('/api/auth/logout', requireAuth, async (req, res) => {
+  const pushToken = req.body?.push_token || req.body?.token || null;
   try {
+    if (pushToken) {
+      await pgDb.deactivatePushDeviceToken(req.session.userId, pushToken);
+    }
     if (req.session?.authTransport === 'mobile' && req.session?.mobileSessionId) {
       await pgDb.revokeMobileAuthSession(req.session.userId, req.session.mobileSessionId);
       return res.json({ success: true, redirect: '/login' });
@@ -793,11 +797,12 @@ router.post('/api/auth/impersonation/stop', requireAuth, async (req, res) => {
 router.get('/api/auth/sessions', requireAuth, async (req, res) => {
   try {
     const userId = Number(req.session.userId || 0);
+    const currentAuthTag = String(req.session?.authTag || '').trim() || null;
     const currentBrowserSid = req.session?.authTransport === 'web' ? String(req.sessionID || '') : null;
     const currentMobileSid = req.session?.authTransport === 'mobile' ? String(req.session.mobileSessionId || '') : null;
     const [browserSessions, mobileSessions] = await Promise.all([
-      pgDb.listBrowserSessions(userId, currentBrowserSid, req.session?.authTransport === 'web' ? req.session : null),
-      pgDb.listMobileAuthSessions(userId, currentMobileSid),
+      pgDb.listBrowserSessions(userId, currentBrowserSid, req.session?.authTransport === 'web' ? req.session : null, currentAuthTag),
+      pgDb.listMobileAuthSessions(userId, currentMobileSid, currentAuthTag),
     ]);
     const sessions = [...browserSessions, ...mobileSessions].sort((a, b) => {
       const aTime = new Date(a.last_seen_at || a.created_at || 0).getTime();

@@ -2428,30 +2428,28 @@ async function resolveSubtitleStreamTarget(token) {
 async function resolvePosterStreamTarget(token) {
   const structured = decodeStructuredToken(token);
   if (structured?.type !== 'catalog_poster') return null;
-  const resolvedRootPath = resolveVideoRootPathForRuntime(structured.root_path);
   const relativePath = String(structured.relative_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!relativePath || relativePath.includes('..')) return null;
-  const absolutePath = path.resolve(resolvedRootPath, relativePath);
-  if (!isPathInsideRoot(resolvedRootPath, absolutePath)) return null;
-  try {
-    const stats = await fs.promises.stat(absolutePath);
-    if (!stats.isFile()) return null;
-    const ext = String(path.extname(absolutePath) || '').toLowerCase();
-    const mime = ext === '.png'
-      ? 'image/png'
-      : ext === '.webp'
-        ? 'image/webp'
-        : 'image/jpeg';
-    return {
-      relative_path: relativePath,
-      absolute_path: absolutePath,
-      stats,
-      filename: path.basename(absolutePath),
-      mime_type: mime,
-    };
-  } catch (_err) {
-    return null;
-  }
+  const resolvedTarget = await resolveExistingMediaPath(
+    structured.root_path,
+    relativePath,
+    path.basename(relativePath)
+  );
+  if (!resolvedTarget) return null;
+  const ext = String(path.extname(resolvedTarget.absolute_path) || '').toLowerCase();
+  const mime = ext === '.png'
+    ? 'image/png'
+    : ext === '.webp'
+      ? 'image/webp'
+      : 'image/jpeg';
+  return {
+    relative_path: resolvedTarget.relative_path,
+    source_root_path: resolvedTarget.root_path,
+    absolute_path: resolvedTarget.absolute_path,
+    stats: resolvedTarget.stats,
+    filename: path.basename(resolvedTarget.absolute_path),
+    mime_type: mime,
+  };
 }
 
 module.exports = {

@@ -1,3 +1,5 @@
+const pgAuth = require('../db/postgres-auth');
+
 function chunkArray(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -21,6 +23,66 @@ function normalizeMessagePayload(payload = {}) {
 
 function isExpoPushToken(token) {
   return /^(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/.test(String(token || '').trim());
+}
+
+function getFcmErrorCode(error) {
+  const code = String(error?.code || error?.errorInfo?.code || '').trim();
+  if (code) return code;
+  const message = String(error?.message || '').trim().toLowerCase();
+  if (message.includes('registration-token-not-registered')) return 'messaging/registration-token-not-registered';
+  if (message.includes('invalid-registration-token')) return 'messaging/invalid-registration-token';
+  return '';
+}
+
+function isTerminalPushFailure(result) {
+  const token = String(result?.meta?.to || '').trim();
+  if (!token) return false;
+  if (result?.success) return false;
+
+  if (result?.provider === 'expo') {
+    const expoError = String(
+      result?.response?.details?.error
+      || result?.response?.error
+      || result?.error
+      || ''
+    ).trim();
+    return ['DeviceNotRegistered', 'MismatchSenderId'].includes(expoError);
+  }
+
+  if (result?.provider === 'fcm') {
+    const errorCode = String(
+      result?.response?.code
+      || result?.response?.error_code
+      || result?.response?.errorCode
+      || ''
+    ).trim();
+    return [
+      'messaging/registration-token-not-registered',
+      'messaging/invalid-registration-token',
+      'UNREGISTERED',
+    ].includes(errorCode);
+  }
+
+  if (result?.provider === 'validation') {
+    return /invalid|missing/i.test(String(result?.error || ''));
+  }
+
+  return false;
+}
+
+async function retireInvalidPushTokens(results = []) {
+  const deadTokens = [...new Set(
+    (Array.isArray(results) ? results : [])
+      .filter((result) => isTerminalPushFailure(result))
+      .map((result) => String(result?.meta?.to || '').trim())
+      .filter(Boolean)
+  )];
+  if (!deadTokens.length) return 0;
+  try {
+    return await pgAuth.deactivatePushDeviceTokens(deadTokens);
+  } catch (_err) {
+    return 0;
+  }
 }
 
 // Send via Expo (legacy fallback for any remaining Expo tokens)
@@ -142,6 +204,7 @@ async function sendViaFcm(messages) {
             success: !!resp?.success,
             messageId: resp?.messageId || null,
             error: resp?.error?.message || null,
+            code: getFcmErrorCode(resp?.error),
           },
           meta: batch[i]?.meta || null,
         });
@@ -272,6 +335,9 @@ async function sendExpoPushNotifications(messages = []) {
     ...(expoResult.errors || []),
   ];
   const totalSent = (fcmResult.sent || 0) + (expoResult.sent || 0);
+  const allResults = [...results, ...(fcmResult.results || []), ...(expoResult.results || [])];
+
+  await retireInvalidPushTokens(allResults);
 
   return {
     ok: allErrors.length === 0,
@@ -279,7 +345,7 @@ async function sendExpoPushNotifications(messages = []) {
     errors: allErrors,
     tickets: expoResult.tickets || [],
     receipts: [],
-    results: [...results, ...(fcmResult.results || []), ...(expoResult.results || [])],
+    results: allResults,
   };
 }
 
