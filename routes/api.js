@@ -35,6 +35,12 @@ const {
   AI_CANONICAL_QUESTIONS,
   AI_INTENT_RULES,
 } = require('../utils/ai-lookup-config');
+const {
+  buildReportPdfHtml,
+  buildStructuredPdfHtml,
+  buildSocietyPdfHtml,
+} = require('../utils/shared-pdf-html');
+const { generatePdfFileFromHtml, sanitizeBaseName } = require('../utils/server-pdf');
 const { sendLiveSplitInviteEmail, sendTenantPaymentRequestEmail, sendSocietyPaymentRequestEmail, sendVideoSeasonAccessRequestEmail, ADMIN_EMAIL } = require('../utils/mailer');
 const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
 const {
@@ -81,6 +87,73 @@ router.use((req, res, next) => {
     return adminRateLimiter(req, res, next);
   }
   return next();
+});
+
+router.post('/pdf/render-html', requireAuth, async (req, res) => {
+  try {
+    const template = String(req.body?.template || '').trim().toLowerCase();
+    const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+    let html = '';
+
+    if (template === 'report-basic') {
+      html = buildReportPdfHtml(payload);
+    } else if (template === 'structured') {
+      html = buildStructuredPdfHtml(payload);
+    } else if (template === 'society') {
+      const action = String(payload?.action || '').trim().toLowerCase();
+      const detail = payload?.detail && typeof payload.detail === 'object' ? payload.detail : {};
+      const options = payload?.options && typeof payload.options === 'object' ? payload.options : {};
+      const prefs = payload?.prefs && typeof payload.prefs === 'object' ? payload.prefs : {};
+      html = buildSocietyPdfHtml(action, detail, options, prefs);
+    } else {
+      return res.status(400).json({ error: 'Unsupported PDF template.' });
+    }
+
+    res.json({ html });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not build PDF HTML.' });
+  }
+});
+
+router.post('/pdf/render-file', requireAuth, async (req, res) => {
+  try {
+    const template = String(req.body?.template || '').trim().toLowerCase();
+    const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+    let html = '';
+    let fileNameBase = String(req.body?.file_name || req.body?.fileName || '').trim();
+
+    if (template === 'report-basic') {
+      html = buildReportPdfHtml(payload);
+      if (!fileNameBase) fileNameBase = payload?.title || 'report';
+    } else if (template === 'structured') {
+      html = buildStructuredPdfHtml(payload);
+      if (!fileNameBase) fileNameBase = payload?.title || 'report';
+    } else if (template === 'society') {
+      const action = String(payload?.action || '').trim().toLowerCase();
+      const detail = payload?.detail && typeof payload.detail === 'object' ? payload.detail : {};
+      const options = payload?.options && typeof payload.options === 'object' ? payload.options : {};
+      const prefs = payload?.prefs && typeof payload.prefs === 'object' ? payload.prefs : {};
+      html = buildSocietyPdfHtml(action, detail, options, prefs);
+      if (!fileNameBase) {
+        fileNameBase = [
+          'society',
+          action || 'report',
+          detail?.society?.name || detail?.title || 'export',
+        ].filter(Boolean).join('-');
+      }
+    } else {
+      return res.status(400).json({ error: 'Unsupported PDF template.' });
+    }
+
+    const result = await generatePdfFileFromHtml(html, sanitizeBaseName(fileNameBase || 'report'));
+    res.json({
+      url: result.publicUrl,
+      absolute_url: `${req.protocol}://${req.get('host')}${result.publicUrl}`,
+      file_name: result.fileName,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not build PDF file.' });
+  }
 });
 
 router.use((req, res, next) => {

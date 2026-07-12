@@ -431,33 +431,37 @@ function downloadTripsPdf(tripsArr) {
     if (tripsFilters.transport && tripsFilters.transport !== 'all') filterParts.push(`Transport: ${tripsFilters.transport}`);
     if (tripsFilters.member && tripsFilters.member !== 'all') filterParts.push(`Member share: ${tripsFilters.member}`);
   }
-  const doc = _P.init(true);
-  let y = _P.header(doc, 'Trips Overview',
-    `${trips.length} trip${trips.length!==1?'s':''}  ·  ${filterParts.join(' · ') || new Date().toLocaleDateString('en-IN')}`);
-  const total = trips.reduce((s,t)=>s+(Number(t.total_expenditure ?? t.totalExpenses ?? 0) || 0),0);
-  const active = trips.filter(t => ['pending', 'upcoming', 'ongoing'].includes(String(t.status || '').toLowerCase())).length;
-  const completed = trips.filter(t => String(t.status || '').toLowerCase() === 'completed').length;
-  y = _P.cards(doc, y, [
-    { label:'Total Trips',  value:trips.length,   color:'' },
-    { label:'Upcoming / Ongoing', value:active,    color:'green' },
-    { label:'Completed',    value:completed, color:'' },
-    { label:'Total Spent',  value:_P.cur(total),  color:'' },
-  ]);
-  _P.table(doc, y,
-    [['Trip Name','Status','Start','End','Members','Expenses','Shown Amount']],
-    trips.map(t=>[
-      (t.destination || t.name || '-') + (t.is_owner===0 ? ' (Shared)' : ''),
-      String(t.status || 'upcoming').replace(/\b\w/g, (m) => m.toUpperCase()),
-      `${_P.dt(t.start_date)}${tripStartsInPdfLabel(t.start_date) ? `\n${tripStartsInPdfLabel(t.start_date)}` : ''}`,
-      t.end_date?_P.dt(t.end_date):'—',
-      (t.members||[]).map(m=>m.member_name).join(', '),
-      t.expense_count ?? t.expenseCount ?? 0,
-      _P.cur(Number(t.total_expenditure ?? t.totalExpenses ?? 0) || 0),
-    ]),
-    { 1:{halign:'center'}, 5:{halign:'center'}, 6:{halign:'right',fontStyle:'bold'} },
-    true
-  );
-  _P.save(doc, 'Trips_Overview');
+  const total = trips.reduce((sum, trip) => sum + (Number(trip.total_expenditure ?? trip.totalExpenses ?? 0) || 0), 0);
+  const active = trips.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length;
+  const completed = trips.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length;
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: 'Trips Overview',
+      subtitle: `${trips.length} trip${trips.length !== 1 ? 's' : ''}`,
+      breadcrumb: `Trips / ${filterParts.join(' • ') || new Date().toLocaleDateString('en-IN')}`,
+      totals: {
+        total: _P.cur(total),
+        fair: `${active} active`,
+        extra: `${completed} completed`,
+        count: `${trips.length} trips`,
+      },
+      tables: [
+        {
+          title: 'Trips',
+          columns: ['Trip Name', 'Status', 'Dates', 'Members', 'Expenses', 'Shown Amount'],
+          rows: trips.map((trip) => [
+            `${trip.destination || trip.name || '-'}${trip.is_owner === 0 ? ' (Shared)' : ''}`,
+            String(trip.status || 'upcoming').replace(/\b\w/g, (m) => m.toUpperCase()),
+            `${_P.dt(trip.start_date)}${trip.end_date ? ` - ${_P.dt(trip.end_date)}` : ''}${tripStartsInPdfLabel(trip.start_date) ? ` (${tripStartsInPdfLabel(trip.start_date)})` : ''}`,
+            (trip.members || []).map((member) => member.member_name).join(', ') || '-',
+            String(trip.expense_count ?? trip.expenseCount ?? 0),
+            _P.cur(Number(trip.total_expenditure ?? trip.totalExpenses ?? 0) || 0),
+          ]),
+        },
+      ],
+    },
+  }, 'Trips Overview', 'trips-overview');
 }
 
 // ── Trip Detail ──────────────────────────────────────────────
@@ -572,7 +576,6 @@ function downloadTripDetailPdf() {
 function downloadTripDetailPdfEnhanced() {
   const trip = _tripDetail;
   if (!trip) return;
-  const doc = _P.init(true);
   const startsIn = tripStartsInPdfLabel(trip.start_date);
   const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   const members = Array.isArray(trip.members) ? trip.members : [];
@@ -580,35 +583,8 @@ function downloadTripDetailPdfEnhanced() {
   const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
   const expenseGroups = Array.isArray(trip.expense_groups) ? trip.expense_groups : [];
   const grandTotal = Number(trip.grand_total ?? (expenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0) || 0));
-  let y = _P.header(doc, `Trip: ${trip.destination || trip.name || 'Trip'}`,
-    `${_P.dt(trip.start_date)}${trip.end_date ? ' -> ' + _P.dt(trip.end_date) : ''}${startsIn ? `  ·  ${startsIn}` : ''}  ·  ${trip.status}`);
-
-  y = _P.note(doc, y, `Members: ${members.map((member) => member.member_name).join('  ·  ')}`);
-  if (trip.notes) y = _P.note(doc, y, `Notes: ${trip.notes}`);
-  if (trip.transport_mode) y = _P.note(doc, y, `Transport: ${trip.transport_mode}`);
-  if (trip.total_distance != null && trip.total_distance !== '') y = _P.note(doc, y, `Distance: ${trip.total_distance} km`);
-  if (sharedUsers.length) {
-    y = _P.note(doc, y, `Shared With: ${sharedUsers.map((user) => `${user.display_name || user.member_name || 'User'} (${user.permission === 'edit' ? 'edit' : 'view'})`).join('  ·  ')}`);
-  }
-
-  y = _P.cards(doc, y, [
-    { label:'Grand Total', value:_P.cur(grandTotal), color:'' },
-    { label:'Expenses', value:expenses.length, color:'' },
-    { label:'Members', value:members.length, color:'' },
-    { label:'Transport', value:trip.transport_mode || '-', color:'' },
-  ]);
 
   if (itineraryItems.length) {
-    y = _P.section(doc, y, 'Itinerary');
-    y = _P.table(doc, y,
-      [['Date','Time','Title','Location','Notes']],
-      itineraryItems
-        .slice()
-        .sort((a, b) => `${String(a?.itinerary_date || '')} ${String(a?.start_time || '99:99')}`.localeCompare(`${String(b?.itinerary_date || '')} ${String(b?.start_time || '99:99')}`))
-        .map((item) => [_P.dt(item.itinerary_date), tripItineraryTimeLabel(item), item.title || '-', item.location || '-', item.notes || '-']),
-      { 4:{fontSize:7} },
-      true
-    );
   }
 
   const settlementRows = (() => {
@@ -644,51 +620,75 @@ function downloadTripDetailPdfEnhanced() {
     }));
   })();
 
-  if (settlementRows.length) {
-    y = _P.section(doc, y, 'Member Totals');
-    y = _P.table(doc, y,
-      [['Member','Share','Paid','Net']],
-      settlementRows.map((row) => [row.name + (row.fallbackKey === 'self' ? ' (You)' : ''), _P.cur(row.share), _P.cur(row.gave), (row.net > 0.005 ? '+' : '') + _P.cur(row.net)]),
-      { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
-      true
-    );
-  }
-
-  if (expenseGroups.length) {
-    y = _P.section(doc, y, 'Expense Breakdown');
-    y = _P.table(doc, y,
-      [['Type','Items','Subtotal']],
-      expenseGroups.map((group) => [group.type || '-', Number((group.items || []).length || 0), _P.cur(Number(group.total || 0))]),
-      { 1:{halign:'center'}, 2:{halign:'right',fontStyle:'bold'} },
-      true
-    );
-  }
-
-  y = _P.section(doc, y, 'Expenses');
-  y = _P.table(doc, y,
-    [['Date','Type','Details','Paid By','Amount','Split Mode','Split Details','Notes']],
-    expenses.map((expense) => [
-      _P.dt(expense.expense_date),
-      expense.expense_type || '-',
-      expense.details || '-',
-      expense.paid_by_name || '-',
-      _P.cur(expense.amount),
-      expense.split_mode || 'equal',
-      (expense.splits || []).map((split) => `${split.member_name}: ${_P.cur(split.share_amount)}`).join('\n'),
-      expense.notes || '-',
-    ]),
-    { 4:{halign:'right',fontStyle:'bold'}, 6:{fontSize:7}, 7:{fontSize:7} },
-    true
-  );
-
-  y = _P.section(doc, y, 'Settlement Summary');
-  _P.table(doc, y,
-    [['Member','Total Share (Owes)','Total Paid','Net Balance']],
-    settlementRows.map((row) => [row.name + (row.fallbackKey === 'self' ? ' (You)' : ''), _P.cur(row.share), _P.cur(row.gave), (row.net > 0.005 ? '+' : '') + _P.cur(row.net)]),
-    { 1:{halign:'right'}, 2:{halign:'right'}, 3:{halign:'right',fontStyle:'bold'} },
-    true
-  );
-  _P.save(doc, `Trip_${trip.destination || trip.name || 'Trip'}`);
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: trip.destination || trip.name || 'Trip',
+      subtitle: `${_P.dt(trip.start_date)}${trip.end_date ? ` - ${_P.dt(trip.end_date)}` : ''}`,
+      breadcrumb: `${String(trip.status || 'upcoming').replace(/\b\w/g, (m) => m.toUpperCase())} • ${startsIn || 'Trip details'}`,
+      totals: {
+        total: _P.cur(grandTotal),
+        fair: `${members.length} members`,
+        extra: `${expenses.length} expenses`,
+        count: `${itineraryItems.length} itinerary items`,
+      },
+      sections: [
+        {
+          title: 'Members',
+          lines: [
+            members.map((member) => member.member_name).join(', ') || 'No members',
+            trip.notes ? `Notes: ${trip.notes}` : null,
+            trip.transport_mode ? `Transport: ${trip.transport_mode}` : null,
+            trip.total_distance != null && trip.total_distance !== '' ? `Distance: ${trip.total_distance} km` : null,
+            sharedUsers.length ? `Shared With: ${sharedUsers.map((user) => `${user.display_name || user.member_name || 'User'} (${user.permission === 'edit' ? 'edit' : 'view'})`).join(', ')}` : null,
+          ].filter(Boolean),
+        },
+        settlementRows.length ? {
+          title: 'Member Shares',
+          lines: settlementRows.map((row) => `${row.name}${row.fallbackKey === 'self' ? ' (You)' : ''}: Share ${_P.cur(row.share)} • Paid ${_P.cur(row.gave)} • Net ${(row.net > 0.005 ? '+' : '') + _P.cur(row.net)}`),
+        } : null,
+      ].filter(Boolean),
+      tables: [
+        itineraryItems.length ? {
+          title: 'Itinerary',
+          columns: ['Date', 'Time', 'Title', 'Location', 'Notes'],
+          rows: itineraryItems
+            .slice()
+            .sort((a, b) => `${String(a?.itinerary_date || '')} ${String(a?.start_time || '99:99')}`.localeCompare(`${String(b?.itinerary_date || '')} ${String(b?.start_time || '99:99')}`))
+            .map((item) => [_P.dt(item.itinerary_date), tripItineraryTimeLabel(item), item.title || '-', item.location || '-', item.notes || '-']),
+        } : null,
+        expenseGroups.length ? {
+          title: 'Expense Breakdown',
+          columns: ['Type', 'Items', 'Subtotal'],
+          rows: expenseGroups.map((group) => [group.type || '-', String(Number((group.items || []).length || 0)), _P.cur(Number(group.total || 0))]),
+        } : null,
+        {
+          title: 'Expenses',
+          columns: ['Date', 'Type', 'Details', 'Paid By', 'Amount', 'Split Mode', 'Split Details', 'Notes'],
+          rows: expenses.map((expense) => [
+            _P.dt(expense.expense_date),
+            expense.expense_type || '-',
+            expense.details || '-',
+            expense.paid_by_name || '-',
+            _P.cur(expense.amount),
+            expense.split_mode || 'equal',
+            (expense.splits || []).map((split) => `${split.member_name}: ${_P.cur(split.share_amount)}`).join(' | ') || '-',
+            expense.notes || '-',
+          ]),
+        },
+        settlementRows.length ? {
+          title: 'Settlement Summary',
+          columns: ['Member', 'Total Share (Owes)', 'Total Paid', 'Net Balance'],
+          rows: settlementRows.map((row) => [
+            row.name + (row.fallbackKey === 'self' ? ' (You)' : ''),
+            _P.cur(row.share),
+            _P.cur(row.gave),
+            (row.net > 0.005 ? '+' : '') + _P.cur(row.net),
+          ]),
+        } : null,
+      ].filter(Boolean),
+    },
+  }, `${trip.destination || trip.name || 'Trip'} PDF`, `trip-${String(trip.destination || trip.name || 'trip').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`);
 }
 
 downloadTripDetailPdf = downloadTripDetailPdfEnhanced;
@@ -1945,6 +1945,452 @@ function downloadSocietyCustomPdf(options = {}) {
   _P.save(doc, `Society_Custom_${society.name}`);
 }
 
+async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
+  const previewWin = window.open('', '_blank');
+  if (!previewWin) {
+    toast('Please allow popups to open the PDF preview.', 'warning');
+    return;
+  }
+  previewWin.document.write('<!DOCTYPE html><html><head><title>Loading PDF...</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Preparing PDF preview...</body></html>');
+  previewWin.document.close();
+  try {
+    const response = await fetch('/api/pdf/render-html', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error || !String(data?.html || '').trim()) {
+      throw new Error(data?.error || 'Could not render shared PDF.');
+    }
+    const html = String(data.html);
+    const withPrint = html.includes('window.print(')
+      ? html
+      : html.replace('</body>', '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},120)};<\/script></body>');
+    previewWin.document.open();
+    previewWin.document.write(withPrint);
+    previewWin.document.close();
+    try { previewWin.document.title = windowTitle; } catch (_err) {}
+  } catch (err) {
+    try { previewWin.close(); } catch (_closeErr) {}
+    toast(err.message || 'Could not open shared PDF.', 'error');
+  }
+}
+
+async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', fileNameBase = 'report') {
+  const previewWin = window.open('', '_blank');
+  if (!previewWin) {
+    toast('Please allow popups to open the PDF preview.', 'warning');
+    return;
+  }
+  previewWin.document.write(`<!DOCTYPE html><html><head><title>${windowTitle}</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Generating PDF...</body></html>`);
+  previewWin.document.close();
+  try {
+    const response = await fetch('/api/pdf/render-file', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template: payload?.template,
+        payload: payload?.payload,
+        file_name: fileNameBase,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    const pdfUrl = String(data?.absolute_url || data?.url || '').trim();
+    if (!response.ok || data?.error || !pdfUrl) {
+      throw new Error(data?.error || 'Could not generate shared PDF.');
+    }
+    previewWin.location.replace(pdfUrl);
+  } catch (err) {
+    try { previewWin.close(); } catch (_closeErr) {}
+    toast(err.message || 'Could not open shared PDF.', 'error');
+  }
+}
+
+function societyWebMemberBalanceSummary(memberId) {
+  const balanceRow = (Array.isArray(_societyDetail?.member_balances) ? _societyDetail.member_balances : [])
+    .find((item) => Number(item.member_id) === Number(memberId)) || {};
+  const settlements = Array.isArray(balanceRow.settlements)
+    ? balanceRow.settlements
+    : (Array.isArray(_societyDetail?.member_balance_settlements) ? _societyDetail.member_balance_settlements : [])
+      .filter((item) => Number(item.member_id) === Number(memberId));
+  return {
+    gross_owed: Number(balanceRow.amount || 0),
+    settled_amount: Number(balanceRow.settled_amount || 0),
+    remaining_amount: Number(balanceRow.remaining_amount || 0),
+    settlement_count: Number(balanceRow.settlement_count || settlements.length || 0),
+    settlements,
+  };
+}
+
+async function downloadSocietyMonthPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'month',
+      detail: _societyDetail,
+    },
+  }, `Society_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-month-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyMemberPdf(memberId) {
+  if (!_societyDetail?.society) return;
+  const member = (_societyDetail.members || []).find((item) => Number(item.id) === Number(memberId));
+  if (!member) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'member',
+      detail: _societyDetail,
+      options: {
+        member,
+        balance_summary: societyWebMemberBalanceSummary(member.id),
+      },
+    },
+  }, `Society_Member_${societyPdfMemberLabel(member)}`, `society-member-${societyPdfMemberLabel(member)}`);
+}
+
+async function downloadSocietyMatrixPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'matrix',
+      detail: _societyDetail,
+    },
+  }, `Society_Matrix_${_societyDetail?.society?.name || 'Report'}`, `society-matrix-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyExpensesPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'expenses',
+      detail: _societyDetail,
+      options: {
+        scope: 'current',
+      },
+    },
+  }, `Society_Expenses_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-expenses-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyReportPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'report',
+      detail: _societyDetail,
+    },
+  }, `Society_Report_${_societyDetail?.society?.name || 'Report'}`, `society-report-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyCustomPdf(options = {}) {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'custom',
+      detail: _societyDetail,
+      options,
+    },
+  }, `Society_Custom_${_societyDetail?.society?.name || 'Report'}`, `society-custom-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadFriendsPdf() {
+  const data = await api('/api/friends');
+  if (!data) return;
+  const friends = data.friends || [];
+  const netBalance = Number(data.netBalance || 0);
+  const owedToMe = friends.filter((friend) => Number(friend.balance || 0) > 0).reduce((sum, friend) => sum + Number(friend.balance || 0), 0);
+  const iOwe = friends.filter((friend) => Number(friend.balance || 0) < 0).reduce((sum, friend) => sum + Math.abs(Number(friend.balance || 0)), 0);
+  await renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: 'Friends & Loans Overview',
+      subtitle: `${friends.length} friend${friends.length !== 1 ? 's' : ''}`,
+      breadcrumb: `Friends / ${new Date().toLocaleDateString('en-IN')}`,
+      totals: {
+        total: _P.cur(netBalance),
+        fair: _P.cur(owedToMe),
+        extra: _P.cur(iOwe),
+        count: `${friends.length} friends`,
+      },
+      tables: [
+        {
+          title: 'Friends',
+          columns: ['Friend', 'Balance', 'Status'],
+          rows: friends.map((friend) => [
+            friend.name || '-',
+            _P.cur(friend.balance || 0),
+            Number(friend.balance || 0) > 0.005 ? 'They owe me' : Number(friend.balance || 0) < -0.005 ? 'I owe' : 'Settled',
+          ]),
+        },
+      ],
+    },
+  }, 'Friends Overview', 'friends-overview');
+}
+
+function downloadFriendDetailPdf() {
+  const friend = _loanFriend;
+  if (!friend) return;
+  const normalizeLoanPdfDate = (value) => {
+    if (typeof normalizeTxnDateValue === 'function') return normalizeTxnDateValue(value);
+    if (typeof dateOnlyFromValue === 'function') {
+      const normalized = dateOnlyFromValue(value);
+      if (normalized) return normalized;
+    }
+    if (!value) return '';
+    const raw = String(value).trim();
+    if (!raw) return '';
+    return raw.length >= 10 ? raw.slice(0, 10) : raw;
+  };
+  const allTxns = (_loanAllTxns || []).map((txn) => ({
+    ...txn,
+    txn_date: normalizeLoanPdfDate(txn?.txn_date),
+  }));
+  const { balance = 0 } = _loanBalance || {};
+  let txns = [...allTxns];
+  if (loanFilters.year) txns = txns.filter((txn) => txn.txn_date?.startsWith(loanFilters.year));
+  if (loanFilters.month) txns = txns.filter((txn) => txn.txn_date?.substring(5, 7) === String(loanFilters.month).padStart(2, '0'));
+  if (loanFilters.date) txns = txns.filter((txn) => txn.txn_date === loanFilters.date);
+  if (loanFilters.search) {
+    const query = loanFilters.search.toLowerCase();
+    txns = txns.filter((txn) => String(txn.details || '').toLowerCase().includes(query));
+  }
+  if (loanFilters.type === 'paid') txns = txns.filter((txn) => Number(txn.paid || 0) > 0);
+  if (loanFilters.type === 'received') txns = txns.filter((txn) => Number(txn.received || 0) > 0);
+  txns.sort((a, b) => (a.txn_date < b.txn_date ? 1 : -1));
+  const filterLabel = [
+    loanFilters.year ? `Year: ${loanFilters.year}` : '',
+    loanFilters.month ? `Month: ${loanFilters.month}` : '',
+    loanFilters.search ? `Search: "${loanFilters.search}"` : '',
+    loanFilters.type ? `Type: ${loanFilters.type}` : '',
+  ].filter(Boolean).join(' • ') || 'All transactions';
+  const paidTotal = txns.reduce((sum, txn) => sum + Number(txn.paid || 0), 0);
+  const receivedTotal = txns.reduce((sum, txn) => sum + Number(txn.received || 0), 0);
+  const chronological = [...txns].reverse();
+  let running = 0;
+  const runMap = {};
+  chronological.forEach((txn) => {
+    running += Number(txn.paid || 0) - Number(txn.received || 0);
+    runMap[txn.id] = running;
+  });
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: `${friend.name || 'Friend'} Transactions`,
+      subtitle: filterLabel,
+      breadcrumb: 'Friends / Detail',
+      totals: {
+        total: _P.cur(Math.abs(Number(balance || 0))),
+        fair: _P.cur(paidTotal),
+        extra: _P.cur(receivedTotal),
+        count: `${txns.length} transactions`,
+      },
+      sections: [
+        {
+          title: 'Summary',
+          lines: [
+            Number(balance || 0) > 0.005 ? 'Status: To receive' : Number(balance || 0) < -0.005 ? 'Status: To pay' : 'Status: Settled',
+          ],
+        },
+      ],
+      tables: [
+        {
+          title: 'Transactions',
+          columns: ['Date', 'Details', 'Paid / Given', 'Received', 'Running Net'],
+          rows: txns.map((txn) => [
+            _P.dt(txn.txn_date),
+            txn.details || '-',
+            Number(txn.paid || 0) > 0 ? _P.cur(txn.paid) : '-',
+            Number(txn.received || 0) > 0 ? _P.cur(txn.received) : '-',
+            _P.cur(runMap[txn.id] || 0),
+          ]),
+        },
+      ],
+    },
+  }, `${friend.name || 'Friend'} Transactions`, `transactions-${String(friend.name || 'friend').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`);
+}
+
+function downloadSplitHistoryPdf() {
+  const groups = _divGroups || [];
+  const total = groups.reduce((sum, group) => sum + Number(group.total_amount || 0), 0);
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: 'Split History',
+      subtitle: `${groups.length} split${groups.length !== 1 ? 's' : ''}`,
+      breadcrumb: `Split / ${new Date().toLocaleDateString('en-IN')}`,
+      totals: {
+        total: _P.cur(total),
+        fair: `${groups.length} entries`,
+        extra: '-',
+        count: `${groups.length} rows`,
+      },
+      tables: [
+        {
+          title: 'Splits',
+          columns: ['Date', 'Heading', 'Details', 'Paid By', 'Total Amount', 'Split Details'],
+          rows: groups.map((group) => [
+            _P.dt(group.divide_date),
+            group.heading || '-',
+            group.details || '-',
+            group.paid_by || '-',
+            _P.cur(group.total_amount || 0),
+            (group.splits || []).map((split) => `${split.friend_name}: ${_P.cur(split.share_amount)}`).join(' | ') || '-',
+          ]),
+        },
+      ],
+    },
+  }, 'Split History', 'split-history');
+}
+
+function downloadSplitSessionPdf(sessionKey) {
+  const groups = (_divGroups || []).filter((group) => (group.session_id || `_solo_${group.id}`) === sessionKey);
+  if (!groups.length) return;
+  const session = groups[0];
+  const title = session.heading || session.details || 'Split';
+  const sessionTotal = groups.reduce((sum, group) => sum + Number(group.total_amount || 0), 0);
+  const tables = groups.map((group, index) => {
+    const splits = group.splits || [];
+    const friendsTotal = splits.reduce((sum, split) => sum + Number(split.share_amount || 0), 0);
+    const myShare = Math.round((Number(group.total_amount || 0) - friendsTotal) * 100) / 100;
+    const paidByYou = group.paid_by === 'You';
+    const participants = [...splits.map((split) => ({ name: split.friend_name, share: split.share_amount, isMe: false }))];
+    if (myShare > 0.005) participants.unshift({ name: 'You (me)', share: myShare, isMe: true });
+    return {
+      title: groups.length > 1
+        ? `${index + 1}. ${group.details || '-'} - ${group.paid_by || '-'} - ${_P.cur(group.total_amount || 0)}`
+        : 'Settlement',
+      columns: ['Person', 'Share', 'Paid Upfront', 'Owes / Gets Back'],
+      rows: participants.map((person) => {
+        const isPayer = (person.isMe && paidByYou) || (!person.isMe && group.paid_by === person.name);
+        const paidUp = isPayer ? Number(group.total_amount || 0) : 0;
+        const net = Number(person.share || 0) - paidUp;
+        const netLabel = Math.abs(net) < 0.005 ? 'Settled' : net > 0 ? `Owes ${_P.cur(net)}` : `Gets back ${_P.cur(Math.abs(net))}`;
+        return [
+          person.name + (person.isMe ? ' (me)' : ''),
+          _P.cur(person.share || 0),
+          isPayer ? _P.cur(paidUp) : '-',
+          netLabel,
+        ];
+      }),
+    };
+  });
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title,
+      subtitle: _P.dt(session.divide_date),
+      breadcrumb: `Split / ${groups.length} item${groups.length !== 1 ? 's' : ''}`,
+      totals: {
+        total: _P.cur(sessionTotal),
+        fair: `${groups.length} items`,
+        extra: '-',
+        count: `${tables.reduce((sum, table) => sum + table.rows.length, 0)} participants`,
+      },
+      tables,
+    },
+  }, `${title} Split`, `split-${String(title).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`);
+}
+
+function downloadEmisPdf(records) {
+  const emis = records || _emiRecords || [];
+  const active = emis.filter((record) => record.status === 'active').length;
+  const totalPaid = emis.reduce((sum, record) => sum + Number(record.totalPaid || 0), 0);
+  const totalRemaining = emis.reduce((sum, record) => sum + Number(record.remaining || record.grand_total || 0), 0);
+  void renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: 'EMI Records Overview',
+      subtitle: `${emis.length} records`,
+      breadcrumb: `EMI / ${new Date().toLocaleDateString('en-IN')}`,
+      totals: {
+        total: _P.cur(totalPaid),
+        fair: `${active} active`,
+        extra: _P.cur(totalRemaining),
+        count: `${emis.length} EMIs`,
+      },
+      tables: [
+        {
+          title: 'EMIs',
+          columns: ['Name', 'Tag', 'Principal', 'Rate %', 'Months', 'Monthly EMI', 'Grand Total', 'Paid', 'Remaining', 'Status'],
+          rows: emis.map((record) => [
+            record.name || '-',
+            record.tag || '-',
+            _P.cur(record.principal || 0),
+            `${record.annual_rate}%`,
+            `${record.tenure_months}m`,
+            _P.cur(record.monthly_emi || 0),
+            _P.cur(record.grand_total || 0),
+            _P.cur(record.totalPaid || 0),
+            _P.cur(record.remaining != null ? record.remaining : record.grand_total || 0),
+            record.status || 'saved',
+          ]),
+        },
+      ],
+    },
+  }, 'EMI Overview', 'emi-overview');
+}
+
+async function downloadEmiDetailPdf(emiId) {
+  const data = await api(`/api/emi/records/${emiId}`);
+  if (!data?.record) return;
+  const record = data.record;
+  const installments = Array.isArray(record.installments) ? record.installments : [];
+  await renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: record.name || 'EMI',
+      subtitle: `${record.annual_rate}% p.a. • ${record.tenure_months} months`,
+      breadcrumb: `EMI / Start: ${record.start_date || 'Not started'}`,
+      totals: {
+        total: _P.cur(record.principal || 0),
+        fair: _P.cur(record.totalPaid || 0),
+        extra: _P.cur(record.remaining != null ? record.remaining : record.grand_total || 0),
+        count: `${installments.length} installments`,
+      },
+      sections: [
+        {
+          title: 'Summary',
+          lines: [
+            record.tag ? `Tag: ${record.tag}` : null,
+            record.description ? `Note: ${record.description}` : null,
+            `Status: ${record.status || 'saved'}`,
+            installments.length ? `${record.paidCount || 0} / ${installments.length} installments paid` : 'No installment schedule generated yet.',
+          ].filter(Boolean),
+        },
+      ],
+      tables: installments.length ? [
+        {
+          title: 'Installments',
+          columns: ['#', 'Due Date', 'EMI Amount', 'Principal', 'Interest', 'GST', 'Paid Amount', 'Paid Date', 'Status'],
+          rows: installments.map((installment) => {
+            const paid = Number(installment.paid_amount || 0) >= Number(installment.emi_amount || 0) * 0.999;
+            const partial = Number(installment.paid_amount || 0) > 0 && !paid;
+            return [
+              String(installment.installment_no || ''),
+              _P.dt(installment.due_date),
+              _P.cur(installment.emi_amount || 0),
+              Number(installment.principal_component || 0) > 0 ? _P.cur(installment.principal_component) : '-',
+              Number(installment.interest_component || 0) > 0 ? _P.cur(installment.interest_component) : '-',
+              Number(installment.gst_amount || 0) > 0 ? _P.cur(installment.gst_amount) : '-',
+              Number(installment.paid_amount || 0) > 0 ? _P.cur(installment.paid_amount) : '-',
+              installment.paid_date ? _P.dt(installment.paid_date) : '-',
+              paid ? 'Paid' : partial ? 'Partial' : 'Pending',
+            ];
+          }),
+        },
+      ] : [],
+    },
+  }, `${record.name || 'EMI'} PDF`, `emi-${String(record.name || 'record').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`);
+}
+
 function societyPdfSelectedPeriodRange(monthKeys = []) {
   const keys = (monthKeys || []).filter(Boolean);
   if (!keys.length) return 'No period';
@@ -2499,4 +2945,81 @@ function downloadSocietyCustomPdf(options = {}) {
   }
 
   _P.save(doc, `Society_Custom_${society.name}`);
+}
+
+// Final override: society exports must use the generated PDF file route so web and mobile open the exact same PDF output.
+async function downloadSocietyMonthPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'month',
+      detail: _societyDetail,
+    },
+  }, `Society_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-month-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyMemberPdf(memberId) {
+  if (!_societyDetail?.society) return;
+  const member = (_societyDetail.members || []).find((item) => Number(item.id) === Number(memberId));
+  if (!member) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'member',
+      detail: _societyDetail,
+      options: {
+        member,
+        balance_summary: societyWebMemberBalanceSummary(member.id),
+      },
+    },
+  }, `Society_Member_${societyPdfMemberLabel(member)}`, `society-member-${societyPdfMemberLabel(member)}`);
+}
+
+async function downloadSocietyMatrixPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'matrix',
+      detail: _societyDetail,
+    },
+  }, `Society_Matrix_${_societyDetail?.society?.name || 'Report'}`, `society-matrix-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyExpensesPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'expenses',
+      detail: _societyDetail,
+      options: {
+        scope: 'current',
+      },
+    },
+  }, `Society_Expenses_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-expenses-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyReportPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'report',
+      detail: _societyDetail,
+    },
+  }, `Society_Report_${_societyDetail?.society?.name || 'Report'}`, `society-report-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyCustomPdf(options = {}) {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'custom',
+      detail: _societyDetail,
+      options,
+    },
+  }, `Society_Custom_${_societyDetail?.society?.name || 'Report'}`, `society-custom-${_societyDetail?.society?.name || 'report'}`);
 }

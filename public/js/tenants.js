@@ -984,153 +984,122 @@ function getTenantReportSnapshot(building) {
 }
 
 function downloadTenantInvoicePdf(invoiceId) {
-  const pdf = tenantPdfHelper();
-  if (!pdf) return;
   const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
-  const doc = pdf.init(false);
-  const title = `Tenant Invoice - ${invoice.tenant_name_snapshot || 'Tenant'}`;
-  let y = pdf.header(doc, title, tenantMonthLabel(invoice.invoice_month));
-  y = pdf.cards(doc, y, [
-    { label: 'Total', value: pdf.cur(invoice.total_amount || 0), color: 'green' },
-    { label: 'Status', value: tenantInvoiceStatusLabel(invoice.payment_status), color: '' },
-    { label: 'Due Date', value: pdf.dt(invoice.due_date), color: '' },
-  ]);
-  y = pdf.section(doc, y, 'Invoice Snapshot');
-  const body = [
-    ['Tenant', invoice.tenant_name_snapshot || 'Tenant'],
-    ['Building', invoice.building_name_snapshot || '-'],
-    ['Room', invoice.room_label_snapshot || '-'],
-    ['Invoice Month', tenantMonthLabel(invoice.invoice_month)],
-    ['Rent', pdf.cur(invoice.rent_amount_snapshot || 0)],
-  ];
-  if (Number(invoice.electricity_units_used || 0) !== 0 || Number(invoice.electricity_amount || 0) !== 0) {
-    body.push([
-      'Electricity',
-      tenantElectricityUsageText(invoice, {
-        currencyFormatter: pdf.cur,
-        includeRate: true,
-        includeAmount: true,
-      }),
-    ]);
-  }
-  if (Number(invoice.sewerage_charge_snapshot || 0) !== 0) body.push(['Sewerage', pdf.cur(invoice.sewerage_charge_snapshot || 0)]);
-  if (Number(invoice.water_charge_snapshot || 0) !== 0) body.push(['Water', pdf.cur(invoice.water_charge_snapshot || 0)]);
-  if (Number(invoice.cleaning_charge_snapshot || 0) !== 0) body.push(['Cleaning', pdf.cur(invoice.cleaning_charge_snapshot || 0)]);
-  body.push(['Status', `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'pending' ? '' : ` - ${pdf.cur(invoice.paid_amount || 0)}`}`]);
-  const chargeItems = Array.isArray(invoice.other_charge_items) ? invoice.other_charge_items.filter((item) => tenantNum(item.amount || 0) !== 0) : [];
-  if (chargeItems.length) {
-    chargeItems.forEach((item) => {
-      body.push([item.detail || 'Other charge', pdf.cur(item.amount || 0)]);
-    });
-  } else if (Number(invoice.other_charges_snapshot || 0) !== 0) {
-    body.push(['Other Charges', pdf.cur(invoice.other_charges_snapshot || 0)]);
-  }
-  body.push(['Previous Units', Number(invoice.previous_electricity_units || 0)]);
-  body.push(['Current Units', Number(invoice.current_electricity_units || 0)]);
-  body.push(['Extra Units', Number(invoice.extra_electricity_units || 0)]);
-  body.push(['Total', pdf.cur(invoice.total_amount || 0)]);
-  if (invoice.notes) body.push(['Notes', invoice.notes]);
-  pdf.table(doc, y, [['Field', 'Value']], body, {
-    0: { cellWidth: 54, fontStyle: 'bold' },
-    1: { cellWidth: 118 },
-  });
-  pdf.save(doc, `Tenant Invoice ${invoice.tenant_name_snapshot || 'Tenant'} ${tenantMonthLabel(invoice.invoice_month)}`);
+  renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: `${invoice.tenant_name_snapshot || 'Tenant'} Invoice`,
+      subtitle: `${invoice.room_label_snapshot || 'Room'} · ${tenantMonthLabel(invoice.invoice_month)}`,
+      breadcrumb: `${invoice.building_name_snapshot || 'Building'} · Invoice snapshot`,
+      sections: [
+        {
+          title: 'Invoice Summary',
+          rows: [
+            { label: 'Rent', value: fmtCur(invoice.rent_amount_snapshot || 0) },
+            { label: 'Electricity', value: tenantElectricityUsageText(invoice) },
+            { label: 'Other Charges', value: fmtCur(invoice.other_charges_snapshot || 0) },
+            { label: 'Status', value: String(invoice.payment_status || 'pending').replace(/_/g, ' ') },
+            { label: 'Due Date', value: invoice.due_date ? tenantDateLabel(invoice.due_date) : '-' },
+            { label: 'Total', value: fmtCur(invoice.total_amount || 0) },
+          ],
+        },
+      ],
+    },
+  }, `Tenant_Invoice_${invoice.tenant_name_snapshot || 'Tenant'}_${tenantMonthLabel(invoice.invoice_month)}`, `tenant-invoice-${invoice.tenant_name_snapshot || 'tenant'}-${invoice.invoice_month || 'invoice'}`);
 }
 
 function downloadTenantReportPdf(buildingId = _selectedTenantBuildingId) {
-  const pdf = tenantPdfHelper();
-  if (!pdf) return;
   const building = tenantFindBuilding(buildingId);
   if (!building) { toast('Building not found.', 'error'); return; }
   const snapshot = getTenantReportSnapshot(building);
-  const doc = pdf.init(true);
-  const subtitleParts = [];
-  if (snapshot.activeYear !== 'all') subtitleParts.push(`Year ${snapshot.activeYear}`);
-  if (snapshot.activeMonthFrom) subtitleParts.push(`From ${tenantMonthLabel(snapshot.activeMonthFrom)}`);
-  if (snapshot.activeMonthTo) subtitleParts.push(`To ${tenantMonthLabel(snapshot.activeMonthTo)}`);
-  if (snapshot.activeTenantId !== 'all') {
-    const tenant = tenantFindRecord(snapshot.activeTenantId);
-    if (tenant) subtitleParts.push(`Tenant ${tenant.tenant_name}`);
-  }
-  if (snapshot.activeRoomId !== 'all') {
-    const room = tenantFindRoom(snapshot.activeRoomId);
-    if (room) subtitleParts.push(`Room ${room.room_label}`);
-  }
-  let y = pdf.header(doc, `Tenant Report - ${building.name || 'Building'}`, subtitleParts.join(' · ') || 'All filters');
-  y = pdf.cards(doc, y, [
-    { label: 'Selected Total', value: pdf.cur(snapshot.totalAmount), color: 'green' },
-    { label: 'Rent Total', value: pdf.cur(snapshot.totalRent), color: '' },
-    { label: 'Electricity', value: pdf.cur(snapshot.totalElectricity), color: '' },
-    { label: 'Avg / Invoice', value: pdf.cur(snapshot.avgInvoice), color: '' },
-  ]);
-  y = pdf.section(doc, y, 'Monthly Breakdown');
-  y = pdf.table(doc, y, [['Month', 'Invoices', 'Electricity', 'Total']], snapshot.monthRows.map((row) => [
-    tenantMonthLabel(row.monthKey),
-    Number(row.invoice_count || 0),
-    pdf.cur(row.electricity),
-    pdf.cur(row.total),
-  ]), {
-    1: { halign: 'center', cellWidth: 25 },
-    2: { halign: 'right', cellWidth: 38 },
-    3: { halign: 'right', cellWidth: 40, fontStyle: 'bold' },
-  }, true);
-  y = pdf.section(doc, y, 'Tenant Totals');
-  y = pdf.table(doc, y, [['Tenant', 'Room', 'Total']], (snapshot.tenantTotals.length ? snapshot.tenantTotals : [{ tenant: { tenant_name: 'No rows' }, total: 0 }]).map((entry) => [
-    entry.tenant?.tenant_name || 'No rows',
-    entry.tenant ? (snapshot.roomMap.get(String(entry.tenant.room_id))?.room_label || '-') : '-',
-    entry.tenant ? pdf.cur(entry.total) : '-',
-  ]), {
-    2: { halign: 'right', cellWidth: 44, fontStyle: 'bold' },
-  }, true);
-  y = pdf.section(doc, y, 'Room Totals');
-  pdf.table(doc, y, [['Room', 'Floor / Type', 'Total']], (snapshot.roomTotals.length ? snapshot.roomTotals : [{ room: { room_label: 'No rows', floor_label: '-' }, total: 0 }]).map((entry) => [
-    entry.room?.room_label || 'No rows',
-    entry.room ? (entry.room.floor_label || entry.room.room_type || '-') : '-',
-    entry.room ? pdf.cur(entry.total) : '-',
-  ]), {
-    2: { halign: 'right', cellWidth: 44, fontStyle: 'bold' },
-  }, true);
-  pdf.save(doc, `Tenant Report ${building.name || 'Building'}`);
+  renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: `${building.name || 'Building'} Report`,
+      subtitle: `${snapshot.invoiceCount || 0} invoice snapshots`,
+      breadcrumb: 'Tenant analytics',
+      sections: [
+        {
+          title: 'Summary',
+          rows: [
+            { label: 'Selected Total', value: fmtCur(snapshot.totalAmount || 0) },
+            { label: 'Paid', value: fmtCur((snapshot.filteredInvoices || []).reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0)) },
+            { label: 'Rent Total', value: fmtCur(snapshot.totalRent || 0) },
+            { label: 'Electricity', value: fmtCur(snapshot.totalElectricity || 0) },
+            { label: 'Avg / Invoice', value: fmtCur(snapshot.avgInvoice || 0) },
+            { label: 'Rows', value: String(snapshot.invoiceCount || 0) },
+          ],
+        },
+      ],
+      tables: [
+        {
+          title: 'Top Tenants',
+          columns: ['Tenant', 'Total'],
+          amountColumnIndex: 1,
+          rows: (snapshot.tenantTotals || []).map((entry) => [
+            entry.tenant?.tenant_name || 'No rows',
+            fmtCur(entry.total || 0),
+          ]),
+        },
+        {
+          title: 'Room Totals',
+          columns: ['Room', 'Total'],
+          amountColumnIndex: 1,
+          rows: (snapshot.roomTotals || []).map((entry) => [
+            entry.room?.room_label || 'No rows',
+            fmtCur(entry.total || 0),
+          ]),
+        },
+        {
+          title: 'Monthly Breakdown',
+          columns: ['Month', 'Total'],
+          amountColumnIndex: 1,
+          rows: (snapshot.monthRows || []).map((row) => [
+            tenantMonthLabel(row.monthKey),
+            fmtCur(row.total || 0),
+          ]),
+        },
+      ],
+    },
+  }, `Tenant_Report_${building.name || 'Building'}`, `tenant-report-${building.name || 'building'}`);
 }
 
 function downloadTenantMonthInvoicesPdf(buildingId = _selectedTenantBuildingId, monthKey = tenantCurrentMonthKey()) {
-  const pdf = tenantPdfHelper();
-  if (!pdf) return;
   const building = tenantFindBuilding(buildingId);
   if (!building) { toast('Building not found.', 'error'); return; }
   const monthInvoices = getTenantMonthInvoices(building, monthKey);
   if (!monthInvoices.length) { toast('No invoices found for this month.', 'warning'); return; }
   const totalAmount = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0));
   const totalPaid = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.paid_amount || 0), 0));
-  const pendingAmount = tenantNum(totalAmount - totalPaid);
-  const doc = pdf.init(true);
-  let y = pdf.header(doc, `Tenant Invoices - ${building.name || 'Building'}`, tenantMonthLabel(monthKey));
-  y = pdf.cards(doc, y, [
-    { label: 'Invoices', value: String(monthInvoices.length), color: '' },
-    { label: 'Total', value: pdf.cur(totalAmount), color: 'green' },
-    { label: 'Paid', value: pdf.cur(totalPaid), color: '' },
-    { label: 'Pending', value: pdf.cur(pendingAmount), color: '' },
-  ]);
-  y = pdf.section(doc, y, 'Monthly Invoice Snapshot');
-  pdf.table(doc, y, [['Tenant', 'Room', 'Electricity', 'Status', 'Due Date', 'Total']], monthInvoices.map((invoice) => [
-    invoice.tenant_name_snapshot || 'Tenant',
-    invoice.room_label_snapshot || '-',
-    tenantElectricityUsageText(invoice, {
-      currencyFormatter: pdf.cur,
-      includeAmount: true,
-      compact: true,
-    }),
-    `${tenantInvoiceStatusLabel(invoice.payment_status)}${invoice.payment_status === 'partial_paid' ? ` • ${pdf.cur(invoice.paid_amount || 0)}` : invoice.payment_status === 'paid' ? ` • ${pdf.cur(invoice.paid_amount || invoice.total_amount || 0)}` : ''}`,
-    pdf.dt(invoice.due_date),
-    pdf.cur(invoice.total_amount || 0),
-  ]), {
-    2: { cellWidth: 44 },
-    3: { cellWidth: 42 },
-    4: { cellWidth: 28 },
-    5: { halign: 'right', cellWidth: 30, fontStyle: 'bold' },
-  }, true);
-  pdf.save(doc, `Tenant Invoices ${building.name || 'Building'} ${tenantMonthLabel(monthKey)}`);
+  renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title: `${building.name || 'Building'} Invoices`,
+      subtitle: tenantMonthLabel(monthKey),
+      breadcrumb: `${monthInvoices.length} invoices · Total ${fmtCur(totalAmount)}`,
+      totals: {
+        total: fmtCur(totalAmount),
+        fair: fmtCur(monthInvoices.reduce((sum, invoice) => sum + Number(invoice.electricity_amount || 0), 0)),
+        extra: String(monthInvoices.length),
+        count: String(monthInvoices.filter((invoice) => String(invoice.payment_status || 'pending') === 'paid').length),
+      },
+      tables: [
+        {
+          title: 'Month Invoices',
+          columns: ['Tenant', 'Room', 'Electricity', 'Total', 'Status'],
+          amountColumnIndex: 3,
+          rows: monthInvoices.map((invoice) => [
+            invoice.tenant_name_snapshot || 'Tenant',
+            invoice.room_label_snapshot || 'Room',
+            fmtCur(invoice.electricity_amount || 0),
+            fmtCur(invoice.total_amount || 0),
+            String(invoice.payment_status || 'pending').replace(/_/g, ' '),
+          ]),
+        },
+      ],
+    },
+  }, `Tenant_Invoices_${building.name || 'Building'}_${tenantMonthLabel(monthKey)}`, `tenant-month-${building.name || 'building'}-${monthKey}`);
 }
 
 function renderTenantReportsTab(building) {
