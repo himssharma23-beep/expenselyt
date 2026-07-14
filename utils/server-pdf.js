@@ -6,6 +6,8 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 
 const execFileAsync = promisify(execFile);
+let puppeteerModule = null;
+let puppeteerLoadError = null;
 
 function getPdfOutputDir() {
   const dir = path.join(process.cwd(), 'public', 'uploads', 'generated-pdfs');
@@ -101,27 +103,74 @@ function sanitizeBaseName(value, fallback = 'report') {
   return cleaned || fallback;
 }
 
+function getPuppeteerModule() {
+  if (puppeteerModule) return puppeteerModule;
+  if (puppeteerLoadError) return null;
+  try {
+    // Installed as a regular dependency so server PDF generation does not rely only on system Chrome/Edge.
+    // eslint-disable-next-line global-require, import/no-extraneous-dependencies
+    puppeteerModule = require('puppeteer');
+    return puppeteerModule;
+  } catch (err) {
+    puppeteerLoadError = err;
+    return null;
+  }
+}
+
+async function generatePdfViaPuppeteer(html, pdfPath, browserPath = '') {
+  const puppeteer = getPuppeteerModule();
+  if (!puppeteer) {
+    throw puppeteerLoadError || new Error('Puppeteer is not available for server PDF generation.');
+  }
+  const launchOptions = {
+    headless: true,
+    args: ['--disable-gpu', '--no-sandbox', '--disable-setuid-sandbox'],
+  };
+  if (browserPath) launchOptions.executablePath = browserPath;
+  const browser = await puppeteer.launch(launchOptions);
+  try {
+    const page = await browser.newPage();
+    await page.setContent(String(html || ''), { waitUntil: ['domcontentloaded', 'networkidle0'] });
+    await page.emulateMediaType('screen');
+    await page.pdf({
+      path: pdfPath,
+      format: 'A4',
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+  } finally {
+    try {
+      await browser.close();
+    } catch (_err) {}
+  }
+}
+
 function getPdfServerStatus() {
   const browserPath = findBrowserExecutable();
+  const puppeteer = getPuppeteerModule();
   const outputDir = getPdfOutputDir();
   const envPath = String(process.env.PDF_BROWSER_PATH || '').trim();
   return {
-    ok: !!browserPath,
+    ok: !!browserPath || !!puppeteer,
     browserPath: browserPath || null,
     browserDetected: !!browserPath,
+    puppeteerAvailable: !!puppeteer,
+    puppeteerError: puppeteer ? null : (puppeteerLoadError ? String(puppeteerLoadError.message || puppeteerLoadError) : null),
     configuredBrowserPath: envPath || null,
     configuredBrowserPathExists: !!(envPath && fs.existsSync(envPath)),
     outputDir,
     outputDirExists: fs.existsSync(outputDir),
     platform: process.platform,
     cwd: process.cwd(),
-    fallbackMode: browserPath ? 'server-pdf-file' : 'html-print-preview',
+    fallbackMode: browserPath || puppeteer ? 'server-pdf-file' : 'html-print-preview',
   };
 }
 
 async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
   const browserPath = findBrowserExecutable();
-  if (!browserPath) {
+  const puppeteer = getPuppeteerModule();
+  if (!browserPath && !puppeteer) {
     throw new Error('No Chrome/Edge browser was found for server PDF generation.');
   }
 
@@ -130,25 +179,38 @@ async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const htmlPath = path.join(os.tmpdir(), `${safeBase}-${unique}.html`);
   const pdfPath = path.join(outputDir, `${safeBase}-${unique}.pdf`);
-  fs.writeFileSync(htmlPath, String(html || ''), 'utf8');
+  if (browserPath) {
+    fs.writeFileSync(htmlPath, String(html || ''), 'utf8');
 
-  const args = [
-    '--headless=new',
-    '--disable-gpu',
-    '--allow-file-access-from-files',
-    '--run-all-compositor-stages-before-draw',
-    '--virtual-time-budget=4000',
-    '--no-pdf-header-footer',
-    `--print-to-pdf=${pdfPath}`,
-    pathToFileURL(htmlPath).href,
-  ];
+    const args = [
+      '--headless=new',
+      '--disable-gpu',
+      '--allow-file-access-from-files',
+      '--run-all-compositor-stages-before-draw',
+      '--virtual-time-budget=4000',
+      '--no-pdf-header-footer',
+      `--print-to-pdf=${pdfPath}`,
+      pathToFileURL(htmlPath).href,
+    ];
 
-  try {
-    await execFileAsync(browserPath, args, { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 * 4 });
-  } finally {
+    let browserError = null;
     try {
-      fs.unlinkSync(htmlPath);
-    } catch (_err) {}
+      await execFileAsync(browserPath, args, { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 * 4 });
+    } catch (err) {
+      browserError = err;
+    } finally {
+      try {
+        fs.unlinkSync(htmlPath);
+      } catch (_err) {}
+    }
+    if (browserError) {
+      if (!puppeteer) {
+        throw browserError;
+      }
+      await generatePdfViaPuppeteer(html, pdfPath, '');
+    }
+  } else {
+    await generatePdfViaPuppeteer(html, pdfPath);
   }
 
   if (!fs.existsSync(pdfPath)) {
