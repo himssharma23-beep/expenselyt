@@ -57,6 +57,17 @@ echo "📦 Installing dependencies..."
 rm -rf node_modules
 npm ci --omit=dev
 
+echo "🧾 Verifying server PDF runtime..."
+node - <<'NODE'
+const { getPdfServerStatus } = require('./utils/server-pdf');
+const status = getPdfServerStatus();
+console.log('PDF runtime status:', JSON.stringify(status, null, 2));
+if (!status.ok) {
+  console.error('❌ Server PDF runtime is unavailable. Install puppeteer/chrome before continuing.');
+  process.exit(1);
+}
+NODE
+
 # OPTIONAL: enable if you later add build script
 # echo "🏗️ Building app..."
 # npm run build

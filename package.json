@@ -23,12 +23,10 @@
     "nodemailer": "^6.10.1",
     "pdfjs-dist": "^6.0.227",
     "pg": "^8.20.0",
+    "puppeteer": "^25.3.0",
     "tesseract.js": "^7.0.0",
     "twilio": "^5.13.1",
     "xlsx": "^0.18.5",
     "xlsx-populate": "^1.21.0"
-  },
-  "optionalDependencies": {
-    "puppeteer": "^25.3.0"
   }
 }
