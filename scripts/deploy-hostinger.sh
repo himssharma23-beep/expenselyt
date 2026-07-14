@@ -60,6 +60,20 @@ rm -rf "$PUPPETEER_CACHE_DIR"
 mkdir -p "$PUPPETEER_CACHE_DIR"
 npm ci --omit=dev
 
+echo "🌐 Installing Puppeteer Chrome runtime..."
+npx puppeteer browsers install chrome
+
+echo "🔎 Verifying Puppeteer executable path..."
+node - <<'NODE'
+const puppeteer = require('puppeteer');
+const path = puppeteer.executablePath();
+console.log('Puppeteer executable path:', path);
+if (!path) {
+  console.error('❌ Puppeteer executable path is empty after browser install.');
+  process.exit(1);
+}
+NODE
+
 echo "🧾 Verifying server PDF runtime..."
 node - <<'NODE'
 const { getPdfServerStatus } = require('./utils/server-pdf');

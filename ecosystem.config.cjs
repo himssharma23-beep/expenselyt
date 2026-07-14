@@ -12,6 +12,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: process.env.PORT || 3000,
+        PUPPETEER_CACHE_DIR: process.env.PUPPETEER_CACHE_DIR || '/var/www/expense-lite-ai/shared/.cache/puppeteer',
       },
     },
   ],

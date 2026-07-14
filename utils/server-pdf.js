@@ -9,6 +9,17 @@ const execFileAsync = promisify(execFile);
 let puppeteerModule = null;
 let puppeteerLoadError = null;
 
+function getBundledPuppeteerExecutablePath() {
+  const puppeteer = getPuppeteerModule();
+  if (!puppeteer || typeof puppeteer.executablePath !== 'function') return '';
+  try {
+    const executablePath = String(puppeteer.executablePath() || '').trim();
+    return executablePath && fs.existsSync(executablePath) ? executablePath : '';
+  } catch (_err) {
+    return '';
+  }
+}
+
 function getPdfOutputDir() {
   const dir = path.join(process.cwd(), 'public', 'uploads', 'generated-pdfs');
   fs.mkdirSync(dir, { recursive: true });
@@ -122,11 +133,13 @@ async function generatePdfViaPuppeteer(html, pdfPath, browserPath = '') {
   if (!puppeteer) {
     throw puppeteerLoadError || new Error('Puppeteer is not available for server PDF generation.');
   }
+  const bundledExecutablePath = getBundledPuppeteerExecutablePath();
   const launchOptions = {
     headless: true,
     args: ['--disable-gpu', '--no-sandbox', '--disable-setuid-sandbox'],
   };
   if (browserPath) launchOptions.executablePath = browserPath;
+  else if (bundledExecutablePath) launchOptions.executablePath = bundledExecutablePath;
   const browser = await puppeteer.launch(launchOptions);
   try {
     const page = await browser.newPage();
@@ -149,13 +162,16 @@ async function generatePdfViaPuppeteer(html, pdfPath, browserPath = '') {
 function getPdfServerStatus() {
   const browserPath = findBrowserExecutable();
   const puppeteer = getPuppeteerModule();
+  const bundledExecutablePath = getBundledPuppeteerExecutablePath();
   const outputDir = getPdfOutputDir();
   const envPath = String(process.env.PDF_BROWSER_PATH || '').trim();
   return {
-    ok: !!browserPath || !!puppeteer,
+    ok: !!browserPath || !!bundledExecutablePath,
     browserPath: browserPath || null,
     browserDetected: !!browserPath,
     puppeteerAvailable: !!puppeteer,
+    puppeteerExecutablePath: bundledExecutablePath || null,
+    puppeteerExecutableDetected: !!bundledExecutablePath,
     puppeteerError: puppeteer ? null : (puppeteerLoadError ? String(puppeteerLoadError.message || puppeteerLoadError) : null),
     configuredBrowserPath: envPath || null,
     configuredBrowserPathExists: !!(envPath && fs.existsSync(envPath)),
@@ -163,14 +179,15 @@ function getPdfServerStatus() {
     outputDirExists: fs.existsSync(outputDir),
     platform: process.platform,
     cwd: process.cwd(),
-    fallbackMode: browserPath || puppeteer ? 'server-pdf-file' : 'html-print-preview',
+    fallbackMode: browserPath || bundledExecutablePath ? 'server-pdf-file' : 'html-print-preview',
   };
 }
 
 async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
   const browserPath = findBrowserExecutable();
   const puppeteer = getPuppeteerModule();
-  if (!browserPath && !puppeteer) {
+  const bundledExecutablePath = getBundledPuppeteerExecutablePath();
+  if (!browserPath && !bundledExecutablePath && !puppeteer) {
     throw new Error('No Chrome/Edge browser was found for server PDF generation.');
   }
 
@@ -207,10 +224,10 @@ async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
       if (!puppeteer) {
         throw browserError;
       }
-      await generatePdfViaPuppeteer(html, pdfPath, '');
+      await generatePdfViaPuppeteer(html, pdfPath, bundledExecutablePath || '');
     }
   } else {
-    await generatePdfViaPuppeteer(html, pdfPath);
+    await generatePdfViaPuppeteer(html, pdfPath, bundledExecutablePath || '');
   }
 
   if (!fs.existsSync(pdfPath)) {
