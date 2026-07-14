@@ -2016,7 +2016,14 @@ async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', f
       try { downloadLink.remove(); } catch (_err) {}
     }, 0);
   } catch (err) {
-    toast(String(err?.message || 'Could not open shared PDF.'), 'error');
+    const message = String(err?.message || 'Could not open shared PDF.');
+    const shouldFallback = /No Chrome\/Edge browser was found|Puppeteer is not available|Could not build PDF file|Server PDF generation/i.test(message);
+    if (shouldFallback) {
+      toast('Server PDF is unavailable right now. Opening print view instead.', 'warning');
+      await renderSharedPdfHtmlWindow(payload, windowTitle);
+      return;
+    }
+    toast(message, 'error');
   }
 }
 

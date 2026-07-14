@@ -15809,6 +15809,159 @@ function downloadBankHistoryPdf() {
   win.document.close();
 }
 
+async function downloadBankHistoryPdf() {
+  const bank = _bankHistoryState.bank || null;
+  const rows = _bankHistoryFilteredRows();
+  if (!bank || !rows.length) {
+    toast('No bank history rows to export', 'warning');
+    return;
+  }
+  const credits = rows.reduce((sum, row) => sum + (String(row.direction || '').toLowerCase() === 'credit' ? Number(row.amount || 0) : 0), 0);
+  const debits = rows.reduce((sum, row) => sum + (String(row.direction || '').toLowerCase() === 'debit' ? Number(row.amount || 0) : 0), 0);
+  const title = `${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''} Bank History`;
+  const rangeLabel = [_bankHistoryState.from || '', _bankHistoryState.to || ''].filter(Boolean).join(' to ') || 'All dates';
+  const subtitle = `Filter: ${(_bankHistoryState.filter || 'all').toUpperCase()} · ${rangeLabel} · ${rows.length} entries`;
+
+  await renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title,
+      subtitle,
+      breadcrumb: 'Banks / History',
+      totals: {
+        total: String(rows.length),
+        fair: fmtCur(credits),
+        extra: fmtCur(debits),
+        count: fmtCur(Number(bank.balance || 0)),
+      },
+      tables: [
+        {
+          title: 'History',
+          columns: ['When', 'Type', 'Note', 'Amount', 'Balance After'],
+          rows: rows.map((entry) => {
+            const isCredit = String(entry.direction || '').toLowerCase() === 'credit';
+            const note = [
+              entry.note || '',
+              entry.related_bank_name
+                ? `Other bank: ${entry.related_bank_name}${entry.related_account_name ? ` - ${entry.related_account_name}` : ''}`
+                : '',
+            ].filter(Boolean).join(' | ');
+            return [
+              _bankHistoryTimeLabel(entry.created_at),
+              _bankHistoryTypeLabel(entry),
+              note || '-',
+              `${isCredit ? '+' : '-'}${fmtCur(entry.amount || 0)}`,
+              fmtCur(entry.balance_after || 0),
+            ];
+          }),
+        },
+      ],
+    },
+  }, title, `${(bank.bank_name || 'bank').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-history`);
+}
+
+async function printReport(level) {
+  const mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const now = new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+
+  let title = '';
+  let subtitle = '';
+  let breadcrumb = 'Reports';
+  let totals = null;
+  let tables = [];
+
+  if (level === 'years') {
+    const rows = rptSortArr(_rptYearsData, rptYearSort.field, rptYearSort.dir);
+    const grandTotal = rows.reduce((sum, row) => sum + row.total, 0);
+    const grandFair = rows.reduce((sum, row) => sum + row.fair, 0);
+    const grandExtra = rows.reduce((sum, row) => sum + row.extra, 0);
+    const grandCount = rows.reduce((sum, row) => sum + row.count, 0);
+    title = 'Expense Report - All Years';
+    subtitle = `Generated on ${now}`;
+    totals = {
+      total: fmtCur(grandTotal),
+      fair: fmtCur(grandFair),
+      extra: fmtCur(grandExtra),
+      count: String(grandCount),
+    };
+    tables = [{
+      title: 'Yearly Breakdown',
+      columns: ['Year', 'Total', 'Fair', 'Extra', 'Items'],
+      rows: [
+        ...rows.map((row) => [String(row.year), fmtCur(row.total), fmtCur(row.fair), fmtCur(row.extra), String(row.count)]),
+        ['Grand Total', fmtCur(grandTotal), fmtCur(grandFair), fmtCur(grandExtra), String(grandCount)],
+      ],
+    }];
+  } else if (level === 'months') {
+    const year = reportDrillYear;
+    const rows = rptSortArr(_rptMonthsData.map((row) => ({ ...row, month: parseInt(row.month) })), rptMonthSort.field, rptMonthSort.dir);
+    const yearTotal = rows.reduce((sum, row) => sum + row.total, 0);
+    const yearFair = rows.reduce((sum, row) => sum + row.fair, 0);
+    const yearExtra = rows.reduce((sum, row) => sum + row.extra, 0);
+    const yearCount = rows.reduce((sum, row) => sum + row.count, 0);
+    title = `Expense Report - ${year}`;
+    subtitle = `Monthly breakdown · Generated on ${now}`;
+    breadcrumb = `Reports / ${year}`;
+    totals = {
+      total: fmtCur(yearTotal),
+      fair: fmtCur(yearFair),
+      extra: fmtCur(yearExtra),
+      count: String(yearCount),
+    };
+    tables = [{
+      title: 'Monthly Breakdown',
+      columns: ['Month', 'Total', 'Fair', 'Extra', 'Items'],
+      rows: [
+        ...rows.map((row) => [mNames[row.month - 1], fmtCur(row.total), fmtCur(row.fair), fmtCur(row.extra), String(row.count)]),
+        ['Year Total', fmtCur(yearTotal), fmtCur(yearFair), fmtCur(yearExtra), String(yearCount)],
+      ],
+    }];
+  } else if (level === 'expenses') {
+    const year = reportDrillYear;
+    const month = reportDrillMonth;
+    const monthName = mNames[month - 1];
+    const list = rptSortArr(
+      _rptExpData.map((entry) => ({ ...entry, date: entry.purchase_date, name: entry.item_name })),
+      rptExpSort.field === 'date' ? 'date' : rptExpSort.field === 'amount' ? 'amount' : rptExpSort.field === 'name' ? 'name' : 'is_extra',
+      rptExpSort.dir
+    );
+    const total = list.reduce((sum, entry) => sum + entry.amount, 0);
+    const fair = list.filter((entry) => !entry.is_extra).reduce((sum, entry) => sum + entry.amount, 0);
+    const extra = list.filter((entry) => entry.is_extra).reduce((sum, entry) => sum + entry.amount, 0);
+    title = `Expense Report - ${monthName} ${year}`;
+    subtitle = `${list.length} expenses · Generated on ${now}`;
+    breadcrumb = `Reports / ${year} / ${monthName}`;
+    totals = {
+      total: fmtCur(total),
+      fair: fmtCur(fair),
+      extra: fmtCur(extra),
+      count: String(list.length),
+    };
+    tables = [{
+      title: 'Expenses',
+      columns: ['#', 'Date', 'Description', 'Amount', 'Type'],
+      rows: [
+        ...list.map((entry, index) => [String(index + 1), fmtDate(entry.purchase_date), entry.item_name || '-', fmtCur(entry.amount), entry.is_extra ? 'Extra' : 'Fair']),
+        ['', '', 'Total', fmtCur(total), ''],
+      ],
+    }];
+  } else {
+    toast('Unknown report PDF view', 'warning');
+    return;
+  }
+
+  await renderSharedPdfFileWindow({
+    template: 'structured',
+    payload: {
+      title,
+      subtitle,
+      breadcrumb,
+      totals,
+      tables,
+    },
+  }, title, title.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
+}
+
 function downloadBankHistoryCsv() {
   const bank = _bankHistoryState.bank || null;
   const rows = _bankHistoryFilteredRows();
