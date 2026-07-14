@@ -1987,6 +1987,7 @@ async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
 }
 
 async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', fileNameBase = 'report') {
+  let objectUrl = '';
   try {
     const response = await fetch('/api/pdf/render-file', {
       method: 'POST',
@@ -2004,18 +2005,31 @@ async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', f
     if (!response.ok || data?.error || !pdfUrl) {
       throw new Error(data?.error || 'Could not generate shared PDF.');
     }
+    const pdfResponse = await fetch(pdfUrl, {
+      method: 'GET',
+      credentials: 'same-origin',
+    });
+    if (!pdfResponse.ok) {
+      throw new Error('Could not download generated PDF file.');
+    }
+    const pdfBlob = await pdfResponse.blob();
+    objectUrl = URL.createObjectURL(pdfBlob);
     const downloadLink = document.createElement('a');
-    downloadLink.href = pdfUrl;
+    downloadLink.href = objectUrl;
     downloadLink.download = fileName;
-    downloadLink.target = '_blank';
-    downloadLink.rel = 'noopener';
     downloadLink.style.display = 'none';
     document.body.appendChild(downloadLink);
     downloadLink.click();
     setTimeout(() => {
       try { downloadLink.remove(); } catch (_err) {}
+      if (objectUrl) {
+        try { URL.revokeObjectURL(objectUrl); } catch (_err) {}
+      }
     }, 0);
   } catch (err) {
+    if (objectUrl) {
+      try { URL.revokeObjectURL(objectUrl); } catch (_err) {}
+    }
     const message = String(err?.message || 'Could not open shared PDF.');
     const shouldFallback = /No Chrome\/Edge browser was found|Puppeteer is not available|Could not build PDF file|Server PDF generation/i.test(message);
     if (shouldFallback) {
