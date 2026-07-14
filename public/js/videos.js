@@ -3855,6 +3855,8 @@ function renderVideoSeriesManagerPreview(groupIndex) {
     </div>`;
 }
 
+
+
 function videoCatalogSeriesManagerScanPath(groupIndex) {
   return document.getElementById(`videoSeriesManagerScanPath_${Number(groupIndex || 0)}`)?.value?.trim() || '';
 }
