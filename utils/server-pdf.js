@@ -101,6 +101,24 @@ function sanitizeBaseName(value, fallback = 'report') {
   return cleaned || fallback;
 }
 
+function getPdfServerStatus() {
+  const browserPath = findBrowserExecutable();
+  const outputDir = getPdfOutputDir();
+  const envPath = String(process.env.PDF_BROWSER_PATH || '').trim();
+  return {
+    ok: !!browserPath,
+    browserPath: browserPath || null,
+    browserDetected: !!browserPath,
+    configuredBrowserPath: envPath || null,
+    configuredBrowserPathExists: !!(envPath && fs.existsSync(envPath)),
+    outputDir,
+    outputDirExists: fs.existsSync(outputDir),
+    platform: process.platform,
+    cwd: process.cwd(),
+    fallbackMode: browserPath ? 'server-pdf-file' : 'html-print-preview',
+  };
+}
+
 async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
   const browserPath = findBrowserExecutable();
   if (!browserPath) {
@@ -146,5 +164,6 @@ async function generatePdfFileFromHtml(html, fileNameBase = 'report') {
 
 module.exports = {
   generatePdfFileFromHtml,
+  getPdfServerStatus,
   sanitizeBaseName,
 };

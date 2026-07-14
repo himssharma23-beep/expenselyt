@@ -40,7 +40,7 @@ const {
   buildStructuredPdfHtml,
   buildSocietyPdfHtml,
 } = require('../utils/shared-pdf-html');
-const { generatePdfFileFromHtml, sanitizeBaseName } = require('../utils/server-pdf');
+const { generatePdfFileFromHtml, getPdfServerStatus, sanitizeBaseName } = require('../utils/server-pdf');
 const { sendLiveSplitInviteEmail, sendTenantPaymentRequestEmail, sendSocietyPaymentRequestEmail, sendVideoSeasonAccessRequestEmail, ADMIN_EMAIL } = require('../utils/mailer');
 const { sendSms, normalizePhone, isSmsEnabled } = require('../utils/sms');
 const {
@@ -112,6 +112,15 @@ router.post('/pdf/render-html', requireAuth, async (req, res) => {
     res.json({ html });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Could not build PDF HTML.' });
+  }
+});
+
+router.get('/pdf/status', requireAuth, async (_req, res) => {
+  try {
+    const status = getPdfServerStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not determine PDF status.' });
   }
 });
 
