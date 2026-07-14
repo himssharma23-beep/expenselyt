@@ -55,6 +55,9 @@ cd "$LIVE_DIR"
 
 echo "📦 Installing dependencies..."
 rm -rf node_modules
+export PUPPETEER_CACHE_DIR="$SHARED_DIR/.cache/puppeteer"
+rm -rf "$PUPPETEER_CACHE_DIR"
+mkdir -p "$PUPPETEER_CACHE_DIR"
 npm ci --omit=dev
 
 echo "🧾 Verifying server PDF runtime..."
