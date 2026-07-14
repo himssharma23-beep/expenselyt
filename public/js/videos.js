@@ -3768,6 +3768,8 @@ function videoCatalogSeriesManagerSeasonMetaForRow(row, groupIndex = null) {
   };
 }
 
+
+
 function videoCatalogSeriesManagerEpisodeMetaForRow(row, groupIndex = null) {
   const source = groupIndex == null
     ? String(row?.episodeSource || 'filename')
