@@ -30,6 +30,28 @@
     return value ? (typeof fmtDate === 'function' ? fmtDate(value) : String(value)) : '-';
   }
 
+  function getUserPushDebug(user = {}) {
+    const deviceCount = Number(user.push_device_count || 0);
+    const mobileSessionCount = Number(user.mobile_session_count || 0);
+    if (deviceCount > 0) {
+      return {
+        tone: 'green',
+        label: `Push active${user.push_last_seen_at ? ` - last seen ${fmtAdminDate(user.push_last_seen_at)}` : ''}`,
+      };
+    }
+    if (mobileSessionCount > 0) {
+      const deviceLabel = user.mobile_last_device_name || user.mobile_last_platform || 'mobile app';
+      return {
+        tone: 'amber',
+        label: `Mobile session found on ${deviceLabel}${user.mobile_last_seen_at ? ` - last seen ${fmtAdminDate(user.mobile_last_seen_at)}` : ''} - no active push token`,
+      };
+    }
+    return {
+      tone: 'slate',
+      label: 'No active mobile session or push token found',
+    };
+  }
+
   function chip(status) {
     const normalized = String(status || 'draft').toLowerCase();
     const map = {
@@ -45,6 +67,22 @@
     };
     const current = map[normalized] || map.draft;
     return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:${current[0]};color:${current[1]};font-size:12px;font-weight:700">${esc(current[2])}</span>`;
+  }
+
+  function getDeviceSessionDebug(device = {}) {
+    const mobileSessionCount = Number(device.mobile_session_count || 0);
+    if (mobileSessionCount > 0) {
+      const deviceLabel = device.mobile_last_device_name || device.mobile_last_platform || device.device_name || device.platform || 'mobile app';
+      const ipSuffix = device.mobile_last_ip_address ? ` - IP ${device.mobile_last_ip_address}` : '';
+      return {
+        tone: 'green',
+        label: `Latest app session on ${deviceLabel}${device.mobile_last_seen_at ? ` - last seen ${fmtAdminDate(device.mobile_last_seen_at)}` : ''}${ipSuffix}`,
+      };
+    }
+    return {
+      tone: 'slate',
+      label: 'No active mobile session record found for this user',
+    };
   }
 
   async function fetchJson(url) {
@@ -276,16 +314,22 @@
   }
 
   function renderDevicesTab() {
-    const rows = (state.devices || []).map((row) => `
+    const rows = (state.devices || []).map((row) => {
+      const debug = getDeviceSessionDebug(row);
+      return `
       <tr>
         <td style="padding:12px 10px">${esc(row.display_name)}</td>
         <td style="padding:12px 10px">${esc(row.email)}</td>
         <td style="padding:12px 10px">${esc(row.platform || '-')}</td>
-        <td style="padding:12px 10px">${esc(row.device_name || '-')}</td>
+        <td style="padding:12px 10px">
+          <div style="font-weight:700">${esc(row.device_name || '-')}</div>
+          <div class="admin-push-user-debug tone-${esc(debug.tone)}" style="margin-top:8px">${esc(debug.label)}</div>
+        </td>
         <td style="padding:12px 10px">${esc(row.app_version || '-')}</td>
         <td style="padding:12px 10px">${esc(row.token_preview || '')}</td>
         <td style="padding:12px 10px">${fmtAdminDate(row.last_seen_at)}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     return `
       <div class="card">
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
@@ -410,7 +454,12 @@
           <div class="admin-push-user-meta-row">
             <span class="admin-push-user-meta-chip">${esc(user.role || 'user')}</span>
             <span class="admin-push-user-meta-chip">${user.is_active === false ? 'inactive' : 'active'}</span>
+            ${user.plan_name ? `<span class="admin-push-user-meta-chip">${esc(user.plan_name)}</span>` : ''}
           </div>
+          ${(() => {
+            const debug = getUserPushDebug(user);
+            return `<div class="admin-push-user-debug tone-${esc(debug.tone)}">${esc(debug.label)}</div>`;
+          })()}
         </div>
       </label>`).join('') || '<div style="color:var(--t3);padding:12px">No users found.</div>';
     const meta = document.getElementById('adminPushUserPickerMeta');

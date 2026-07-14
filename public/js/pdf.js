@@ -1945,14 +1945,7 @@ function downloadSocietyCustomPdf(options = {}) {
   _P.save(doc, `Society_Custom_${society.name}`);
 }
 
-async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
-  const previewWin = window.open('', '_blank');
-  if (!previewWin) {
-    toast('Please allow popups to open the PDF preview.', 'warning');
-    return;
-  }
-  previewWin.document.write('<!DOCTYPE html><html><head><title>Loading PDF...</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Preparing PDF preview...</body></html>');
-  previewWin.document.close();
+async function renderSharedPdfHtmlIntoWindow(previewWin, payload, windowTitle = 'PDF Preview') {
   try {
     const response = await fetch('/api/pdf/render-html', {
       method: 'POST',
@@ -1972,6 +1965,21 @@ async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
     previewWin.document.write(withPrint);
     previewWin.document.close();
     try { previewWin.document.title = windowTitle; } catch (_err) {}
+  } catch (err) {
+    throw err;
+  }
+}
+
+async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
+  const previewWin = window.open('', '_blank');
+  if (!previewWin) {
+    toast('Please allow popups to open the PDF preview.', 'warning');
+    return;
+  }
+  previewWin.document.write('<!DOCTYPE html><html><head><title>Loading PDF...</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Preparing PDF preview...</body></html>');
+  previewWin.document.close();
+  try {
+    await renderSharedPdfHtmlIntoWindow(previewWin, payload, windowTitle);
   } catch (err) {
     try { previewWin.close(); } catch (_closeErr) {}
     toast(err.message || 'Could not open shared PDF.', 'error');
@@ -2004,8 +2012,24 @@ async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', f
     }
     previewWin.location.replace(pdfUrl);
   } catch (err) {
+    const message = String(err?.message || '');
+    const browserMissing = /No Chrome\/Edge browser was found for server PDF generation/i.test(message);
+    if (browserMissing) {
+      try {
+        previewWin.document.open();
+        previewWin.document.write(`<!DOCTYPE html><html><head><title>${windowTitle}</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Server PDF browser not available. Opening print preview fallback...</body></html>`);
+        previewWin.document.close();
+        await renderSharedPdfHtmlIntoWindow(previewWin, payload, windowTitle);
+        toast('Server PDF browser was not available, so a print-friendly preview was opened instead.', 'warning');
+        return;
+      } catch (fallbackErr) {
+        try { previewWin.close(); } catch (_closeErr) {}
+        toast(fallbackErr?.message || message || 'Could not open shared PDF.', 'error');
+        return;
+      }
+    }
     try { previewWin.close(); } catch (_closeErr) {}
-    toast(err.message || 'Could not open shared PDF.', 'error');
+    toast(message || 'Could not open shared PDF.', 'error');
   }
 }
 
@@ -2034,6 +2058,17 @@ async function downloadSocietyMonthPdf() {
       detail: _societyDetail,
     },
   }, `Society_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-month-${_societyDetail?.society?.name || 'report'}`);
+}
+
+async function downloadSocietyMobileMonthPdf() {
+  if (!_societyDetail?.society) return;
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'mobile_month',
+      detail: _societyDetail,
+    },
+  }, `Society_Mobile_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-mobile-month-${_societyDetail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyMemberPdf(memberId) {

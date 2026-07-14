@@ -563,6 +563,21 @@ async function ensureSchema() {
 
 async function listUsersForTargeting(options = {}) {
   await ensureSchema();
+  await query(
+    `CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
+      sid TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      auth_tag TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'mobile',
+      client_name TEXT NULL,
+      device_name TEXT NULL,
+      user_agent TEXT NULL,
+      ip_address TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ NULL
+    )`
+  );
   const pageSize = clampPageSize(options.page_size || 20);
   const offset = pageOffset(options.page || 1, pageSize);
   const search = String(options.search || '').trim().toLowerCase();
@@ -603,8 +618,12 @@ async function listUsersForTargeting(options = {}) {
        pl.name AS plan_name,
        COALESCE(dev.device_count, 0) AS push_device_count,
        dev.last_seen_at AS push_last_seen_at,
+       COALESCE(ms.mobile_session_count, 0) AS mobile_session_count,
+       ms.last_seen_at AS mobile_last_seen_at,
+       ms.platform AS mobile_last_platform,
+       ms.device_name AS mobile_last_device_name,
        COUNT(*) OVER() AS total_count
-     FROM users u
+      FROM users u
      LEFT JOIN LATERAL (
        SELECT us.plan_id
        FROM user_subscriptions us
@@ -614,13 +633,25 @@ async function listUsersForTargeting(options = {}) {
        LIMIT 1
      ) sub ON TRUE
      LEFT JOIN plans pl ON pl.id = sub.plan_id
-     LEFT JOIN LATERAL (
-       SELECT COUNT(*) AS device_count, MAX(last_seen_at) AS last_seen_at
-       FROM push_device_tokens pdt
-       WHERE pdt.user_id = u.id
-         AND pdt.deleted_at IS NULL
-     ) dev ON TRUE
-     WHERE ${where.join(' AND ')}
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS device_count, MAX(last_seen_at) AS last_seen_at
+        FROM push_device_tokens pdt
+        WHERE pdt.user_id = u.id
+          AND pdt.deleted_at IS NULL
+      ) dev ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) OVER() AS mobile_session_count,
+          mas.last_seen_at,
+          mas.platform,
+          mas.device_name
+        FROM mobile_auth_sessions mas
+        WHERE mas.user_id = u.id
+          AND mas.revoked_at IS NULL
+        ORDER BY mas.last_seen_at DESC NULLS LAST, mas.created_at DESC NULLS LAST
+        LIMIT 1
+      ) ms ON TRUE
+      WHERE ${where.join(' AND ')}
      ORDER BY COALESCE(dev.last_seen_at, u.created_at) DESC, u.id DESC
      LIMIT $${params.length - 1}
      OFFSET $${params.length}`,
@@ -640,6 +671,10 @@ async function listUsersForTargeting(options = {}) {
       plan_name: row.plan_name || null,
       push_device_count: Number(row.push_device_count || 0),
       push_last_seen_at: row.push_last_seen_at || null,
+      mobile_session_count: Number(row.mobile_session_count || 0),
+      mobile_last_seen_at: row.mobile_last_seen_at || null,
+      mobile_last_platform: row.mobile_last_platform || null,
+      mobile_last_device_name: row.mobile_last_device_name || null,
     })),
     pagination: {
       page: Math.max(1, Math.trunc(toNumber(options.page, 1) || 1)),
@@ -1135,6 +1170,7 @@ async function cancelScheduledCampaign(campaignId, actorUserId = null) {
 
 async function listDeviceTokens(options = {}) {
   await ensureSchema();
+  await ensureMobileAuthSessionsTable();
   const pageSize = clampPageSize(options.page_size || 20);
   const offset = pageOffset(options.page || 1, pageSize);
   const search = String(options.search || '').trim().toLowerCase();
@@ -1156,9 +1192,27 @@ async function listDeviceTokens(options = {}) {
        pdt.*,
        u.display_name,
        u.email,
+       COALESCE(ms.mobile_session_count, 0) AS mobile_session_count,
+       ms.last_seen_at AS mobile_last_seen_at,
+       ms.platform AS mobile_last_platform,
+       ms.device_name AS mobile_last_device_name,
+       ms.ip_address AS mobile_last_ip_address,
        COUNT(*) OVER() AS total_count
      FROM push_device_tokens pdt
      JOIN users u ON u.id = pdt.user_id
+     LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*) OVER() AS mobile_session_count,
+         mas.last_seen_at,
+         mas.platform,
+         mas.device_name,
+         mas.ip_address
+       FROM mobile_auth_sessions mas
+       WHERE mas.user_id = u.id
+         AND mas.revoked_at IS NULL
+       ORDER BY mas.last_seen_at DESC NULLS LAST, mas.created_at DESC NULLS LAST
+       LIMIT 1
+     ) ms ON TRUE
      WHERE ${where.join(' AND ')}
      ORDER BY pdt.last_seen_at DESC NULLS LAST, pdt.id DESC
      LIMIT $${params.length - 1}
@@ -1177,6 +1231,11 @@ async function listDeviceTokens(options = {}) {
       app_version: row.app_version || null,
       token_preview: String(row.expo_push_token || '').slice(0, 18) + '...',
       last_seen_at: row.last_seen_at || null,
+      mobile_session_count: Number(row.mobile_session_count || 0),
+      mobile_last_seen_at: row.mobile_last_seen_at || null,
+      mobile_last_platform: row.mobile_last_platform || null,
+      mobile_last_device_name: row.mobile_last_device_name || null,
+      mobile_last_ip_address: row.mobile_last_ip_address || null,
       created_at: row.created_at || null,
       updated_at: row.updated_at || null,
     })),

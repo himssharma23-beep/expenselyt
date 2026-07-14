@@ -908,6 +908,7 @@ async function deactivatePushDeviceTokens(tokens = []) {
 async function getAdminPushUsers(search = '', planId = null) {
   const trimmed = String(search || '').trim();
   const params = [];
+  await ensureMobileAuthSessionsTable();
   let whereSql = `WHERE u.deleted_at IS NULL`;
   if (trimmed) {
     params.push(`%${trimmed}%`);
@@ -932,24 +933,40 @@ async function getAdminPushUsers(search = '', planId = null) {
        current_plan.plan_id,
        current_plan.plan_name,
        COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) AS push_device_count,
-       MAX(t.last_seen_at) FILTER (WHERE t.deleted_at IS NULL) AS push_last_seen_at
-     FROM users u
-     LEFT JOIN LATERAL (
-       SELECT s.plan_id, p.name AS plan_name
+       MAX(t.last_seen_at) FILTER (WHERE t.deleted_at IS NULL) AS push_last_seen_at,
+       COALESCE(ms.mobile_session_count, 0) AS mobile_session_count,
+       ms.last_seen_at AS mobile_last_seen_at,
+       ms.platform AS mobile_last_platform,
+       ms.device_name AS mobile_last_device_name
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT s.plan_id, p.name AS plan_name
        FROM user_subscriptions s
        JOIN plans p ON p.id = s.plan_id
        WHERE s.user_id = u.id
          AND s.status = 'active'
          AND (s.end_date IS NULL OR s.end_date >= CURRENT_DATE)
        ORDER BY s.end_date NULLS LAST, s.id DESC
-       LIMIT 1
-     ) current_plan ON TRUE
-     LEFT JOIN push_device_tokens t ON t.user_id = u.id
-     ${whereSql}
-     GROUP BY u.id, current_plan.plan_id, current_plan.plan_name
-     ORDER BY
-       COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) DESC,
-       lower(u.display_name) ASC
+        LIMIT 1
+      ) current_plan ON TRUE
+      LEFT JOIN push_device_tokens t ON t.user_id = u.id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) OVER() AS mobile_session_count,
+          mas.last_seen_at,
+          mas.platform,
+          mas.device_name
+        FROM mobile_auth_sessions mas
+        WHERE mas.user_id = u.id
+          AND mas.revoked_at IS NULL
+        ORDER BY mas.last_seen_at DESC NULLS LAST, mas.created_at DESC NULLS LAST
+        LIMIT 1
+      ) ms ON TRUE
+      ${whereSql}
+      GROUP BY u.id, current_plan.plan_id, current_plan.plan_name, ms.mobile_session_count, ms.last_seen_at, ms.platform, ms.device_name
+      ORDER BY
+        COUNT(t.id) FILTER (WHERE t.deleted_at IS NULL) DESC,
+        lower(u.display_name) ASC
      LIMIT 200`,
     params
   );
@@ -960,10 +977,14 @@ async function getAdminPushUsers(search = '', planId = null) {
     email: row.email,
     is_active: !!row.is_active,
     plan_id: row.plan_id ? Number(row.plan_id) : null,
-    plan_name: row.plan_name || null,
-    push_device_count: Number(row.push_device_count || 0),
-    push_last_seen_at: row.push_last_seen_at || null,
-  }));
+     plan_name: row.plan_name || null,
+     push_device_count: Number(row.push_device_count || 0),
+     push_last_seen_at: row.push_last_seen_at || null,
+     mobile_session_count: Number(row.mobile_session_count || 0),
+     mobile_last_seen_at: row.mobile_last_seen_at || null,
+     mobile_last_platform: row.mobile_last_platform || null,
+     mobile_last_device_name: row.mobile_last_device_name || null,
+   }));
   const userIds = users.map((row) => row.id);
   const devicesByUser = new Map();
   if (userIds.length) {

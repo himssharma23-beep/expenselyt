@@ -3753,6 +3753,9 @@
         <label class="fl">Amount
           <input class="fi" type="number" step="0.01" min="0.01" value="${escHtml(String(settle.amount || ''))}" oninput="liveSplitSettleField('amount', this.value)">
         </label>
+        <label class="fl">Date
+          <input class="fi" type="date" value="${escHtml(String(settle.settlement_date || todayLocalIso()))}" onchange="liveSplitSettleField('settlement_date', this.value)">
+        </label>
         <div>
           <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Settlement Type</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -4122,6 +4125,7 @@
       friend_id: id,
       amount: outstanding > 0 ? String(outstanding) : '',
       direction,
+      settlement_date: todayLocalIso(),
       outstanding_amount: outstanding,
       record_finance: false,
       finance_target: 'none',
@@ -4193,6 +4197,7 @@
       toast('Enter a valid amount', 'warning');
       return;
     }
+    const settlementDate = toLocalIsoDate(settle.settlement_date, todayLocalIso());
     const paidBy = settle.direction === 'paid' ? 'You' : String(friend.name || '').trim();
     const sessionKey = `live_settle_${Date.now()}`;
     try {
@@ -4201,7 +4206,7 @@
       await api('/api/live-split/groups', {
         method: 'POST',
         body: {
-          divide_date: todayLocalIso(),
+          divide_date: settlementDate,
           details: 'Settlement',
           paid_by: paidBy,
           total_amount: amount,
@@ -4224,7 +4229,7 @@
             method: 'POST',
             body: {
               card_id: cardId,
-              txn_date: todayLocalIso(),
+              txn_date: settlementDate,
               description: `Settlement - ${String(friend.name || 'Friend').trim()}`,
               amount,
               discount_pct: Number(settle.card_discount_pct || 0),

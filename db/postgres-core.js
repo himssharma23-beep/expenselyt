@@ -1448,17 +1448,27 @@ async function updateExpense(userId, id, data) {
     const nextBankAccountId = normalizeBankAccountId(data.bank_account_id);
     const prevBankAccountId = normalizeBankAccountId(current.bank_account_id);
     const prevAmount = Math.abs(num(current.amount));
-    if (prevBankAccountId) {
-      await adjustBankBalance(userId, prevBankAccountId, prevAmount, client, {
-        entry_type: 'fund_added',
-        note: `Expense updated refund: ${String(current.item_name || itemName || 'Expense').trim()}`,
-      });
-    }
-    if (nextBankAccountId) {
-      await adjustBankBalance(userId, nextBankAccountId, -nextAmount, client, {
-        entry_type: 'fund_removed',
-        note: `Expense: ${itemName}`,
-      });
+    if (prevBankAccountId && nextBankAccountId && String(prevBankAccountId) === String(nextBankAccountId)) {
+      const diff = Math.round((nextAmount - prevAmount) * 100) / 100;
+      if (diff !== 0) {
+        await adjustBankBalance(userId, nextBankAccountId, -diff, client, {
+          entry_type: diff > 0 ? 'fund_removed' : 'fund_added',
+          note: `Expense updated: ${itemName}`,
+        });
+      }
+    } else {
+      if (prevBankAccountId) {
+        await adjustBankBalance(userId, prevBankAccountId, prevAmount, client, {
+          entry_type: 'fund_added',
+          note: `Expense updated refund: ${String(current.item_name || itemName || 'Expense').trim()}`,
+        });
+      }
+      if (nextBankAccountId) {
+        await adjustBankBalance(userId, nextBankAccountId, -nextAmount, client, {
+          entry_type: 'fund_removed',
+          note: `Expense: ${itemName}`,
+        });
+      }
     }
     await client.query(
       `UPDATE expenses
@@ -8743,17 +8753,27 @@ async function syncTripExpenseLedger(userId, previousExpense = null, nextExpense
   const prevAmount = Math.abs(num(prev?.amount));
   const nextAmount = Math.abs(num(next?.amount));
 
-  if (prevBankId && (!nextBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
-    await adjustBankBalance(userId, prevBankId, prevAmount, client, {
-      entry_type: 'fund_added',
-      note: `Trip expense refund: ${String(prev?.details || 'Trip expense').trim()}`,
-    });
-  }
-  if (nextBankId && (!prevBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
-    await adjustBankBalance(userId, nextBankId, -nextAmount, client, {
-      entry_type: 'fund_removed',
-      note: `Trip expense: ${String(next?.details || 'Trip expense').trim()}`,
-    });
+  if (prevBankId && nextBankId && String(prevBankId) === String(nextBankId)) {
+    const diff = Math.round((nextAmount - prevAmount) * 100) / 100;
+    if (diff !== 0) {
+      await adjustBankBalance(userId, nextBankId, -diff, client, {
+        entry_type: diff > 0 ? 'fund_removed' : 'fund_added',
+        note: `Trip expense updated: ${String(next?.details || prev?.details || 'Trip expense').trim()}`,
+      });
+    }
+  } else {
+    if (prevBankId && (!nextBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
+      await adjustBankBalance(userId, prevBankId, prevAmount, client, {
+        entry_type: 'fund_added',
+        note: `Trip expense refund: ${String(prev?.details || 'Trip expense').trim()}`,
+      });
+    }
+    if (nextBankId && (!prevBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
+      await adjustBankBalance(userId, nextBankId, -nextAmount, client, {
+        entry_type: 'fund_removed',
+        note: `Trip expense: ${String(next?.details || 'Trip expense').trim()}`,
+      });
+    }
   }
 
   if (!next?.card_id) {

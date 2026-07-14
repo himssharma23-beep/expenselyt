@@ -652,6 +652,134 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     });
   }
 
+  if (action === 'mobile_month_v2') {
+    const totals = detail?.totals || {};
+    const monthKey = detail?.selected_month;
+    const monthHeading = monthLabel(monthKey);
+    const rows = sortMembers(detail?.members || []).map((member) => `
+      <tr>
+        <td style="font-weight:800;color:#213f31;padding:14px 12px">${escapeHtml(memberLabel(member))}</td>
+        <td style="color:#63716a;padding:14px 12px">${escapeHtml(memberPhoneDisplay(member))}</td>
+        <td style="font-weight:800;color:#2f7b53;text-align:right;padding:14px 12px">${escapeHtml(fmtCur(member.selected_month_amount || 0))}</td>
+      </tr>
+    `).join('');
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #173228; margin: 0; font-size: 11px; background: #fff; }
+            .hero { background: #1f4a33; color: #fff; padding: 22px; margin-bottom: 18px; }
+            .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800; opacity: .95; }
+            .title { font-size: 21px; font-weight: 800; margin-top: 10px; }
+            .subtitle { font-size: 13px; margin-top: 8px; opacity: .94; }
+            .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #d9e0db; margin: 0 8px 20px; }
+            .card { min-height: 138px; padding: 14px 14px 12px; border-right: 1px solid #d9e0db; border-bottom: 1px solid #d9e0db; }
+            .card:nth-child(2n) { border-right: none; }
+            .card:nth-last-child(-n+2) { border-bottom: none; }
+            .card-label { color: #6f7671; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 30px; }
+            .card-value { color: #244837; font-size: 22px; font-weight: 800; line-height: 1.2; }
+            .card-meta { color: #6f7671; font-size: 10px; margin-top: 32px; }
+            .members-wrap { margin: 0 10px 12px; }
+            .members-title { font-size: 16px; font-weight: 800; color: #244837; text-transform: uppercase; }
+            .members-sub { color: #6f7671; font-size: 11px; margin-top: 2px; }
+            .section-title { margin: 0 10px 10px; font-size: 17px; font-weight: 800; color: #244837; }
+            .table-wrap { border: 1px solid #dfe6e1; margin: 0; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+            th { background: #2f6848; color: #fff; text-align: left; padding: 12px; font-size: 10px; font-weight: 800; }
+            td { border-bottom: 1px solid #e3ebe6; vertical-align: middle; font-size: 11px; word-break: break-word; overflow-wrap: anywhere; }
+            tbody tr:nth-child(even) td { background: #f4f8f5; }
+            tbody tr:last-child td { border-bottom: none; }
+          </style>
+        </head>
+        <body>
+          <div class="hero">
+            <div class="eyebrow">Society Report</div>
+            <div class="title">${escapeHtml(detail?.society?.name || 'Society')}</div>
+            <div class="subtitle">${escapeHtml(`${detail?.society?.location || 'Not added'} • ${Number(totals.member_count || 0)} Members • ${monthHeading}`)}</div>
+          </div>
+          <div class="cards">
+            <div class="card">
+              <div class="card-label">Total Collected</div>
+              <div class="card-value">${escapeHtml(fmtCur(totals.selected_month_collected || 0))}</div>
+              <div class="card-meta">${escapeHtml(`${Number(totals.selected_month_paid_count || 0)}/${Number(totals.member_count || 0)} paid`)}</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Total Expenses</div>
+              <div class="card-value">${escapeHtml(fmtCur(totals.selected_month_spent || 0))}</div>
+              <div class="card-meta">${escapeHtml(`${Number(totals.selected_month_expense_count || 0)} entries`)}</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Net Balance</div>
+              <div class="card-value">${escapeHtml(fmtCur(totals.selected_month_balance || 0))}</div>
+              <div class="card-meta">${escapeHtml(Number(totals.selected_month_balance || 0) >= 0 ? 'surplus' : 'deficit')}</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Net Bank Balance</div>
+              <div class="card-value">${escapeHtml(fmtCur(totals.overall_balance || 0))}</div>
+              <div class="card-meta">till today</div>
+            </div>
+          </div>
+          <div class="members-wrap">
+            <div class="members-title">Members</div>
+            <div class="members-sub">${escapeHtml(`${Number(totals.member_count || 0)} registered`)}</div>
+          </div>
+          <div class="section-title">${escapeHtml(`Monthly Contributions - ${monthHeading}`)}</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:52%">Member</th>
+                  <th style="width:28%">Phone</th>
+                  <th style="width:20%;text-align:right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  if (action === 'mobile_month') {
+    return buildSocietyPdfHtml('mobile_month_v2', detail, options, prefs);
+  }
+
+  if (action === 'mobile_month') {
+    const monthKey = detail?.selected_month;
+    const rows = sortMembers(detail?.members || []).map((member) => [
+      memberLabel(member),
+      member.unit_label || '-',
+      memberPhoneDisplay(member),
+      fmtCur(member.selected_month_amount || 0),
+      member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-',
+    ]);
+    return buildPdfShell({
+      hero: renderHero({
+        title: detail?.society?.name || 'Society',
+        location: detail?.society?.location || 'Not added',
+        metaRight: `${Number(detail?.totals?.member_count || 0)} Members`,
+        period: monthLabel(monthKey),
+        cards: statCardsData(detail, 'month'),
+      }),
+      landscape: false,
+      body: `
+        ${renderSectionBand('Monthly Contributions', `${monthLabel(monthKey)} • Mobile view`)}
+        <div class="table-card">
+          ${renderTable(['Member', 'House No.', 'Phone', 'Amount', 'Paid On'], rows, {
+            numericColumns: [3],
+            nowrapColumns: [3, 4],
+            columnWidths: ['30%', '14%', '24%', '16%', '16%'],
+          })}
+        </div>
+      `,
+    });
+  }
+
   if (action === 'member') {
     const member = options.member || {};
     const balanceSummary = options.balance_summary || detail?.balance_summary || {};

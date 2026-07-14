@@ -23,6 +23,9 @@ function findBrowserExecutable() {
         'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
         'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
         'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        path.join(String(process.env.LOCALAPPDATA || ''), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(String(process.env.LOCALAPPDATA || ''), 'Chromium', 'Application', 'chrome.exe'),
+        path.join(String(process.env.LOCALAPPDATA || ''), 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
       ]
     : [
         '/usr/bin/google-chrome',
@@ -31,9 +34,61 @@ function findBrowserExecutable() {
         '/usr/bin/chromium-browser',
         '/usr/bin/microsoft-edge',
         '/snap/bin/chromium',
+        '/opt/google/chrome/chrome',
+        '/opt/microsoft/msedge/msedge',
       ];
 
-  return candidates.find((candidate) => fs.existsSync(candidate)) || '';
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+
+  if (process.platform === 'win32') {
+    const registryCandidates = [
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
+    ];
+    for (const registryKey of registryCandidates) {
+      try {
+        const result = require('child_process').spawnSync('reg', ['query', registryKey, '/ve'], {
+          windowsHide: true,
+          encoding: 'utf8',
+        });
+        const output = String(result?.stdout || '');
+        const match = output.match(/[A-Z]:\\[^\r\n]+?\.(?:exe)/i);
+        if (match && fs.existsSync(match[0])) return match[0];
+      } catch (_err) {}
+    }
+    const pathCommands = ['chrome.exe', 'msedge.exe', 'chrome', 'msedge'];
+    for (const cmd of pathCommands) {
+      try {
+        const result = require('child_process').spawnSync('where', [cmd], {
+          windowsHide: true,
+          encoding: 'utf8',
+        });
+        const lines = String(result?.stdout || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const hit = lines.find((line) => fs.existsSync(line));
+        if (hit) return hit;
+      } catch (_err) {}
+    }
+  } else {
+    const pathCommands = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge'];
+    for (const cmd of pathCommands) {
+      try {
+        const result = require('child_process').spawnSync('which', [cmd], {
+          encoding: 'utf8',
+        });
+        const hit = String(result?.stdout || '').trim();
+        if (hit && fs.existsSync(hit)) return hit;
+      } catch (_err) {}
+    }
+  }
+
+  return '';
 }
 
 function sanitizeBaseName(value, fallback = 'report') {
