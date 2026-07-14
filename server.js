@@ -147,7 +147,7 @@ app.get('/tenant-portal', (req, res, next) => {
       widgetId: '',
       tokenAuth: '',
     };
-    const tenantPortalAssetVersion = 'tenant-portal-live-v5';
+    const tenantPortalAssetVersion = 'tenant-portal-live-v6';
     html = html.replace(
       '/js/tenant-portal-live.js',
       `/js/tenant-portal-live.js?v=${encodeURIComponent(tenantPortalAssetVersion)}`
@@ -169,7 +169,7 @@ app.get('/society-portal', (req, res, next) => {
   try {
     const templatePath = path.resolve(__dirname, 'views', 'society-portal.html');
     let html = fs.readFileSync(templatePath, 'utf8');
-    const societyPortalAssetVersion = 'society-portal-v1';
+    const societyPortalAssetVersion = 'society-portal-v2';
     html = html.replace(
       '/js/society-portal.js',
       `/js/society-portal.js?v=${encodeURIComponent(societyPortalAssetVersion)}`

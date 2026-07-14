@@ -1987,13 +1987,6 @@ async function renderSharedPdfHtmlWindow(payload, windowTitle = 'PDF Preview') {
 }
 
 async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', fileNameBase = 'report') {
-  const previewWin = window.open('', '_blank');
-  if (!previewWin) {
-    toast('Please allow popups to open the PDF preview.', 'warning');
-    return;
-  }
-  previewWin.document.write(`<!DOCTYPE html><html><head><title>${windowTitle}</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Generating PDF...</body></html>`);
-  previewWin.document.close();
   try {
     const response = await fetch('/api/pdf/render-file', {
       method: 'POST',
@@ -2007,29 +2000,23 @@ async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', f
     });
     const data = await response.json().catch(() => ({}));
     const pdfUrl = String(data?.absolute_url || data?.url || '').trim();
+    const fileName = String(data?.file_name || `${fileNameBase || 'report'}.pdf`).trim() || 'report.pdf';
     if (!response.ok || data?.error || !pdfUrl) {
       throw new Error(data?.error || 'Could not generate shared PDF.');
     }
-    previewWin.location.replace(pdfUrl);
+    const downloadLink = document.createElement('a');
+    downloadLink.href = pdfUrl;
+    downloadLink.download = fileName;
+    downloadLink.target = '_blank';
+    downloadLink.rel = 'noopener';
+    downloadLink.style.display = 'none';
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    setTimeout(() => {
+      try { downloadLink.remove(); } catch (_err) {}
+    }, 0);
   } catch (err) {
-    const message = String(err?.message || '');
-    const browserMissing = /No Chrome\/Edge browser was found for server PDF generation/i.test(message);
-    if (browserMissing) {
-      try {
-        previewWin.document.open();
-        previewWin.document.write(`<!DOCTYPE html><html><head><title>${windowTitle}</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#1f2937">Server PDF browser not available. Opening print preview fallback...</body></html>`);
-        previewWin.document.close();
-        await renderSharedPdfHtmlIntoWindow(previewWin, payload, windowTitle);
-        toast('Server PDF browser was not available, so a print-friendly preview was opened instead.', 'warning');
-        return;
-      } catch (fallbackErr) {
-        try { previewWin.close(); } catch (_closeErr) {}
-        toast(fallbackErr?.message || message || 'Could not open shared PDF.', 'error');
-        return;
-      }
-    }
-    try { previewWin.close(); } catch (_closeErr) {}
-    toast(message || 'Could not open shared PDF.', 'error');
+    toast(String(err?.message || 'Could not open shared PDF.'), 'error');
   }
 }
 
