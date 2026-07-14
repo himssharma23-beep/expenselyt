@@ -2000,7 +2000,7 @@ async function renderSharedPdfFileWindow(payload, windowTitle = 'PDF Preview', f
       }),
     });
     const data = await response.json().catch(() => ({}));
-    const pdfUrl = String(data?.absolute_url || data?.url || '').trim();
+    const pdfUrl = String(data?.url || data?.absolute_url || '').trim();
     const fileName = String(data?.file_name || `${fileNameBase || 'report'}.pdf`).trim() || 'report.pdf';
     if (!response.ok || data?.error || !pdfUrl) {
       throw new Error(data?.error || 'Could not generate shared PDF.');

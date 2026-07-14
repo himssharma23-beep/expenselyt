@@ -155,9 +155,10 @@ router.post('/pdf/render-file', requireAuth, async (req, res) => {
     }
 
     const result = await generatePdfFileFromHtml(html, sanitizeBaseName(fileNameBase || 'report'));
+    const appBase = String(process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/,'');
     res.json({
       url: result.publicUrl,
-      absolute_url: `${req.protocol}://${req.get('host')}${result.publicUrl}`,
+      absolute_url: `${appBase}${result.publicUrl}`,
       file_name: result.fileName,
     });
   } catch (err) {
