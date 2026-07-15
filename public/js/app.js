@@ -21056,7 +21056,7 @@ function renderSocietiesPage() {
                   <td>${fmtDate(expense.expense_date)}</td>
                   <td>
                     <strong>${escHtml(expense.title)}</strong>
-                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button>` : ''}</div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button> · ${expense.show_attachment_in_portal !== false ? 'Visible in portal' : 'Hidden in portal'}` : ''}</div>
                   </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
@@ -21102,7 +21102,7 @@ function renderSocietiesPage() {
                   <td>${fmtDate(expense.expense_date)}</td>
                   <td>
                     <strong>${escHtml(expense.title)}</strong>
-                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button>` : ''}</div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">${societyEntryTypeLabel(expense.entry_type)}${expense.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>Attachment</button> · ${expense.show_attachment_in_portal !== false ? 'Visible in portal' : 'Hidden in portal'}` : ''}</div>
                   </td>
                   <td>${expense.category ? `<span class="badge" style="background:#fff2cf;color:#b66a05">${escHtml(expense.category)}</span>` : '-'}</td>
                   <td>${escHtml(expense.notes || '—')}</td>
@@ -21462,6 +21462,9 @@ function renderSocietiesPage() {
               <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
                 <button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>
                 <button class="trip-icon-btn" title="Mobile Month PDF" aria-label="Mobile Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMobileMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:12px">&#128241;</span></button>
+                <button class="trip-icon-btn" title="Members PDF" aria-label="Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('all')"><span class="trip-icon-btn-glyph" style="font-size:11px">M</span></button>
+                <button class="trip-icon-btn" title="Paid Members PDF" aria-label="Paid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('paid')"><span class="trip-icon-btn-glyph" style="font-size:11px">P</span></button>
+                <button class="trip-icon-btn" title="Unpaid Members PDF" aria-label="Unpaid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('unpaid')"><span class="trip-icon-btn-glyph" style="font-size:11px">U</span></button>
                 <button class="trip-icon-btn" title="Matrix PDF" aria-label="Matrix PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMatrixPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#9638;</span></button>
                 <button class="trip-icon-btn" title="Expenses PDF" aria-label="Expenses PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyExpensesPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#8377;</span></button>
               </div>
@@ -21852,6 +21855,10 @@ function showSocietyExpenseModal(expenseId = null, defaults = {}) {
       <label class="fl full">Attachment / Receipt
         <input class="fi" type="file" id="societyExpenseAttachment" accept="image/*,application/pdf">
       </label>
+      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
+        <input type="checkbox" id="societyExpenseShowAttachmentInPortal" ${expense.show_attachment_in_portal !== false ? 'checked' : ''}>
+        <span>Show this attachment in portal/mobile</span>
+      </label>
       ${expense.attachment_path ? `
         <div class="fl full" style="font-size:12px;color:var(--t3);line-height:1.6">
           Current file: <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Attachment'))})'>${escHtml(expense.attachment_name || 'View attachment')}</button>
@@ -21897,6 +21904,7 @@ async function saveSocietyExpense(expenseId = null) {
     paid_by_member_id: selectedPaidByMemberId,
     attachment_path: document.getElementById('societyExpenseExistingAttachmentPath')?.value || '',
     attachment_name: document.getElementById('societyExpenseExistingAttachmentName')?.value || '',
+    show_attachment_in_portal: document.getElementById('societyExpenseShowAttachmentInPortal')?.checked !== false,
   };
   const normalizedEntryType = normalizeSocietyEntryTypeClient(body.entry_type || body.entryType || body.entry_kind || body.kind || body.balance_type || body.type || 'expense');
   const payload = {

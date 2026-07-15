@@ -53,9 +53,19 @@
     return (long ? longMonthFmt : monthFmt).format(date);
   }
 
+  function parsePortalDate(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return new Date(NaN);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [year, month, day] = raw.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    }
+    return new Date(raw);
+  }
+
   function fmtDate(value) {
     if (!value) return '-';
-    const parsed = /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim()) ? new Date(`${value}T00:00:00`) : new Date(value);
+    const parsed = parsePortalDate(value);
     if (Number.isNaN(parsed.getTime())) return String(value || '');
     return dateFmt.format(parsed);
   }
@@ -63,7 +73,7 @@
   function monthKeyFromDate(value) {
     const raw = String(value || '').trim();
     if (/^\d{4}-\d{2}/.test(raw)) return raw.slice(0, 7);
-    const parsed = new Date(raw);
+    const parsed = parsePortalDate(raw);
     if (Number.isNaN(parsed.getTime())) return '';
     const year = parsed.getFullYear();
     const month = String(parsed.getMonth() + 1).padStart(2, '0');
@@ -882,7 +892,7 @@
           <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
           <div>
             <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
-            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.attachment_path ? ` • <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
+            <div class="sp-row-sub">${esc(fmtDate(expense.expense_date))}${expense.category ? ` • ${esc(expense.category)}` : ''}${expense.show_attachment_in_portal !== false && expense.attachment_path ? ` • <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
           </div>
           <div class="sp-row-right">
           <div class="sp-row-amount red">${fmtMoney(expense.amount || 0)}</div>
@@ -907,8 +917,7 @@
     const expenseGroupsHtml = expenseMonthGroups.map((group) => {
       const groupRows = group.items.map((expense) => {
         const cls = expenseCategoryClass(expense.category);
-        const rawDate = String(expense.expense_date || '').trim();
-        const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? new Date(`${rawDate}T00:00:00`) : new Date(rawDate);
+        const parsedDate = parsePortalDate(expense.expense_date);
         const dayLabel = Number.isNaN(parsedDate.getTime())
           ? fmtDate(expense.expense_date)
           : parsedDate.toLocaleDateString('en-IN', { month: 'short', day: '2-digit' });
@@ -919,7 +928,7 @@
               <div class="sp-expense-icon ${cls}">${esc((expense.category || expense.title || 'O').slice(0, 1).toUpperCase())}</div>
               <div>
                 <div class="sp-row-title">${esc(expense.title || 'Expense')}</div>
-                <div class="sp-row-sub">${expense.category ? esc(expense.category) : 'No category'}${expense.attachment_path ? ` &bull; <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
+                <div class="sp-row-sub">${expense.category ? esc(expense.category) : 'No category'}${expense.show_attachment_in_portal !== false && expense.attachment_path ? ` &bull; <button type="button" class="sp-attachment-link" data-sp-attachment="${esc(expense.attachment_path)}" data-sp-attachment-name="${esc(expense.attachment_name || expense.title || 'Attachment')}">Attachment</button>` : ''}</div>
               </div>
             </div>
             <div class="sp-row-right">

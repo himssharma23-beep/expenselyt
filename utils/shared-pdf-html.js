@@ -652,6 +652,57 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     });
   }
 
+  if (action === 'member_list') {
+    const monthKey = String(detail?.selected_month || '').trim();
+    const statusScope = String(options.status_scope || options.statusScope || 'all').trim().toLowerCase();
+    const scopedMembers = statusScope === 'paid' || statusScope === 'unpaid'
+      ? filterMembers(detail, statusScope, monthKey ? [monthKey] : [])
+      : (detail?.members || []);
+    const statusLabel = statusScope === 'paid' ? 'Paid Members'
+      : statusScope === 'unpaid' ? 'Unpaid Members'
+      : 'Members';
+    const rows = sortMembers(scopedMembers).map((member) => {
+      const monthAmount = Number(member?.selected_month_amount || 0);
+      const paid = monthAmount > 0;
+      return [
+        memberLabel(member),
+        member.property_type === 'shop' ? 'Shop' : 'Home',
+        member.unit_label || '-',
+        memberPhoneDisplay(member),
+        fmtCur(member?.monthly_due || 0),
+        fmtCur(monthAmount),
+        member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-',
+        paid ? 'Paid' : 'Not paid',
+      ];
+    });
+    return buildPdfShell({
+      hero: renderHero({
+        title: detail?.society?.name || 'Society',
+        location: detail?.society?.location || 'Not added',
+        metaRight: `${rows.length} ${statusLabel.toLowerCase()}`,
+        period: monthLabel(monthKey),
+        cards: [
+          { label: 'Members Shown', value: String(rows.length), meta: statusLabel, tone: 'neutral' },
+          { label: 'Monthly Due Total', value: fmtCur(scopedMembers.reduce((sum, member) => sum + Number(member?.monthly_due || 0), 0)), meta: 'member due setup', tone: 'blue' },
+          { label: 'Collected This Month', value: fmtCur(scopedMembers.reduce((sum, member) => sum + Number(member?.selected_month_amount || 0), 0)), meta: 'selected month', tone: 'green' },
+          { label: 'Selected Month', value: monthLabel(monthKey), meta: 'current filter', tone: 'neutral' },
+        ],
+      }),
+      landscape: true,
+      body: `
+        ${renderSectionBand(statusLabel, monthLabel(monthKey))}
+        <div class="table-card">
+          ${renderTable(['Member', 'Property', 'Unit', 'Phone', 'Monthly Due', 'Amount', 'Paid On', 'Status'], rows, {
+            numericColumns: [4, 5],
+            centerColumns: [1, 2, 7],
+            nowrapColumns: [4, 5, 6, 7],
+            columnWidths: ['22%', '9%', '10%', '18%', '11%', '10%', '11%', '9%'],
+          })}
+        </div>
+      `,
+    });
+  }
+
   if (action === 'mobile_month_v2') {
     const totals = detail?.totals || {};
     const monthKey = detail?.selected_month;

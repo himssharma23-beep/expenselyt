@@ -2079,6 +2079,22 @@ async function downloadSocietyMobileMonthPdf() {
   }, `Society_Mobile_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-mobile-month-${_societyDetail?.society?.name || 'report'}`);
 }
 
+async function downloadSocietyMembersPdf(statusScope = 'all') {
+  if (!_societyDetail?.society) return;
+  const scope = String(statusScope || 'all').trim().toLowerCase();
+  const scopeLabel = scope === 'paid' ? 'Paid_Members' : scope === 'unpaid' ? 'Unpaid_Members' : 'Members';
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'member_list',
+      detail: _societyDetail,
+      options: {
+        status_scope: scope,
+      },
+    },
+  }, `Society_${scopeLabel}_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-${scope}-members-${_societyDetail?.society?.name || 'report'}`);
+}
+
 async function downloadSocietyMemberPdf(memberId) {
   if (!_societyDetail?.society) return;
   const member = (_societyDetail.members || []).find((item) => Number(item.id) === Number(memberId));
