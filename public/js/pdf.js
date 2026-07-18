@@ -2160,6 +2160,272 @@ async function downloadSocietyCustomPdf(options = {}) {
   }, `Society_Custom_${_societyDetail?.society?.name || 'Report'}`, `society-custom-${_societyDetail?.society?.name || 'report'}`);
 }
 
+function societyMapPdfSvgCss() {
+  return `
+    .society-layout-road { fill:#e6decc; stroke:#cbbfa2; stroke-width:1; }
+    .society-layout-roadlabel {
+      fill:#8a7a52;
+      text-anchor:middle;
+      dominant-baseline:central;
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.06em;
+      text-transform:uppercase;
+      font-family:Arial,sans-serif;
+    }
+    .society-layout-park { fill:#c4d3b8; stroke:#9bb08c; stroke-width:1; }
+    .society-layout-parklabel {
+      fill:#3f5535;
+      text-anchor:middle;
+      dominant-baseline:central;
+      font-size:14px;
+      font-weight:700;
+      letter-spacing:.05em;
+      font-family:Arial,sans-serif;
+    }
+    .society-layout-plot rect { fill:#fcfaf3; stroke:#3a5348; stroke-width:1; }
+    .society-layout-plot text {
+      fill:#20382f;
+      text-anchor:middle;
+      dominant-baseline:central;
+      font-family:Courier,monospace;
+      font-weight:800;
+    }
+    .society-layout-plot.blank rect { fill:url(#societyLayoutHatch); }
+    .society-layout-plot.paid rect { fill:#afcf9b; }
+    .society-layout-plot.unpaid rect { fill:#e9a79a; }
+    .society-layout-plot.active rect { stroke:#3a5348; stroke-width:1; }
+  `;
+}
+
+function societyMapPdfFileName(detail, mobile = false) {
+  const societyName = String(detail?.society?.name || 'Society').trim() || 'Society';
+  const monthLabel = societyMonthLabel(detail?.selected_month || _societyMonth || '');
+  return `Society_Map_${societyName}_${mobile ? 'Mobile_' : ''}${monthLabel || 'Month'}`;
+}
+
+function societyMapPdfBuildHost(detail) {
+  const previousRange = _societyRange;
+  let markup = '';
+  try {
+    _societyRange = 'month';
+    markup = renderSocietyMapSection(detail);
+  } finally {
+    _societyRange = previousRange;
+  }
+  const host = document.createElement('div');
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.width = '1180px';
+  host.style.opacity = '0';
+  host.style.pointerEvents = 'none';
+  host.style.zIndex = '-1';
+  host.innerHTML = markup;
+  const card = host.querySelector('.society-layout-card-floating');
+  if (card) card.remove();
+  document.body.appendChild(host);
+  return host;
+}
+
+function societyMapPdfSvgMarkup(svgEl) {
+  const clone = svgEl.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.querySelectorAll('.active').forEach((node) => node.classList.remove('active'));
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  style.textContent = societyMapPdfSvgCss();
+  clone.insertBefore(style, clone.firstChild);
+  const viewBox = String(clone.getAttribute('viewBox') || '').trim();
+  const parts = viewBox.split(/\s+/).map(Number);
+  const width = Number.isFinite(parts[2]) ? parts[2] : 1200;
+  const height = Number.isFinite(parts[3]) ? parts[3] : 900;
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function societyMapPdfSvgToImage(svgMarkup, width, height) {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width));
+        canvas.height = Math.max(1, Math.round(height));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fcfaf5';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        reject(error);
+      }
+    };
+    img.onerror = (error) => {
+      URL.revokeObjectURL(url);
+      reject(error);
+    };
+    img.src = url;
+  });
+}
+
+function societyMapPdfDrawLegend(doc, x, y) {
+  const items = [
+    { label: 'Paid', fill: [175, 207, 155], stroke: [111, 138, 94] },
+    { label: 'Not Paid', fill: [233, 167, 154], stroke: [185, 97, 74] },
+    { label: 'Empty Plot', fill: [252, 250, 243], stroke: [183, 171, 138], hatch: true },
+  ];
+  let cursor = x;
+  items.forEach((item) => {
+    doc.setDrawColor(...item.stroke);
+    doc.setFillColor(...item.fill);
+    doc.roundedRect(cursor, y, 5, 5, 0.8, 0.8, 'FD');
+    if (item.hatch) {
+      doc.setDrawColor(216, 208, 184);
+      for (let offset = -2; offset <= 6; offset += 2) {
+        doc.line(cursor + offset, y, cursor + offset + 4, y + 5);
+      }
+      doc.setDrawColor(...item.stroke);
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text(item.label, cursor + 8, y + 3.8);
+    cursor += item.label === 'Empty Plot' ? 34 : 26;
+  });
+  doc.setFont('helvetica', 'normal');
+}
+
+function societyMapPdfMonthlyCards(detail = _societyDetail) {
+  return societyPdfStatCardsData(detail, 'month').slice(0, 5).map((card) => ({
+    label: String(card?.label || '').trim() || '-',
+    value: String(card?.value || '-').trim() || '-',
+    accent: Array.isArray(card?.accent) ? card.accent : [102, 102, 102],
+  }));
+}
+
+function societyMapPdfDrawStatTile(doc, card, x, y, w, h) {
+  const accent = Array.isArray(card?.accent) ? card.accent : [102, 102, 102];
+  const innerWidth = Math.max(10, w - 6);
+  doc.setFillColor(255, 253, 248);
+  doc.setDrawColor(226, 218, 199);
+  doc.roundedRect(x, y, w, h, 2.2, 2.2, 'FD');
+  doc.setDrawColor(...accent);
+  doc.setLineWidth(0.9);
+  doc.line(x + 1.5, y + 1.4, x + w - 1.5, y + 1.4);
+  const labelLines = doc.splitTextToSize(String(card?.label || '-').toUpperCase(), innerWidth);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(136, 149, 142);
+  doc.text(labelLines, x + 3, y + 6.5, { baseline: 'top' });
+  const labelHeight = labelLines.length * 3.3;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(String(card?.value || '').length > 11 ? 11 : 13);
+  doc.setTextColor(...accent);
+  const valueY = y + 8 + labelHeight;
+  doc.text(String(card?.value || '-'), x + 3, valueY, { baseline: 'top', maxWidth: innerWidth });
+  doc.setTextColor(0, 0, 0);
+}
+
+function societyMapPdfDrawMonthlyTiles(doc, detail, drawX, drawY, drawWidth, drawHeight, mobile = false) {
+  const cards = societyMapPdfMonthlyCards(detail);
+  if (!cards.length) return;
+  const gap = mobile ? 3 : 3.5;
+  const tileAreaX = drawX + (drawWidth * 0.04);
+  const tileAreaY = drawY + (drawHeight * 0.04);
+  const tileAreaWidth = drawWidth * (mobile ? 0.32 : 0.31);
+  const tileHeight = drawHeight * (mobile ? 0.118 : 0.114);
+  const halfWidth = (tileAreaWidth - gap) / 2;
+  const rows = [
+    { items: cards.slice(0, 2), cols: 2 },
+    { items: cards.slice(2, 4), cols: 2 },
+    { items: cards.slice(4, 5), cols: 1 },
+  ].filter((row) => row.items.length);
+  let currentY = tileAreaY;
+  rows.forEach((row) => {
+    if (row.cols === 1) {
+      societyMapPdfDrawStatTile(doc, row.items[0], tileAreaX, currentY, halfWidth, tileHeight, mobile);
+      currentY += tileHeight + gap;
+      return;
+    }
+    row.items.forEach((card, index) => {
+      const x = tileAreaX + (index * (halfWidth + gap));
+      societyMapPdfDrawStatTile(doc, card, x, currentY, halfWidth, tileHeight, mobile);
+    });
+    currentY += tileHeight + gap;
+  });
+}
+
+async function downloadSocietyMapPdf() {
+  await downloadSocietyMapPdfVariant({ mobile: false });
+}
+
+async function downloadSocietyMobileMapPdf() {
+  await downloadSocietyMapPdfVariant({ mobile: true });
+}
+
+async function downloadSocietyMapPdfVariant({ mobile = false } = {}) {
+  if (!_societyDetail?.society) return;
+  if (_societyDetail?.society?.show_map_in_portal === false) {
+    toast('Map access is disabled for this society.', 'warning');
+    return;
+  }
+  if (typeof renderSocietyMapSection !== 'function' || typeof getSocietyMapPreset !== 'function') {
+    toast('Map export is not available right now.', 'warning');
+    return;
+  }
+  const preset = getSocietyMapPreset(_societyDetail.society || {});
+  if (!preset) {
+    toast('Add a map layout to this society before downloading the map PDF.', 'warning');
+    return;
+  }
+  let host = null;
+  try {
+    host = societyMapPdfBuildHost(_societyDetail);
+    const svgEl = host.querySelector('svg');
+    if (!svgEl) throw new Error('Map SVG not found');
+    const viewBox = String(svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
+    const svgWidth = Number.isFinite(viewBox[2]) ? viewBox[2] : 1200;
+    const svgHeight = Number.isFinite(viewBox[3]) ? viewBox[3] : 900;
+    const svgMarkup = societyMapPdfSvgMarkup(svgEl);
+    const imageData = await societyMapPdfSvgToImage(svgMarkup, svgWidth, svgHeight);
+    const doc = _P.init(true);
+    const pageWidth = _P.W(doc);
+    const pageHeight = _P.H(doc);
+    const margin = mobile ? 8 : 6;
+    const titleY = 10;
+    const legendY = 13;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(_P.cleanText ? _P.cleanText(String(_societyDetail.society.name || 'Society Map')) : String(_societyDetail.society.name || 'Society Map'), margin, titleY);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(95, 107, 122);
+    doc.text(`Selected month: ${societyMonthLabel(_societyDetail.selected_month || _societyMonth || '')}`, margin, titleY + 5);
+    doc.setTextColor(0, 0, 0);
+    societyMapPdfDrawLegend(doc, Math.max(margin, pageWidth - 72), legendY);
+    const availableWidth = pageWidth - (margin * 2);
+    const availableHeight = pageHeight - 24;
+    const scale = Math.min(availableWidth / svgWidth, availableHeight / svgHeight);
+    const drawWidth = svgWidth * scale;
+    const drawHeight = svgHeight * scale;
+    const drawX = (pageWidth - drawWidth) / 2;
+    const drawY = 20 + ((availableHeight - drawHeight) / 2);
+    doc.addImage(imageData, 'PNG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
+    societyMapPdfDrawMonthlyTiles(doc, _societyDetail, drawX, drawY, drawWidth, drawHeight, mobile);
+    doc.save(societyMapPdfFileName(_societyDetail, mobile).replace(/[^\w\s\-]/g, '_').trim() + '.pdf');
+  } catch (error) {
+    console.error('Failed to download society map PDF', error);
+    toast('Unable to download the map PDF right now.', 'error');
+  } finally {
+    if (host && host.parentNode) host.parentNode.removeChild(host);
+  }
+}
+
 async function downloadFriendsPdf() {
   const data = await api('/api/friends');
   if (!data) return;

@@ -6508,6 +6508,35 @@ function normalizePropertyType(value) {
   return normalized;
 }
 
+function normalizeSocietyFloorPlotsConfig(value) {
+  if (value === undefined) return undefined;
+  const rawList = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/[\s,;|]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const parsed = [...new Set(rawList
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0 && item <= 9999)
+  )].sort((a, b) => a - b);
+  return JSON.stringify(parsed);
+}
+
+function parseSocietyFloorPlotsConfig(value) {
+  if (value == null || value === '') return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0 && item <= 9999)
+    )].sort((a, b) => a - b);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function ensureSocietyTables() {
   if (societySchemaEnsured) return;
   await query(`
@@ -6517,6 +6546,9 @@ async function ensureSocietyTables() {
       name TEXT NOT NULL,
       location TEXT,
       start_month TEXT,
+      map_layout_key TEXT,
+      map_floor_plots_json TEXT,
+      show_map_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
       show_elections_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
       show_expense_attachments_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -6524,6 +6556,9 @@ async function ensureSocietyTables() {
       UNIQUE (user_id, name)
     )`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS start_month TEXT`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_layout_key TEXT`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_floor_plots_json TEXT`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_map_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_elections_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_expense_attachments_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
   await query(`
@@ -6856,7 +6891,7 @@ function mapSocietyElectionRow(row, { revealVotes = false, includeVoters = false
 async function getSocietyOwnedByUser(userId, societyId) {
   await ensureSocietyTables();
   const result = await query(
-    `SELECT id, user_id, name, location, start_month, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
      FROM societies
      WHERE id = $1 AND user_id = $2
      LIMIT 1`,
@@ -6872,6 +6907,9 @@ async function listSocieties(userId) {
             s.name,
             s.location,
             s.start_month,
+            s.map_layout_key,
+            s.map_floor_plots_json,
+            s.show_map_in_portal,
             s.show_elections_in_portal,
             s.show_expense_attachments_in_portal,
             s.created_at,
@@ -6924,6 +6962,9 @@ async function listSocieties(userId) {
     name: row.name,
     location: row.location || '',
     start_month: row.start_month || '',
+    map_layout_key: row.map_layout_key || '',
+    map_floor_plots: parseSocietyFloorPlotsConfig(row.map_floor_plots_json),
+    show_map_in_portal: row.show_map_in_portal !== false,
     show_elections_in_portal: row.show_elections_in_portal !== false,
     show_expense_attachments_in_portal: row.show_expense_attachments_in_portal !== false,
     member_count: Number(row.member_count || 0),
@@ -6942,12 +6983,15 @@ async function createSociety(userId, data = {}) {
   const name = normalizeText(data.name, 'Society name', 120);
   const location = normalizeOptionalText(data.location, 160);
   const startMonth = normalizeOptionalMonthKey(data.start_month, 'Start month');
+  const mapLayoutKey = data.map_layout_key != null ? normalizeOptionalText(data.map_layout_key, 80) : '';
+  const mapFloorPlotsJson = normalizeSocietyFloorPlotsConfig(data.map_floor_plots);
+  const showMapInPortal = data.show_map_in_portal !== false;
   const showExpenseAttachmentsInPortal = data.show_expense_attachments_in_portal !== false;
   const result = await query(
-    `INSERT INTO societies (user_id, name, location, start_month, show_elections_in_portal, show_expense_attachments_in_portal, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
-     RETURNING id, user_id, name, location, start_month, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [userId, name, location, startMonth || null, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal]
+    `INSERT INTO societies (user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
+    [userId, name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson != null ? mapFloorPlotsJson : null, showMapInPortal, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal]
   );
   return result.rows[0];
 }
@@ -6959,16 +7003,19 @@ async function updateSociety(userId, societyId, data = {}) {
   const name = data.name !== undefined ? normalizeText(data.name, 'Society name', 120) : current.name;
   const location = data.location !== undefined ? normalizeOptionalText(data.location, 160) : current.location;
   const startMonth = data.start_month !== undefined ? normalizeOptionalMonthKey(data.start_month, 'Start month') : (current.start_month || '');
+  const mapLayoutKey = data.map_layout_key !== undefined ? normalizeOptionalText(data.map_layout_key, 80) : (current.map_layout_key || '');
+  const mapFloorPlotsJson = data.map_floor_plots !== undefined ? normalizeSocietyFloorPlotsConfig(data.map_floor_plots) : (current.map_floor_plots_json ?? null);
+  const showMapInPortal = data.show_map_in_portal !== undefined ? !!data.show_map_in_portal : current.show_map_in_portal !== false;
   const showElectionsInPortal = data.show_elections_in_portal !== undefined ? !!data.show_elections_in_portal : current.show_elections_in_portal !== false;
   const showExpenseAttachmentsInPortal = data.show_expense_attachments_in_portal !== undefined
     ? !!data.show_expense_attachments_in_portal
     : current.show_expense_attachments_in_portal !== false;
   const result = await query(
     `UPDATE societies
-     SET name = $1, location = $2, start_month = $3, show_elections_in_portal = $4, show_expense_attachments_in_portal = $5, updated_at = NOW()
-     WHERE id = $6 AND user_id = $7
-     RETURNING id, user_id, name, location, start_month, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [name, location, startMonth || null, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId]
+     SET name = $1, location = $2, start_month = $3, map_layout_key = $4, map_floor_plots_json = $5, show_map_in_portal = $6, show_elections_in_portal = $7, show_expense_attachments_in_portal = $8, updated_at = NOW()
+     WHERE id = $9 AND user_id = $10
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
+    [name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson, showMapInPortal, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId]
   );
   return result.rows[0] || null;
 }
@@ -8071,6 +8118,9 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       name: society.name,
       location: society.location || '',
       start_month: startMonth || '',
+      map_layout_key: society.map_layout_key || '',
+      map_floor_plots: parseSocietyFloorPlotsConfig(society.map_floor_plots_json),
+      show_map_in_portal: society.show_map_in_portal !== false,
       show_elections_in_portal: society.show_elections_in_portal !== false,
       show_expense_attachments_in_portal: society.show_expense_attachments_in_portal !== false,
       created_at: society.created_at,

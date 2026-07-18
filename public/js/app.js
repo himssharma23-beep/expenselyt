@@ -20548,6 +20548,619 @@ function societyMemberContributionValue(member, isAllTime) {
   return Number(isAllTime ? (member?.total_contributed || 0) : (member?.selected_month_amount || 0));
 }
 
+const SOCIETY_MAP_PRESETS = {
+  raman_enclave_v1: {
+    key: 'raman_enclave_v1',
+    label: 'Raman Enclave Layout',
+    viewBox: '0 0 900 780',
+    blocks: [
+      { x: 365, y: 47, cw: 90, ch: 39.3, cols: 1, plots: [47, 46, 45, 44, 43, 42, 41] },
+      { x: 490, y: 47, cw: 93, ch: 45.833, cols: 1, plots: [48, 49, 50, 51, 52, 53] },
+      { x: 588, y: 47, cw: 50, ch: 45.833, cols: 1, plots: [{ id: 'SHOP1', label: 'S-1', kind: 'shop' }, { id: 'SHOP2', label: 'S-2', kind: 'shop' }] },
+      { x: 583, y: 184.5, cw: 102, ch: 45.833, cols: 1, plots: [56, 55, 54] },
+      { x: 525, y: 345, cw: 85, ch: 32.3, cols: 1, plots: [85, 86, 87, 88, 89, 90, 91, 92, 93, 94] },
+      { x: 610, y: 345, cw: 75, ch: 32.3, cols: 1, plots: [84, 83, 82, 81, 80, 79, 78, 77, 76, 75] },
+      { x: 525, y: 669, cw: 53.333, ch: 26, cols: 3, plots: [{ id: 'SHOP3', label: 'S-3', kind: 'shop' }, { id: 'SHOP4', label: 'S-4', kind: 'shop' }, { id: 'SHOP5', label: 'S-5', kind: 'shop' }] },
+      { x: 735, y: 172, cw: 73, ch: 27.6, cols: 1, plots: [57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74] },
+      { x: 30, y: 347, cw: 30.667, ch: 80, cols: 7, plots: [40, 39, 38, 37, 36, 35, 34] },
+      { x: 275.333, y: 347, cw: 30.667, ch: 80, cols: 7, plots: [33, 32, 31, 30, 29, 28, 27] },
+      { x: 30, y: 427, cw: 30.667, ch: 70, cols: 7, plots: [13, 14, 15, 16, 17, 18, 19] },
+      { x: 275.333, y: 427, cw: 30.667, ch: 70, cols: 7, plots: [20, 21, 22, 23, 24, 25, 26] },
+      { x: 30, y: 527, cw: 35.385, ch: 70, cols: 5, plots: [12, 11, 10, 9, 8] },
+      { x: 242.31, y: 527, cw: 35.385, ch: 70, cols: 7, plots: [7, 6, 5, 4, 3, 2, 1] },
+    ],
+    parks: [
+      { x: 244.667, y: 347, w: 30.667, h: 150, label: 'PARK' },
+      { x: 206.92, y: 527, w: 35.385, h: 70, label: 'PARK' },
+    ],
+    roads: [
+      { x: 455, y: 47, w: 35, h: 275, label: 'ROAD', vertical: true },
+      { x: 490, y: 345, w: 35, h: 323, label: 'ROAD', vertical: true },
+      { x: 685, y: 172, w: 50, h: 496, label: 'ROAD', vertical: true },
+      { x: 30, y: 322, w: 655, h: 23, label: 'ROAD' },
+      { x: 30, y: 497, w: 460, h: 30, label: 'ROAD' },
+      { x: 365, y: 5, w: 315, h: 42, label: 'ROAD' },
+    ],
+    diagRoads: [
+      { cx: 815, cy: 702, w: 430, h: 44, deg: -13, label: 'ROAD' },
+    ],
+    floorPlots: { 1: ['SF', 'FF', 'GF'], 87: ['SF', 'FF', 'GF'] },
+  },
+};
+
+let _societyMapSelection = { societyId: null, plotNo: null, floorCode: '' };
+
+function societyMapPlotMeta(plot) {
+  if (plot && typeof plot === 'object' && !Array.isArray(plot)) {
+    const id = String(plot.id || plot.label || '').trim();
+    const label = String(plot.label || plot.id || '').trim() || id || '-';
+    const kind = String(plot.kind || 'house').trim().toLowerCase() === 'shop' ? 'shop' : 'house';
+    return { id: id || label, label, kind };
+  }
+  const label = String(plot || '').trim() || '-';
+  return { id: label, label, kind: 'house' };
+}
+
+function societyMapConfiguredFloorPlots(society = {}, preset = null) {
+  if (Array.isArray(society?.map_floor_plots)) return [...new Set(society.map_floor_plots.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0))].sort((a, b) => a - b);
+  const fallbackPreset = preset || getSocietyMapPreset(society);
+  return Object.keys(fallbackPreset?.floorPlots || {}).map(Number).filter((item) => Number.isInteger(item) && item > 0).sort((a, b) => a - b);
+}
+
+function getSocietyMapPreset(society = {}) {
+  const key = String(society?.map_layout_key || '').trim();
+  if (key && SOCIETY_MAP_PRESETS[key]) return SOCIETY_MAP_PRESETS[key];
+  const fallbackName = String(society?.name || '').trim().toLowerCase();
+  if (!key && fallbackName === 'raman enclave') return SOCIETY_MAP_PRESETS.raman_enclave_v1;
+  return null;
+}
+
+function societyMapNormalizeLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function societyMapFloorAliases(code = '') {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (normalized === 'GF') return ['gf', 'ground', 'ground floor', 'groundfloor'];
+  if (normalized === 'FF') return ['ff', 'first', 'first floor', 'firstfloor'];
+  if (normalized === 'SF') return ['sf', 'second', 'second floor', 'secondfloor', 'terrace'];
+  return [];
+}
+
+function societyMapShopAliases(meta = {}) {
+  const label = societyMapNormalizeLabel(meta.label || meta.id || '');
+  const id = societyMapNormalizeLabel(meta.id || '');
+  const digits = ((label.match(/\d+/g) || [])[0]) || ((id.match(/\d+/g) || [])[0]) || '';
+  const aliases = new Set([label, id].filter(Boolean));
+  if (digits) {
+    aliases.add(`shop ${digits}`);
+    aliases.add(`shop${digits}`);
+    aliases.add(`s ${digits}`);
+    aliases.add(`s${digits}`);
+  }
+  return [...aliases];
+}
+
+function societyMapMemberForPlot(members = [], plotNo, floorCode = '', plotKind = 'house', plotLabel = '') {
+  const plotNumber = Number(plotNo || 0);
+  const meta = { id: plotNo, label: plotLabel || plotNo, kind: plotKind };
+  if (plotKind === 'shop') {
+    const shopAliases = societyMapShopAliases(meta);
+    const scoredShops = (members || []).map((member) => {
+      const label = societyMapNormalizeLabel(member?.unit_label || '');
+      if (!label) return null;
+      const propertyType = String(member?.property_type || '').trim().toLowerCase();
+      const hasShopWord = label.includes('shop') || propertyType === 'shop';
+      const aliasMatch = shopAliases.some((alias) => alias && (label === alias || label.includes(alias)));
+      if (!hasShopWord && !aliasMatch) return null;
+      let score = 10;
+      if (propertyType === 'shop') score += 14;
+      if (aliasMatch) score += 20;
+      if (label === shopAliases[0]) score += 8;
+      if (member?.is_active !== false) score += 4;
+      return { member, score };
+    }).filter(Boolean);
+    scoredShops.sort((a, b) => b.score - a.score || String(a.member?.unit_label || '').localeCompare(String(b.member?.unit_label || '')));
+    return scoredShops[0]?.member || null;
+  }
+  if (!(plotNumber > 0)) return null;
+  const normalizedFloor = String(floorCode || '').trim().toUpperCase();
+  const floorAliases = societyMapFloorAliases(normalizedFloor);
+  const hasKnownFloor = (label) => ['gf', 'ground', 'ff', 'first', 'sf', 'second'].some((token) => label.includes(token));
+  const scored = (members || []).map((member) => {
+    const label = societyMapNormalizeLabel(member?.unit_label || '');
+    const numbers = (label.match(/\d+/g) || []).map(Number);
+    if (!numbers.includes(plotNumber)) return null;
+    let score = 10;
+    if (numbers[0] === plotNumber) score += 8;
+    if (label === String(plotNumber)) score += 20;
+    if (label.startsWith(`${plotNumber} `) || label.endsWith(` ${plotNumber}`)) score += 6;
+    if (member?.is_active !== false) score += 4;
+    if (normalizedFloor) {
+      const floorMatch = floorAliases.some((alias) => label.includes(alias));
+      if (!floorMatch && !label.includes(normalizedFloor.toLowerCase())) return null;
+      score += 12;
+    } else if (hasKnownFloor(label)) {
+      score -= 8;
+    }
+    return { member, score };
+  }).filter(Boolean);
+  scored.sort((a, b) => b.score - a.score || String(a.member?.unit_label || '').localeCompare(String(b.member?.unit_label || '')));
+  return scored[0]?.member || null;
+}
+
+function societyMapPlotStatus(member, isAllTime) {
+  if (!member) return 'blank';
+  if (member.is_active === false && societyMemberContributionValue(member, isAllTime) <= 0) return 'blank';
+  if (isAllTime) return Number(member.total_contributed || 0) > 0 ? 'paid' : 'unpaid';
+  if (String(member.selected_month_status || '').toLowerCase() === 'paid') return 'paid';
+  return 'unpaid';
+}
+
+function societyMapPaymentLabel(member, isAllTime) {
+  if (!member) return 'Empty Plot';
+  if (isAllTime) return Number(member.total_contributed || 0) > 0 ? 'Paid sometime' : 'No payment yet';
+  const requestStatus = String(member.selected_month_request_status || '').toLowerCase();
+  if (requestStatus === 'pending') return 'Approval pending';
+  if (requestStatus === 'rejected') return 'Rejected';
+  if (String(member.selected_month_status || '').toLowerCase() === 'paid') return 'Paid';
+  if (Number(member.selected_month_due || 0) <= 0) return 'No due set';
+  return 'Not paid';
+}
+
+function societyMapActiveSelectionKey() {
+  return `${String(_societyMapSelection.plotNo || '').trim()}:${String(_societyMapSelection.floorCode || '').trim().toUpperCase()}`;
+}
+
+function societyMapPlotCardMarkup(detail, plotNo, floorCode = '', plotKind = 'house', plotLabel = '') {
+  const member = societyMapMemberForPlot(detail?.members || [], plotNo, floorCode, plotKind, plotLabel);
+  const isAllTime = _societyRange === 'all';
+  const amountPaid = member ? societyMemberContributionValue(member, isAllTime) : 0;
+  const totalPaid = Number(member?.total_contributed || 0);
+  const floorLabelMap = { GF: 'Ground Floor', FF: 'First Floor', SF: 'Second Floor' };
+  const floorLabel = floorCode ? (floorLabelMap[String(floorCode).toUpperCase()] || String(floorCode).toUpperCase()) : '';
+  const badgeClass = societyMapPlotStatus(member, isAllTime);
+  const titleLabel = String(plotLabel || plotNo || '-');
+  const kickerLabel = plotKind === 'shop' ? 'Shop No.' : 'House No.';
+  const emptyLabel = plotKind === 'shop' ? 'Empty Shop' : 'Empty Plot';
+  const statusLabel = member ? societyMapPaymentLabel(member, isAllTime) : emptyLabel;
+  return `
+    <div class="society-layout-card-shell">
+      <div class="society-layout-card-head">
+        <div class="society-layout-card-no">
+          <div class="society-layout-card-kicker">${escHtml(kickerLabel)}</div>
+          <div class="society-layout-card-title">${escHtml(titleLabel)}</div>
+          ${floorLabel ? `<div class="society-layout-card-floor">${escHtml(floorLabel)}</div>` : ''}
+        </div>
+        <div class="society-layout-card-primary">
+          <div class="society-layout-card-field">
+            <span>Name</span>
+            <strong>${escHtml(member ? societyMemberDisplayLabel(member) : emptyLabel)}</strong>
+          </div>
+          <div class="society-layout-card-field">
+            <span>Current status</span>
+            <strong><span class="society-layout-card-badge ${badgeClass}">${escHtml(statusLabel)}</span></strong>
+          </div>
+        </div>
+      </div>
+      <div class="society-layout-card-grid society-layout-card-grid-compact">
+        <div class="society-layout-card-stat">
+          <span>${isAllTime ? 'Total paid' : 'This month paid'}</span>
+          <strong>${member ? fmtCur(amountPaid) : '-'}</strong>
+        </div>
+        <div class="society-layout-card-stat">
+          <span>All-time paid</span>
+          <strong>${member ? fmtCur(totalPaid) : '-'}</strong>
+        </div>
+      </div>
+      <div class="society-layout-card-field">
+        <span>Phone</span>
+        <strong>${escHtml(member ? societyMemberPhoneDisplay(member) : '-')}</strong>
+      </div>
+    </div>`;
+}
+
+function renderSocietyMapSection(detail) {
+  const preset = getSocietyMapPreset(detail?.society || {});
+  if (!preset) {
+    return `
+      <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Society Map</div>
+      <div class="card" style="padding:22px">
+        <div style="font-size:16px;font-weight:900;color:var(--t1)">No map layout added yet</div>
+        <div style="font-size:13px;color:var(--t3);margin-top:8px;line-height:1.6">Open Edit Society and choose a map layout to show a tappable society view in web and mobile.</div>
+      </div>`;
+  }
+  const isAllTime = _societyRange === 'all';
+  const configuredFloorPlots = societyMapConfiguredFloorPlots(detail?.society || {}, preset);
+  const floorPlots = Object.fromEntries(configuredFloorPlots.map((plotNo) => [plotNo, ['SF', 'FF', 'GF']]));
+  const plotKey = societyMapActiveSelectionKey();
+  const roads = (preset.roads || []).map((road) => {
+    const cx = road.x + (road.w / 2);
+    const cy = road.y + (road.h / 2);
+    return `
+      <rect x="${road.x}" y="${road.y}" width="${road.w}" height="${road.h}" class="society-layout-road" rx="2"></rect>
+      <text x="${cx}" y="${cy}" class="society-layout-roadlabel" ${road.vertical ? `transform="rotate(-90 ${cx} ${cy})"` : ''}>${escHtml(road.label)}</text>`;
+  }).join('');
+  const diagRoads = (preset.diagRoads || []).map((road) => `
+    <g transform="rotate(${road.deg} ${road.cx} ${road.cy})">
+      <rect x="${road.cx - (road.w / 2)}" y="${road.cy - (road.h / 2)}" width="${road.w}" height="${road.h}" class="society-layout-road" rx="2"></rect>
+      <text x="${road.cx}" y="${road.cy}" class="society-layout-roadlabel">${escHtml(road.label)}</text>
+    </g>`).join('');
+  const parks = (preset.parks || []).map((park) => {
+    const cx = park.x + (park.w / 2);
+    const cy = park.y + (park.h / 2);
+    return `
+      <rect x="${park.x}" y="${park.y}" width="${park.w}" height="${park.h}" class="society-layout-park" rx="2"></rect>
+      <text x="${cx}" y="${cy}" class="society-layout-parklabel" ${park.h > park.w ? `transform="rotate(-90 ${cx} ${cy})"` : ''}>${escHtml(park.label)}</text>`;
+  }).join('');
+  const plots = (preset.blocks || []).map((block) => (block.plots || []).map((plotEntry, index) => {
+    const plotMeta = societyMapPlotMeta(plotEntry);
+    const plotNo = plotMeta.id;
+    const plotLabel = plotMeta.label;
+    const plotKind = plotMeta.kind;
+    const col = index % Number(block.cols || 1);
+    const row = Math.floor(index / Number(block.cols || 1));
+    const x = Number(block.x) + (col * Number(block.cw));
+    const y = Number(block.y) + (row * Number(block.ch));
+    const floors = floorPlots[plotNo];
+    if (Array.isArray(floors) && floors.length) {
+      const vertical = Number(block.ch) >= Number(block.cw);
+      const floorMarkup = floors.map((floorCode, floorIndex) => {
+        const width = vertical ? Number(block.cw) : (Number(block.cw) / floors.length);
+        const height = vertical ? (Number(block.ch) / floors.length) : Number(block.ch);
+        const fx = vertical ? x : (x + (floorIndex * width));
+        const fy = vertical ? (y + (floorIndex * height)) : y;
+        const member = societyMapMemberForPlot(detail?.members || [], plotNo, floorCode, plotKind, plotLabel);
+        const plotStatus = societyMapPlotStatus(member, isAllTime);
+        const isActive = plotKey === `${plotNo}:${String(floorCode).toUpperCase()}`;
+        const cx = fx + (width / 2);
+        const cy = fy + (height / 2);
+        const numberSize = Math.max(6, Math.min(9, height * 0.26)).toFixed(1);
+        const codeSize = Math.max(8, Math.min(12, height * 0.34)).toFixed(1);
+        return `
+          <g class="society-layout-plot ${plotStatus}${isActive ? ' active' : ''}" data-plot-key="${plotNo}:${String(floorCode).toUpperCase()}" data-plot-no="${plotNo}" data-plot-label="${escHtml(plotLabel)}" data-plot-kind="${plotKind}" data-floor-code="${String(floorCode).toUpperCase()}" tabindex="0" role="button" aria-label="${plotKind === 'shop' ? 'Shop' : 'House'} ${escHtml(plotLabel)}, ${escHtml(String(floorCode).toUpperCase())}">
+            <rect x="${fx}" y="${fy}" width="${width}" height="${height}" rx="1"></rect>
+            <text x="${cx}" y="${cy}">
+              <tspan x="${cx}" dy="-0.3em" font-size="${numberSize}" font-weight="500">${escHtml(plotLabel)}</tspan>
+              <tspan x="${cx}" dy="1.05em" font-size="${codeSize}" font-weight="800">${escHtml(String(floorCode).toUpperCase())}</tspan>
+            </text>
+          </g>`;
+      }).join('');
+      return `${floorMarkup}<rect x="${x}" y="${y}" width="${block.cw}" height="${block.ch}" rx="2" fill="none" stroke="#20382f" stroke-width="1.6" pointer-events="none"></rect>`;
+    }
+    const member = societyMapMemberForPlot(detail?.members || [], plotNo, '', plotKind, plotLabel);
+    const plotStatus = societyMapPlotStatus(member, isAllTime);
+    const isActive = plotKey === `${plotNo}:`;
+    const fontSize = Math.min(plotKind === 'shop' ? 13 : 15, Math.max(plotKind === 'shop' ? 8 : 10, Number(block.cw) * (plotKind === 'shop' ? 0.28 : 0.42)));
+    return `
+      <g class="society-layout-plot ${plotStatus}${isActive ? ' active' : ''}" data-plot-key="${plotNo}:" data-plot-no="${plotNo}" data-plot-label="${escHtml(plotLabel)}" data-plot-kind="${plotKind}" data-floor-code="" tabindex="0" role="button" aria-label="${plotKind === 'shop' ? 'Shop' : 'House'} ${escHtml(plotLabel)}">
+        <rect x="${x}" y="${y}" width="${block.cw}" height="${block.ch}" rx="2"></rect>
+        <text x="${x + (Number(block.cw) / 2)}" y="${y + (Number(block.ch) / 2)}" font-size="${fontSize.toFixed(0)}">${escHtml(plotLabel)}</text>
+      </g>`;
+  }).join('')).join('');
+  const selectedPlotNo = String(_societyMapSelection.plotNo || '').trim() || '47';
+  const selectedFloorCode = String(_societyMapSelection.floorCode || '').trim().toUpperCase();
+  const selectedPlotMeta = (preset.blocks || []).flatMap((block) => block.plots || []).map((plot) => societyMapPlotMeta(plot)).find((plot) => String(plot.id) === selectedPlotNo) || societyMapPlotMeta(selectedPlotNo);
+  const mapCard = societyMapPlotCardMarkup(detail, selectedPlotNo, selectedFloorCode, selectedPlotMeta.kind, selectedPlotMeta.label);
+  return `
+    <div class="society-layout-shell card">
+      <div class="society-layout-canvas-wrap">
+        <div class="society-layout-stage">
+          <svg id="societyMapSvg" class="society-layout-svg" viewBox="${preset.viewBox}" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <pattern id="societyLayoutHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="6" height="6" fill="#fcfaf3"></rect>
+                <line x1="0" y1="0" x2="0" y2="6" stroke="#d8d0b8" stroke-width="2.2"></line>
+              </pattern>
+            </defs>
+            ${roads}
+            ${diagRoads}
+            ${parks}
+            ${plots}
+          </svg>
+          <div id="societyMapCard" class="society-layout-card society-layout-card-floating">${mapCard}</div>
+          <div class="society-layout-legend society-layout-legend-floating">
+            <span><i class="paid"></i>Paid</span>
+            <span><i class="unpaid"></i>Not Paid</span>
+            <span><i class="blank"></i>Empty Plot</span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function setupSocietyMapInteractions() {
+  const mapCard = document.getElementById('societyMapCard');
+  if (!mapCard || !_societyDetail?.society) return;
+  const societyId = Number(_societyDetail.society.id || 0);
+  const plots = Array.from(document.querySelectorAll('.society-layout-plot[data-plot-key]'));
+  if (!plots.length) return;
+  const activate = (plotNo, floorCode = '') => {
+    const activePlot = plots.find((plot) => String(plot.dataset.plotKey || '') === `${String(plotNo || '').trim()}:${String(floorCode || '').trim().toUpperCase()}`);
+    _societyMapSelection = {
+      societyId,
+      plotNo: String(plotNo || '').trim(),
+      floorCode: String(floorCode || '').trim().toUpperCase(),
+    };
+    mapCard.innerHTML = societyMapPlotCardMarkup(_societyDetail, plotNo, floorCode, String(activePlot?.dataset.plotKind || 'house'), String(activePlot?.dataset.plotLabel || plotNo || ''));
+    const targetKey = societyMapActiveSelectionKey();
+    plots.forEach((plot) => plot.classList.toggle('active', String(plot.dataset.plotKey || '') === targetKey));
+  };
+  plots.forEach((plot) => {
+    const open = () => activate(plot.dataset.plotNo, plot.dataset.floorCode);
+    plot.addEventListener('click', open);
+    plot.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  const hasMatchingSelection = _societyMapSelection.societyId === societyId
+    && plots.some((plot) => String(plot.dataset.plotKey || '') === societyMapActiveSelectionKey());
+  if (hasMatchingSelection) {
+    activate(_societyMapSelection.plotNo, _societyMapSelection.floorCode);
+    return;
+  }
+  const firstFilled = plots.find((plot) => !plot.classList.contains('blank')) || plots[0];
+  if (firstFilled) activate(firstFilled.dataset.plotNo, firstFilled.dataset.floorCode);
+}
+
+function societyMapPrintHtml(detail, { mobile = false } = {}) {
+  const monthKey = String(detail?.selected_month || _societyMonth || '').trim();
+  const monthLabel = societyMonthLabel(monthKey);
+  const previousRange = _societyRange;
+  let mapHtml = '';
+  try {
+    _societyRange = 'month';
+    mapHtml = renderSocietyMapSection(detail);
+  } finally {
+    _societyRange = previousRange;
+  }
+  const title = `${detail?.society?.name || 'Society'} Map`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escHtml(title)}</title>
+  <link rel="stylesheet" href="/css/app.css?v=20260419a">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: #20382f;
+      font-family: "DM Sans", "Segoe UI", Arial, sans-serif;
+      padding: 16px;
+    }
+    .print-page {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .print-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #d9e4dc;
+      margin-bottom: 14px;
+    }
+    .print-title {
+      font-size: 26px;
+      font-weight: 900;
+      color: #145a3c;
+      line-height: 1.1;
+    }
+    .print-sub {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #5f6f67;
+    }
+    .print-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: #eef8f1;
+      border: 1px solid #d5e6da;
+      font-size: 12px;
+      font-weight: 800;
+      color: #145a3c;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      white-space: nowrap;
+    }
+    .society-layout-shell {
+      border: none !important;
+      box-shadow: none !important;
+      background: #fcfaf5 !important;
+    }
+    .society-layout-canvas-wrap {
+      overflow: visible !important;
+      padding: 0 !important;
+    }
+    .society-layout-stage {
+      min-width: 0 !important;
+      width: ${mobile ? '920px' : '1120px'};
+      max-width: 100%;
+      margin: 0 auto;
+    }
+    .society-layout-svg {
+      width: 100% !important;
+      height: auto !important;
+      display: block !important;
+    }
+    .society-layout-card-floating {
+      left: ${mobile ? '2.8%' : '3.2%'} !important;
+      top: ${mobile ? '2.8%' : '3.6%'} !important;
+      width: ${mobile ? '38%' : '36.5%'} !important;
+      height: ${mobile ? '36%' : '35.5%'} !important;
+      max-width: none !important;
+    }
+    .society-layout-legend-floating {
+      left: ${mobile ? '4%' : '4.3%'} !important;
+      top: ${mobile ? '80.5%' : '79.8%'} !important;
+    }
+    @page {
+      size: A4 landscape;
+      margin: 10mm;
+    }
+    @media print {
+      body { padding: 0; }
+      .print-page { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-page">
+    <div class="print-head">
+      <div>
+        <div class="print-title">${escHtml(title)}</div>
+        <div class="print-sub">${escHtml(detail?.society?.location || 'Society layout map')} · Selected month: ${escHtml(monthLabel)}</div>
+      </div>
+      <div class="print-badge">${mobile ? 'Mobile Map PDF' : 'Map PDF'}</div>
+    </div>
+    ${mapHtml}
+  </div>
+  <script>window.onload=function(){setTimeout(function(){window.focus();window.print();},120)};<\/script>
+</body>
+</html>`;
+}
+
+function societyMapSinglePagePrintHtml(detail, { mobile = false } = {}) {
+  const previousRange = _societyRange;
+  let mapHtml = '';
+  try {
+    _societyRange = 'month';
+    mapHtml = renderSocietyMapSection(detail);
+  } finally {
+    _societyRange = previousRange;
+  }
+  const title = `${detail?.society?.name || 'Society'} Map`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escHtml(title)}</title>
+  <link rel="stylesheet" href="/css/app.css?v=20260419a">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+      color: #20382f;
+      font-family: "DM Sans", "Segoe UI", Arial, sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .print-page {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .print-scale {
+      width: ${mobile ? '1000px' : '1160px'};
+      max-width: none;
+      transform-origin: center center;
+      transform: scale(${mobile ? '0.76' : '0.78'});
+    }
+    .society-layout-shell {
+      border: none !important;
+      box-shadow: none !important;
+      background: #fcfaf5 !important;
+      width: 100% !important;
+      max-width: none !important;
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+    }
+    .society-layout-canvas-wrap {
+      overflow: hidden !important;
+      padding: 0 !important;
+      background: #fcfaf5 !important;
+    }
+    .society-layout-stage {
+      min-width: 0 !important;
+      width: ${mobile ? '1000px' : '1160px'} !important;
+      max-width: none !important;
+      margin: 0 auto;
+    }
+    .society-layout-svg {
+      width: 100% !important;
+      height: auto !important;
+      display: block !important;
+    }
+    .society-layout-card-floating {
+      left: ${mobile ? '2.8%' : '3.2%'} !important;
+      top: ${mobile ? '3%' : '3.6%'} !important;
+      width: ${mobile ? '38%' : '36.5%'} !important;
+      height: ${mobile ? '36%' : '35.5%'} !important;
+      max-width: none !important;
+    }
+    .society-layout-card-shell {
+      box-shadow: 0 8px 22px rgba(32,56,47,.08) !important;
+    }
+    .society-layout-legend-floating {
+      left: ${mobile ? '4%' : '4.3%'} !important;
+      top: ${mobile ? '80.2%' : '79.6%'} !important;
+    }
+    @page {
+      size: A4 landscape;
+      margin: 3mm;
+    }
+  </style>
+</head>
+<body>
+  <div class="print-page">
+    <div class="print-scale" aria-label="${escHtml(title)}">${mapHtml}</div>
+  </div>
+  <script>window.onload=function(){setTimeout(function(){window.focus();window.print();},120)};<\/script>
+</body>
+</html>`;
+}
+
+function printSocietyMapPdf({ mobile = false } = {}) {
+  if (_societyDetail?.society?.show_map_in_portal === false) {
+    toast('Map access is disabled for this society.', 'warning');
+    return;
+  }
+  if (mobile && typeof downloadSocietyMobileMapPdf === 'function') {
+    return downloadSocietyMobileMapPdf();
+  }
+  if (!mobile && typeof downloadSocietyMapPdf === 'function') {
+    return downloadSocietyMapPdf();
+  }
+  if (!_societyDetail?.society) return;
+  toast('Map PDF download is not available right now.', 'warning');
+}
+
+function printSocietyDesktopMapPdf() {
+  printSocietyMapPdf();
+}
+
+function printSocietyMobileMapPdf() {
+  printSocietyMapPdf({ mobile: true });
+}
+
 function societyMemberShouldShow(member, isAllTime) {
   if (!member) return false;
   return member.is_active !== false || societyMemberContributionValue(member, isAllTime) > 0;
@@ -20746,9 +21359,13 @@ function renderSocietiesPage() {
         </div>`;
     }).join('');
 
+    const mapPreset = getSocietyMapPreset(selected.society || {});
+    const showMapPermission = selected.society?.show_map_in_portal !== false;
+    if (!showMapPermission && _societyTab === 'map') _societyTab = 'overview';
     const tabItems = [
       ['overview', 'Overview'],
       ['members', 'Members'],
+      ...(mapPreset && showMapPermission ? [['map', 'Map']] : []),
       ['matrix', 'Matrix'],
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
@@ -20761,6 +21378,19 @@ function renderSocietiesPage() {
         class="chip ${_societyTab === key ? 'active' : ''}"
         style="${_societyTab === key ? 'background:#1f734c;color:#fff;border-color:#1f734c;' : ''}"
         onclick="setSocietyTab('${key}')">${label}</button>`).join('');
+    const quickActionButtons = [
+      `<button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>`,
+      `<button class="trip-icon-btn" title="Mobile Month PDF" aria-label="Mobile Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMobileMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:12px">&#128241;</span></button>`,
+      ...(mapPreset && showMapPermission ? [
+        `<button class="trip-icon-btn" title="Map PDF" aria-label="Map PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="printSocietyDesktopMapPdf()"><span class="trip-icon-btn-glyph" style="font-size:10px">MAP</span></button>`,
+        `<button class="trip-icon-btn" title="Mobile Map PDF" aria-label="Mobile Map PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="printSocietyMobileMapPdf()"><span class="trip-icon-btn-glyph" style="font-size:10px">MOB</span></button>`,
+      ] : []),
+      `<button class="trip-icon-btn" title="Members PDF" aria-label="Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('all')"><span class="trip-icon-btn-glyph" style="font-size:11px">M</span></button>`,
+      `<button class="trip-icon-btn" title="Paid Members PDF" aria-label="Paid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('paid')"><span class="trip-icon-btn-glyph" style="font-size:11px">P</span></button>`,
+      `<button class="trip-icon-btn" title="Unpaid Members PDF" aria-label="Unpaid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('unpaid')"><span class="trip-icon-btn-glyph" style="font-size:11px">U</span></button>`,
+      `<button class="trip-icon-btn" title="Matrix PDF" aria-label="Matrix PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMatrixPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#9638;</span></button>`,
+      `<button class="trip-icon-btn" title="Expenses PDF" aria-label="Expenses PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyExpensesPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#8377;</span></button>`,
+    ].join('');
 
     const overviewSection = `
       <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Payment Status · ${escHtml(monthLabel)}</div>
@@ -21413,8 +22043,11 @@ function renderSocietiesPage() {
         </div>
       </div>`;
 
+    const mapSection = renderSocietyMapSection(selected);
     const activeSection = _societyTab === 'members'
       ? membersSection
+      : _societyTab === 'map'
+      ? mapSection
       : _societyTab === 'matrix'
       ? matrixSectionEnhanced
       : _societyTab === 'requests'
@@ -21459,15 +22092,7 @@ function renderSocietiesPage() {
                 <span style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:800">Month</span>
                 <input class="fi" type="month" value="${escHtml(_societyMonth)}" onchange="changeSocietyMonth(this.value)" ${isAllTime ? 'disabled' : ''} ${selected.society?.start_month ? `min="${escHtml(selected.society.start_month)}"` : ''} style="background:transparent;border:none;box-shadow:none;padding:0;color:#fff;font-weight:800">
               </label>
-              <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
-                <button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>
-                <button class="trip-icon-btn" title="Mobile Month PDF" aria-label="Mobile Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMobileMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:12px">&#128241;</span></button>
-                <button class="trip-icon-btn" title="Members PDF" aria-label="Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('all')"><span class="trip-icon-btn-glyph" style="font-size:11px">M</span></button>
-                <button class="trip-icon-btn" title="Paid Members PDF" aria-label="Paid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('paid')"><span class="trip-icon-btn-glyph" style="font-size:11px">P</span></button>
-                <button class="trip-icon-btn" title="Unpaid Members PDF" aria-label="Unpaid Members PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMembersPdf('unpaid')"><span class="trip-icon-btn-glyph" style="font-size:11px">U</span></button>
-                <button class="trip-icon-btn" title="Matrix PDF" aria-label="Matrix PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMatrixPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#9638;</span></button>
-                <button class="trip-icon-btn" title="Expenses PDF" aria-label="Expenses PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyExpensesPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#8377;</span></button>
-              </div>
+              <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">${quickActionButtons}</div>
               <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)">
                 <button class="trip-icon-btn" title="Add Member" aria-label="Add Member" style="width:36px;height:36px;min-width:36px;background:#ffffff;border-color:#ffffff;color:#175d3e" onclick="showSocietyMemberModal()"><span class="trip-icon-btn-glyph" style="font-size:14px">&#128101;</span></button>
                 <button class="trip-icon-btn" title="Add Expense" aria-label="Add Expense" style="width:36px;height:36px;min-width:36px;background:#ffffff;border-color:#ffffff;color:#175d3e" onclick="showSocietyExpenseModal()"><span class="trip-icon-btn-glyph" style="font-size:14px">&#8377;</span></button>
@@ -21500,8 +22125,7 @@ function renderSocietiesPage() {
             </div>
           </div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px;margin-right:4px">Sections</div>
+        <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;scrollbar-width:none;-ms-overflow-style:none">
           ${tabsHtml}
         </div>
         ${activeSection}
@@ -21545,6 +22169,7 @@ function renderSocietiesPage() {
       ${_societiesLoading ? '<div class="card" style="padding:34px;text-align:center;color:var(--t3)">Loading societies...</div>' : `<div class="societies-main">${detailBlock}</div>`}
     </div>`;
   repairMojibakeInNode(main);
+  if (!_societiesLoading) setupSocietyMapInteractions();
   if (_schoolKidTab === 'class') {
     Array.from(main.querySelectorAll('div,section')).forEach((node) => {
       const text = (node.textContent || '').trim();
@@ -21630,16 +22255,34 @@ async function changeSocietyMonth(monthKey) {
 
 function showSocietyModal(id = null) {
   const society = id ? (_societiesList.find((item) => String(item.id) === String(id)) || {}) : {};
+  const layoutOptions = [
+    ['','No map layout'],
+    ['raman_enclave_v1','Raman Enclave Layout'],
+  ].map(([value, label]) => `<option value="${escHtml(value)}" ${String(society.map_layout_key || '') === String(value) ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
+  const floorPlotPreset = societyMapConfiguredFloorPlots(society, getSocietyMapPreset(society));
   openModal(id ? 'Edit Society' : 'Add Society', `
     <div class="fg">
       <label class="fl full">Society Name *<input class="fi" id="societyName" value="${escHtml(society.name || '')}" placeholder="e.g. Green Avenue RWA"></label>
       <label class="fl full">Location<input class="fi" id="societyLocation" value="${escHtml(society.location || '')}" placeholder="e.g. Sector 22, Chandigarh"></label>
       <label class="fl">Start Month (optional)<input class="fi" type="month" id="societyStartMonth" value="${escHtml(society.start_month || '')}"></label>
+      <label class="fl">Map Layout
+        <select class="fi" id="societyMapLayout">${layoutOptions}</select>
+      </label>
+      <label class="fl full">GF / FF / SF Plots
+        <input class="fi" id="societyMapFloorPlots" value="${escHtml(floorPlotPreset.join(', '))}" placeholder="e.g. 1, 7, 42">
+      </label>
+      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
+        <input type="checkbox" id="societyShowMapInPortal" ${society.id ? (society.show_map_in_portal !== false ? 'checked' : '') : 'checked'}>
+        <span>Show map section and map PDFs in portal/mobile</span>
+      </label>
       <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
         <input type="checkbox" id="societyShowElectionsInPortal" ${society.id ? (society.show_elections_in_portal !== false ? 'checked' : '') : 'checked'}>
         <span>Show elections tab in portal/mobile</span>
       </label>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">If set, collections, expenses, balances, reports, and PDFs will start from this month for this society.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Choose a map layout to show a clickable society map with house-wise payment status in web and mobile.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Add any plot numbers here to split them into three stacked floors: Ground Floor, First Floor, and Second Floor. Clear a number to remove the split later.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Turn map permission off any time to hide both the map section and its MAP / MOB PDF downloads.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">You can hide elections completely from the member portal/mobile app, or control visibility per election below.</div>
     </div>
     <div class="fa" style="margin-top:16px">
@@ -21655,6 +22298,9 @@ async function saveSociety(id = null) {
     name: document.getElementById('societyName')?.value?.trim() || '',
     location: document.getElementById('societyLocation')?.value?.trim() || '',
     start_month: document.getElementById('societyStartMonth')?.value || '',
+    map_layout_key: document.getElementById('societyMapLayout')?.value || '',
+    map_floor_plots: document.getElementById('societyMapFloorPlots')?.value || '',
+    show_map_in_portal: document.getElementById('societyShowMapInPortal')?.checked !== false,
     show_elections_in_portal: document.getElementById('societyShowElectionsInPortal')?.checked !== false,
   };
   if (!body.name) { toast('Society name is required', 'warning'); return; }
