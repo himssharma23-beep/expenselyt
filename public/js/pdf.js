@@ -1356,6 +1356,60 @@ function societyPdfVisibleMembers(detail = _societyDetail, monthKeys = []) {
   return societyPdfSortMembers(members.filter((member) => member?.is_active !== false || societyPdfMemberContributionValue(member, keys) > 0));
 }
 
+function societyPdfMonthsForDetail(detail = _societyDetail, mode = 'selected', options = {}) {
+  if (mode === 'all') {
+    return Array.isArray(detail?.matrix_months) ? detail.matrix_months.filter(Boolean) : [];
+  }
+  if (mode === 'matrix') {
+    const selectedMonths = Array.isArray(options?.selectedMonths) ? options.selectedMonths.filter(Boolean) : [];
+    if (selectedMonths.length) return selectedMonths;
+    return Array.isArray(detail?.matrix_months) ? detail.matrix_months.filter(Boolean) : [];
+  }
+  const selectedMonth = String(detail?.selected_month || '').trim();
+  return selectedMonth ? [selectedMonth] : [];
+}
+
+function societyPdfActiveDetail(detail = _societyDetail, { mode = 'selected', options = {}, forceIncludeMemberId = null } = {}) {
+  if (!detail || typeof detail !== 'object') return detail;
+  const keys = societyPdfMonthsForDetail(detail, mode, options);
+  const members = Array.isArray(detail?.members)
+    ? detail.members.filter((member) => (
+      member?.is_active !== false
+        || societyPdfMemberContributionValue(member, keys) > 0
+        || (forceIncludeMemberId != null && Number(member?.id) === Number(forceIncludeMemberId))
+    ))
+    : [];
+  const activeIds = new Set(members.map((member) => Number(member?.id || 0)).filter((id) => id > 0));
+  const keepByMemberId = (row) => {
+    const memberId = Number(row?.member_id || row?.id || 0);
+    if (!memberId) return true;
+    return activeIds.has(memberId);
+  };
+  const paymentStatus = {
+    ...(detail?.payment_status || {}),
+    paid_count: members.filter((member) => String(member?.selected_month_status || '').toLowerCase() === 'paid').length,
+    pending_count: members.filter((member) => String(member?.selected_month_status || '').toLowerCase() === 'pending').length,
+    approval_pending_count: members.filter((member) => String(member?.selected_month_request_status || '').toLowerCase() === 'pending').length,
+    not_paid_count: members.filter((member) => {
+      const status = String(member?.selected_month_status || '').toLowerCase();
+      return !['paid', 'pending', 'not_set'].includes(status);
+    }).length,
+  };
+  return {
+    ...detail,
+    members,
+    contributions: Array.isArray(detail?.contributions) ? detail.contributions.filter(keepByMemberId) : detail?.contributions,
+    payment_requests: Array.isArray(detail?.payment_requests) ? detail.payment_requests.filter(keepByMemberId) : detail?.payment_requests,
+    member_balances: Array.isArray(detail?.member_balances) ? detail.member_balances.filter(keepByMemberId) : detail?.member_balances,
+    member_balance_settlements: Array.isArray(detail?.member_balance_settlements) ? detail.member_balance_settlements.filter(keepByMemberId) : detail?.member_balance_settlements,
+    payment_status: paymentStatus,
+    totals: {
+      ...(detail?.totals || {}),
+      member_count: members.length,
+    },
+  };
+}
+
 function societyPdfUnitSortValue(unitLabel) {
   const raw = String(unitLabel || '').trim();
   if (!raw) return { primary: Number.MAX_SAFE_INTEGER, secondary: raw };
@@ -2059,51 +2113,55 @@ function societyWebMemberBalanceSummary(memberId) {
 
 async function downloadSocietyMonthPdf() {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'month',
-      detail: _societyDetail,
+      detail,
     },
-  }, `Society_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-month-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_${detail?.society?.name || 'Report'}_${societyMonthLabel(detail?.selected_month || _societyMonth)}`, `society-month-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyMobileMonthPdf() {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'mobile_month',
-      detail: _societyDetail,
+      detail,
     },
-  }, `Society_Mobile_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-mobile-month-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_Mobile_${detail?.society?.name || 'Report'}_${societyMonthLabel(detail?.selected_month || _societyMonth)}`, `society-mobile-month-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyMembersPdf(statusScope = 'all') {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
   const scope = String(statusScope || 'all').trim().toLowerCase();
   const scopeLabel = scope === 'paid' ? 'Paid_Members' : scope === 'unpaid' ? 'Unpaid_Members' : 'Members';
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'member_list',
-      detail: _societyDetail,
+      detail,
       options: {
         status_scope: scope,
       },
     },
-  }, `Society_${scopeLabel}_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-${scope}-members-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_${scopeLabel}_${detail?.society?.name || 'Report'}_${societyMonthLabel(detail?.selected_month || _societyMonth)}`, `society-${scope}-members-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyMemberPdf(memberId) {
   if (!_societyDetail?.society) return;
-  const member = (_societyDetail.members || []).find((item) => Number(item.id) === Number(memberId));
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected', forceIncludeMemberId: memberId });
+  const member = (detail?.members || []).find((item) => Number(item.id) === Number(memberId));
   if (!member) return;
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'member',
-      detail: _societyDetail,
+      detail,
       options: {
         member,
         balance_summary: societyWebMemberBalanceSummary(member.id),
@@ -2114,50 +2172,57 @@ async function downloadSocietyMemberPdf(memberId) {
 
 async function downloadSocietyMatrixPdf() {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'matrix' });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'matrix',
-      detail: _societyDetail,
+      detail,
     },
-  }, `Society_Matrix_${_societyDetail?.society?.name || 'Report'}`, `society-matrix-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_Matrix_${detail?.society?.name || 'Report'}`, `society-matrix-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyExpensesPdf() {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'expenses',
-      detail: _societyDetail,
+      detail,
       options: {
         scope: 'current',
       },
     },
-  }, `Society_Expenses_${_societyDetail?.society?.name || 'Report'}_${societyMonthLabel(_societyDetail?.selected_month || _societyMonth)}`, `society-expenses-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_Expenses_${detail?.society?.name || 'Report'}_${societyMonthLabel(detail?.selected_month || _societyMonth)}`, `society-expenses-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyReportPdf() {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'all' });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'report',
-      detail: _societyDetail,
+      detail,
     },
-  }, `Society_Report_${_societyDetail?.society?.name || 'Report'}`, `society-report-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_Report_${detail?.society?.name || 'Report'}`, `society-report-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyCustomPdf(options = {}) {
   if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, {
+    mode: options?.include_matrix ? 'matrix' : options?.include_report ? 'all' : 'selected',
+    options: { selectedMonths: options?.matrix_months || [] },
+  });
   await renderSharedPdfFileWindow({
     template: 'society',
     payload: {
       action: 'custom',
-      detail: _societyDetail,
+      detail,
       options,
     },
-  }, `Society_Custom_${_societyDetail?.society?.name || 'Report'}`, `society-custom-${_societyDetail?.society?.name || 'report'}`);
+  }, `Society_Custom_${detail?.society?.name || 'Report'}`, `society-custom-${detail?.society?.name || 'report'}`);
 }
 
 function societyMapPdfSvgCss() {
@@ -2383,9 +2448,10 @@ async function downloadSocietyMapPdfVariant({ mobile = false } = {}) {
     toast('Add a map layout to this society before downloading the map PDF.', 'warning');
     return;
   }
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
   let host = null;
   try {
-    host = societyMapPdfBuildHost(_societyDetail);
+    host = societyMapPdfBuildHost(detail);
     const svgEl = host.querySelector('svg');
     if (!svgEl) throw new Error('Map SVG not found');
     const viewBox = String(svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
@@ -2401,11 +2467,11 @@ async function downloadSocietyMapPdfVariant({ mobile = false } = {}) {
     const legendY = 13;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
-    doc.text(_P.cleanText ? _P.cleanText(String(_societyDetail.society.name || 'Society Map')) : String(_societyDetail.society.name || 'Society Map'), margin, titleY);
+    doc.text(_P.cleanText ? _P.cleanText(String(detail.society.name || 'Society Map')) : String(detail.society.name || 'Society Map'), margin, titleY);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(95, 107, 122);
-    doc.text(`Selected month: ${societyMonthLabel(_societyDetail.selected_month || _societyMonth || '')}`, margin, titleY + 5);
+    doc.text(`Selected month: ${societyMonthLabel(detail.selected_month || _societyMonth || '')}`, margin, titleY + 5);
     doc.setTextColor(0, 0, 0);
     societyMapPdfDrawLegend(doc, Math.max(margin, pageWidth - 72), legendY);
     const availableWidth = pageWidth - (margin * 2);
@@ -2416,8 +2482,8 @@ async function downloadSocietyMapPdfVariant({ mobile = false } = {}) {
     const drawX = (pageWidth - drawWidth) / 2;
     const drawY = 20 + ((availableHeight - drawHeight) / 2);
     doc.addImage(imageData, 'PNG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
-    societyMapPdfDrawMonthlyTiles(doc, _societyDetail, drawX, drawY, drawWidth, drawHeight, mobile);
-    doc.save(societyMapPdfFileName(_societyDetail, mobile).replace(/[^\w\s\-]/g, '_').trim() + '.pdf');
+    societyMapPdfDrawMonthlyTiles(doc, detail, drawX, drawY, drawWidth, drawHeight, mobile);
+    doc.save(societyMapPdfFileName(detail, mobile).replace(/[^\w\s\-]/g, '_').trim() + '.pdf');
   } catch (error) {
     console.error('Failed to download society map PDF', error);
     toast('Unable to download the map PDF right now.', 'error');
