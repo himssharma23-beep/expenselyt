@@ -669,7 +669,6 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
         member.property_type === 'shop' ? 'Shop' : 'Home',
         member.unit_label || '-',
         memberPhoneDisplay(member),
-        fmtCur(member?.monthly_due || 0),
         fmtCur(monthAmount),
         member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-',
         paid ? 'Paid' : 'Not paid',
@@ -683,7 +682,6 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
         period: monthLabel(monthKey),
         cards: [
           { label: 'Members Shown', value: String(rows.length), meta: statusLabel, tone: 'neutral' },
-          { label: 'Monthly Due Total', value: fmtCur(scopedMembers.reduce((sum, member) => sum + Number(member?.monthly_due || 0), 0)), meta: 'member due setup', tone: 'blue' },
           { label: 'Collected This Month', value: fmtCur(scopedMembers.reduce((sum, member) => sum + Number(member?.selected_month_amount || 0), 0)), meta: 'selected month', tone: 'green' },
           { label: 'Selected Month', value: monthLabel(monthKey), meta: 'current filter', tone: 'neutral' },
         ],
@@ -692,11 +690,11 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
       body: `
         ${renderSectionBand(statusLabel, monthLabel(monthKey))}
         <div class="table-card">
-          ${renderTable(['Member', 'Property', 'Unit', 'Phone', 'Monthly Due', 'Amount', 'Paid On', 'Status'], rows, {
-            numericColumns: [4, 5],
-            centerColumns: [1, 2, 7],
-            nowrapColumns: [4, 5, 6, 7],
-            columnWidths: ['22%', '9%', '10%', '18%', '11%', '10%', '11%', '9%'],
+          ${renderTable(['Member', 'Property', 'Unit', 'Phone', 'Amount', 'Paid On', 'Status'], rows, {
+            numericColumns: [4],
+            centerColumns: [1, 2, 6],
+            nowrapColumns: [4, 5, 6],
+            columnWidths: ['24%', '10%', '10%', '20%', '12%', '12%', '12%'],
           })}
         </div>
       `,
