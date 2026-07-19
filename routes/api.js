@@ -9731,6 +9731,24 @@ router.get('/admin/public-stats', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/admin/societies', requireAdmin, async (_req, res) => {
+  try {
+    const societies = await Promise.resolve(getCoreDb().listAdminSocieties());
+    res.json({ societies });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not load societies.' });
+  }
+});
+
+router.put('/admin/societies/:id', requireAdmin, async (req, res) => {
+  try {
+    const society = await Promise.resolve(getCoreDb().adminUpdateSociety(req.session.userId, req.params.id, req.body || {}));
+    res.json({ success: true, society });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update society.' });
+  }
+});
+
 router.get('/admin/database/backup/download', requireAdmin, async (_req, res) => {
   try {
     const backup = await createPostgresBackupFile();

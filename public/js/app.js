@@ -9981,6 +9981,7 @@ async function loadAdmin() {
   }
   renderAdminShell();
   if (adminSection === 'users') await loadAdminUsers();
+  else if (adminSection === 'societies') await loadAdminSocieties();
   else if (adminSection === 'expense_stats') await loadAdminExpenseStats();
   else if (adminSection === 'public_stats') await loadAdminPublicStats();
   else if (adminSection === 'plans') await loadAdminPlans();
@@ -9992,7 +9993,7 @@ async function loadAdmin() {
 }
 
 function renderAdminShell() {
-  const tabs = [['users','Users'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['currencies','Currencies'], ['notifications','Notifications'], ['portal_access','Portal Access'], ['ai','AI Learning']];
+  const tabs = [['users','Users'], ['societies','Societies'], ['expense_stats','Expense Stats'], ['public_stats','Public Stats'], ['plans','Plans'], ['subscriptions','Subscriptions'], ['currencies','Currencies'], ['notifications','Notifications'], ['portal_access','Portal Access'], ['ai','AI Learning']];
   const tabHtml = tabs.map(([k,l]) =>
     `<button class="chip ${adminSection===k?'active':''}" onclick="adminSection='${k}';loadAdmin()">${l}</button>`
   ).join('');
@@ -11173,6 +11174,8 @@ async function adminAiRunTest() {
 let _adminUsersData = [];
 let _adminUserFilter = 'all'; // 'all' | 'active' | 'deleted'
 let _adminUserSearch = '';
+let _adminSocietiesData = [];
+let _adminSocietySearch = '';
 
 async function loadAdminUsers() {
   const data = await api('/api/admin/users');
@@ -11193,6 +11196,85 @@ function _adminUserHandleSearchInput(input) {
   try {
     nextInput.setSelectionRange(start, end);
   } catch (_) {}
+}
+
+async function loadAdminSocieties() {
+  const data = await api('/api/admin/societies');
+  _adminSocietiesData = Array.isArray(data?.societies) ? data.societies : [];
+  _adminSocietySearch = '';
+  renderAdminSocieties();
+}
+
+function renderAdminSocieties() {
+  const q = String(_adminSocietySearch || '').trim().toLowerCase();
+  const filtered = _adminSocietiesData.filter((item) => {
+    if (!q) return true;
+    return [
+      item?.name,
+      item?.location,
+      item?.owner_name,
+      item?.owner_email,
+      item?.map_layout_key,
+    ].join(' ').toLowerCase().includes(q);
+  });
+  const cards = filtered.map((item) => `
+    <div class="admin-user-card">
+      <div class="admin-user-top">
+        <div>
+          <div class="admin-user-name">${escHtml(item.name || 'Society')}</div>
+          <div class="admin-user-handle">${escHtml(item.location || 'No location')} · ${Number(item.member_count || 0)} members</div>
+        </div>
+        <span class="admin-user-status" style="color:${item.show_map_in_portal !== false ? 'var(--green)' : 'var(--orange)'};background:${item.show_map_in_portal !== false ? 'var(--green-l)' : 'var(--border-l)'}">${item.show_map_in_portal !== false ? 'Map On' : 'Map Off'}</span>
+      </div>
+      <div class="admin-user-meta">
+        <div>
+          <div class="admin-user-label">Owner</div>
+          <div class="admin-user-value">${escHtml(item.owner_name || '-')}</div>
+          <div class="admin-user-sub">${escHtml(item.owner_email || 'No email')}</div>
+        </div>
+        <div>
+          <div class="admin-user-label">Layout</div>
+          <div class="admin-user-value">${escHtml(item.map_layout_key || 'No map layout')}</div>
+          <div class="admin-user-sub">Society ID ${Number(item.id || 0)}</div>
+        </div>
+        <div>
+          <div class="admin-user-label">Portal Map</div>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:700;color:var(--t1)">
+            <input type="checkbox" ${item.show_map_in_portal !== false ? 'checked' : ''} onchange="adminToggleSocietyMapPermission(${Number(item.id)}, this.checked)">
+            <span>Show MAP / MOB</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  document.getElementById('adminContent').innerHTML = `
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-main" style="font-size:14px;font-weight:700">Societies (${filtered.length}/${_adminSocietiesData.length})</div>
+      <div class="admin-toolbar-copy">Global admin control for each society map section and its MAP / MOB PDF access.</div>
+    </div>
+    <div class="admin-toolbar" style="margin-bottom:12px">
+      <input class="fi" id="adminSocietySearch" placeholder="Search society, owner, location, email…" style="flex:1;min-width:180px;max-width:360px;padding:7px 10px;font-size:13px" value="${escHtml(_adminSocietySearch)}" oninput="_adminSocietySearch=this.value;renderAdminSocieties()">
+      <div class="admin-toolbar-actions">
+        <button class="btn btn-s btn-sm" onclick="loadAdminSocieties()">Refresh</button>
+      </div>
+    </div>
+    <div class="admin-user-grid">${cards || '<div class="card" style="text-align:center;color:var(--t3);padding:30px">No societies match</div>'}</div>`;
+}
+
+async function adminToggleSocietyMapPermission(societyId, checked) {
+  try {
+    await api(`/api/admin/societies/${Number(societyId)}`, {
+      method: 'PUT',
+      body: { show_map_in_portal: !!checked },
+    });
+    const target = _adminSocietiesData.find((item) => Number(item.id) === Number(societyId));
+    if (target) target.show_map_in_portal = !!checked;
+    renderAdminSocieties();
+    toast('Society map permission updated', 'success');
+  } catch (err) {
+    toast(err?.message || 'Could not update society map permission.', 'error');
+    await loadAdminSocieties();
+  }
 }
 
 function _renderAdminUserCard(u) {
@@ -21365,7 +21447,7 @@ function renderSocietiesPage() {
     const tabItems = [
       ['overview', 'Overview'],
       ['members', 'Members'],
-      ...(mapPreset && showMapPermission ? [['map', 'Map']] : []),
+      ...(showMapPermission ? [['map', 'Map']] : []),
       ['matrix', 'Matrix'],
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
@@ -21381,7 +21463,7 @@ function renderSocietiesPage() {
     const quickActionButtons = [
       `<button class="trip-icon-btn" title="Month PDF" aria-label="Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:13px">&#128196;</span></button>`,
       `<button class="trip-icon-btn" title="Mobile Month PDF" aria-label="Mobile Month PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="downloadSocietyMobileMonthPdf()"><span class="trip-icon-btn-glyph" style="font-size:12px">&#128241;</span></button>`,
-      ...(mapPreset && showMapPermission ? [
+      ...(showMapPermission ? [
         `<button class="trip-icon-btn" title="Map PDF" aria-label="Map PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="printSocietyDesktopMapPdf()"><span class="trip-icon-btn-glyph" style="font-size:10px">MAP</span></button>`,
         `<button class="trip-icon-btn" title="Mobile Map PDF" aria-label="Mobile Map PDF" style="width:36px;height:36px;min-width:36px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff" onclick="printSocietyMobileMapPdf()"><span class="trip-icon-btn-glyph" style="font-size:10px">MOB</span></button>`,
       ] : []),
@@ -22272,17 +22354,12 @@ function showSocietyModal(id = null) {
         <input class="fi" id="societyMapFloorPlots" value="${escHtml(floorPlotPreset.join(', '))}" placeholder="e.g. 1, 7, 42">
       </label>
       <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
-        <input type="checkbox" id="societyShowMapInPortal" ${society.id ? (society.show_map_in_portal !== false ? 'checked' : '') : 'checked'}>
-        <span>Show map section and map PDFs in portal/mobile</span>
-      </label>
-      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
         <input type="checkbox" id="societyShowElectionsInPortal" ${society.id ? (society.show_elections_in_portal !== false ? 'checked' : '') : 'checked'}>
         <span>Show elections tab in portal/mobile</span>
       </label>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">If set, collections, expenses, balances, reports, and PDFs will start from this month for this society.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Choose a map layout to show a clickable society map with house-wise payment status in web and mobile.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Add any plot numbers here to split them into three stacked floors: Ground Floor, First Floor, and Second Floor. Clear a number to remove the split later.</div>
-      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Turn map permission off any time to hide both the map section and its MAP / MOB PDF downloads.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">You can hide elections completely from the member portal/mobile app, or control visibility per election below.</div>
     </div>
     <div class="fa" style="margin-top:16px">
@@ -22300,7 +22377,6 @@ async function saveSociety(id = null) {
     start_month: document.getElementById('societyStartMonth')?.value || '',
     map_layout_key: document.getElementById('societyMapLayout')?.value || '',
     map_floor_plots: document.getElementById('societyMapFloorPlots')?.value || '',
-    show_map_in_portal: document.getElementById('societyShowMapInPortal')?.checked !== false,
     show_elections_in_portal: document.getElementById('societyShowElectionsInPortal')?.checked !== false,
   };
   if (!body.name) { toast('Society name is required', 'warning'); return; }

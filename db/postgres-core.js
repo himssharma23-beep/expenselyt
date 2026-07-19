@@ -6978,6 +6978,67 @@ async function listSocieties(userId) {
   }));
 }
 
+async function listAdminSocieties() {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT s.id,
+            s.user_id,
+            s.name,
+            s.location,
+            s.start_month,
+            s.map_layout_key,
+            s.show_map_in_portal,
+            s.show_elections_in_portal,
+            s.show_expense_attachments_in_portal,
+            s.created_at,
+            s.updated_at,
+            COALESCE(u.display_name, u.username, '') AS owner_name,
+            COALESCE(u.email, '') AS owner_email,
+            COALESCE(m.member_count, 0) AS member_count
+     FROM societies s
+     LEFT JOIN users u ON u.id = s.user_id
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) AS member_count
+       FROM society_members
+       WHERE society_id = s.id
+     ) m ON TRUE
+     ORDER BY lower(s.name), s.id`
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    name: row.name,
+    location: row.location || '',
+    start_month: row.start_month || '',
+    map_layout_key: row.map_layout_key || '',
+    show_map_in_portal: row.show_map_in_portal !== false,
+    show_elections_in_portal: row.show_elections_in_portal !== false,
+    show_expense_attachments_in_portal: row.show_expense_attachments_in_portal !== false,
+    owner_name: row.owner_name || '',
+    owner_email: row.owner_email || '',
+    member_count: Number(row.member_count || 0),
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  }));
+}
+
+async function adminUpdateSociety(userId, societyId, data = {}) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+     FROM societies
+     WHERE id = $1
+     LIMIT 1`,
+    [societyId]
+  );
+  const current = result.rows[0] || null;
+  if (!current) throw validationError('Society not found');
+  return updateSociety(Number(current.user_id), societyId, {
+    ...data,
+    user_id: userId,
+  });
+}
+
 async function createSociety(userId, data = {}) {
   await ensureSocietyTables();
   const name = normalizeText(data.name, 'Society name', 120);
@@ -9461,9 +9522,11 @@ module.exports = {
   deleteShareLink,
   getPublicShareData,
   listSocieties,
+  listAdminSocieties,
   getSocietyDetail,
   createSociety,
   updateSociety,
+  adminUpdateSociety,
   deleteSociety,
   addSocietyMember,
   updateSocietyMember,
