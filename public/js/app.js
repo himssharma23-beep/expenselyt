@@ -20689,6 +20689,10 @@ function societyMapConfiguredFloorPlots(society = {}, preset = null) {
   return Object.keys(fallbackPreset?.floorPlots || {}).map(Number).filter((item) => Number.isInteger(item) && item > 0).sort((a, b) => a - b);
 }
 
+function societyMapShowShops(society = {}) {
+  return society?.show_shops_in_map !== false;
+}
+
 function getSocietyMapPreset(society = {}) {
   const key = String(society?.map_layout_key || '').trim();
   if (key && SOCIETY_MAP_PRESETS[key]) return SOCIETY_MAP_PRESETS[key];
@@ -20857,6 +20861,7 @@ function renderSocietyMapSection(detail) {
       </div>`;
   }
   const isAllTime = _societyRange === 'all';
+  const showShops = societyMapShowShops(detail?.society || {});
   const configuredFloorPlots = societyMapConfiguredFloorPlots(detail?.society || {}, preset);
   const floorPlots = Object.fromEntries(configuredFloorPlots.map((plotNo) => [plotNo, ['SF', 'FF', 'GF']]));
   const plotKey = societyMapActiveSelectionKey();
@@ -20879,7 +20884,10 @@ function renderSocietyMapSection(detail) {
       <rect x="${park.x}" y="${park.y}" width="${park.w}" height="${park.h}" class="society-layout-park" rx="2"></rect>
       <text x="${cx}" y="${cy}" class="society-layout-parklabel" ${park.h > park.w ? `transform="rotate(-90 ${cx} ${cy})"` : ''}>${escHtml(park.label)}</text>`;
   }).join('');
-  const plots = (preset.blocks || []).map((block) => (block.plots || []).map((plotEntry, index) => {
+  const plots = (preset.blocks || []).map((block) => (block.plots || []).filter((plotEntry) => {
+    const plotMeta = societyMapPlotMeta(plotEntry);
+    return showShops || plotMeta.kind !== 'shop';
+  }).map((plotEntry, index) => {
     const plotMeta = societyMapPlotMeta(plotEntry);
     const plotNo = plotMeta.id;
     const plotLabel = plotMeta.label;
@@ -22354,12 +22362,27 @@ function showSocietyModal(id = null) {
         <input class="fi" id="societyMapFloorPlots" value="${escHtml(floorPlotPreset.join(', '))}" placeholder="e.g. 1, 7, 42">
       </label>
       <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
+        <input type="checkbox" id="societyShowShopsInMap" ${society.id ? (society.show_shops_in_map !== false ? 'checked' : '') : 'checked'}>
+        <span>Show shops in map and map PDFs</span>
+      </label>
+      <label class="fl">Shop Rows In PDFs
+        <select class="fi" id="societyPdfShopsMode">
+          <option value="individual" ${String(society.pdf_shops_mode || 'individual') === 'summary' ? '' : 'selected'}>Show individual shops</option>
+          <option value="summary" ${String(society.pdf_shops_mode || '') === 'summary' ? 'selected' : ''}>Show one shops total row</option>
+        </select>
+      </label>
+      <label class="fl">Shop Summary Text
+        <input class="fi" id="societyPdfShopsSummaryText" value="${escHtml(society.pdf_shops_summary_text || '')}" placeholder="e.g. Shops Total">
+      </label>
+      <label class="fl full" style="display:flex;align-items:center;gap:10px;padding-top:4px">
         <input type="checkbox" id="societyShowElectionsInPortal" ${society.id ? (society.show_elections_in_portal !== false ? 'checked' : '') : 'checked'}>
         <span>Show elections tab in portal/mobile</span>
       </label>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">If set, collections, expenses, balances, reports, and PDFs will start from this month for this society.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Choose a map layout to show a clickable society map with house-wise payment status in web and mobile.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Add any plot numbers here to split them into three stacked floors: Ground Floor, First Floor, and Second Floor. Clear a number to remove the split later.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Turn shops off if you want the map to show houses only across the app and exported map PDFs.</div>
+      <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">Choose whether PDF exports should show each shop separately or combine all visible shops into one summary row with your custom text.</div>
       <div style="grid-column:1 / -1;font-size:12px;color:var(--t3);line-height:1.5">You can hide elections completely from the member portal/mobile app, or control visibility per election below.</div>
     </div>
     <div class="fa" style="margin-top:16px">
@@ -22377,6 +22400,9 @@ async function saveSociety(id = null) {
     start_month: document.getElementById('societyStartMonth')?.value || '',
     map_layout_key: document.getElementById('societyMapLayout')?.value || '',
     map_floor_plots: document.getElementById('societyMapFloorPlots')?.value || '',
+    show_shops_in_map: document.getElementById('societyShowShopsInMap')?.checked !== false,
+    pdf_shops_mode: document.getElementById('societyPdfShopsMode')?.value || 'individual',
+    pdf_shops_summary_text: document.getElementById('societyPdfShopsSummaryText')?.value?.trim() || '',
     show_elections_in_portal: document.getElementById('societyShowElectionsInPortal')?.checked !== false,
   };
   if (!body.name) { toast('Society name is required', 'warning'); return; }

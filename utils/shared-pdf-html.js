@@ -311,6 +311,65 @@ function buildSocietyHelpers(prefs = {}) {
     });
   }
 
+  function pdfShopRowsMode(detail = {}) {
+    return String(detail?.society?.pdf_shops_mode || 'individual').trim().toLowerCase() === 'summary' ? 'summary' : 'individual';
+  }
+
+  function pdfShopSummaryText(detail = {}) {
+    return String(detail?.society?.pdf_shops_summary_text || '').trim() || 'Shops Total';
+  }
+
+  function buildPdfShopSummaryMember(detail, members = [], monthKeys = []) {
+    const shops = (members || []).filter((member) => String(member?.property_type || '').toLowerCase() === 'shop');
+    if (!shops.length) return null;
+    const keys = Array.isArray(monthKeys) ? monthKeys.filter(Boolean) : [];
+    const combinedByMonth = {};
+    keys.forEach((monthKey) => {
+      combinedByMonth[monthKey] = shops.reduce((sum, member) => sum + Number((member?.contributions_by_month || {})[monthKey] || 0), 0);
+    });
+    const totalPaid = shops.reduce((sum, member) => sum + Number(member?.total_contributed || 0), 0);
+    const monthAmount = keys.length
+      ? keys.reduce((sum, monthKey) => sum + Number(combinedByMonth[monthKey] || 0), 0)
+      : shops.reduce((sum, member) => sum + Number(member?.selected_month_amount || 0), 0);
+    const paidCount = shops.filter((member) => Number(member?.selected_month_amount || 0) > 0).length;
+    return {
+      __pdf_shop_summary: true,
+      member_name: pdfShopSummaryText(detail),
+      unit_label: '',
+      property_type: '',
+      phone_number: '',
+      phone_numbers: [],
+      total_contributed: totalPaid,
+      contributions_by_month: combinedByMonth,
+      selected_month_amount: monthAmount,
+      selected_month_paid_on: '',
+      selected_month_notes: '',
+      selected_month_status: paidCount > 0 ? 'paid' : 'pending',
+      shop_member_count: shops.length,
+      shop_paid_count: paidCount,
+    };
+  }
+
+  function collapsePdfShopMembers(detail, members = [], monthKeys = []) {
+    const rows = Array.isArray(members) ? members : [];
+    if (pdfShopRowsMode(detail) !== 'summary') return sortMembers(rows);
+    const shops = rows.filter((member) => String(member?.property_type || '').toLowerCase() === 'shop');
+    if (!shops.length) return sortMembers(rows);
+    const homes = rows.filter((member) => String(member?.property_type || '').toLowerCase() !== 'shop');
+    const summaryRow = buildPdfShopSummaryMember(detail, shops, monthKeys);
+    return sortMembers(summaryRow ? [...homes, summaryRow] : homes);
+  }
+
+  function pdfShopSummaryStatus(member) {
+    if (!member?.__pdf_shop_summary) return '';
+    const total = Number(member?.shop_member_count || 0);
+    const paid = Number(member?.shop_paid_count || 0);
+    if (!total) return 'Not paid';
+    if (paid <= 0) return 'Not paid';
+    if (paid >= total) return 'Paid';
+    return `${paid}/${total} paid`;
+  }
+
   function matrixScopeTotal(member, monthKeys = []) {
     return (monthKeys || []).reduce(
       (sum, monthKey) => sum + Number((member?.contributions_by_month || {})[monthKey] || 0),
@@ -473,7 +532,28 @@ function buildSocietyHelpers(prefs = {}) {
 
   function memberBalanceRows(detail) {
     const rows = Array.isArray(detail?.member_balances) ? detail.member_balances : [];
-    return rows.map((item) => [
+    let sourceRows = rows;
+    if (pdfShopRowsMode(detail) === 'summary') {
+      const shops = rows.filter((item) => String(item?.property_type || '').toLowerCase() === 'shop');
+      if (shops.length) {
+        const homes = rows.filter((item) => String(item?.property_type || '').toLowerCase() !== 'shop');
+        sourceRows = [
+          ...homes,
+          {
+            __pdf_shop_summary: true,
+            member_name: pdfShopSummaryText(detail),
+            unit_label: '',
+            property_type: '',
+            amount: shops.reduce((sum, item) => sum + Number(item?.amount || 0), 0),
+            settled_amount: shops.reduce((sum, item) => sum + Number(item?.settled_amount || 0), 0),
+            remaining_amount: shops.reduce((sum, item) => sum + Number(item?.remaining_amount || 0), 0),
+            expense_count: shops.reduce((sum, item) => sum + Number(item?.expense_count || 0), 0),
+            settlement_count: shops.reduce((sum, item) => sum + Number(item?.settlement_count || 0), 0),
+          },
+        ];
+      }
+    }
+    return sourceRows.map((item) => [
       memberLabel(item),
       fmtCur(item.amount || 0),
       fmtCur(item.settled_amount || 0),
@@ -485,7 +565,27 @@ function buildSocietyHelpers(prefs = {}) {
 
   function memberSettlementRows(detail) {
     const rows = Array.isArray(detail?.member_balance_settlements) ? detail.member_balance_settlements : [];
-    return rows.map((item) => [
+    let sourceRows = rows;
+    if (pdfShopRowsMode(detail) === 'summary') {
+      const shops = rows.filter((item) => String(item?.property_type || '').toLowerCase() === 'shop');
+      if (shops.length) {
+        const homes = rows.filter((item) => String(item?.property_type || '').toLowerCase() !== 'shop');
+        sourceRows = [
+          ...homes,
+          {
+            __pdf_shop_summary: true,
+            settlement_date: null,
+            member_name: pdfShopSummaryText(detail),
+            unit_label: '',
+            property_type: '',
+            settlement_mode: 'Mixed',
+            notes: '-',
+            amount: shops.reduce((sum, item) => sum + Number(item?.amount || 0), 0),
+          },
+        ];
+      }
+    }
+    return sourceRows.map((item) => [
       fmtDate(item.settlement_date),
       memberLabel(item),
       item.settlement_mode || '-',
@@ -575,6 +675,8 @@ function buildSocietyHelpers(prefs = {}) {
     memberLabel,
     memberPhoneDisplay,
     sortMembers,
+    collapsePdfShopMembers,
+    pdfShopSummaryStatus,
     matrixScopeTotal,
     renderTable,
     summaryCards,
@@ -601,6 +703,8 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     memberLabel,
     memberPhoneDisplay,
     sortMembers,
+    collapsePdfShopMembers,
+    pdfShopSummaryStatus,
     matrixScopeTotal,
     renderTable,
     summaryCards,
@@ -620,14 +724,15 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
 
   if (action === 'month') {
     const monthKey = detail?.selected_month;
-    const rows = sortMembers(detail?.members || []).map((member) => [
+    const pdfMembers = collapsePdfShopMembers(detail, detail?.members || [], [String(monthKey || '').trim()]);
+    const rows = pdfMembers.map((member) => [
       memberLabel(member),
-      member.property_type === 'shop' ? 'Shop' : 'Home',
+      member.__pdf_shop_summary ? '-' : (member.property_type === 'shop' ? 'Shop' : 'Home'),
       member.unit_label || '-',
       memberPhoneDisplay(member),
       fmtCur(member.selected_month_amount || 0),
-      member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-',
-      member.selected_month_notes || '-',
+      member.__pdf_shop_summary ? '-' : (member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-'),
+      member.__pdf_shop_summary ? '-' : (member.selected_month_notes || '-'),
     ]);
     return buildPdfShell({
       hero: renderHero({
@@ -658,20 +763,20 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     const scopedMembers = statusScope === 'paid' || statusScope === 'unpaid'
       ? filterMembers(detail, statusScope, monthKey ? [monthKey] : [])
       : (detail?.members || []);
+    const pdfMembers = collapsePdfShopMembers(detail, scopedMembers, monthKey ? [monthKey] : []);
     const statusLabel = statusScope === 'paid' ? 'Paid Members'
       : statusScope === 'unpaid' ? 'Unpaid Members'
       : 'Members';
-    const rows = sortMembers(scopedMembers).map((member) => {
+    const rows = pdfMembers.map((member) => {
       const monthAmount = Number(member?.selected_month_amount || 0);
-      const paid = monthAmount > 0;
       return [
         memberLabel(member),
-        member.property_type === 'shop' ? 'Shop' : 'Home',
+        member.__pdf_shop_summary ? '-' : (member.property_type === 'shop' ? 'Shop' : 'Home'),
         member.unit_label || '-',
         memberPhoneDisplay(member),
         fmtCur(monthAmount),
-        member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-',
-        paid ? 'Paid' : 'Not paid',
+        member.__pdf_shop_summary ? '-' : (member.selected_month_paid_on ? createFormatters(prefs).fmtDate(member.selected_month_paid_on) : '-'),
+        member.__pdf_shop_summary ? pdfShopSummaryStatus(member) : (monthAmount > 0 ? 'Paid' : 'Not paid'),
       ];
     });
     return buildPdfShell({
@@ -705,7 +810,8 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     const totals = detail?.totals || {};
     const monthKey = detail?.selected_month;
     const monthHeading = monthLabel(monthKey);
-    const rows = sortMembers(detail?.members || []).map((member) => `
+    const pdfMembers = collapsePdfShopMembers(detail, detail?.members || [], [String(monthKey || '').trim()]);
+    const rows = pdfMembers.map((member) => `
       <tr>
         <td style="font-weight:800;color:#213f31;padding:14px 12px">${escapeHtml(memberLabel(member))}</td>
         <td style="color:#63716a;padding:14px 12px">${escapeHtml(memberPhoneDisplay(member))}</td>
@@ -888,8 +994,9 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     const matrixMonths = (options.selectedMonths || []).length ? options.selectedMonths : (detail?.matrix_months || []);
     const memberScope = options.memberScope || 'all';
     const scopedMembers = filterMembers(detail, memberScope, matrixMonths);
+    const pdfMembers = collapsePdfShopMembers(detail, scopedMembers, matrixMonths);
     const periodLabel = matrixMonths.length ? selectedPeriodRange(matrixMonths) : societyPeriodRange(detail);
-    const rows = sortMembers(scopedMembers).map((member) => [
+    const rows = pdfMembers.map((member) => [
       memberLabel(member),
       ...matrixMonths.map((monthKey) => compactMoney((member.contributions_by_month || {})[monthKey] || 0)),
       fmtCur(matrixScopeTotal(member, matrixMonths)),
@@ -1023,6 +1130,7 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     const matrixMonths = (options.matrix_months || []).length ? options.matrix_months : (detail?.matrix_months || []);
     const memberScope = String(options.member_scope || 'all');
     const scopedMembers = filterMembers(detail, memberScope, matrixMonths);
+    const pdfMembers = collapsePdfShopMembers(detail, scopedMembers, matrixMonths);
     const scopedExpenses = resolveExpenseScope(detail, options.expense_scope || 'current', options.expense_months || []);
     const includeSummary = options.include_summary !== false;
     const includeReport = !!options.include_report;
@@ -1096,7 +1204,7 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     }
 
     if (includeMatrix) {
-      const rows = sortMembers(scopedMembers).map((member) => [
+      const rows = pdfMembers.map((member) => [
         memberLabel(member),
         ...matrixMonths.map((monthKey) => compactMoney((member.contributions_by_month || {})[monthKey] || 0)),
         fmtCur(matrixScopeTotal(member, matrixMonths)),

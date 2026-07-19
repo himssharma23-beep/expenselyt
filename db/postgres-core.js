@@ -6508,6 +6508,11 @@ function normalizePropertyType(value) {
   return normalized;
 }
 
+function normalizeSocietyPdfShopsMode(value) {
+  const normalized = String(value || 'individual').trim().toLowerCase();
+  return normalized === 'summary' ? 'summary' : 'individual';
+}
+
 function normalizeSocietyFloorPlotsConfig(value) {
   if (value === undefined) return undefined;
   const rawList = Array.isArray(value)
@@ -6548,6 +6553,9 @@ async function ensureSocietyTables() {
       start_month TEXT,
       map_layout_key TEXT,
       map_floor_plots_json TEXT,
+      show_shops_in_map BOOLEAN NOT NULL DEFAULT TRUE,
+      pdf_shops_mode TEXT NOT NULL DEFAULT 'individual',
+      pdf_shops_summary_text TEXT,
       show_map_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
       show_elections_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
       show_expense_attachments_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
@@ -6558,6 +6566,9 @@ async function ensureSocietyTables() {
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS start_month TEXT`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_layout_key TEXT`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_floor_plots_json TEXT`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_shops_in_map BOOLEAN NOT NULL DEFAULT TRUE`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS pdf_shops_mode TEXT NOT NULL DEFAULT 'individual'`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS pdf_shops_summary_text TEXT`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_map_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_elections_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS show_expense_attachments_in_portal BOOLEAN NOT NULL DEFAULT TRUE`);
@@ -6891,7 +6902,7 @@ function mapSocietyElectionRow(row, { revealVotes = false, includeVoters = false
 async function getSocietyOwnedByUser(userId, societyId) {
   await ensureSocietyTables();
   const result = await query(
-    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
      FROM societies
      WHERE id = $1 AND user_id = $2
      LIMIT 1`,
@@ -6909,6 +6920,9 @@ async function listSocieties(userId) {
             s.start_month,
             s.map_layout_key,
             s.map_floor_plots_json,
+            s.show_shops_in_map,
+            s.pdf_shops_mode,
+            s.pdf_shops_summary_text,
             s.show_map_in_portal,
             s.show_elections_in_portal,
             s.show_expense_attachments_in_portal,
@@ -6964,6 +6978,9 @@ async function listSocieties(userId) {
     start_month: row.start_month || '',
     map_layout_key: row.map_layout_key || '',
     map_floor_plots: parseSocietyFloorPlotsConfig(row.map_floor_plots_json),
+    show_shops_in_map: row.show_shops_in_map !== false,
+    pdf_shops_mode: normalizeSocietyPdfShopsMode(row.pdf_shops_mode),
+    pdf_shops_summary_text: row.pdf_shops_summary_text || '',
     show_map_in_portal: row.show_map_in_portal !== false,
     show_elections_in_portal: row.show_elections_in_portal !== false,
     show_expense_attachments_in_portal: row.show_expense_attachments_in_portal !== false,
@@ -6987,6 +7004,9 @@ async function listAdminSocieties() {
             s.location,
             s.start_month,
             s.map_layout_key,
+            s.show_shops_in_map,
+            s.pdf_shops_mode,
+            s.pdf_shops_summary_text,
             s.show_map_in_portal,
             s.show_elections_in_portal,
             s.show_expense_attachments_in_portal,
@@ -7011,6 +7031,9 @@ async function listAdminSocieties() {
     location: row.location || '',
     start_month: row.start_month || '',
     map_layout_key: row.map_layout_key || '',
+    show_shops_in_map: row.show_shops_in_map !== false,
+    pdf_shops_mode: normalizeSocietyPdfShopsMode(row.pdf_shops_mode),
+    pdf_shops_summary_text: row.pdf_shops_summary_text || '',
     show_map_in_portal: row.show_map_in_portal !== false,
     show_elections_in_portal: row.show_elections_in_portal !== false,
     show_expense_attachments_in_portal: row.show_expense_attachments_in_portal !== false,
@@ -7025,7 +7048,7 @@ async function listAdminSocieties() {
 async function adminUpdateSociety(userId, societyId, data = {}) {
   await ensureSocietyTables();
   const result = await query(
-    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
      FROM societies
      WHERE id = $1
      LIMIT 1`,
@@ -7046,13 +7069,16 @@ async function createSociety(userId, data = {}) {
   const startMonth = normalizeOptionalMonthKey(data.start_month, 'Start month');
   const mapLayoutKey = data.map_layout_key != null ? normalizeOptionalText(data.map_layout_key, 80) : '';
   const mapFloorPlotsJson = normalizeSocietyFloorPlotsConfig(data.map_floor_plots);
+  const showShopsInMap = data.show_shops_in_map !== false;
+  const pdfShopsMode = normalizeSocietyPdfShopsMode(data.pdf_shops_mode);
+  const pdfShopsSummaryText = normalizeOptionalText(data.pdf_shops_summary_text, 120);
   const showMapInPortal = data.show_map_in_portal !== false;
   const showExpenseAttachmentsInPortal = data.show_expense_attachments_in_portal !== false;
   const result = await query(
-    `INSERT INTO societies (user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [userId, name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson != null ? mapFloorPlotsJson : null, showMapInPortal, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal]
+    `INSERT INTO societies (user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
+    [userId, name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson != null ? mapFloorPlotsJson : null, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal]
   );
   return result.rows[0];
 }
@@ -7066,6 +7092,9 @@ async function updateSociety(userId, societyId, data = {}) {
   const startMonth = data.start_month !== undefined ? normalizeOptionalMonthKey(data.start_month, 'Start month') : (current.start_month || '');
   const mapLayoutKey = data.map_layout_key !== undefined ? normalizeOptionalText(data.map_layout_key, 80) : (current.map_layout_key || '');
   const mapFloorPlotsJson = data.map_floor_plots !== undefined ? normalizeSocietyFloorPlotsConfig(data.map_floor_plots) : (current.map_floor_plots_json ?? null);
+  const showShopsInMap = data.show_shops_in_map !== undefined ? !!data.show_shops_in_map : current.show_shops_in_map !== false;
+  const pdfShopsMode = data.pdf_shops_mode !== undefined ? normalizeSocietyPdfShopsMode(data.pdf_shops_mode) : normalizeSocietyPdfShopsMode(current.pdf_shops_mode);
+  const pdfShopsSummaryText = data.pdf_shops_summary_text !== undefined ? normalizeOptionalText(data.pdf_shops_summary_text, 120) : (current.pdf_shops_summary_text || '');
   const showMapInPortal = data.show_map_in_portal !== undefined ? !!data.show_map_in_portal : current.show_map_in_portal !== false;
   const showElectionsInPortal = data.show_elections_in_portal !== undefined ? !!data.show_elections_in_portal : current.show_elections_in_portal !== false;
   const showExpenseAttachmentsInPortal = data.show_expense_attachments_in_portal !== undefined
@@ -7073,10 +7102,10 @@ async function updateSociety(userId, societyId, data = {}) {
     : current.show_expense_attachments_in_portal !== false;
   const result = await query(
     `UPDATE societies
-     SET name = $1, location = $2, start_month = $3, map_layout_key = $4, map_floor_plots_json = $5, show_map_in_portal = $6, show_elections_in_portal = $7, show_expense_attachments_in_portal = $8, updated_at = NOW()
-     WHERE id = $9 AND user_id = $10
-     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson, showMapInPortal, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId]
+     SET name = $1, location = $2, start_month = $3, map_layout_key = $4, map_floor_plots_json = $5, show_shops_in_map = $6, pdf_shops_mode = $7, pdf_shops_summary_text = $8, show_map_in_portal = $9, show_elections_in_portal = $10, show_expense_attachments_in_portal = $11, updated_at = NOW()
+     WHERE id = $12 AND user_id = $13
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
+    [name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId]
   );
   return result.rows[0] || null;
 }
@@ -8181,6 +8210,9 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       start_month: startMonth || '',
       map_layout_key: society.map_layout_key || '',
       map_floor_plots: parseSocietyFloorPlotsConfig(society.map_floor_plots_json),
+      show_shops_in_map: society.show_shops_in_map !== false,
+      pdf_shops_mode: normalizeSocietyPdfShopsMode(society.pdf_shops_mode),
+      pdf_shops_summary_text: society.pdf_shops_summary_text || '',
       show_map_in_portal: society.show_map_in_portal !== false,
       show_elections_in_portal: society.show_elections_in_portal !== false,
       show_expense_attachments_in_portal: society.show_expense_attachments_in_portal !== false,
