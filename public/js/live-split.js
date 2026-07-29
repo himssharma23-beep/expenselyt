@@ -2045,14 +2045,16 @@
 
     const doc = _P.init(true);
     const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  Â·  ${filteredEvents.length} entries`;
-    const balanceValue = r2(scoped.total || 0);
-    const balanceLabel = balanceValue > 0.005 ? 'To pay' : balanceValue < -0.005 ? 'To receive' : 'Settled';
+    const overallBalanceValue = r2(row?.amount || 0);
+    const overallBalanceLabel = overallBalanceValue > 0.005 ? 'Overall to receive' : overallBalanceValue < -0.005 ? 'Overall to pay' : 'Overall settled';
+    const rangeBalanceValue = r2(scoped.total || 0);
+    const rangeBalanceLabel = rangeBalanceValue > 0.005 ? 'Selected range receive' : rangeBalanceValue < -0.005 ? 'Selected range pay' : 'Selected range settled';
     let y = _P.header(doc, `Live Split - ${row?.name || 'Friend'}`, subtitle);
     y = _P.cards(doc, y, [
-      { label: balanceLabel, value: _P.cur(Math.abs(balanceValue)), color: balanceValue > 0.005 ? 'green' : balanceValue < -0.005 ? 'red' : '' },
+      { label: overallBalanceLabel, value: _P.cur(Math.abs(overallBalanceValue)), color: overallBalanceValue > 0.005 ? 'green' : overallBalanceValue < -0.005 ? 'red' : '' },
       { label: 'Entries', value: String(filteredEvents.length), color: '' },
+      { label: rangeBalanceLabel, value: _P.cur(Math.abs(rangeBalanceValue)), color: rangeBalanceValue > 0.005 ? 'green' : rangeBalanceValue < -0.005 ? 'red' : '' },
       { label: 'Trips', value: String((scoped.tripSections || []).length), color: '' },
-      { label: 'Friend', value: String(row?.name || '-'), color: '' },
     ]);
     y = _P.section(doc, y, 'Live Split Entries');
     y = _P.table(

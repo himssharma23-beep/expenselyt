@@ -2426,70 +2426,23 @@ function societyMapPdfDrawMonthlyTiles(doc, detail, drawX, drawY, drawWidth, dra
 }
 
 async function downloadSocietyMapPdf() {
-  await downloadSocietyMapPdfVariant({ mobile: false });
+  if (!_societyDetail?.society) return;
+  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
+  await renderSharedPdfFileWindow({
+    template: 'society',
+    payload: {
+      action: 'map',
+      detail,
+    },
+  }, `Society_Map_${detail?.society?.name || 'Report'}_${societyMonthLabel(detail?.selected_month || _societyMonth)}`, `society-map-${detail?.society?.name || 'report'}`);
 }
 
 async function downloadSocietyMobileMapPdf() {
-  await downloadSocietyMapPdfVariant({ mobile: true });
+  await downloadSocietyMapPdf();
 }
 
 async function downloadSocietyMapPdfVariant({ mobile = false } = {}) {
-  if (!_societyDetail?.society) return;
-  if (_societyDetail?.society?.show_map_in_portal === false) {
-    toast('Map access is disabled for this society.', 'warning');
-    return;
-  }
-  if (typeof renderSocietyMapSection !== 'function' || typeof getSocietyMapPreset !== 'function') {
-    toast('Map export is not available right now.', 'warning');
-    return;
-  }
-  const preset = getSocietyMapPreset(_societyDetail.society || {});
-  if (!preset) {
-    toast('Add a map layout to this society before downloading the map PDF.', 'warning');
-    return;
-  }
-  const detail = societyPdfActiveDetail(_societyDetail, { mode: 'selected' });
-  let host = null;
-  try {
-    host = societyMapPdfBuildHost(detail);
-    const svgEl = host.querySelector('svg');
-    if (!svgEl) throw new Error('Map SVG not found');
-    const viewBox = String(svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
-    const svgWidth = Number.isFinite(viewBox[2]) ? viewBox[2] : 1200;
-    const svgHeight = Number.isFinite(viewBox[3]) ? viewBox[3] : 900;
-    const svgMarkup = societyMapPdfSvgMarkup(svgEl);
-    const imageData = await societyMapPdfSvgToImage(svgMarkup, svgWidth, svgHeight);
-    const doc = _P.init(true);
-    const pageWidth = _P.W(doc);
-    const pageHeight = _P.H(doc);
-    const margin = mobile ? 8 : 6;
-    const titleY = 10;
-    const legendY = 13;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14);
-    doc.text(_P.cleanText ? _P.cleanText(String(detail.society.name || 'Society Map')) : String(detail.society.name || 'Society Map'), margin, titleY);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(95, 107, 122);
-    doc.text(`Selected month: ${societyMonthLabel(detail.selected_month || _societyMonth || '')}`, margin, titleY + 5);
-    doc.setTextColor(0, 0, 0);
-    societyMapPdfDrawLegend(doc, Math.max(margin, pageWidth - 72), legendY);
-    const availableWidth = pageWidth - (margin * 2);
-    const availableHeight = pageHeight - 24;
-    const scale = Math.min(availableWidth / svgWidth, availableHeight / svgHeight);
-    const drawWidth = svgWidth * scale;
-    const drawHeight = svgHeight * scale;
-    const drawX = (pageWidth - drawWidth) / 2;
-    const drawY = 20 + ((availableHeight - drawHeight) / 2);
-    doc.addImage(imageData, 'PNG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
-    societyMapPdfDrawMonthlyTiles(doc, detail, drawX, drawY, drawWidth, drawHeight, mobile);
-    doc.save(societyMapPdfFileName(detail, mobile).replace(/[^\w\s\-]/g, '_').trim() + '.pdf');
-  } catch (error) {
-    console.error('Failed to download society map PDF', error);
-    toast('Unable to download the map PDF right now.', 'error');
-  } finally {
-    if (host && host.parentNode) host.parentNode.removeChild(host);
-  }
+  await downloadSocietyMapPdf();
 }
 
 async function downloadFriendsPdf() {

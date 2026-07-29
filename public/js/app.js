@@ -2343,6 +2343,56 @@ async function loadExpenses() {
   f.page = Math.min(f.page, totalPages);
   const pageStart = (f.page - 1) * f.pageSize;
   const pageList = list.slice(pageStart, pageStart + f.pageSize);
+  const expenseDayShortLabel = (dateStr = '') => {
+    const [year, month, day] = String(dateStr || '').split('-').map(Number);
+    const parsed = new Date(year, (month || 1) - 1, day || 1);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleDateString('en-IN', { weekday: 'short' });
+  };
+  const groupedExpenseRows = [];
+  let currentExpenseDate = '';
+  let currentExpenseTotal = 0;
+  let currentExpenseRows = [];
+  const flushExpenseDayGroup = () => {
+    if (!currentExpenseDate) return;
+    const dayLabel = String(currentExpenseDate).slice(8, 10) || '--';
+    groupedExpenseRows.push(`
+      <tr>
+        <td colspan="6" style="padding:8px 12px;background:#fff;border-bottom:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;padding:0 8px;border-radius:10px;background:#fff;border:1px solid var(--border);font-size:16px;font-weight:800;color:var(--t1);line-height:1">${escHtml(dayLabel)}</span>
+              <span style="display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:22px;padding:0 8px;border-radius:999px;background:#e8f4ea;color:var(--green);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">${escHtml(expenseDayShortLabel(currentExpenseDate))}</span>
+              <span style="display:inline-flex;align-items:center;justify-content:center;min-width:84px;height:24px;padding:0 10px;border-radius:999px;background:#eef3ff;color:#4267b2;font-size:12px;font-weight:800;line-height:1;white-space:nowrap">${fmtCur(currentExpenseTotal)}</span>
+            </div>
+            <div></div>
+          </div>
+        </td>
+      </tr>`);
+    groupedExpenseRows.push(...currentExpenseRows);
+  };
+  pageList.forEach((e) => {
+    const itemDate = String(e?.purchase_date || '').slice(0, 10);
+    if (itemDate && itemDate !== currentExpenseDate) {
+      flushExpenseDayGroup();
+      currentExpenseDate = itemDate;
+      currentExpenseTotal = 0;
+      currentExpenseRows = [];
+    }
+    if (!e?.is_income_history) currentExpenseTotal += Number(e?.amount || 0);
+    currentExpenseRows.push(`<tr>
+              <td>${fmtDate(e.purchase_date)}</td>
+              <td>
+                <div style="font-weight:600">${escHtml(e.item_name || '')}</div>
+                ${expenseSourceLabel(e) ? `<div style="font-size:11px;color:var(--t3);margin-top:3px">${escHtml(expenseSourceLabel(e))}</div>` : ''}
+              </td>
+              <td>${expenseCategoryDisplayText(e.category, e.subcategory) ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(expenseCategoryDisplayText(e.category, e.subcategory))}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
+              <td class="td-m" style="font-weight:600;${e.is_income_history ? 'color:var(--green)' : ''}">${e.is_income_history ? '+' : ''}${fmtCur(e.amount)}</td>
+              <td><span class="badge ${e.is_income_history ? '' : e.is_extra?'b-extra':'b-fair'}" ${e.is_income_history ? 'style="background:#eaf8f0;color:var(--green)"' : ''}>${e.is_income_history ? 'Income' : e.is_extra?'Extra':'Fair'}</span></td>
+              <td>${e.is_income_history ? '<span style="font-size:12px;color:var(--t3)">Bank</span>' : `<button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button>`}</td>
+            </tr>`);
+  });
+  flushExpenseDayGroup();
 
   const sortArrow = (field) => f.sortField === field ? (f.sortDir === 'asc' ? ' &uarr;' : ' &darr;') : '';
 
@@ -2425,17 +2475,7 @@ async function loadExpenses() {
           </tr></thead>
           <tbody>
             ${pageList.length === 0 ? '<tr><td colspan="6" class="empty-td">No expenses found.</td></tr>' : ''}
-            ${pageList.map(e => `<tr>
-              <td>${fmtDate(e.purchase_date)}</td>
-              <td>
-                <div style="font-weight:600">${escHtml(e.item_name || '')}</div>
-                ${expenseSourceLabel(e) ? `<div style="font-size:11px;color:var(--t3);margin-top:3px">${escHtml(expenseSourceLabel(e))}</div>` : ''}
-              </td>
-              <td>${expenseCategoryDisplayText(e.category, e.subcategory) ? `<span class="badge" style="background:var(--bg2);color:var(--t2)">${escHtml(expenseCategoryDisplayText(e.category, e.subcategory))}</span>` : '<span style="color:var(--t3)">-</span>'}</td>
-              <td class="td-m" style="font-weight:600;${e.is_income_history ? 'color:var(--green)' : ''}">${e.is_income_history ? '+' : ''}${fmtCur(e.amount)}</td>
-              <td><span class="badge ${e.is_income_history ? '' : e.is_extra?'b-extra':'b-fair'}" ${e.is_income_history ? 'style="background:#eaf8f0;color:var(--green)"' : ''}>${e.is_income_history ? 'Income' : e.is_extra?'Extra':'Fair'}</span></td>
-              <td>${e.is_income_history ? '<span style="font-size:12px;color:var(--t3)">Bank</span>' : `<button class="btn-d" style="color:var(--em)" onclick="showExpenseForm(${e.id})">Edit</button><button class="btn-d" onclick="deleteExpense(${e.id})">Del</button>`}</td>
-            </tr>`).join('')}
+            ${groupedExpenseRows.join('')}
           </tbody>
         </table>
       </div>

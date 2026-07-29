@@ -9,6 +9,218 @@ function escapeHtml(value) {
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+const SHARED_SOCIETY_MAP_PRESETS = {
+  raman_enclave_v1: {
+    key: 'raman_enclave_v1',
+    label: 'Raman Enclave Layout',
+    width: 900,
+    height: 780,
+    blocks: [
+      { x: 365, y: 47, cw: 90, ch: 39.3, cols: 1, plots: [47, 46, 45, 44, 43, 42, 41] },
+      { x: 490, y: 47, cw: 93, ch: 45.833, cols: 1, plots: [48, 49, 50, 51, 52, 53] },
+      { x: 588, y: 47, cw: 50, ch: 45.833, cols: 1, plots: [{ id: 'SHOP1', label: 'S-1', kind: 'shop' }, { id: 'SHOP2', label: 'S-2', kind: 'shop' }] },
+      { x: 583, y: 184.5, cw: 102, ch: 45.833, cols: 1, plots: [56, 55, 54] },
+      { x: 525, y: 345, cw: 85, ch: 32.3, cols: 1, plots: [85, 86, 87, 88, 89, 90, 91, 92, 93, 94] },
+      { x: 610, y: 345, cw: 75, ch: 32.3, cols: 1, plots: [84, 83, 82, 81, 80, 79, 78, 77, 76, 75] },
+      { x: 525, y: 669, cw: 53.333, ch: 26, cols: 3, plots: [{ id: 'SHOP3', label: 'S-3', kind: 'shop' }, { id: 'SHOP4', label: 'S-4', kind: 'shop' }, { id: 'SHOP5', label: 'S-5', kind: 'shop' }] },
+      { x: 735, y: 172, cw: 73, ch: 27.6, cols: 1, plots: [57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74] },
+      { x: 30, y: 347, cw: 30.667, ch: 80, cols: 7, plots: [40, 39, 38, 37, 36, 35, 34] },
+      { x: 275.333, y: 347, cw: 30.667, ch: 80, cols: 7, plots: [33, 32, 31, 30, 29, 28, 27] },
+      { x: 30, y: 427, cw: 30.667, ch: 70, cols: 7, plots: [13, 14, 15, 16, 17, 18, 19] },
+      { x: 275.333, y: 427, cw: 30.667, ch: 70, cols: 7, plots: [20, 21, 22, 23, 24, 25, 26] },
+      { x: 30, y: 527, cw: 35.385, ch: 70, cols: 5, plots: [12, 11, 10, 9, 8] },
+      { x: 242.31, y: 527, cw: 35.385, ch: 70, cols: 7, plots: [7, 6, 5, 4, 3, 2, 1] },
+    ],
+    parks: [
+      { x: 244.667, y: 347, w: 30.667, h: 150, label: 'PARK' },
+      { x: 206.92, y: 527, w: 35.385, h: 70, label: 'PARK' },
+    ],
+    roads: [
+      { x: 455, y: 47, w: 35, h: 275, label: 'ROAD', vertical: true },
+      { x: 490, y: 345, w: 35, h: 323, label: 'ROAD', vertical: true },
+      { x: 685, y: 172, w: 50, h: 496, label: 'ROAD', vertical: true },
+      { x: 30, y: 322, w: 655, h: 23, label: 'ROAD' },
+      { x: 30, y: 497, w: 460, h: 30, label: 'ROAD' },
+      { x: 365, y: 5, w: 315, h: 42, label: 'ROAD' },
+    ],
+    diagRoads: [
+      { cx: 815, cy: 702, w: 430, h: 44, deg: -13, label: 'ROAD' },
+    ],
+    floorPlots: { 1: ['SF', 'FF', 'GF'], 41: ['SF', 'FF', 'GF'], 87: ['SF', 'FF', 'GF'] },
+  },
+};
+
+function sharedSocietyMapPreset(society = {}) {
+  const key = String(society?.map_layout_key || '').trim();
+  if (key && SHARED_SOCIETY_MAP_PRESETS[key]) return SHARED_SOCIETY_MAP_PRESETS[key];
+  const fallbackName = String(society?.name || '').trim().toLowerCase();
+  if (!key && fallbackName === 'raman enclave') return SHARED_SOCIETY_MAP_PRESETS.raman_enclave_v1;
+  return null;
+}
+
+function sharedSocietyFloorPlots(society = {}, preset = null) {
+  if (Array.isArray(society?.map_floor_plots)) {
+    return [...new Set(society.map_floor_plots.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0))].sort((a, b) => a - b);
+  }
+  if (typeof society?.map_floor_plots === 'string') {
+    return [...new Set(
+      society.map_floor_plots
+        .split(/[,\s;|]+/)
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )].sort((a, b) => a - b);
+  }
+  const source = preset || sharedSocietyMapPreset(society);
+  return Object.keys(source?.floorPlots || {}).map(Number).filter((item) => Number.isInteger(item) && item > 0).sort((a, b) => a - b);
+}
+
+function sharedMapPlotMeta(plot) {
+  if (plot && typeof plot === 'object' && !Array.isArray(plot)) {
+    const id = String(plot.id || plot.label || '').trim();
+    const label = String(plot.label || plot.id || '').trim() || id || '-';
+    const kind = String(plot.kind || 'house').trim().toLowerCase() === 'shop' ? 'shop' : 'house';
+    return { id: id || label, label, kind };
+  }
+  const label = String(plot || '').trim() || '-';
+  return { id: label, label, kind: 'house' };
+}
+
+function sharedMapNormalizeLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sharedMapFloorAliases(code = '') {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (normalized === 'GF') return ['gf', 'ground', 'ground floor', 'groundfloor'];
+  if (normalized === 'FF') return ['ff', 'first', 'first floor', 'firstfloor'];
+  if (normalized === 'SF') return ['sf', 'second', 'second floor', 'secondfloor', 'terrace'];
+  return [];
+}
+
+function sharedMapShopAliases(meta = {}) {
+  const label = sharedMapNormalizeLabel(meta.label || meta.id || '');
+  const id = sharedMapNormalizeLabel(meta.id || '');
+  const digits = ((label.match(/\d+/g) || [])[0]) || ((id.match(/\d+/g) || [])[0]) || '';
+  const aliases = new Set([label, id].filter(Boolean));
+  if (digits) {
+    aliases.add(`shop ${digits}`);
+    aliases.add(`shop${digits}`);
+    aliases.add(`s ${digits}`);
+    aliases.add(`s${digits}`);
+  }
+  return [...aliases];
+}
+
+function sharedMapMemberForUnit(members = [], plotNo, floorCode = '', plotKind = 'house', plotLabel = '') {
+  const plotNumber = Number(plotNo || 0);
+  const meta = { id: plotNo, label: plotLabel || plotNo, kind: plotKind };
+  if (plotKind === 'shop') {
+    const aliases = sharedMapShopAliases(meta);
+    const scored = (members || []).map((member) => {
+      const label = sharedMapNormalizeLabel(member?.unit_label || '');
+      if (!label) return null;
+      const propertyType = String(member?.property_type || '').trim().toLowerCase();
+      const hasShopWord = label.includes('shop') || propertyType === 'shop';
+      const aliasMatch = aliases.some((alias) => alias && (label === alias || label.includes(alias)));
+      if (!hasShopWord && !aliasMatch) return null;
+      let score = 10;
+      if (propertyType === 'shop') score += 14;
+      if (aliasMatch) score += 20;
+      if (label === aliases[0]) score += 8;
+      if (member?.is_active !== false) score += 4;
+      return { member, score };
+    }).filter(Boolean);
+    scored.sort((a, b) => b.score - a.score || String(a.member?.unit_label || '').localeCompare(String(b.member?.unit_label || '')));
+    return scored[0]?.member || null;
+  }
+  if (!(plotNumber > 0)) return null;
+  const normalizedFloor = String(floorCode || '').trim().toUpperCase();
+  const aliases = sharedMapFloorAliases(normalizedFloor);
+  const hasKnownFloor = (label) => ['gf', 'ground', 'ff', 'first', 'sf', 'second'].some((token) => label.includes(token));
+  const scored = (members || []).map((member) => {
+    const label = sharedMapNormalizeLabel(member?.unit_label || '');
+    const numbers = (label.match(/\d+/g) || []).map(Number);
+    if (!numbers.includes(plotNumber)) return null;
+    let score = 10;
+    if (numbers[0] === plotNumber) score += 8;
+    if (label === String(plotNumber)) score += 20;
+    if (label.startsWith(`${plotNumber} `) || label.endsWith(` ${plotNumber}`)) score += 6;
+    if (member?.is_active !== false) score += 4;
+    if (normalizedFloor) {
+      const floorMatch = aliases.some((alias) => label.includes(alias));
+      if (!floorMatch && !label.includes(normalizedFloor.toLowerCase())) return null;
+      score += 12;
+    } else if (hasKnownFloor(label)) {
+      score -= 8;
+    }
+    return { member, score };
+  }).filter(Boolean);
+  scored.sort((a, b) => b.score - a.score || String(a.member?.unit_label || '').localeCompare(String(b.member?.unit_label || '')));
+  return scored[0]?.member || null;
+}
+
+function sharedMapMemberValue(member, isAllTime) {
+  return Number(isAllTime ? (member?.total_contributed || 0) : (member?.selected_month_amount || 0));
+}
+
+function sharedMapUnitStatus(member, isAllTime) {
+  if (!member) return 'blank';
+  if (member.is_active === false && sharedMapMemberValue(member, isAllTime) <= 0) return 'blank';
+  if (isAllTime) return Number(member.total_contributed || 0) > 0 ? 'paid' : 'unpaid';
+  if (String(member.selected_month_status || '').toLowerCase() === 'paid') return 'paid';
+  return 'unpaid';
+}
+
+function sharedBuildMapUnits(society = {}) {
+  const preset = sharedSocietyMapPreset(society);
+  if (!preset) return [];
+  const floorPlots = new Set(sharedSocietyFloorPlots(society, preset));
+  const showShops = society?.show_shops_in_map !== false;
+  const units = [];
+  preset.blocks.forEach((block) => {
+    (block.plots || []).forEach((plot, index) => {
+      const meta = sharedMapPlotMeta(plot);
+      if (!showShops && meta.kind === 'shop') return;
+      const col = index % Number(block.cols || 1);
+      const row = Math.floor(index / Number(block.cols || 1));
+      const baseX = Number(block.x || 0) + col * Number(block.cw || 0);
+      const baseY = Number(block.y || 0) + row * Number(block.ch || 0);
+      const plotNo = Number(meta.label);
+      const plotHasFloors = meta.kind === 'house' && floorPlots.has(plotNo);
+      if (plotHasFloors) {
+        ['SF', 'FF', 'GF'].forEach((floorCode, floorIndex) => {
+          units.push({
+            plotNo: meta.label,
+            plotLabel: meta.label,
+            floorCode,
+            kind: meta.kind,
+            x: baseX,
+            y: baseY + (Number(block.ch || 0) / 3) * floorIndex,
+            w: Number(block.cw || 0),
+            h: Number(block.ch || 0) / 3,
+          });
+        });
+      } else {
+        units.push({
+          plotNo: meta.label,
+          plotLabel: meta.label,
+          floorCode: '',
+          kind: meta.kind,
+          x: baseX,
+          y: baseY,
+          w: Number(block.cw || 0),
+          h: Number(block.ch || 0),
+        });
+      }
+    });
+  });
+  return units;
+}
+
 function createFormatters(prefs = {}) {
   const currencyCode = String(prefs.currencyCode || prefs.currency_code || 'INR').trim().toUpperCase() || 'INR';
   const localeCode = String(prefs.localeCode || prefs.locale_code || 'en-IN').trim() || 'en-IN';
@@ -1263,6 +1475,138 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
       landscape: true,
       body: parts.join(''),
     });
+  }
+
+  if (action === 'map') {
+    const society = detail?.society || {};
+    const preset = sharedSocietyMapPreset(society);
+    if (!preset) throw new Error('Map layout is not configured for this society.');
+    const units = sharedBuildMapUnits(society);
+    const cards = statCardsData(detail, 'month');
+    const mapWidth = 760;
+    const mapHeight = 658;
+    const scale = Math.min(mapWidth / Number(preset.width || 900), mapHeight / Number(preset.height || 780));
+    const roadsHtml = (preset.roads || []).map((road) => {
+      const style = [
+        `left:${road.x * scale}px`,
+        `top:${road.y * scale}px`,
+        `width:${road.w * scale}px`,
+        `height:${road.h * scale}px`,
+      ].join(';');
+      return `<div class="map-road ${road.vertical ? 'vertical' : ''}" style="${style}"><span>${escapeHtml(road.label || 'ROAD')}</span></div>`;
+    }).join('');
+    const diagRoadsHtml = (preset.diagRoads || []).map((road) => {
+      const style = [
+        `left:${(road.cx - (road.w / 2)) * scale}px`,
+        `top:${(road.cy - (road.h / 2)) * scale}px`,
+        `width:${road.w * scale}px`,
+        `height:${road.h * scale}px`,
+        `transform:rotate(${Number(road.deg || 0)}deg)`,
+      ].join(';');
+      return `<div class="map-road" style="${style}"><span>${escapeHtml(road.label || 'ROAD')}</span></div>`;
+    }).join('');
+    const parksHtml = (preset.parks || []).map((park) => {
+      const style = [
+        `left:${park.x * scale}px`,
+        `top:${park.y * scale}px`,
+        `width:${park.w * scale}px`,
+        `height:${park.h * scale}px`,
+      ].join(';');
+      return `<div class="map-park" style="${style}"><span>${escapeHtml(park.label || 'PARK')}</span></div>`;
+    }).join('');
+    const unitsHtml = units.map((unit) => {
+      const member = sharedMapMemberForUnit(detail?.members || [], unit.plotNo, unit.floorCode, unit.kind, unit.plotLabel);
+      const status = sharedMapUnitStatus(member, false);
+      const title = unit.floorCode ? `${unit.plotLabel} ${unit.floorCode}` : unit.plotLabel;
+      const floor = unit.floorCode ? `<div class="plot-floor">${escapeHtml(unit.floorCode)}</div>` : '';
+      return `
+        <div class="plot ${status} ${unit.kind}" style="left:${unit.x * scale}px;top:${unit.y * scale}px;width:${unit.w * scale}px;height:${unit.h * scale}px">
+          <div class="plot-label">${escapeHtml(title)}</div>
+          ${floor}
+        </div>
+      `;
+    }).join('');
+    const cardsHtml = cards.map((card) => `
+      <div class="map-stat ${card.tone}">
+        <div class="map-stat-label">${escapeHtml(card.label)}</div>
+        <div class="map-stat-value">${escapeHtml(card.value)}</div>
+      </div>
+    `).join('');
+    const legendItems = [
+      { cls: 'paid', label: 'Paid' },
+      { cls: 'unpaid', label: 'Not Paid' },
+      { cls: 'blank', label: 'Empty Plot' },
+    ].map((item) => `<div class="legend-item"><span class="legend-chip ${item.cls}"></span>${escapeHtml(item.label)}</div>`).join('');
+    const subtitle = `${society.location || 'Location'} · Selected month: ${monthLabel(detail?.selected_month || '')}`;
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            @page { size: A4 landscape; margin: 7mm; }
+            * { box-sizing: border-box; }
+            body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #173228; background: #f7f4ea; }
+            .sheet { width: 100%; min-height: 100%; border: 1px solid #dccfb2; border-radius: 16px; background: #f5f0e3; padding: 14px; overflow: hidden; }
+            .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+            .title { font-size: 28px; font-weight: 900; color: #115839; line-height: 1.05; }
+            .meta { margin-top: 6px; color: #5f7b6f; font-size: 13px; font-weight: 700; }
+            .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+            .legend-item { display: flex; align-items: center; gap: 6px; color: #4f675d; font-size: 12px; font-weight: 700; }
+            .legend-chip { width: 18px; height: 18px; border-radius: 4px; border: 1px solid #4d6d5d; display: inline-block; }
+            .legend-chip.paid { background: #a9ca8f; border-color: #4f7b56; }
+            .legend-chip.unpaid { background: #e7a192; border-color: #b56454; }
+            .legend-chip.blank { background: repeating-linear-gradient(-45deg, #fffef8, #fffef8 5px, #e5d8b9 5px, #e5d8b9 8px); border-color: #b59d6d; }
+            .layout { display: flex; gap: 12px; align-items: stretch; }
+            .stats-panel { width: 224px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+            .map-stat { background: #fffdf8; border-radius: 18px; border: 1px solid #deceb0; padding: 14px; min-height: 102px; }
+            .map-stat.neutral { grid-column: 1 / -1; min-height: 92px; }
+            .map-stat.green { box-shadow: inset 0 4px 0 #2f8456; }
+            .map-stat.red { box-shadow: inset 0 4px 0 #cb5a4f; }
+            .map-stat.blue { box-shadow: inset 0 4px 0 #4060b5; }
+            .map-stat.neutral { box-shadow: inset 0 4px 0 #6e6e6e; }
+            .map-stat-label { color: #869990; font-size: 11px; line-height: 1.25; letter-spacing: .08em; text-transform: uppercase; font-weight: 800; }
+            .map-stat-value { margin-top: 16px; font-size: 25px; line-height: 1.05; font-weight: 900; color: #173228; }
+            .map-stat.green .map-stat-value { color: #2f8456; }
+            .map-stat.red .map-stat-value { color: #cb5a4f; }
+            .map-stat.blue .map-stat-value { color: #4060b5; }
+            .map-stat.neutral .map-stat-value { color: #4d5960; }
+            .map-panel { position: relative; flex: 1; min-height: ${mapHeight}px; border-radius: 16px; background: #f5f0e3; overflow: hidden; }
+            .map-road, .map-park, .plot { position: absolute; display: flex; align-items: center; justify-content: center; text-align: center; }
+            .map-road { background: #e9ddc6; border: 1px solid #d0c0a1; color: #997947; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+            .map-road.vertical span, .map-park span { transform: rotate(-90deg); white-space: nowrap; }
+            .map-park { background: #b9d3a1; border: 1px solid #5d8157; color: #466445; font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+            .plot { border: 1px solid #4f6e5f; background: #fffdf8; color: #23463d; flex-direction: column; padding: 2px; }
+            .plot.paid { background: #a9ca8f; }
+            .plot.unpaid { background: #e7a192; }
+            .plot.blank { background: repeating-linear-gradient(-45deg, #fffef8, #fffef8 5px, #eadfca 5px, #eadfca 8px); }
+            .plot.shop { font-size: 8px; }
+            .plot-label { font-size: 10px; line-height: 1.1; font-weight: 900; }
+            .plot-floor { font-size: 7px; line-height: 1; margin-top: 2px; font-weight: 800; }
+          </style>
+        </head>
+        <body>
+          <div class="sheet">
+            <div class="header">
+              <div>
+                <div class="title">${escapeHtml(`${society.name || 'Society'} Map`)}</div>
+                <div class="meta">${escapeHtml(subtitle)}</div>
+              </div>
+              <div class="legend">${legendItems}</div>
+            </div>
+            <div class="layout">
+              <div class="stats-panel">${cardsHtml}</div>
+              <div class="map-panel">
+                ${roadsHtml}
+                ${diagRoadsHtml}
+                ${parksHtml}
+                ${unitsHtml}
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
   }
 
   throw new Error('Unknown society PDF action.');
