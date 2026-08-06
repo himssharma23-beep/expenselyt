@@ -6265,6 +6265,18 @@ function isTripSettlementExpense(expense) {
   return String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
 }
 
+function shouldShowTripSharedDetails(expense) {
+  const splits = Array.isArray(expense?.splits) ? expense.splits : [];
+  if (splits.length > 1) return true;
+  if (splits.length !== 1) return false;
+  const split = splits[0] || {};
+  const splitKey = String(split?.member_key || '').trim();
+  const paidByKey = String(expense?.paid_by_key || '').trim();
+  if (splitKey && paidByKey && splitKey !== paidByKey) return true;
+  const nameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return nameKey(split?.member_name) !== nameKey(expense?.paid_by_name);
+}
+
 function buildTripMemberShareTotals(trip) {
   const members = Array.isArray(trip?.members) ? trip.members : [];
   const spendingExpenses = Array.isArray(trip?.expenses)
@@ -6742,7 +6754,7 @@ function tripHandleAmountChange() {
     }
   }
   const people = _tripSelectedPeople();
-  if (!_tripExpIsSettlement && _tripExpMode !== 'equal') {
+  if (!_tripExpIsSettlement && _tripExpMode !== 'equal' && Object.keys(_tripExpValues || {}).length === 0) {
     _tripExpValues = {};
     if (people.length > 0 && amt > 0) _tripExpValues = _autoFillSplitValues(_tripExpMode, people, amt);
   }
@@ -8313,6 +8325,7 @@ function renderTripDetail() {
   const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const peopleMap = {};
   const memberByName = new Map();
+  const currentUserId = Number(_currentUserId || window?._currentUser?.id || 0);
   members.forEach((member) => {
     const key = memberShareKey(member);
     peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0 };
@@ -8340,6 +8353,10 @@ function renderTripDetail() {
     const paidByKey = paidByNameKey || (paidByMember ? memberShareKey(paidByMember) : String(expense.paid_by_key || ''));
     if (peopleMap[paidByKey]) peopleMap[paidByKey].totalGave += Number(expense.amount || 0);
   });
+  const selfMemberKey = (() => {
+    const linked = members.find((member) => Number(member?.linked_user_id || 0) > 0 && Number(member.linked_user_id) === currentUserId);
+    return linked ? memberShareKey(linked) : '';
+  })();
   const memberChips = members.length
     ? members.map((member) => {
         const key = memberShareKey(member);
@@ -8486,7 +8503,7 @@ function renderTripDetail() {
                 <td>
                   <div>${escHtml(item.notes || '-')}</div>
                   <div style="margin-top:4px;font-size:11px;color:var(--t3)">Paid by: ${escHtml(item.paid_by_name || 'You')}</div>
-                  ${(item.splits || []).length > 1 ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${fmtCur(split.share_amount)}`).join(' | '))}</div>` : ''}
+                  ${shouldShowTripSharedDetails(item) ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${fmtCur(split.share_amount)}`).join(' | '))}</div>` : ''}
                 </td>
               </tr>
             `).join('')}</tbody>
@@ -8545,6 +8562,54 @@ function renderTripDetail() {
             }).join('')}</tbody>
           </table>
         </div>
+      </div>
+    `
+    : '';
+  const settlementSummaryRows = Object.entries(peopleMap)
+    .map(([key, person]) => {
+      const totalShare = Math.round(Number(person?.totalShare || 0) * 100) / 100;
+      const totalGave = Math.round(Number(person?.totalGave || 0) * 100) / 100;
+      const net = Math.round((totalGave - totalShare) * 100) / 100;
+      return {
+        key,
+        name: person?.name || 'Member',
+        isSelf: selfMemberKey && key === selfMemberKey,
+        totalShare,
+        totalGave,
+        net,
+      };
+    })
+    .sort((a, b) => {
+      if (a.isSelf && !b.isSelf) return -1;
+      if (!a.isSelf && b.isSelf) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  const settlementSummaryHtml = settlementSummaryRows.length
+    ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px">
+        <div>
+          <div style="font-size:18px;font-weight:800">Settlement Summary</div>
+          <div style="font-size:13px;color:var(--t2)">Share, paid amount, and current net balance for each trip member.</div>
+        </div>
+      </div>
+      <div class="card trip-group-card" style="padding:0;overflow:hidden">
+        ${settlementSummaryRows.map((person, index) => {
+          const netColor = person.net > 0.005 ? 'var(--green)' : person.net < -0.005 ? 'var(--red)' : 'var(--t3)';
+          const netLabel = person.net > 0.005
+            ? `+${fmtCur(person.net)}`
+            : person.net < -0.005
+              ? `${fmtCur(Math.abs(person.net))} owed`
+              : 'Settled';
+          return `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 20px;${index < settlementSummaryRows.length - 1 ? 'border-bottom:1px solid var(--line);' : ''}">
+              <div style="min-width:0;flex:1">
+                <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(person.name)}${person.isSelf ? ' <span style="font-size:12px;color:var(--t3);font-weight:700">(me)</span>' : ''}</div>
+                <div style="font-size:13px;color:var(--t3);margin-top:3px">Share ${fmtCur(person.totalShare)} · Paid ${fmtCur(person.totalGave)}</div>
+              </div>
+              <div style="font-size:16px;font-weight:900;color:${netColor};text-align:right;white-space:nowrap">${netLabel}</div>
+            </div>
+          `;
+        }).join('')}
       </div>
     `
     : '';
@@ -8641,6 +8706,7 @@ function renderTripDetail() {
       </div>
       ${groupHtml}
       ${settlementHtml}
+      ${settlementSummaryHtml}
     </div>
   `;
   if (preserveTripSearchFocus) {
