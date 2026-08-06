@@ -6342,7 +6342,7 @@ function tripExpenseSetEntryKind(kind) {
   if (help) {
     help.textContent = _tripExpIsSettlement
       ? 'Select exactly one receiving member. This records a member-to-member payment and updates balances without increasing the trip total.'
-      : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.';
+      : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense. Paid By can be outside this sharing list.';
   }
   const splitModes = document.getElementById('tripExpenseSplitModes');
   if (splitModes) splitModes.style.display = _tripExpIsSettlement ? 'none' : '';
@@ -6355,8 +6355,6 @@ function tripExpenseSetEntryKind(kind) {
   if (_tripExpIsSettlement) {
     if (_tripExpSel.has(_tripExpPaidBy)) _tripExpSel.delete(_tripExpPaidBy);
     if (_tripExpSel.size > 1) _tripExpSel = new Set([...[..._tripExpSel][0]]);
-  } else {
-    _tripExpSel.add(_tripExpPaidBy);
   }
   tripRefreshSelectionChips();
   tripExpenseToggleLedgerFields();
@@ -6980,7 +6978,6 @@ async function tripSaveExpense() {
   if (!details) { toast('Enter details', 'warning'); return; }
   if (!amt || amt <= 0) { toast('Enter a valid amount', 'warning'); return; }
   if (_tripExpSel.size === 0) { toast('Select at least one person', 'warning'); return; }
-  if (!_tripExpSel.has(_tripExpPaidBy)) { toast('Paid by must also be selected in Divide Between', 'warning'); return; }
 
   const people = _tripSelectedPeople();
   const { valid, error, shares } = computeShares(amt, _tripExpMode, people, _tripExpValues);
@@ -9237,9 +9234,7 @@ async function showTripExpenseModal(expenseId = null) {
     : new Set([fallbackPaidByKey]);
   _tripExpSel = selectedKeys;
   _tripExpIsSettlement = isTripSettlementExpense(expense);
-  _tripExpPaidBy = _tripExpIsSettlement
-    ? fallbackPaidByKey
-    : (selectedKeys.has(fallbackPaidByKey) ? fallbackPaidByKey : [...selectedKeys][0] || fallbackPaidByKey);
+  _tripExpPaidBy = fallbackPaidByKey;
   _tripExpMode = _tripExpIsSettlement ? 'equal' : (expense?.split_mode || 'equal');
   _tripExpValues = resolvedSplitShares.length
     ? _restoreSplitValues(
@@ -9339,7 +9334,7 @@ async function showTripExpenseModal(expenseId = null) {
     </div>
     <div class="card" style="padding:14px 16px;margin-top:12px">
       <div id="tripExpenseParticipantTitle" style="font-size:13px;font-weight:700;margin-bottom:8px">${_tripExpIsSettlement ? 'Select Receiver' : 'Share Expense With Members'}</div>
-      <div id="tripExpenseShareHelp" style="font-size:12px;color:var(--t2);margin-bottom:10px">${_tripExpIsSettlement ? 'Select exactly one receiving member. This records a member-to-member payment and updates balances without increasing the trip total.' : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense.'}</div>
+      <div id="tripExpenseShareHelp" style="font-size:12px;color:var(--t2);margin-bottom:10px">${_tripExpIsSettlement ? 'Select exactly one receiving member. This records a member-to-member payment and updates balances without increasing the trip total.' : 'Choose members who should share this expense. If only one member is selected, it stays as a personal trip expense. Paid By can be outside this sharing list.'}</div>
       <div id="tripExpensePayeeHint" style="font-size:12px;color:var(--t2);margin-bottom:10px;display:${_tripExpIsSettlement ? 'block' : 'none'}">Tip: set Paid By to the person sending money, then select the member receiving it.</div>
       <div id="tripDivChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${participantChips}</div>
       <div id="tripExpenseSplitModesLabel" style="font-size:12px;color:var(--t2);margin-bottom:6px;display:${_tripExpIsSettlement ? 'none' : 'block'}">Split Mode</div>
@@ -9380,8 +9375,6 @@ function tripExpenseChangePaidBy(key) {
   _tripExpPaidBy = key;
   if (_tripExpIsSettlement) {
     if (_tripExpSel.has(key)) _tripExpSel.delete(key);
-  } else if (!_tripExpSel.has(key)) {
-    _tripExpSel.add(key);
   }
   tripRefreshSelectionChips();
   tripHandleAmountChange();
@@ -9399,10 +9392,6 @@ async function saveTripExpenseModal(expenseId = null) {
   }
   if (_tripExpSel.size === 0) {
     toast('Select at least one member', 'warning');
-    return;
-  }
-  if (!_tripExpIsSettlement && !_tripExpSel.has(_tripExpPaidBy)) {
-    toast('Paid by member must also be included in sharing', 'warning');
     return;
   }
   const amountNumber = parseFloat(amountValue || 0);
