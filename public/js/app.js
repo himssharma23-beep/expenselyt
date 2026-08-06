@@ -8511,7 +8511,7 @@ function renderTripDetail() {
                     </button>` : ''}
                   </div>
                 </td>
-                <td>${fmtTripExpenseDateTime(item.expense_date, item.updated_at || item.created_at)}</td>
+                <td>${fmtTripExpenseDateTime(item.expense_date, item.created_at)}</td>
                 <td style="font-weight:600">${escHtml(item.details || '-')}</td>
                 <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
                 <td class="td-m">${item.unit_price != null ? fmtCur(item.unit_price) : '-'}</td>
@@ -8567,7 +8567,7 @@ function renderTripDetail() {
                       </button>` : ''}
                     </div>
                   </td>
-                  <td>${fmtTripExpenseDateTime(item.expense_date, item.updated_at || item.created_at)}</td>
+                  <td>${fmtTripExpenseDateTime(item.expense_date, item.created_at)}</td>
                   <td style="font-weight:600">${escHtml(item.details || 'Settlement')}</td>
                   <td>${escHtml(item.paid_by_name || 'You')}</td>
                   <td>${escHtml(receiverNames)}</td>
