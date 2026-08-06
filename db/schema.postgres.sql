@@ -583,6 +583,7 @@ ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_currency_code TEXT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS original_amount NUMERIC(14,2);
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS conversion_rate NUMERIC(14,6);
+ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS split_values JSONB;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS card_id BIGINT;
 ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS card_discount_pct NUMERIC(8,2) NOT NULL DEFAULT 0;

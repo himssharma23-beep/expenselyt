@@ -4145,6 +4145,20 @@ function _restoreSplitValues(mode, personShares, amt) {
   return values;
 }
 
+function _normalizeStoredSplitValues(mode, rawValues, people = []) {
+  if (!rawValues || typeof rawValues !== 'object' || mode === 'equal' || mode === 'settlement') return null;
+  const allowedKeys = new Set((people || []).map((person) => String(person?.key || '')).filter(Boolean));
+  const values = Object.entries(rawValues).reduce((acc, [key, value]) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey || (allowedKeys.size && !allowedKeys.has(normalizedKey))) return acc;
+    if (mode === 'percent') acc[normalizedKey] = Math.round((parseFloat(value) || 0) * 100) / 100;
+    else if (mode === 'fraction') acc[normalizedKey] = Math.round((parseFloat(value) || 0) * 10000) / 10000;
+    else acc[normalizedKey] = Math.round((parseFloat(value) || 0) * 100) / 100;
+    return acc;
+  }, {});
+  return Object.keys(values).length ? values : null;
+}
+
 function computeShares(amt, mode, people, values) {
   if (people.length === 0) return { valid: false, error: 'No people selected', shares: [] };
   const n = people.length;
@@ -7005,6 +7019,7 @@ async function tripSaveExpense() {
     paid_by_name: paidByName,
     details, amount: amt, expense_date: date,
     split_mode: _tripExpMode,
+    split_values: _tripExpMode !== 'equal' ? _tripExpValues : null,
     splits: shares.map(s => ({ member_key: s.key, member_name: s.name, share_amount: s.share })),
   };
 
@@ -7045,9 +7060,10 @@ async function tripEditExpense(expId) {
   _tripExpPaidBy = exp.paid_by_key;
   _tripExpMode = exp.split_mode || 'equal';
   _tripExpSel = new Set(exp.splits.map(s => s.member_key));
-  _tripExpValues = _restoreSplitValues(
+  const editPeople = (exp.splits || []).map(s => ({ key: s.member_key, name: s.member_name, share: s.share_amount }));
+  _tripExpValues = _normalizeStoredSplitValues(_tripExpMode, exp.split_values, editPeople) || _restoreSplitValues(
     _tripExpMode,
-    (exp.splits || []).map(s => ({ key: s.member_key, share: s.share_amount })),
+    editPeople,
     parseFloat(exp.amount) || 0
   );
   _tripEditCcTxnId = null;
@@ -9303,11 +9319,11 @@ async function showTripExpenseModal(expenseId = null) {
   _tripExpPaidBy = fallbackPaidByKey;
   _tripExpMode = _tripExpIsSettlement ? 'equal' : (expense?.split_mode || 'equal');
   _tripExpValues = resolvedSplitShares.length
-    ? _restoreSplitValues(
+    ? (_normalizeStoredSplitValues(_tripExpMode, expense?.split_values, resolvedSplitShares) || _restoreSplitValues(
         _tripExpMode,
         resolvedSplitShares,
         parseFloat(expense.amount) || 0
-      )
+      ))
     : {};
   if (_tripExpIsSettlement && _tripExpSel.has(_tripExpPaidBy)) _tripExpSel.delete(_tripExpPaidBy);
   const paymentMode = expense?.card_id ? 'card' : expense?.bank_account_id ? 'bank' : 'none';
@@ -9500,6 +9516,7 @@ async function saveTripExpenseModal(expenseId = null) {
     paid_by_key: _tripExpPaidBy,
     paid_by_name: payer.member_name,
     split_mode: _tripExpIsSettlement ? 'settlement' : _tripExpMode,
+    split_values: !_tripExpIsSettlement && _tripExpMode !== 'equal' ? _tripExpValues : null,
     splits: shares.map((share) => ({ member_key: share.key, member_name: share.name, share_amount: share.share })),
     bank_account_id: null,
     card_id: null,

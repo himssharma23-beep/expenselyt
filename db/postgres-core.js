@@ -1226,6 +1226,20 @@ function _computeBulkTripShares(amount, mode, members, values = {}) {
   throw validationError('Unsupported split mode');
 }
 
+function _deriveTripStoredSplitValues(splitMode, splits = [], amount = 0) {
+  const totalAmount = Math.round(num(amount) * 100) / 100;
+  if (!Array.isArray(splits) || !splits.length || totalAmount <= 0 || splitMode === 'equal' || splitMode === 'settlement') return null;
+  return splits.reduce((acc, split) => {
+    const key = normalizeTripMemberKeyValue(split?.member_key || '');
+    if (!key) return acc;
+    const share = num(split?.share_amount);
+    if (splitMode === 'percent') acc[key] = Math.round((share / totalAmount) * 10000) / 100;
+    else if (splitMode === 'fraction') acc[key] = Math.round((share / totalAmount) * 10000) / 10000;
+    else acc[key] = Math.round(share * 100) / 100;
+    return acc;
+  }, {});
+}
+
 async function _loadNormalizedTripExpenses(client, tripId) {
   const expensesR = await client.query('SELECT * FROM trip_expenses WHERE trip_id = $1 ORDER BY expense_date DESC, id DESC', [tripId]);
   const expenses = [];
@@ -1236,6 +1250,13 @@ async function _loadNormalizedTripExpenses(client, tripId) {
       amount: num(expense.amount),
       paid_by_key: normalizeTripMemberKeyValue(expense.paid_by_key),
       split_mode: normalizeTripSplitModeValue(expense.split_mode),
+      split_values: expense.split_values && typeof expense.split_values === 'object'
+        ? Object.entries(expense.split_values).reduce((acc, [key, value]) => {
+            const normalizedKey = normalizeTripMemberKeyValue(key);
+            if (normalizedKey) acc[String(normalizedKey)] = num(value);
+            return acc;
+          }, {})
+        : null,
       splits: splitsR.rows.map((split) => ({
         ...split,
         member_key: normalizeTripMemberKeyValue(split.member_key),
@@ -4784,6 +4805,19 @@ function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
       }];
   const totalShares = Math.round(splits.reduce((sum, split) => sum + num(split.share_amount), 0) * 100) / 100;
   if (Math.abs(totalShares - amount) > 0.05) throw validationError('Split total must match expense total');
+  const rawSplitValues = data.split_values && typeof data.split_values === 'object' ? data.split_values : null;
+  const derivedSplitValues = _deriveTripStoredSplitValues(splitMode, splits, amount);
+  const allowedKeys = new Set(splits.map((split) => String(split.member_key || '')).filter(Boolean));
+  const splitValues = splitMode === 'equal' || splitMode === 'settlement'
+    ? null
+    : Object.entries(rawSplitValues && Object.keys(rawSplitValues).length ? rawSplitValues : (derivedSplitValues || {})).reduce((acc, [key, value]) => {
+        const normalizedKey = normalizeTripMemberKeyValue(key);
+        if (!normalizedKey || !allowedKeys.has(String(normalizedKey))) return acc;
+        if (splitMode === 'percent') acc[String(normalizedKey)] = Math.round(num(value) * 100) / 100;
+        else if (splitMode === 'fraction') acc[String(normalizedKey)] = Math.round(num(value) * 10000) / 10000;
+        else acc[String(normalizedKey)] = Math.round(num(value) * 100) / 100;
+        return acc;
+      }, {});
   return {
     details,
     expense_type: expenseType,
@@ -4803,6 +4837,7 @@ function normalizeTripExpensePayload(data = {}, userCurrencyCode = 'INR') {
     paid_by_key: paidByKey,
     paid_by_name: paidByName,
     split_mode: splitMode,
+    split_values: splitValues && Object.keys(splitValues).length ? splitValues : null,
     splits,
   };
 }
@@ -5112,6 +5147,13 @@ async function getTripById(userId, tripId) {
       paid_by_key: normalizeTripMemberKeyValue(expense.paid_by_key),
       paid_by_name: expense.paid_by_name || 'You',
       split_mode: normalizeTripSplitModeValue(expense.split_mode),
+      split_values: expense.split_values && typeof expense.split_values === 'object'
+        ? Object.entries(expense.split_values).reduce((acc, [key, value]) => {
+            const normalizedKey = normalizeTripMemberKeyValue(key);
+            if (normalizedKey) acc[String(normalizedKey)] = num(value);
+            return acc;
+          }, {})
+        : null,
       splits: (expense.splits || []).map((split) => ({
         member_key: normalizeTripMemberKeyValue(split.member_key),
         member_name: split.member_name,
@@ -5328,10 +5370,10 @@ async function addTripExpense(userId, tripId, data) {
     const expR = await client.query(
       `INSERT INTO trip_expenses (
          trip_id, paid_by_key, paid_by_name, details, amount, expense_date, split_mode,
-         expense_type, quantity, unit_price, notes, original_currency_code, original_amount, conversion_rate,
+         split_values, expense_type, quantity, unit_price, notes, original_currency_code, original_amount, conversion_rate,
          bank_account_id, card_id, card_discount_pct, updated_at
         )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
         RETURNING id`,
       [
         tripId,
@@ -5341,6 +5383,7 @@ async function addTripExpense(userId, tripId, data) {
         payload.amount,
         payload.expense_date,
         payload.split_mode,
+        payload.split_values ? JSON.stringify(payload.split_values) : null,
         payload.expense_type,
         payload.quantity,
         payload.unit_price,
@@ -5392,18 +5435,19 @@ async function updateTripExpense(userId, expenseId, data) {
            amount = $4,
            expense_date = $5,
            split_mode = $6,
-           expense_type = $7,
-           quantity = $8,
-           unit_price = $9,
-           notes = $10,
-           original_currency_code = $11,
-           original_amount = $12,
-           conversion_rate = $13,
-           bank_account_id = $14,
-           card_id = $15,
-           card_discount_pct = $16,
+           split_values = $7::jsonb,
+           expense_type = $8,
+           quantity = $9,
+           unit_price = $10,
+           notes = $11,
+           original_currency_code = $12,
+           original_amount = $13,
+           conversion_rate = $14,
+           bank_account_id = $15,
+           card_id = $16,
+           card_discount_pct = $17,
            updated_at = NOW()
-       WHERE id = $17`,
+       WHERE id = $18`,
       [
         payload.paid_by_key,
         payload.paid_by_name,
@@ -5411,6 +5455,7 @@ async function updateTripExpense(userId, expenseId, data) {
         payload.amount,
         payload.expense_date,
         payload.split_mode,
+        payload.split_values ? JSON.stringify(payload.split_values) : null,
         payload.expense_type,
         payload.quantity,
         payload.unit_price,
@@ -5510,9 +5555,10 @@ async function bulkUpdateTripExpenseShares(userId, tripId, data = {}) {
       await client.query(
         `UPDATE trip_expenses
          SET split_mode = $1,
+             split_values = $2::jsonb,
              updated_at = NOW()
-         WHERE id = $2`,
-        [splitMode, expense.id]
+         WHERE id = $3`,
+        [splitMode, normalizedValues && Object.keys(normalizedValues).length ? JSON.stringify(normalizedValues) : null, expense.id]
       );
       await client.query('DELETE FROM trip_expense_splits WHERE expense_id = $1', [expense.id]);
       for (const split of splits) {
