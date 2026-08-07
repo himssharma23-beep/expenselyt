@@ -420,9 +420,14 @@ function buildStructuredPdfHtml({ title, subtitle, breadcrumb, totals = null, ro
           .label { color: #869990; text-transform: uppercase; font-size: 9px; font-weight: 800; letter-spacing: 0.12em; margin-bottom: 6px; }
           .value, .info-value { font-size: 22px; font-weight: 800; color: #173228; line-height: 1.12; }
           h2 { font-size: 16px; margin: 0 0 12px 0; color: #16261f; }
-          .table-section, .info-section { margin-bottom: 16px; }
-          .table-card { border: 1px solid #dfebe5; border-radius: 14px; overflow: hidden; page-break-inside: avoid; }
+          .table-section, .info-section { margin-bottom: 16px; break-inside: auto; page-break-inside: auto; }
+          .table-section h2, .info-section h2 { break-after: avoid; page-break-after: avoid; }
+          .info-card { break-inside: avoid; page-break-inside: avoid; }
+          .table-card { border: 1px solid #dfebe5; border-radius: 14px; overflow: hidden; break-inside: auto; page-break-inside: auto; }
           table { width: 100%; border-collapse: collapse; table-layout: auto; }
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          tr { break-inside: avoid; page-break-inside: avoid; }
           th, td { border-bottom: 1px solid #e2ece7; padding: 9px; text-align: left; vertical-align: top; line-height: 1.4; overflow-wrap: anywhere; word-break: break-word; }
           th { background: #155839; color: #fff; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
           tbody tr:nth-child(even) td { background: #f8fbf9; }

@@ -577,12 +577,25 @@ function downloadTripDetailPdfEnhanced() {
   const trip = _tripDetail;
   if (!trip) return;
   const startsIn = tripStartsInPdfLabel(trip.start_date);
-  const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
+  const tripStartDate = typeof normalizeInputDate === 'function' ? normalizeInputDate(trip.start_date || '') : String(trip.start_date || '').slice(0, 10);
+  const tripEndDate = typeof normalizeInputDate === 'function'
+    ? normalizeInputDate(trip.end_date || trip.start_date || '')
+    : String(trip.end_date || trip.start_date || '').slice(0, 10);
+  const expenses = (Array.isArray(trip.expenses) ? trip.expenses : []).filter((expense) => {
+    const expenseDate = typeof normalizeInputDate === 'function'
+      ? normalizeInputDate(expense?.expense_date || '')
+      : String(expense?.expense_date || '').slice(0, 10);
+    if (!expenseDate) return true;
+    if (tripStartDate && expenseDate < tripStartDate) return false;
+    if (tripEndDate && expenseDate > tripEndDate) return false;
+    return true;
+  });
   const members = Array.isArray(trip.members) ? trip.members : [];
   const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
   const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
   const expenseGroups = Array.isArray(trip.expense_groups) ? trip.expense_groups : [];
-  const grandTotal = Number(trip.grand_total ?? (expenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0) || 0));
+  const spendingExpenses = expenses.filter((expense) => String(expense?.split_mode || '').trim().toLowerCase() !== 'settlement');
+  const grandTotal = spendingExpenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0);
 
   if (itineraryItems.length) {
   }
@@ -601,11 +614,13 @@ function downloadTripDetailPdfEnhanced() {
     const rowByFallbackKey = new Map(rows.map((row) => [String(row.fallbackKey), row]));
     const rowByName = new Map(rows.map((row) => [nameKey(row.name), row]));
     expenses.forEach((expense) => {
+      const settlementMode = String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
       (expense.splits || []).forEach((split) => {
         const target = rowByUiKey.get(String(split?.member_key || ''))
           || rowByFallbackKey.get(String(split?.member_key || ''))
           || rowByName.get(nameKey(split?.member_name || ''));
-        if (target) target.share += Number(split?.share_amount || 0);
+        if (!target || settlementMode) return;
+        target.share += Number(split?.share_amount || 0);
       });
       const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
         || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
@@ -629,7 +644,7 @@ function downloadTripDetailPdfEnhanced() {
       totals: {
         total: _P.cur(grandTotal),
         fair: `${members.length} members`,
-        extra: `${expenses.length} expenses`,
+        extra: `${spendingExpenses.length} expenses`,
         count: `${itineraryItems.length} itinerary items`,
       },
       sections: [
@@ -665,7 +680,7 @@ function downloadTripDetailPdfEnhanced() {
         {
           title: 'Expenses',
           columns: ['Date', 'Type', 'Details', 'Paid By', 'Amount', 'Split Mode', 'Split Details', 'Notes'],
-          rows: expenses.map((expense) => [
+          rows: spendingExpenses.map((expense) => [
             _P.dt(expense.expense_date),
             expense.expense_type || '-',
             expense.details || '-',

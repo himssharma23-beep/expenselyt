@@ -7296,6 +7296,7 @@ function buildTripSettlementPreview(trip, liveSplitFriends = []) {
       name: String(member?.member_name || '').trim() || 'Member',
       totalShare: 0,
       totalGave: 0,
+      totalReceivedSettlement: 0,
       liveSplitFriendId: null,
       isSelf: key === selfMemberKey,
     };
@@ -7306,11 +7307,14 @@ function buildTripSettlementPreview(trip, liveSplitFriends = []) {
   const rowByFallbackKey = new Map(rows.map((row, index) => [String(_memberKey(members[index]) || row.key), row]));
 
   expenses.forEach((expense) => {
+    const settlementMode = String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
     (expense.splits || []).forEach((split) => {
       const target = rowByUiKey.get(String(split?.member_key || ''))
         || rowByFallbackKey.get(String(split?.member_key || ''))
         || memberByName.get(tripSettlementNameKey(split?.member_name || ''));
-      if (target) target.totalShare += Number(split?.share_amount || 0);
+      if (!target) return;
+      if (settlementMode) target.totalReceivedSettlement += Number(split?.share_amount || 0);
+      else target.totalShare += Number(split?.share_amount || 0);
     });
     const payer = rowByUiKey.get(String(expense?.paid_by_key || ''))
       || rowByFallbackKey.get(String(expense?.paid_by_key || ''))
@@ -7324,7 +7328,8 @@ function buildTripSettlementPreview(trip, liveSplitFriends = []) {
       ...row,
       totalShare: Math.round(Number(row.totalShare || 0) * 100) / 100,
       totalGave: Math.round(Number(row.totalGave || 0) * 100) / 100,
-      net: Math.round((Number(row.totalGave || 0) - Number(row.totalShare || 0)) * 100) / 100,
+      totalReceivedSettlement: Math.round(Number(row.totalReceivedSettlement || 0) * 100) / 100,
+      net: Math.round((Number(row.totalGave || 0) - Number(row.totalShare || 0) - Number(row.totalReceivedSettlement || 0)) * 100) / 100,
       liveSplitFriendId: matchedLiveFriend ? Number(matchedLiveFriend.id) : null,
     };
   });
@@ -8344,10 +8349,11 @@ function renderTripDetail() {
   const currentUserId = Number(_currentUserId || window?._currentUser?.id || 0);
   members.forEach((member) => {
     const key = memberShareKey(member);
-    peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0 };
+    peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0, totalReceivedSettlement: 0 };
     memberByName.set(memberNameKey(member.member_name), key);
   });
   allTripExpenses.forEach((expense) => {
+    const settlementMode = isTripSettlementExpense(expense);
     (expense.splits || []).forEach((split) => {
       const byNameKey = memberByName.get(memberNameKey(split.member_name));
       const matchedMember = byNameKey
@@ -8357,7 +8363,9 @@ function renderTripDetail() {
             return String(split.member_key) === stableKey || String(split.member_key) === String(_memberKey(member));
           });
       const targetKey = byNameKey || (matchedMember ? memberShareKey(matchedMember) : String(split.member_key || ''));
-      if (peopleMap[targetKey]) peopleMap[targetKey].totalShare += Number(split.share_amount || 0);
+      if (!peopleMap[targetKey]) return;
+      if (settlementMode) peopleMap[targetKey].totalReceivedSettlement += Number(split.share_amount || 0);
+      else peopleMap[targetKey].totalShare += Number(split.share_amount || 0);
     });
     const paidByNameKey = memberByName.get(memberNameKey(expense.paid_by_name));
     const paidByMember = paidByNameKey
@@ -8585,13 +8593,15 @@ function renderTripDetail() {
     .map(([key, person]) => {
       const totalShare = Math.round(Number(person?.totalShare || 0) * 100) / 100;
       const totalGave = Math.round(Number(person?.totalGave || 0) * 100) / 100;
-      const net = Math.round((totalGave - totalShare) * 100) / 100;
+      const totalReceivedSettlement = Math.round(Number(person?.totalReceivedSettlement || 0) * 100) / 100;
+      const net = Math.round((totalGave - totalShare - totalReceivedSettlement) * 100) / 100;
       return {
         key,
         name: person?.name || 'Member',
         isSelf: selfMemberKey && key === selfMemberKey,
         totalShare,
         totalGave,
+        totalReceivedSettlement,
         net,
       };
     })
@@ -15456,6 +15466,7 @@ function renderBankAccountsPageView() {
             <tbody>${fdTableRows}</tbody>
           </table>
         </div>
+        ${fixedDepositPaginationHtml(fdPageState)}
       </div>`;
     repairMojibakeInNode(document.getElementById('main'));
     return;
