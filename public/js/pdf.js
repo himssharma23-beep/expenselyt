@@ -577,24 +577,24 @@ function downloadTripDetailPdfEnhanced() {
   const trip = _tripDetail;
   if (!trip) return;
   const startsIn = tripStartsInPdfLabel(trip.start_date);
-  const tripStartDate = typeof normalizeInputDate === 'function' ? normalizeInputDate(trip.start_date || '') : String(trip.start_date || '').slice(0, 10);
-  const tripEndDate = typeof normalizeInputDate === 'function'
-    ? normalizeInputDate(trip.end_date || trip.start_date || '')
-    : String(trip.end_date || trip.start_date || '').slice(0, 10);
-  const expenses = (Array.isArray(trip.expenses) ? trip.expenses : []).filter((expense) => {
-    const expenseDate = typeof normalizeInputDate === 'function'
-      ? normalizeInputDate(expense?.expense_date || '')
-      : String(expense?.expense_date || '').slice(0, 10);
-    if (!expenseDate) return true;
-    if (tripStartDate && expenseDate < tripStartDate) return false;
-    if (tripEndDate && expenseDate > tripEndDate) return false;
-    return true;
-  });
+  const expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   const members = Array.isArray(trip.members) ? trip.members : [];
   const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
   const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
   const expenseGroups = Array.isArray(trip.expense_groups) ? trip.expense_groups : [];
   const spendingExpenses = expenses.filter((expense) => String(expense?.split_mode || '').trim().toLowerCase() !== 'settlement');
+  const sortedSpendingExpenses = spendingExpenses.slice().sort((a, b) => {
+    const aDate = typeof normalizeInputDate === 'function'
+      ? normalizeInputDate(a?.expense_date || '')
+      : String(a?.expense_date || '').slice(0, 10);
+    const bDate = typeof normalizeInputDate === 'function'
+      ? normalizeInputDate(b?.expense_date || '')
+      : String(b?.expense_date || '').slice(0, 10);
+    if (aDate !== bDate) return String(aDate || '').localeCompare(String(bDate || ''));
+    const aTime = String(a?.created_at || '');
+    const bTime = String(b?.created_at || '');
+    return aTime.localeCompare(bTime);
+  });
   const grandTotal = spendingExpenses.reduce((sum, expense) => sum + Number(expense?.amount || 0), 0);
 
   if (itineraryItems.length) {
@@ -644,7 +644,7 @@ function downloadTripDetailPdfEnhanced() {
       totals: {
         total: _P.cur(grandTotal),
         fair: `${members.length} members`,
-        extra: `${spendingExpenses.length} expenses`,
+        extra: `${sortedSpendingExpenses.length} expenses`,
         count: `${itineraryItems.length} itinerary items`,
       },
       sections: [
@@ -680,7 +680,7 @@ function downloadTripDetailPdfEnhanced() {
         {
           title: 'Expenses',
           columns: ['Date', 'Type', 'Details', 'Paid By', 'Amount', 'Split Mode', 'Split Details', 'Notes'],
-          rows: spendingExpenses.map((expense) => [
+          rows: sortedSpendingExpenses.map((expense) => [
             _P.dt(expense.expense_date),
             expense.expense_type || '-',
             expense.details || '-',
