@@ -1344,6 +1344,7 @@ let _societyRequestSearch = '';
 let _societyExpenseDraftType = 'expense';
 let _societyExpenseDraftPaidById = '';
 let _societyExpenseDraftForcedType = '';
+let _societyMembersView = 'list';
 let _societyFunctionSearch = '';
 let _societyFunctionExpenseSearch = '';
 let _societyFunctionContributorSearch = '';
@@ -21466,6 +21467,12 @@ function setSocietyRequestSearch(value) {
   renderSocietiesPage();
 }
 
+function setSocietyMembersView(value) {
+  _societyMembersView = String(value || 'list') === 'map' ? 'map' : 'list';
+  _societyTab = 'members';
+  renderSocietiesPage();
+}
+
 function setSocietyFunctionSearch(value) {
   _societyFunctionSearch = String(value || '');
   renderSocietiesPage();
@@ -21762,11 +21769,10 @@ function renderSocietiesPage() {
 
     const mapPreset = getSocietyMapPreset(selected.society || {});
     const showMapPermission = selected.society?.show_map_in_portal !== false;
-    if (!showMapPermission && _societyTab === 'map') _societyTab = 'overview';
+    if (!showMapPermission && _societyMembersView === 'map') _societyMembersView = 'list';
     const tabItems = [
       ['overview', 'Overview'],
       ['members', 'Members'],
-      ...(showMapPermission ? [['map', 'Map']] : []),
       ['matrix', 'Matrix'],
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
@@ -21860,6 +21866,7 @@ function renderSocietiesPage() {
             <div style="font-size:12px;color:var(--t3);margin-top:4px">${isAllTime ? 'Member contributions from start till today' : `Monthly dues for ${escHtml(monthLabel)}`}</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            ${showMapPermission ? `<button class="btn btn-s btn-sm" onclick="setSocietyMembersView('map')">Map View</button>` : ''}
             ${pendingPaymentRequests.length ? `<button class="btn btn-s btn-sm" onclick="setSocietyTab('requests')">${pendingPaymentRequests.length} Pending Request${pendingPaymentRequests.length === 1 ? '' : 's'}</button>` : `<button class="btn btn-s btn-sm" onclick="setSocietyTab('requests')">Open Member Requests</button>`}
             <button class="btn btn-s btn-sm" onclick="showSocietyExcelImportModal()">Import Excel</button>
             <button class="btn btn-p btn-sm" onclick="showSocietyMemberModal()">+ Add Member</button>
@@ -22445,12 +22452,15 @@ function renderSocietiesPage() {
         </div>
       </div>`;
 
-    const mapSection = renderSocietyMapSection(selected);
+    const mapSection = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Members Map View</div>
+        <button class="btn btn-s btn-sm" onclick="setSocietyMembersView('list')">Back To Members</button>
+      </div>
+      ${renderSocietyMapSection(selected)}`;
     const functionsSection = renderSocietyFunctionsSection(selected);
     const activeSection = _societyTab === 'members'
-      ? membersSection
-      : _societyTab === 'map'
-      ? mapSection
+      ? (_societyMembersView === 'map' ? mapSection : membersSection)
       : _societyTab === 'matrix'
       ? matrixSectionEnhanced
       : _societyTab === 'requests'
