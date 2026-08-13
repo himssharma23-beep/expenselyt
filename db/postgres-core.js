@@ -106,6 +106,64 @@ function mapSocietyExpenseRow(row) {
   };
 }
 
+function normalizeSocietyFunctionStatus(value, fallback = 'planned') {
+  const normalized = String(value || fallback || 'planned').trim().toLowerCase();
+  if (['planned', 'upcoming', 'completed', 'cancelled'].includes(normalized)) return normalized;
+  if (['done', 'finished', 'complete'].includes(normalized)) return 'completed';
+  if (['cancel', 'canceled'].includes(normalized)) return 'cancelled';
+  return fallback || 'planned';
+}
+
+function mapSocietyFunctionRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    function_name: row.function_name || '',
+    function_date: formatDateOnlyValue(row.function_date),
+    estimated_budget: num(row.estimated_budget),
+    status: normalizeSocietyFunctionStatus(row.status),
+    image_path: row.image_path || '',
+    image_name: row.image_name || '',
+    notes: row.notes || '',
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function mapSocietyFunctionExpenseRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    function_id: Number(row.function_id),
+    expense_date: formatDateOnlyValue(row.expense_date),
+    title: row.title || '',
+    category: row.category || '',
+    amount: num(row.amount),
+    notes: row.notes || '',
+    attachment_path: row.attachment_path || '',
+    attachment_name: row.attachment_name || '',
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function mapSocietyFunctionContributorRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    society_id: Number(row.society_id),
+    function_id: Number(row.function_id),
+    member_id: Number(row.member_id),
+    amount: num(row.amount),
+    contributed_on: formatDateOnlyValue(row.contributed_on),
+    notes: row.notes || '',
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
 function normalizeText(value, label, maxLength = 160) {
   const normalized = String(value || '').trim().replace(/\s+/g, ' ');
   if (!normalized) throw validationError(`${label} is required`);
@@ -4549,6 +4607,7 @@ function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}, selfMemberKe
   const peopleMap = {};
   const explicitSelfKey = String(selfMemberKey || '').trim();
   const aliasToCanonical = new Map();
+  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
   for (const member of (trip.members || [])) {
     const memberKey = member.friend_id != null
       ? String(member.friend_id)
@@ -4558,27 +4617,37 @@ function _buildTripSettlementSnapshot(trip, friendIdOverrides = {}, selfMemberKe
           ? `m${member.id}`
           : 'self';
     const stableIdKey = member.id != null ? String(member.id) : '';
-    const key = explicitSelfKey && memberKey === explicitSelfKey ? 'self' : memberKey;
+    const normalizedNameKey = memberNameKey(member.member_name);
+    const key = explicitSelfKey && (memberKey === explicitSelfKey || stableIdKey === explicitSelfKey) ? 'self' : memberKey;
     peopleMap[key] = {
       key,
       name: member.member_name,
       friendId: member.friend_id || friendIdOverrides[memberKey] || friendIdOverrides[key] || null,
       totalShare: 0,
       totalGave: 0,
+      totalReceivedSettlement: 0,
     };
     aliasToCanonical.set(String(memberKey), key);
     if (stableIdKey) aliasToCanonical.set(stableIdKey, key);
+    if (normalizedNameKey) aliasToCanonical.set(normalizedNameKey, key);
   }
 
   for (const expense of (trip.expenses || [])) {
+    const settlementMode = String(expense?.split_mode || '').trim().toLowerCase() === 'settlement';
     for (const split of (expense.splits || [])) {
       const rawSplitKey = String(split.member_key || '');
+      const rawSplitNameKey = memberNameKey(split.member_name || '');
       const splitKey = aliasToCanonical.get(rawSplitKey)
+        || aliasToCanonical.get(rawSplitNameKey)
         || (explicitSelfKey && rawSplitKey === explicitSelfKey ? 'self' : rawSplitKey);
-      if (peopleMap[splitKey]) peopleMap[splitKey].totalShare += num(split.share_amount);
+      if (!peopleMap[splitKey]) continue;
+      if (settlementMode) peopleMap[splitKey].totalReceivedSettlement += num(split.share_amount);
+      else peopleMap[splitKey].totalShare += num(split.share_amount);
     }
     const rawPaidByKey = String(expense.paid_by_key || '');
+    const rawPaidByNameKey = memberNameKey(expense.paid_by_name || '');
     const paidByKey = aliasToCanonical.get(rawPaidByKey)
+      || aliasToCanonical.get(rawPaidByNameKey)
       || (explicitSelfKey && rawPaidByKey === explicitSelfKey ? 'self' : rawPaidByKey);
     if (peopleMap[paidByKey]) peopleMap[paidByKey].totalGave += num(expense.amount);
   }
@@ -5616,7 +5685,7 @@ async function finalizeTrip(userId, tripId, data = {}) {
 
     for (const [key, person] of Object.entries(peopleMap)) {
       if (key === 'self') continue;
-      const net = person.totalGave - person.totalShare;
+      const net = person.totalGave - person.totalShare - num(person.totalReceivedSettlement || 0);
       const settlementAmount = Math.round(Math.abs(net) * 100) / 100;
       if (!(settlementAmount > 0.005)) continue;
 
@@ -6754,6 +6823,61 @@ async function ensureSocietyTables() {
   await query(`CREATE INDEX IF NOT EXISTS idx_society_elections_society_id ON society_elections(society_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_election_candidates_election_id ON society_election_candidates(election_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_election_votes_election_id ON society_election_votes(election_id)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_functions (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      function_name TEXT NOT NULL,
+      function_date DATE NOT NULL,
+      estimated_budget NUMERIC(12,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'planned',
+      image_path TEXT,
+      image_name TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE society_functions ADD COLUMN IF NOT EXISTS estimated_budget NUMERIC(12,2) NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE society_functions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'planned'`);
+  await query(`ALTER TABLE society_functions ADD COLUMN IF NOT EXISTS image_path TEXT`);
+  await query(`ALTER TABLE society_functions ADD COLUMN IF NOT EXISTS image_name TEXT`);
+  await query(`ALTER TABLE society_functions ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_function_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      function_id BIGINT NOT NULL REFERENCES society_functions(id) ON DELETE CASCADE,
+      expense_date DATE NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      attachment_path TEXT,
+      attachment_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE society_function_expenses ADD COLUMN IF NOT EXISTS category TEXT`);
+  await query(`ALTER TABLE society_function_expenses ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await query(`ALTER TABLE society_function_expenses ADD COLUMN IF NOT EXISTS attachment_path TEXT`);
+  await query(`ALTER TABLE society_function_expenses ADD COLUMN IF NOT EXISTS attachment_name TEXT`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS society_function_contributors (
+      id BIGSERIAL PRIMARY KEY,
+      society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+      function_id BIGINT NOT NULL REFERENCES society_functions(id) ON DELETE CASCADE,
+      member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      contributed_on DATE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS contributed_on DATE`);
+  await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_functions_society_id ON society_functions(society_id, function_date DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_function_expenses_function_id ON society_function_expenses(function_id, expense_date DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_society_function_contributors_function_id ON society_function_contributors(function_id, contributed_on DESC)`);
   societySchemaEnsured = true;
 }
 
@@ -7992,6 +8116,177 @@ async function deleteSocietyElection(userId, societyId, electionId) {
   return result.rowCount > 0;
 }
 
+async function getSocietyFunctionOwnedBySociety(societyId, functionId) {
+  await ensureSocietyTables();
+  const result = await query(
+    `SELECT id, society_id, function_name, function_date, estimated_budget, status, image_path, image_name, notes, created_at, updated_at
+     FROM society_functions
+     WHERE id = $1 AND society_id = $2
+     LIMIT 1`,
+    [functionId, societyId]
+  );
+  return result.rows[0] || null;
+}
+
+async function saveSocietyFunction(userId, societyId, data = {}, functionId = null) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const functionName = normalizeText(data.function_name || data.name || data.title, 'Function name', 160);
+  const functionDate = normalizeDateValue(data.function_date || data.date, 'Function date');
+  const estimatedBudget = data.estimated_budget != null || data.budget != null
+    ? normalizeSocietyAmount(data.estimated_budget ?? data.budget, 'Estimated budget')
+    : 0;
+  const status = normalizeSocietyFunctionStatus(data.status, 'planned');
+  const imagePath = normalizeOptionalText(data.image_path || data.banner_path || data.image || '', 260);
+  const imageName = normalizeOptionalText(data.image_name || data.banner_name || '', 180);
+  const notes = normalizeOptionalText(data.notes || data.description || '', 1000);
+  const params = [functionName, functionDate, estimatedBudget, status, imagePath, imageName, notes];
+  if (functionId) {
+    const current = await getSocietyFunctionOwnedBySociety(societyId, functionId);
+    if (!current) throw validationError('Function not found');
+    const result = await query(
+      `UPDATE society_functions
+       SET function_name = $1,
+           function_date = $2,
+           estimated_budget = $3,
+           status = $4,
+           image_path = $5,
+           image_name = $6,
+           notes = $7,
+           updated_at = NOW()
+       WHERE id = $8 AND society_id = $9
+       RETURNING id, society_id, function_name, function_date, estimated_budget, status, image_path, image_name, notes, created_at, updated_at`,
+      [...params, functionId, societyId]
+    );
+    return mapSocietyFunctionRow(result.rows[0] || null);
+  }
+  const result = await query(
+    `INSERT INTO society_functions (society_id, function_name, function_date, estimated_budget, status, image_path, image_name, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+     RETURNING id, society_id, function_name, function_date, estimated_budget, status, image_path, image_name, notes, created_at, updated_at`,
+    [societyId, ...params]
+  );
+  return mapSocietyFunctionRow(result.rows[0] || null);
+}
+
+async function deleteSocietyFunction(userId, societyId, functionId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query('DELETE FROM society_functions WHERE id = $1 AND society_id = $2', [functionId, societyId]);
+  return result.rowCount > 0;
+}
+
+async function saveSocietyFunctionExpense(userId, societyId, functionId, data = {}, expenseId = null) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const parent = await getSocietyFunctionOwnedBySociety(societyId, functionId);
+  if (!parent) throw validationError('Function not found');
+  const expenseDate = normalizeDateValue(data.expense_date || data.date, 'Expense date');
+  const title = normalizeText(data.title || data.expense_name || data.item_name, 'Expense title', 160);
+  const category = normalizeOptionalText(data.category || '', 80);
+  const amount = normalizeAmount(data.amount, 'Expense amount');
+  const notes = normalizeOptionalText(data.notes || data.description || '', 1000);
+  const attachmentPath = normalizeOptionalText(data.attachment_path || '', 260);
+  const attachmentName = normalizeOptionalText(data.attachment_name || '', 180);
+  const params = [expenseDate, title, category, amount, notes, attachmentPath, attachmentName];
+  if (expenseId) {
+    const current = await query(
+      `SELECT id
+       FROM society_function_expenses
+       WHERE id = $1 AND society_id = $2 AND function_id = $3
+       LIMIT 1`,
+      [expenseId, societyId, functionId]
+    );
+    if (!current.rows[0]) throw validationError('Function expense not found');
+    const result = await query(
+      `UPDATE society_function_expenses
+       SET expense_date = $1,
+           title = $2,
+           category = $3,
+           amount = $4,
+           notes = $5,
+           attachment_path = $6,
+           attachment_name = $7,
+           updated_at = NOW()
+       WHERE id = $8 AND society_id = $9 AND function_id = $10
+       RETURNING id, society_id, function_id, expense_date, title, category, amount, notes, attachment_path, attachment_name, created_at, updated_at`,
+      [...params, expenseId, societyId, functionId]
+    );
+    return mapSocietyFunctionExpenseRow(result.rows[0] || null);
+  }
+  const result = await query(
+    `INSERT INTO society_function_expenses (society_id, function_id, expense_date, title, category, amount, notes, attachment_path, attachment_name, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+     RETURNING id, society_id, function_id, expense_date, title, category, amount, notes, attachment_path, attachment_name, created_at, updated_at`,
+    [societyId, functionId, ...params]
+  );
+  return mapSocietyFunctionExpenseRow(result.rows[0] || null);
+}
+
+async function deleteSocietyFunctionExpense(userId, societyId, functionId, expenseId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query(
+    'DELETE FROM society_function_expenses WHERE id = $1 AND society_id = $2 AND function_id = $3',
+    [expenseId, societyId, functionId]
+  );
+  return result.rowCount > 0;
+}
+
+async function saveSocietyFunctionContributor(userId, societyId, functionId, data = {}, contributorId = null) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const parent = await getSocietyFunctionOwnedBySociety(societyId, functionId);
+  if (!parent) throw validationError('Function not found');
+  const memberId = Number(data.member_id || data.memberId || 0);
+  if (!(memberId > 0)) throw validationError('Member is required');
+  const memberResult = await query('SELECT id FROM society_members WHERE id = $1 AND society_id = $2 LIMIT 1', [memberId, societyId]);
+  if (!memberResult.rows[0]) throw validationError('Member not found');
+  const amount = normalizeAmount(data.amount, 'Contribution amount');
+  const contributedOn = data.contributed_on || data.date ? normalizeDateValue(data.contributed_on || data.date, 'Contribution date') : null;
+  const notes = normalizeOptionalText(data.notes || '', 1000);
+  const params = [memberId, amount, contributedOn, notes];
+  if (contributorId) {
+    const current = await query(
+      `SELECT id
+       FROM society_function_contributors
+       WHERE id = $1 AND society_id = $2 AND function_id = $3
+       LIMIT 1`,
+      [contributorId, societyId, functionId]
+    );
+    if (!current.rows[0]) throw validationError('Contributor entry not found');
+    const result = await query(
+      `UPDATE society_function_contributors
+       SET member_id = $1,
+           amount = $2,
+           contributed_on = $3,
+           notes = $4,
+           updated_at = NOW()
+       WHERE id = $5 AND society_id = $6 AND function_id = $7
+       RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at`,
+      [...params, contributorId, societyId, functionId]
+    );
+    return mapSocietyFunctionContributorRow(result.rows[0] || null);
+  }
+  const result = await query(
+    `INSERT INTO society_function_contributors (society_id, function_id, member_id, amount, contributed_on, notes, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at`,
+    [societyId, functionId, ...params]
+  );
+  return mapSocietyFunctionContributorRow(result.rows[0] || null);
+}
+
+async function deleteSocietyFunctionContributor(userId, societyId, functionId, contributorId) {
+  const society = await getSocietyOwnedByUser(userId, societyId);
+  if (!society) throw validationError('Society not found');
+  const result = await query(
+    'DELETE FROM society_function_contributors WHERE id = $1 AND society_id = $2 AND function_id = $3',
+    [contributorId, societyId, functionId]
+  );
+  return result.rowCount > 0;
+}
+
 async function castSocietyElectionVote(memberId, electionId, candidateId) {
   await ensureSocietyTables();
   return withTransaction(async (client) => {
@@ -8049,7 +8344,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
   const society = await getSocietyOwnedByUser(userId, societyId);
   if (!society) throw validationError('Society not found');
   const startMonth = normalizeOptionalMonthKey(society.start_month, 'Start month');
-  const [membersR, contributionsR, expensesR, requestsR, settlementsR, elections] = await Promise.all([
+  const [membersR, contributionsR, expensesR, requestsR, settlementsR, elections, functionsR, functionExpensesR, functionContributorsR] = await Promise.all([
     query(
       `SELECT id, society_id, member_name, phone_number, phone_numbers, unit_label, property_type, monthly_due, is_active, created_at, updated_at
        FROM society_members
@@ -8086,6 +8381,27 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       [societyId]
     ),
     loadSocietyElectionsForDashboard(societyId, { includeVoters: true, revealVotes: true }),
+    query(
+      `SELECT id, society_id, function_name, function_date, estimated_budget, status, image_path, image_name, notes, created_at, updated_at
+       FROM society_functions
+       WHERE society_id = $1
+       ORDER BY function_date DESC, id DESC`,
+      [societyId]
+    ),
+    query(
+      `SELECT id, society_id, function_id, expense_date, title, category, amount, notes, attachment_path, attachment_name, created_at, updated_at
+       FROM society_function_expenses
+       WHERE society_id = $1
+       ORDER BY expense_date DESC, id DESC`,
+      [societyId]
+    ),
+    query(
+      `SELECT id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at
+       FROM society_function_contributors
+       WHERE society_id = $1
+       ORDER BY COALESCE(contributed_on, created_at::date) DESC, id DESC`,
+      [societyId]
+    ),
   ]);
   const members = membersR.rows.map((row) => ({
     id: Number(row.id),
@@ -8131,6 +8447,9 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));
+  const functionRows = functionsR.rows.map(mapSocietyFunctionRow);
+  const functionExpenses = functionExpensesR.rows.map(mapSocietyFunctionExpenseRow);
+  const functionContributors = functionContributorsR.rows.map(mapSocietyFunctionContributorRow);
   const visibleExpenses = expensesWithNames.filter((item) => societyMonthOnOrAfter(item.month_key, startMonth));
   const monthCandidates = [
     ...contributions.map((item) => item.month_key),
@@ -8248,6 +8567,54 @@ async function getSocietyDetail(userId, societyId, options = {}) {
   }).sort((a, b) => b.remaining_amount - a.remaining_amount || b.amount - a.amount || String(a.member_name || '').localeCompare(String(b.member_name || '')));
   const memberSettledTotal = memberBalances.reduce((sum, item) => Math.round((sum + num(item.settled_amount)) * 100) / 100, 0);
   const memberRemainingTotal = memberBalances.reduce((sum, item) => Math.round((sum + num(item.remaining_amount)) * 100) / 100, 0);
+  const functionExpensesByFunctionId = new Map();
+  functionExpenses.forEach((item) => {
+    const key = Number(item.function_id);
+    const list = functionExpensesByFunctionId.get(key) || [];
+    list.push(item);
+    functionExpensesByFunctionId.set(key, list);
+  });
+  const functionContributorsByFunctionId = new Map();
+  functionContributors.forEach((item) => {
+    const key = Number(item.function_id);
+    const list = functionContributorsByFunctionId.get(key) || [];
+    list.push(item);
+    functionContributorsByFunctionId.set(key, list);
+  });
+  const functionModules = functionRows.map((fn) => {
+    const expensesForFunction = (functionExpensesByFunctionId.get(Number(fn.id)) || []).map((item) => ({
+      ...item,
+    }));
+    const contributorsForFunction = (functionContributorsByFunctionId.get(Number(fn.id)) || []).map((item) => {
+      const member = memberById.get(Number(item.member_id)) || {};
+      return {
+        ...item,
+        member_name: member.member_name || '',
+        unit_label: member.unit_label || '',
+        phone_number: member.phone_number || '',
+        phone_numbers: Array.isArray(member.phone_numbers) ? member.phone_numbers.filter(Boolean) : [],
+      };
+    });
+    const totalExpense = expensesForFunction.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+    const totalContribution = contributorsForFunction.reduce((sum, item) => Math.round((sum + num(item.amount)) * 100) / 100, 0);
+    return {
+      ...fn,
+      expenses: expensesForFunction,
+      contributors: contributorsForFunction,
+      total_expense: totalExpense,
+      total_contribution: totalContribution,
+      net_amount: Math.round((totalContribution - totalExpense) * 100) / 100,
+      contributor_count: contributorsForFunction.length,
+      expense_count: expensesForFunction.length,
+    };
+  });
+  const functionTotals = {
+    total_functions: functionModules.length,
+    total_estimated_budget: functionModules.reduce((sum, item) => Math.round((sum + num(item.estimated_budget)) * 100) / 100, 0),
+    total_contribution: functionModules.reduce((sum, item) => Math.round((sum + num(item.total_contribution)) * 100) / 100, 0),
+    total_expense: functionModules.reduce((sum, item) => Math.round((sum + num(item.total_expense)) * 100) / 100, 0),
+  };
+  functionTotals.net_amount = Math.round((functionTotals.total_contribution - functionTotals.total_expense) * 100) / 100;
   return {
     society: {
       id: Number(society.id),
@@ -8275,6 +8642,9 @@ async function getSocietyDetail(userId, societyId, options = {}) {
     balance_entries: balanceEntries,
     member_balance_settlements: settlements,
     member_balances: memberBalances,
+    functions: functionModules,
+    function_expenses: functionExpenses,
+    function_contributors: functionContributors,
     month_expenses: monthExpenseEntries,
     month_summary: monthSummary,
     elections,
@@ -8302,6 +8672,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       member_settled_total: memberSettledTotal,
       member_owed_total: memberRemainingTotal,
     },
+    function_totals: functionTotals,
   };
 }
 
@@ -9620,6 +9991,12 @@ module.exports = {
   addSocietyExpense,
   updateSocietyExpense,
   deleteSocietyExpense,
+  saveSocietyFunction,
+  deleteSocietyFunction,
+  saveSocietyFunctionExpense,
+  deleteSocietyFunctionExpense,
+  saveSocietyFunctionContributor,
+  deleteSocietyFunctionContributor,
   saveSocietyMemberBalanceSettlement,
   deleteSocietyMemberBalanceSettlement,
   loadSocietyElectionsForDashboard,

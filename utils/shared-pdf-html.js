@@ -885,8 +885,23 @@ function buildSocietyHelpers(prefs = {}) {
     return Array.isArray(detail?.month_expenses) ? detail.month_expenses : [];
   }
 
+  function resolveSocietyFunctionExport(detail, options = {}) {
+    const rows = Array.isArray(detail?.functions) ? detail.functions : [];
+    const targetId = Number(options?.function_id || options?.functionId || options?.id || 0);
+    const target = targetId
+      ? rows.find((item) => Number(item?.id || 0) === targetId)
+      : (options?.function && typeof options.function === 'object' ? options.function : null);
+    if (!target) return null;
+    return {
+      target,
+      contributors: Array.isArray(target?.contributors) ? target.contributors : [],
+      expenses: Array.isArray(target?.expenses) ? target.expenses : [],
+    };
+  }
+
   return {
     fmtCur,
+    fmtDate,
     monthLabel,
     compactMoney,
     memberLabel,
@@ -909,12 +924,14 @@ function buildSocietyHelpers(prefs = {}) {
     statCardsData,
     filterMembers,
     resolveExpenseScope,
+    resolveSocietyFunctionExport,
   };
 }
 
 function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
   const {
     fmtCur,
+    fmtDate,
     monthLabel,
     compactMoney,
     memberLabel,
@@ -937,6 +954,7 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
     statCardsData,
     filterMembers,
     resolveExpenseScope,
+    resolveSocietyFunctionExport,
   } = buildSocietyHelpers(prefs);
 
   if (action === 'month') {
@@ -1146,6 +1164,82 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
             numericColumns: [3],
             nowrapColumns: [3, 4],
             columnWidths: ['30%', '14%', '24%', '16%', '16%'],
+          })}
+        </div>
+      `,
+    });
+  }
+
+  if (action === 'function_detail') {
+    const exportData = resolveSocietyFunctionExport(detail, options);
+    if (!exportData) throw new Error('Function not found for PDF export.');
+    const { target, contributors, expenses } = exportData;
+    const rawStatus = String(target?.status || 'planned').trim();
+    const statusLabel = rawStatus ? `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1)}` : 'Planned';
+    return buildPdfShell({
+      hero: renderHero({
+        title: target?.function_name || 'Society Function',
+        location: detail?.society?.name || 'Society',
+        metaRight: statusLabel,
+        period: fmtDate(target?.function_date),
+        cards: [
+          { label: 'Estimated Budget', value: fmtCur(target?.estimated_budget || 0), meta: 'planned', tone: 'blue' },
+          { label: 'Total Contribution', value: fmtCur(target?.total_contribution || 0), meta: `${contributors.length} contributor(s)`, tone: 'green' },
+          { label: 'Total Expense', value: fmtCur(target?.total_expense || 0), meta: `${expenses.length} expense(s)`, tone: 'red' },
+          { label: 'Net Amount', value: fmtCur(target?.net_amount || 0), meta: Number(target?.net_amount || 0) >= 0 ? 'surplus' : 'deficit', tone: Number(target?.net_amount || 0) >= 0 ? 'green' : 'red' },
+        ],
+      }),
+      landscape: true,
+      body: `
+        ${renderSectionBand('Function Details', detail?.society?.location || 'Society module')}
+        <div class="table-card">
+          ${renderTable(['Field', 'Value'], [
+            ['Function Name', target?.function_name || '-'],
+            ['Function Date', fmtDate(target?.function_date)],
+            ['Status', statusLabel],
+            ['Estimated Budget', fmtCur(target?.estimated_budget || 0)],
+            ['Total Contribution', fmtCur(target?.total_contribution || 0)],
+            ['Total Expense', fmtCur(target?.total_expense || 0)],
+            ['Net Amount', fmtCur(target?.net_amount || 0)],
+            ['Contributor Count', String(Number(target?.contributor_count || contributors.length || 0))],
+            ['Expense Count', String(Number(target?.expense_count || expenses.length || 0))],
+            ['Image', target?.image_path ? 'Banner attached' : 'No image'],
+            ['Notes', target?.notes || '-'],
+          ], {
+            columnWidths: ['28%', '72%'],
+          })}
+        </div>
+        <div class="spacer"></div>
+        ${renderSectionBand('Contributors', `${contributors.length} item(s)`)}
+        <div class="table-card">
+          ${renderTable(['Member', 'House No.', 'Phone', 'Contributed On', 'Amount', 'Notes'], contributors.map((entry) => [
+            entry?.member_name || '-',
+            entry?.unit_label || '-',
+            entry?.phone_number || '-',
+            fmtDate(entry?.contributed_on),
+            fmtCur(entry?.amount || 0),
+            entry?.notes || '-',
+          ]), {
+            numericColumns: [4],
+            nowrapColumns: [3, 4],
+            columnWidths: ['22%', '12%', '16%', '14%', '14%', '22%'],
+            footer: [['', '', '', 'Total', fmtCur(contributors.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0)), '']],
+          })}
+        </div>
+        <div class="spacer"></div>
+        ${renderSectionBand('Expenses', `${expenses.length} item(s)`)}
+        <div class="table-card">
+          ${renderTable(['Date', 'Title', 'Category', 'Notes', 'Amount'], expenses.map((entry) => [
+            fmtDate(entry?.expense_date),
+            entry?.title || '-',
+            entry?.category || '-',
+            entry?.notes || '-',
+            fmtCur(entry?.amount || 0),
+          ]), {
+            numericColumns: [4],
+            nowrapColumns: [0, 4],
+            columnWidths: ['14%', '24%', '18%', '26%', '18%'],
+            footer: [['', '', '', 'Total', fmtCur(expenses.reduce((sum, entry) => sum + Number(entry?.amount || 0), 0))]],
           })}
         </div>
       `,

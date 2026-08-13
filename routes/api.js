@@ -5737,6 +5737,12 @@ function ensureSocietyUploadDir() {
   return uploadDir;
 }
 
+function ensureGeneratedExportDir() {
+  const exportDir = path.join(__dirname, '..', 'public', 'uploads', 'generated-exports');
+  if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
+  return exportDir;
+}
+
 function sanitizeUploadBaseName(name) {
   return String(name || 'file')
     .replace(/\.[^.]+$/, '')
@@ -5772,6 +5778,94 @@ function saveSocietyUploadFile(file) {
     path: `/uploads/societies/${filename}`,
     name: String(file.originalname || filename).trim() || filename,
   };
+}
+
+async function saveGeneratedExportFile(buffer, fileName = '') {
+  const safeBase = sanitizeBaseName(String(fileName || '').replace(/\.[^.]+$/, '') || 'export');
+  const finalName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeBase}.xlsx`;
+  const exportDir = ensureGeneratedExportDir();
+  const absPath = path.join(exportDir, finalName);
+  await fs.promises.writeFile(absPath, buffer);
+  return {
+    fileName: finalName,
+    publicUrl: `/uploads/generated-exports/${finalName}`,
+  };
+}
+
+function normalizeExportDate(value) {
+  if (!value && value !== 0) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+}
+
+function findSocietyFunctionForExport(detail, functionId) {
+  const rows = Array.isArray(detail?.functions) ? detail.functions : [];
+  const targetId = Number(functionId || 0);
+  return rows.find((item) => Number(item?.id || 0) === targetId) || null;
+}
+
+function buildSocietyFunctionWorkbook(detail, societyFunction) {
+  const wb = XLSX.utils.book_new();
+  const contributors = Array.isArray(societyFunction?.contributors) ? societyFunction.contributors : [];
+  const expenses = Array.isArray(societyFunction?.expenses) ? societyFunction.expenses : [];
+  const summaryRows = [
+    ['Field', 'Value'],
+    ['Society', detail?.society?.name || 'Society'],
+    ['Location', detail?.society?.location || ''],
+    ['Function Name', societyFunction?.function_name || ''],
+    ['Function Date', normalizeExportDate(societyFunction?.function_date)],
+    ['Status', societyFunction?.status || 'planned'],
+    ['Estimated Budget', Number(societyFunction?.estimated_budget || 0)],
+    ['Total Contribution', Number(societyFunction?.total_contribution || 0)],
+    ['Total Expense', Number(societyFunction?.total_expense || 0)],
+    ['Net Amount', Number(societyFunction?.net_amount || 0)],
+    ['Contributor Count', Number(societyFunction?.contributor_count || contributors.length || 0)],
+    ['Expense Count', Number(societyFunction?.expense_count || expenses.length || 0)],
+    ['Notes', societyFunction?.notes || ''],
+    ['Image', societyFunction?.image_path || ''],
+  ];
+  const contributorRows = [
+    ['Member Name', 'House No', 'Mobile', 'Amount', 'Contributed On', 'Notes'],
+    ...contributors.map((entry) => [
+      entry?.member_name || '',
+      entry?.unit_label || '',
+      entry?.phone_number || '',
+      Number(entry?.amount || 0),
+      normalizeExportDate(entry?.contributed_on),
+      entry?.notes || '',
+    ]),
+  ];
+  const expenseRows = [
+    ['Date', 'Title', 'Category', 'Amount', 'Notes', 'Attachment'],
+    ...expenses.map((entry) => [
+      normalizeExportDate(entry?.expense_date),
+      entry?.title || '',
+      entry?.category || '',
+      Number(entry?.amount || 0),
+      entry?.notes || '',
+      entry?.attachment_path || '',
+    ]),
+  ];
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  const contributorsSheet = XLSX.utils.aoa_to_sheet(contributorRows);
+  const expensesSheet = XLSX.utils.aoa_to_sheet(expenseRows);
+  summarySheet['!cols'] = [{ wch: 24 }, { wch: 42 }];
+  contributorsSheet['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 16 }, { wch: 32 }];
+  expensesSheet['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 34 }, { wch: 40 }];
+
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+  XLSX.utils.book_append_sheet(wb, contributorsSheet, 'Contributors');
+  XLSX.utils.book_append_sheet(wb, expensesSheet, 'Expenses');
+  return XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
 }
 
 function withSocietyExpenseUpload(req, res, next) {
@@ -9798,61 +9892,101 @@ router.delete('/admin/currencies/:code', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/admin/currencies/sync-latest', requireAdmin, async (_req, res) => {
+async function fetchFrankfurterJson(path) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const currencies = await Promise.resolve(getCoreDb().getAdminCurrencyRates());
-    const targets = (currencies || [])
+    const response = await fetch(`https://api.frankfurter.dev${path}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Rate provider failed with status ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function syncAdminCurrenciesFromFrankfurter({ seedAll = false } = {}) {
+  const currencies = await Promise.resolve(getCoreDb().getAdminCurrencyRates());
+  const existingMap = new Map(
+    (currencies || []).map((item) => [String(item.currency_code || '').toUpperCase(), item])
+  );
+
+  let targets = [];
+  let payload = null;
+
+  if (seedAll) {
+    const catalog = await fetchFrankfurterJson('/v1/currencies');
+    targets = Object.keys(catalog || {})
+      .map((code) => String(code || '').toUpperCase())
+      .filter((code) => /^[A-Z]{3}$/.test(code) && code !== 'INR');
+    payload = await fetchFrankfurterJson('/v1/latest?base=INR');
+  } else {
+    targets = (currencies || [])
       .map((item) => String(item.currency_code || '').toUpperCase())
       .filter((code) => code && code !== 'INR');
 
     if (!targets.length) {
-      return res.json({ success: true, updated: 0, message: 'No non-INR currencies to update.' });
+      return { success: true, added: 0, updated: 0, skipped: 0, rate_date: null };
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    let response;
-    try {
-      response = await fetch(`https://api.frankfurter.dev/v1/latest?base=INR&symbols=${encodeURIComponent(targets.join(','))}`, {
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
+    payload = await fetchFrankfurterJson(`/v1/latest?base=INR&symbols=${encodeURIComponent(targets.join(','))}`);
+  }
+
+  const rates = payload?.rates && typeof payload.rates === 'object' ? payload.rates : {};
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({
+    currency_code: 'INR',
+    rate_to_inr: 1,
+    is_active: 1,
+  }));
+
+  for (const code of targets) {
+    const perInr = Number(rates[code]);
+    if (!Number.isFinite(perInr) || perInr <= 0) {
+      skipped += 1;
+      continue;
     }
-
-    if (!response.ok) {
-      throw new Error(`Rate provider failed with status ${response.status}`);
-    }
-
-    const payload = await response.json();
-    const rates = payload?.rates && typeof payload.rates === 'object' ? payload.rates : {};
-    let updated = 0;
-
+    const rateToInr = Math.round((1 / perInr) * 1000000) / 1000000;
+    const existing = existingMap.get(code);
     await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({
-      currency_code: 'INR',
-      rate_to_inr: 1,
-      is_active: 1,
+      currency_code: code,
+      rate_to_inr: rateToInr,
+      is_active: existing ? (existing.is_active ? 1 : 0) : 1,
     }));
+    if (existing) updated += 1;
+    else added += 1;
+  }
 
-    for (const code of targets) {
-      const perInr = Number(rates[code]);
-      if (!Number.isFinite(perInr) || perInr <= 0) continue;
-      const rateToInr = Math.round((1 / perInr) * 1000000) / 1000000;
-      await Promise.resolve(getCoreDb().upsertAdminCurrencyRate({
-        currency_code: code,
-        rate_to_inr: rateToInr,
-        is_active: currencies.find((item) => String(item.currency_code || '').toUpperCase() === code)?.is_active ? 1 : 0,
-      }));
-      updated += 1;
-    }
+  return {
+    success: true,
+    added,
+    updated,
+    skipped,
+    provider: 'Frankfurter',
+    base: 'INR',
+    rate_date: payload?.date || null,
+  };
+}
 
-    res.json({
-      success: true,
-      updated,
-      provider: 'Frankfurter',
-      base: 'INR',
-      rate_date: payload?.date || null,
-    });
+router.post('/admin/currencies/seed-all', requireAdmin, async (_req, res) => {
+  try {
+    const result = await syncAdminCurrenciesFromFrankfurter({ seedAll: true });
+    res.json(result);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add all currencies.' });
+  }
+});
+
+router.post('/admin/currencies/sync-latest', requireAdmin, async (_req, res) => {
+  try {
+    const result = await syncAdminCurrenciesFromFrankfurter({ seedAll: false });
+    res.json(result);
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not sync currency rates.' });
   }
@@ -12583,6 +12717,135 @@ router.delete('/societies/:id/expenses/:expenseId', async (req, res) => {
     res.json({ success });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete expense.' });
+  }
+});
+
+router.post('/societies/:id/functions', withSocietyExpenseUpload, async (req, res) => {
+  try {
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const body = {
+      ...(req.body || {}),
+      image_path: attachment?.path || req.body?.image_path || '',
+      image_name: attachment?.name || req.body?.image_name || '',
+    };
+    const societyFunction = await Promise.resolve(pgCoreDb.saveSocietyFunction(req.session.userId, req.params.id, body, null));
+    res.json({ success: true, function: societyFunction });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not create function.' });
+  }
+});
+
+router.put('/societies/:id/functions/:functionId', withSocietyExpenseUpload, async (req, res) => {
+  try {
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const body = {
+      ...(req.body || {}),
+      image_path: attachment?.path || req.body?.image_path || '',
+      image_name: attachment?.name || req.body?.image_name || '',
+    };
+    const societyFunction = await Promise.resolve(pgCoreDb.saveSocietyFunction(req.session.userId, req.params.id, body, req.params.functionId));
+    res.json({ success: true, function: societyFunction });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update function.' });
+  }
+});
+
+router.delete('/societies/:id/functions/:functionId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyFunction(req.session.userId, req.params.id, req.params.functionId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete function.' });
+  }
+});
+
+router.post('/societies/:id/functions/:functionId/expenses', withSocietyExpenseUpload, async (req, res) => {
+  try {
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const body = {
+      ...(req.body || {}),
+      attachment_path: attachment?.path || req.body?.attachment_path || '',
+      attachment_name: attachment?.name || req.body?.attachment_name || '',
+    };
+    const expense = await Promise.resolve(pgCoreDb.saveSocietyFunctionExpense(req.session.userId, req.params.id, req.params.functionId, body, null));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add function expense.' });
+  }
+});
+
+router.put('/societies/:id/functions/:functionId/expenses/:expenseId', withSocietyExpenseUpload, async (req, res) => {
+  try {
+    const attachment = req.file ? saveSocietyUploadFile(req.file) : null;
+    const body = {
+      ...(req.body || {}),
+      attachment_path: attachment?.path || req.body?.attachment_path || '',
+      attachment_name: attachment?.name || req.body?.attachment_name || '',
+    };
+    const expense = await Promise.resolve(pgCoreDb.saveSocietyFunctionExpense(req.session.userId, req.params.id, req.params.functionId, body, req.params.expenseId));
+    res.json({ success: true, expense });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update function expense.' });
+  }
+});
+
+router.delete('/societies/:id/functions/:functionId/expenses/:expenseId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyFunctionExpense(req.session.userId, req.params.id, req.params.functionId, req.params.expenseId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete function expense.' });
+  }
+});
+
+router.post('/societies/:id/functions/:functionId/contributors', async (req, res) => {
+  try {
+    const contributor = await Promise.resolve(pgCoreDb.saveSocietyFunctionContributor(req.session.userId, req.params.id, req.params.functionId, req.body || {}, null));
+    res.json({ success: true, contributor });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not add contributor.' });
+  }
+});
+
+router.put('/societies/:id/functions/:functionId/contributors/:contributorId', async (req, res) => {
+  try {
+    const contributor = await Promise.resolve(pgCoreDb.saveSocietyFunctionContributor(req.session.userId, req.params.id, req.params.functionId, req.body || {}, req.params.contributorId));
+    res.json({ success: true, contributor });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update contributor.' });
+  }
+});
+
+router.delete('/societies/:id/functions/:functionId/contributors/:contributorId', async (req, res) => {
+  try {
+    const success = await Promise.resolve(pgCoreDb.deleteSocietyFunctionContributor(req.session.userId, req.params.id, req.params.functionId, req.params.contributorId));
+    res.json({ success });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete contributor.' });
+  }
+});
+
+router.post('/societies/:id/functions/:functionId/export-excel', async (req, res) => {
+  try {
+    const detail = await Promise.resolve(pgCoreDb.getSocietyDetail(req.session.userId, req.params.id, {}));
+    if (!detail?.society?.id) return res.status(404).json({ error: 'Society not found.' });
+    const societyFunction = findSocietyFunctionForExport(detail, req.params.functionId);
+    if (!societyFunction) return res.status(404).json({ error: 'Function not found.' });
+    const workbook = buildSocietyFunctionWorkbook(detail, societyFunction);
+    const result = await saveGeneratedExportFile(workbook, [
+      'society-function',
+      societyFunction?.function_name || 'export',
+      detail?.society?.name || 'society',
+    ].filter(Boolean).join('-'));
+    const appBase = String(process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/,'');
+    res.json({
+      success: true,
+      url: result.publicUrl,
+      absolute_url: `${appBase}${result.publicUrl}`,
+      file_name: result.fileName,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not export function excel.' });
   }
 });
 

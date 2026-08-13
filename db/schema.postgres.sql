@@ -1298,3 +1298,82 @@ CREATE TABLE IF NOT EXISTS live_split_nudge_usage (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_live_split_nudge_usage_user_created ON live_split_nudge_usage (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS societies (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  location TEXT,
+  start_month TEXT,
+  map_layout_key TEXT,
+  map_floor_plots_json TEXT,
+  show_shops_in_map BOOLEAN NOT NULL DEFAULT TRUE,
+  pdf_shops_mode TEXT NOT NULL DEFAULT 'individual',
+  pdf_shops_summary_text TEXT,
+  show_map_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
+  show_elections_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
+  show_expense_attachments_in_portal BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_societies_user_id ON societies(user_id);
+
+CREATE TABLE IF NOT EXISTS society_members (
+  id BIGSERIAL PRIMARY KEY,
+  society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+  member_name TEXT NOT NULL,
+  phone_number TEXT,
+  phone_numbers TEXT[] NOT NULL DEFAULT '{}',
+  unit_label TEXT NOT NULL,
+  property_type TEXT NOT NULL DEFAULT 'home',
+  monthly_due NUMERIC(12,2) NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_society_members_society_id ON society_members(society_id);
+
+CREATE TABLE IF NOT EXISTS society_functions (
+  id BIGSERIAL PRIMARY KEY,
+  society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+  function_name TEXT NOT NULL,
+  function_date DATE NOT NULL,
+  estimated_budget NUMERIC(12,2) NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'planned',
+  image_path TEXT,
+  image_name TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_society_functions_society_id ON society_functions(society_id, function_date DESC);
+
+CREATE TABLE IF NOT EXISTS society_function_expenses (
+  id BIGSERIAL PRIMARY KEY,
+  society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+  function_id BIGINT NOT NULL REFERENCES society_functions(id) ON DELETE CASCADE,
+  expense_date DATE NOT NULL,
+  title TEXT NOT NULL,
+  category TEXT,
+  amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  notes TEXT,
+  attachment_path TEXT,
+  attachment_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_society_function_expenses_function_id ON society_function_expenses(function_id, expense_date DESC);
+
+CREATE TABLE IF NOT EXISTS society_function_contributors (
+  id BIGSERIAL PRIMARY KEY,
+  society_id BIGINT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+  function_id BIGINT NOT NULL REFERENCES society_functions(id) ON DELETE CASCADE,
+  member_id BIGINT NOT NULL REFERENCES society_members(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  contributed_on DATE,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_society_function_contributors_function_id ON society_function_contributors(function_id, contributed_on DESC);

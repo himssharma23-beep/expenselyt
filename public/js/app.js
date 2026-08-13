@@ -1344,6 +1344,9 @@ let _societyRequestSearch = '';
 let _societyExpenseDraftType = 'expense';
 let _societyExpenseDraftPaidById = '';
 let _societyExpenseDraftForcedType = '';
+let _societyFunctionSearch = '';
+let _societyFunctionExpenseSearch = '';
+let _societyFunctionContributorSearch = '';
 let _schoolKidsOverview = null;
 let _schoolKidsList = [];
 let _selectedSchoolKidId = null;
@@ -6263,7 +6266,49 @@ let _tripBulkValues = {};
 let _tripCurrencies = null;
 let _tripItineraryCollapsed = false;
 let _adminCurrencies = [];
+const ADMIN_CURRENCY_COUNTRY_LABELS = {
+  AED: 'United Arab Emirates',
+  AUD: 'Australia',
+  BGN: 'Bulgaria',
+  BRL: 'Brazil',
+  CAD: 'Canada',
+  CHF: 'Switzerland',
+  CNY: 'China',
+  CZK: 'Czech Republic',
+  DKK: 'Denmark',
+  EUR: 'Eurozone',
+  GBP: 'United Kingdom',
+  HKD: 'Hong Kong',
+  HUF: 'Hungary',
+  IDR: 'Indonesia',
+  ILS: 'Israel',
+  INR: 'India',
+  ISK: 'Iceland',
+  JPY: 'Japan',
+  KRW: 'South Korea',
+  MXN: 'Mexico',
+  MYR: 'Malaysia',
+  NOK: 'Norway',
+  NZD: 'New Zealand',
+  PHP: 'Philippines',
+  PLN: 'Poland',
+  RON: 'Romania',
+  SEK: 'Sweden',
+  SGD: 'Singapore',
+  THB: 'Thailand',
+  TRY: 'Turkey',
+  USD: 'United States',
+  VND: 'Vietnam',
+  ZAR: 'South Africa',
+};
 const TRIP_BULK_SPLIT_MODES = SPLIT_MODES.filter((mode) => mode.key !== 'amount');
+
+function getAdminCurrencyLabel(currencyCode = '') {
+  const code = String(currencyCode || '').trim().toUpperCase();
+  if (!code) return '';
+  const countryLabel = ADMIN_CURRENCY_COUNTRY_LABELS[code];
+  return countryLabel ? `${code} (${countryLabel})` : code;
+}
 
 function getTripItineraryItemById(itemId) {
   if (!_tripDetail?.itinerary_items?.length || itemId == null) return null;
@@ -10347,7 +10392,7 @@ function renderAdminCurrencies() {
   const html = rows.length
     ? rows.map((item) => `
         <tr>
-          <td style="padding:12px">${escHtml(item.currency_code || '')}</td>
+          <td style="padding:12px">${escHtml(getAdminCurrencyLabel(item.currency_code || ''))}</td>
           <td style="padding:12px;text-align:right">${Number(item.rate_to_inr || 0).toFixed(6)}</td>
           <td style="padding:12px">${item.is_active ? '<span style="color:var(--ok)">Active</span>' : '<span style="color:var(--t3)">Inactive</span>'}</td>
           <td style="padding:12px">${fmtDate(item.updated_at)}</td>
@@ -10366,6 +10411,7 @@ function renderAdminCurrencies() {
           <div class="admin-toolbar-copy">Manage currency rates once here. Trip expense forms will use these saved rates automatically.</div>
         </div>
         <div class="admin-toolbar-actions">
+          <button class="btn btn-s btn-sm" onclick="seedAdminCurrencies()">Add All Currencies</button>
           <button class="btn btn-s btn-sm" onclick="syncAdminCurrencyRates()">Sync Latest Rates</button>
           <button class="btn btn-p btn-sm" onclick="openAdminCurrencyModal()">Add Currency</button>
         </div>
@@ -10387,6 +10433,17 @@ function renderAdminCurrencies() {
     </div>`;
 }
 
+async function seedAdminCurrencies() {
+  const result = await api('/api/admin/currencies/seed-all', { method: 'POST' });
+  if (result?.error) {
+    toast(result.error, 'error');
+    return;
+  }
+  const dateLabel = result?.rate_date ? ` for ${result.rate_date}` : '';
+  toast(`Added ${result?.added || 0}, updated ${result?.updated || 0} currency rate(s)${dateLabel}`, 'success');
+  await loadAdminCurrencies();
+}
+
 async function syncAdminCurrencyRates() {
   const result = await api('/api/admin/currencies/sync-latest', { method: 'POST' });
   if (result?.error) {
@@ -10400,7 +10457,7 @@ async function syncAdminCurrencyRates() {
 
 function openAdminCurrencyModal(currencyCode = '') {
   const item = (Array.isArray(_adminCurrencies) ? _adminCurrencies : []).find((entry) => String(entry.currency_code || '').toUpperCase() === String(currencyCode || '').toUpperCase()) || null;
-  openModal(item ? `Edit Currency: ${item.currency_code}` : 'Add Currency', `
+  openModal(item ? `Edit Currency: ${getAdminCurrencyLabel(item.currency_code)}` : 'Add Currency', `
     <div class="fg">
       <label class="fl">Currency Code *
         <input class="fi" id="adminCurrencyCode" value="${escHtml(item?.currency_code || '')}" placeholder="USD" ${item ? 'readonly' : ''}>
@@ -21409,6 +21466,137 @@ function setSocietyRequestSearch(value) {
   renderSocietiesPage();
 }
 
+function setSocietyFunctionSearch(value) {
+  _societyFunctionSearch = String(value || '');
+  renderSocietiesPage();
+}
+
+function setSocietyFunctionExpenseSearch(value) {
+  _societyFunctionExpenseSearch = String(value || '');
+  renderSocietiesPage();
+}
+
+function setSocietyFunctionContributorSearch(value) {
+  _societyFunctionContributorSearch = String(value || '');
+  renderSocietiesPage();
+}
+
+function renderSocietyFunctionsSection(selected) {
+  const functions = Array.isArray(selected?.functions) ? selected.functions : [];
+  const functionNeedle = String(_societyFunctionSearch || '').trim().toLowerCase();
+  const expenseNeedle = String(_societyFunctionExpenseSearch || '').trim().toLowerCase();
+  const contributorNeedle = String(_societyFunctionContributorSearch || '').trim().toLowerCase();
+  const filteredFunctions = functions.filter((item) => {
+    if (!functionNeedle) return true;
+    return [
+      item.function_name,
+      item.function_date,
+      item.status,
+      item.notes,
+    ].some((value) => String(value || '').toLowerCase().includes(functionNeedle));
+  });
+  const statusTone = (status) => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'completed') return 'background:#e8f8ef;color:#18784a';
+    if (normalized === 'cancelled') return 'background:#fff1ee;color:#d64735';
+    if (normalized === 'upcoming') return 'background:#eef4ff;color:#4869b7';
+    return 'background:#fff6db;color:#b87807';
+  };
+  return `
+    <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Functions Module</div>
+    <div class="card" style="padding:0;overflow:hidden;margin-top:14px">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border-l)">
+        <input class="fi" style="flex:1;min-width:0" value="${escHtml(_societyFunctionSearch)}" oninput="setSocietyFunctionSearch(this.value)" placeholder="Search function, date or status...">
+        <button class="btn btn-p btn-sm" onclick="showSocietyFunctionModal()" style="flex-shrink:0">+ Add Function</button>
+      </div>
+      <div style="padding:18px 20px">
+        ${filteredFunctions.length ? filteredFunctions.map((item) => {
+          const expenses = (item.expenses || []).filter((entry) => {
+            if (!expenseNeedle) return true;
+            return [entry.title, entry.category, entry.notes, entry.expense_date].some((value) => String(value || '').toLowerCase().includes(expenseNeedle));
+          });
+          const contributors = (item.contributors || []).filter((entry) => {
+            if (!contributorNeedle) return true;
+            return [entry.member_name, entry.unit_label, entry.phone_number, entry.contributed_on, entry.notes].some((value) => String(value || '').toLowerCase().includes(contributorNeedle));
+          });
+          return `
+            <div class="card" style="padding:18px 20px;margin-bottom:16px;background:#fcfdfc">
+              <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap">
+                <div style="display:flex;gap:14px;align-items:flex-start">
+                  ${item.image_path ? `<img src="${escHtml(item.image_path)}" alt="${escHtml(item.function_name || 'Function')}" style="width:82px;height:82px;object-fit:cover;border-radius:16px;border:1px solid var(--border-l)">` : ''}
+                  <div>
+                    <div style="font-size:18px;font-weight:900;color:var(--t1)">${escHtml(item.function_name || 'Function')}</div>
+                    <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(fmtDate(item.function_date || ''))} ${item.notes ? `· ${escHtml(item.notes)}` : ''}</div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                      <span class="badge" style="${statusTone(item.status)}">${escHtml(String(item.status || 'planned').replace(/^\w/, (m) => m.toUpperCase()))}</span>
+                      <span class="badge" style="background:#eef4ff;color:#4869b7">Budget ${fmtCur(item.estimated_budget || 0)}</span>
+                      <span class="badge" style="background:#edf8f1;color:#18784a">Contribution ${fmtCur(item.total_contribution || 0)}</span>
+                      <span class="badge" style="background:#fff2ef;color:#c64b36">Expense ${fmtCur(item.total_expense || 0)}</span>
+                      <span class="badge" style="background:${Number(item.net_amount || 0) >= 0 ? '#eef8f0' : '#fff3f1'};color:${Number(item.net_amount || 0) >= 0 ? '#18784a' : '#d64735'}">Net ${fmtCur(item.net_amount || 0)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-s btn-sm" onclick="downloadSocietyFunctionPdf(${Number(item.id)})">PDF</button>
+                  <button class="btn btn-s btn-sm" onclick="downloadSocietyFunctionExcel(${Number(item.id)})">Excel</button>
+                  <button class="btn btn-s btn-sm" onclick="showSocietyFunctionContributorDropdownModal(${Number(item.id)})">+ Contributor</button>
+                  <button class="btn btn-s btn-sm" onclick="showSocietyFunctionExpenseModal(${Number(item.id)})">+ Expense</button>
+                  <button class="btn btn-s btn-sm" onclick="showSocietyFunctionModal(${Number(item.id)})">Edit</button>
+                  <button class="btn btn-s btn-sm" onclick="deleteSocietyFunction(${Number(item.id)})">Delete</button>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px">
+                <div class="card" style="padding:12px 14px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Contributors</div><div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${Number(item.contributor_count || 0)}</div></div>
+                <div class="card" style="padding:12px 14px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Expenses</div><div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${Number(item.expense_count || 0)}</div></div>
+                <div class="card" style="padding:12px 14px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Variance vs Budget</div><div style="font-size:22px;font-weight:900;color:${Number((item.estimated_budget || 0) - (item.total_expense || 0)) >= 0 ? 'var(--green)' : 'var(--red)'};margin-top:4px">${fmtCur(Number(item.estimated_budget || 0) - Number(item.total_expense || 0))}</div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px">
+                <div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+                    <div style="font-size:12px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--t3)">Contributors</div>
+                    <input class="fi" style="max-width:220px" value="${escHtml(_societyFunctionContributorSearch)}" oninput="setSocietyFunctionContributorSearch(this.value)" placeholder="Search contributor...">
+                  </div>
+                  <div class="table-wrap" style="overflow:hidden;border:1px solid var(--border-l);border-radius:14px">
+                    <table style="table-layout:fixed;width:100%;min-width:0">
+                      <thead><tr><th style="width:24%;text-align:center">Action</th><th style="width:58%">Member</th><th style="width:18%;text-align:right">Amount</th></tr></thead>
+                      <tbody>
+                        ${contributors.length ? contributors.map((entry) => `
+                          <tr>
+                            <td style="white-space:nowrap;text-align:center"><button class="trip-icon-btn" title="Edit Contributor" aria-label="Edit Contributor" onclick="showSocietyFunctionContributorDropdownModal(${Number(item.id)}, ${Number(entry.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Contributor" aria-label="Delete Contributor" onclick="deleteSocietyFunctionContributor(${Number(item.id)}, ${Number(entry.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td>
+                            <td><div style="font-weight:800;color:var(--t1)">${escHtml(entry.member_name || '-')}</div><div style="font-size:12px;color:var(--t3)">${escHtml(entry.unit_label || '-')} ${entry.phone_number ? `· ${escHtml(entry.phone_number)}` : ''}</div></td>
+                            <td style="text-align:right;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(entry.amount || 0)}</td>
+                          </tr>`).join('') : '<tr><td colspan="3" style="text-align:center;color:var(--t3)">No contributors found.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+                    <div style="font-size:12px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--t3)">Function Expenses</div>
+                    <input class="fi" style="max-width:220px" value="${escHtml(_societyFunctionExpenseSearch)}" oninput="setSocietyFunctionExpenseSearch(this.value)" placeholder="Search expense...">
+                  </div>
+                  <div class="table-wrap" style="overflow:hidden;border:1px solid var(--border-l);border-radius:14px">
+                    <table style="table-layout:fixed;width:100%;min-width:0">
+                      <thead><tr><th style="width:20%;text-align:center">Action</th><th style="width:42%">Expense</th><th style="width:20%">Date</th><th style="width:18%;text-align:right">Amount</th></tr></thead>
+                      <tbody>
+                        ${expenses.length ? expenses.map((entry) => `
+                          <tr>
+                            <td style="white-space:nowrap;text-align:center"><button class="trip-icon-btn" title="Edit Expense" aria-label="Edit Expense" onclick="showSocietyFunctionExpenseModal(${Number(item.id)}, ${Number(entry.id)})"><span class="trip-icon-btn-glyph">&#9998;</span></button><button class="trip-icon-btn danger" title="Delete Expense" aria-label="Delete Expense" onclick="deleteSocietyFunctionExpense(${Number(item.id)}, ${Number(entry.id)})"><span class="trip-icon-btn-glyph">&#128465;</span></button></td>
+                            <td><div style="font-weight:800;color:var(--t1)">${escHtml(entry.title || '-')}</div><div style="font-size:12px;color:var(--t3)">${escHtml(entry.category || '-')}${entry.attachment_path ? ` · <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(entry.attachment_path || ''))}, ${JSON.stringify(String(entry.attachment_name || entry.title || 'Attachment'))})'>Attachment</button>` : ''}</div></td>
+                            <td>${entry.expense_date ? escHtml(fmtDate(entry.expense_date)) : '-'}</td>
+                            <td style="text-align:right;font-weight:800;color:var(--red);white-space:nowrap">${fmtCur(entry.amount || 0)}</td>
+                          </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--t3)">No expenses found.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        }).join('') : '<div class="card" style="padding:24px;color:var(--t3)">No functions match the current search.</div>'}
+      </div>
+    </div>`;
+}
+
 function setSocietyRange(value) {
   _societyRange = String(value || 'month') === 'all' ? 'all' : 'month';
   renderSocietiesPage();
@@ -21582,6 +21770,7 @@ function renderSocietiesPage() {
       ['matrix', 'Matrix'],
       ['requests', `Member Requests${pendingPaymentRequests.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'requests' ? 'rgba(255,255,255,.2)' : '#fff6db'};color:${_societyTab === 'requests' ? '#fff' : '#b87807'};font-size:12px;font-weight:900">${pendingPaymentRequests.length}</span>` : ''}`],
       ['elections', `Elections${Array.isArray(selected.elections) && selected.elections.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'elections' ? 'rgba(255,255,255,.2)' : '#e9f5ef'};color:${_societyTab === 'elections' ? '#fff' : '#1f734c'};font-size:12px;font-weight:900">${selected.elections.length}</span>` : ''}`],
+      ['functions', `Functions${Array.isArray(selected.functions) && selected.functions.length ? ` <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;margin-left:8px;border-radius:999px;background:${_societyTab === 'functions' ? 'rgba(255,255,255,.2)' : '#eef4ff'};color:${_societyTab === 'functions' ? '#fff' : '#4869b7'};font-size:12px;font-weight:900">${selected.functions.length}</span>` : ''}`],
       ['expenses', 'Expenses'],
       ['balances', 'Balances'],
       ['report', 'Report'],
@@ -22257,6 +22446,7 @@ function renderSocietiesPage() {
       </div>`;
 
     const mapSection = renderSocietyMapSection(selected);
+    const functionsSection = renderSocietyFunctionsSection(selected);
     const activeSection = _societyTab === 'members'
       ? membersSection
       : _societyTab === 'map'
@@ -22267,6 +22457,8 @@ function renderSocietiesPage() {
       ? requestsSection
       : _societyTab === 'elections'
       ? electionsSection
+      : _societyTab === 'functions'
+      ? functionsSection
       : _societyTab === 'expenses'
       ? expensesSectionEnhanced
       : _societyTab === 'balances'
@@ -22819,6 +23011,340 @@ async function deleteSocietyExpense(expenseId) {
   const result = await api(`/api/societies/${Number(_selectedSocietyId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
   if (!result?.success) { toast(result?.error || 'Could not delete expense.', 'error'); return; }
   toast('Expense deleted', 'success');
+  await loadSocieties();
+}
+
+function showSocietyFunctionModal(functionId = null) {
+  if (!_selectedSocietyId) return;
+  const societyFunction = functionId ? ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {}) : {};
+  openModal(functionId ? 'Edit Function' : 'Add Function', `
+    <div class="fg">
+      <label class="fl full">Function Name *<input class="fi" id="societyFunctionName" value="${escHtml(societyFunction.function_name || '')}" placeholder="e.g. Navratri Celebration"></label>
+      <label class="fl">Function Date *<input class="fi" type="date" id="societyFunctionDate" value="${escHtml(normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Estimated Budget<input class="fi" type="number" step="0.01" min="0" id="societyFunctionBudget" value="${escHtml(String(societyFunction.estimated_budget ?? ''))}" placeholder="0.00"></label>
+      <label class="fl">Status
+        <select class="fi" id="societyFunctionStatus">
+          <option value="planned" ${String(societyFunction.status || 'planned') === 'planned' ? 'selected' : ''}>Planned</option>
+          <option value="upcoming" ${String(societyFunction.status || '') === 'upcoming' ? 'selected' : ''}>Upcoming</option>
+          <option value="completed" ${String(societyFunction.status || '') === 'completed' ? 'selected' : ''}>Completed</option>
+          <option value="cancelled" ${String(societyFunction.status || '') === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+        </select>
+      </label>
+      <label class="fl full">Banner / Image
+        <input class="fi" type="file" id="societyFunctionImage" accept="image/*,application/pdf">
+      </label>
+      ${societyFunction.image_path ? `
+        <div class="fl full" style="font-size:12px;color:var(--t3)">
+          Current file: <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(societyFunction.image_path || ''))}, ${JSON.stringify(String(societyFunction.image_name || societyFunction.function_name || 'Function image'))})'>${escHtml(societyFunction.image_name || 'View file')}</button>
+          <input type="hidden" id="societyFunctionExistingImagePath" value="${escHtml(societyFunction.image_path || '')}">
+          <input type="hidden" id="societyFunctionExistingImageName" value="${escHtml(societyFunction.image_name || '')}">
+        </div>` : `
+        <input type="hidden" id="societyFunctionExistingImagePath" value="">
+        <input type="hidden" id="societyFunctionExistingImageName" value="">`}
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionNotes" placeholder="Optional notes">${escHtml(societyFunction.notes || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyFunction(${functionId || 'null'})">${functionId ? 'Update Function' : 'Create Function'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyFunction(functionId));
+}
+
+async function saveSocietyFunction(functionId = null) {
+  const body = {
+    function_name: document.getElementById('societyFunctionName')?.value?.trim() || '',
+    function_date: document.getElementById('societyFunctionDate')?.value || todayStr(),
+    estimated_budget: Number(document.getElementById('societyFunctionBudget')?.value || 0),
+    status: document.getElementById('societyFunctionStatus')?.value || 'planned',
+    notes: document.getElementById('societyFunctionNotes')?.value?.trim() || '',
+    image_path: document.getElementById('societyFunctionExistingImagePath')?.value || '',
+    image_name: document.getElementById('societyFunctionExistingImageName')?.value || '',
+  };
+  if (!body.function_name) { toast('Function name is required.', 'warning'); return; }
+  const fd = new FormData();
+  Object.entries(body).forEach(([key, value]) => fd.append(key, String(value ?? '')));
+  const imageFile = document.getElementById('societyFunctionImage')?.files?.[0];
+  if (imageFile) fd.append('attachment', imageFile);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/functions${functionId ? `/${Number(functionId)}` : ''}`, {
+    method: functionId ? 'PUT' : 'POST',
+    body: fd,
+    credentials: 'same-origin',
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result?.success) { toast(result?.error || 'Could not save function.', 'error'); return; }
+  closeModal();
+  toast(functionId ? 'Function updated' : 'Function created', 'success');
+  await loadSocieties();
+  _societyTab = 'functions';
+  renderSocietiesPage();
+}
+
+async function deleteSocietyFunction(functionId) {
+  if (!await confirmDialog('Delete this function and all its contributors and expenses?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete function.', 'error'); return; }
+  toast('Function deleted', 'success');
+  await loadSocieties();
+}
+
+async function downloadSocietyFunctionPdf(functionId) {
+  if (!_selectedSocietyId || !_societyDetail?.society) return;
+  const societyFunction = (_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId));
+  if (!societyFunction) { toast('Function not found.', 'warning'); return; }
+  const result = await api('/api/pdf/render-file', {
+    method: 'POST',
+    body: {
+      template: 'society',
+      file_name: `society-function-${societyFunction.function_name || 'export'}`,
+      payload: {
+        action: 'function_detail',
+        detail: _societyDetail,
+        options: { function_id: Number(functionId) },
+        prefs: {
+          currency_code: _currentUser?.currency_code || 'INR',
+          locale_code: _currentUser?.locale_code || 'en-IN',
+          time_zone: _currentUser?.time_zone || null,
+        },
+      },
+    },
+  });
+  const url = result?.absolute_url || result?.url || '';
+  if (!url) { toast(result?.error || 'Could not generate function PDF.', 'error'); return; }
+  window.open(url, '_blank', 'noopener');
+}
+
+async function downloadSocietyFunctionExcel(functionId) {
+  if (!_selectedSocietyId) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/export-excel`, {
+    method: 'POST',
+    body: {},
+  });
+  const url = result?.absolute_url || result?.url || '';
+  if (!url) { toast(result?.error || 'Could not generate function Excel.', 'error'); return; }
+  window.open(url, '_blank', 'noopener');
+}
+
+function showSocietyFunctionExpenseModal(functionId, expenseId = null) {
+  if (!_selectedSocietyId) return;
+  const societyFunction = ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {});
+  const expense = expenseId ? ((societyFunction.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
+  openModal(expenseId ? 'Edit Function Expense' : `Add Expense · ${escHtml(societyFunction.function_name || 'Function')}`, `
+    <div class="fg">
+      <label class="fl">Expense Date *<input class="fi" type="date" id="societyFunctionExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionExpenseAmount" value="${escHtml(String(expense.amount ?? ''))}"></label>
+      <label class="fl full">Title *<input class="fi" id="societyFunctionExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Sound system"></label>
+      <label class="fl">Category<input class="fi" id="societyFunctionExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Decor"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionExpenseNotes" placeholder="Optional notes">${escHtml(expense.notes || '')}</textarea></label>
+      <label class="fl full">Attachment
+        <input class="fi" type="file" id="societyFunctionExpenseAttachment" accept="image/*,application/pdf">
+      </label>
+      ${expense.attachment_path ? `
+        <div class="fl full" style="font-size:12px;color:var(--t3)">
+          Current file: <button type="button" class="society-attachment-link" onclick='showSocietyAttachmentViewer(${JSON.stringify(String(expense.attachment_path || ''))}, ${JSON.stringify(String(expense.attachment_name || expense.title || 'Receipt'))})'>${escHtml(expense.attachment_name || 'View attachment')}</button>
+          <input type="hidden" id="societyFunctionExpenseExistingPath" value="${escHtml(expense.attachment_path || '')}">
+          <input type="hidden" id="societyFunctionExpenseExistingName" value="${escHtml(expense.attachment_name || '')}">
+        </div>` : `
+        <input type="hidden" id="societyFunctionExpenseExistingPath" value="">
+        <input type="hidden" id="societyFunctionExpenseExistingName" value="">`}
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyFunctionExpense(${Number(functionId)}, ${expenseId || 'null'})">${expenseId ? 'Update Expense' : 'Add Expense'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyFunctionExpense(functionId, expenseId));
+}
+
+async function saveSocietyFunctionExpense(functionId, expenseId = null) {
+  const body = {
+    expense_date: document.getElementById('societyFunctionExpenseDate')?.value || todayStr(),
+    title: document.getElementById('societyFunctionExpenseTitle')?.value?.trim() || '',
+    category: document.getElementById('societyFunctionExpenseCategory')?.value?.trim() || '',
+    amount: Number(document.getElementById('societyFunctionExpenseAmount')?.value || 0),
+    notes: document.getElementById('societyFunctionExpenseNotes')?.value?.trim() || '',
+    attachment_path: document.getElementById('societyFunctionExpenseExistingPath')?.value || '',
+    attachment_name: document.getElementById('societyFunctionExpenseExistingName')?.value || '',
+  };
+  if (!body.title || !(body.amount > 0)) { toast('Expense title and amount are required.', 'warning'); return; }
+  const fd = new FormData();
+  Object.entries(body).forEach(([key, value]) => fd.append(key, String(value ?? '')));
+  const attachmentFile = document.getElementById('societyFunctionExpenseAttachment')?.files?.[0];
+  if (attachmentFile) fd.append('attachment', attachmentFile);
+  const response = await fetch(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/expenses${expenseId ? `/${Number(expenseId)}` : ''}`, {
+    method: expenseId ? 'PUT' : 'POST',
+    body: fd,
+    credentials: 'same-origin',
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result?.success) { toast(result?.error || 'Could not save function expense.', 'error'); return; }
+  closeModal();
+  toast(expenseId ? 'Function expense updated' : 'Function expense added', 'success');
+  await loadSocieties();
+  _societyTab = 'functions';
+  renderSocietiesPage();
+}
+
+async function deleteSocietyFunctionExpense(functionId, expenseId) {
+  if (!await confirmDialog('Delete this function expense?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/expenses/${Number(expenseId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete function expense.', 'error'); return; }
+  toast('Function expense deleted', 'success');
+  await loadSocieties();
+}
+
+function showSocietyFunctionContributorModal(functionId, contributorId = null) {
+  if (!_selectedSocietyId) return;
+  const societyFunction = ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {});
+  const contributor = contributorId ? ((societyFunction.contributors || []).find((item) => String(item.id) === String(contributorId)) || {}) : {};
+  const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+  const memberOptions = ['<option value="">Select member</option>', ...members.map((member) => `<option value="${Number(member.id)}" ${String(contributor.member_id || '') === String(member.id) ? 'selected' : ''}>${escHtml(societyMemberDisplayLabel(member))} · ${escHtml(member.unit_label || '-')}</option>`)].join('');
+  openModal(contributorId ? 'Edit Contributor' : `Add Contributor · ${escHtml(societyFunction.function_name || 'Function')}`, `
+    <div class="fg">
+      <label class="fl full">Search Member
+        <input class="fi" id="societyFunctionContributorMemberSearch" placeholder="Search name, house number or mobile" oninput="filterSocietyFunctionContributorMemberOptions(this.value)">
+      </label>
+      <label class="fl full">Society Member *
+        <select class="fi" id="societyFunctionContributorMember">${memberOptions}</select>
+      </label>
+      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionContributorAmount" value="${escHtml(String(contributor.amount ?? ''))}"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionContributorNotes" placeholder="Optional notes">${escHtml(contributor.notes || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyFunctionContributor(${Number(functionId)}, ${contributorId || 'null'})">${contributorId ? 'Update Contributor' : 'Add Contributor'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyFunctionContributor(functionId, contributorId));
+}
+
+function filterSocietyFunctionContributorMemberOptions(value) {
+  const select = document.getElementById('societyFunctionContributorMember');
+  if (!select) return;
+  const needle = String(value || '').trim().toLowerCase();
+  [...select.options].forEach((option, index) => {
+    if (index === 0) {
+      option.hidden = false;
+      return;
+    }
+    const haystack = String(option.textContent || option.label || '').toLowerCase();
+    option.hidden = !!needle && !haystack.includes(needle);
+  });
+  if (select.selectedOptions?.[0]?.hidden) {
+    select.value = '';
+  }
+}
+
+function showSocietyFunctionContributorDropdownModal(functionId, contributorId = null) {
+  if (!_selectedSocietyId) return;
+  const societyFunction = ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {});
+  const contributor = contributorId ? ((societyFunction.contributors || []).find((item) => String(item.id) === String(contributorId)) || {}) : {};
+  const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+  const selectedMemberId = String(contributor.member_id || '');
+  const memberOptions = members.map((member) => {
+    const active = String(member.id) === selectedMemberId;
+    const displayLabel = societyMemberDisplayLabel(member);
+    const metaLabel = `${member.unit_label || '-'} - ${societyMemberPhoneDisplay(member)}`;
+    const searchText = [displayLabel, member.unit_label || '', societyMemberPhoneDisplay(member)].join(' ').toLowerCase();
+    return `
+      <button
+        type="button"
+        class="society-function-contributor-dd-option"
+        data-member-id="${Number(member.id)}"
+        data-search="${escHtml(searchText)}"
+        onclick="selectSocietyFunctionContributorDropdownMember(${Number(member.id)})"
+        style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;padding:10px 12px;border:none;border-bottom:1px solid var(--border-l);background:${active ? '#eef8f2' : '#fff'};text-align:left;cursor:pointer"
+      >
+        <div style="min-width:0">
+          <div class="society-function-contributor-dd-title" style="font-weight:800;color:${active ? 'var(--green)' : 'var(--t1)'}">${escHtml(displayLabel)}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(metaLabel)}</div>
+        </div>
+        <span class="society-function-contributor-dd-check" style="font-size:16px;color:var(--green);visibility:${active ? 'visible' : 'hidden'}">&#10003;</span>
+      </button>`;
+  }).join('');
+  openModal(contributorId ? 'Edit Contributor' : `Add Contributor - ${escHtml(societyFunction.function_name || 'Function')}`, `
+    <div class="fg">
+      <input type="hidden" id="societyFunctionContributorMember" value="${escHtml(selectedMemberId)}">
+      <div class="fl full">
+        <div style="font-size:13px;font-weight:700;color:var(--t2);margin-bottom:6px">Society Member *</div>
+        <div style="border:1px solid var(--border-l);border-radius:14px;background:#fff;overflow:hidden">
+          <div style="padding:10px;border-bottom:1px solid var(--border-l);background:#f8fbf9">
+            <input class="fi" id="societyFunctionContributorDropdownSearch" placeholder="Search name, house number or mobile" oninput="filterSocietyFunctionContributorDropdownMembers(this.value)" style="margin:0">
+          </div>
+          <div id="societyFunctionContributorDropdownOptions" style="max-height:240px;overflow:auto">${memberOptions || '<div style="padding:12px;color:var(--t3)">No members available.</div>'}</div>
+        </div>
+      </div>
+      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionContributorAmount" value="${escHtml(String(contributor.amount ?? ''))}"></label>
+      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionContributorNotes" placeholder="Optional notes">${escHtml(contributor.notes || '')}</textarea></label>
+    </div>
+    <div class="fa" style="margin-top:16px">
+      <button class="btn btn-p" onclick="saveSocietyFunctionContributor(${Number(functionId)}, ${contributorId || 'null'})">${contributorId ? 'Update Contributor' : 'Add Contributor'}</button>
+      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
+    </div>`);
+  bindModalSubmit(() => saveSocietyFunctionContributor(functionId, contributorId));
+}
+
+function selectSocietyFunctionContributorDropdownMember(memberId) {
+  const input = document.getElementById('societyFunctionContributorMember');
+  if (input) input.value = String(memberId || '');
+  document.querySelectorAll('.society-function-contributor-dd-option').forEach((row) => {
+    const active = String(row.getAttribute('data-member-id') || '') === String(memberId || '');
+    row.style.background = active ? '#eef8f2' : '#fff';
+    const title = row.querySelector('.society-function-contributor-dd-title');
+    if (title) title.style.color = active ? 'var(--green)' : 'var(--t1)';
+    const check = row.querySelector('.society-function-contributor-dd-check');
+    if (check) check.style.visibility = active ? 'visible' : 'hidden';
+  });
+}
+
+function filterSocietyFunctionContributorDropdownMembers(value) {
+  const needle = String(value || '').trim().toLowerCase();
+  let visible = 0;
+  document.querySelectorAll('.society-function-contributor-dd-option').forEach((row) => {
+    const haystack = String(row.getAttribute('data-search') || '').toLowerCase();
+    const show = !needle || haystack.includes(needle);
+    row.style.display = show ? 'flex' : 'none';
+    if (show) visible += 1;
+  });
+  const wrap = document.getElementById('societyFunctionContributorDropdownOptions');
+  if (!wrap) return;
+  let empty = document.getElementById('societyFunctionContributorDropdownEmpty');
+  if (!visible) {
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.id = 'societyFunctionContributorDropdownEmpty';
+      empty.style.padding = '12px';
+      empty.style.color = 'var(--t3)';
+      empty.textContent = 'No members match this search.';
+      wrap.appendChild(empty);
+    }
+  } else if (empty) {
+    empty.remove();
+  }
+}
+async function saveSocietyFunctionContributor(functionId, contributorId = null) {
+  const body = {
+    member_id: Number(document.getElementById('societyFunctionContributorMember')?.value || 0),
+    contributed_on: document.getElementById('societyFunctionContributorDate')?.value || '',
+    amount: Number(document.getElementById('societyFunctionContributorAmount')?.value || 0),
+    notes: document.getElementById('societyFunctionContributorNotes')?.value?.trim() || '',
+  };
+  if (!(body.member_id > 0) || !(body.amount > 0)) { toast('Member and amount are required.', 'warning'); return; }
+  const result = contributorId
+    ? await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/contributors/${Number(contributorId)}`, { method: 'PUT', body })
+    : await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/contributors`, { method: 'POST', body });
+  if (!result?.success) { toast(result?.error || 'Could not save contributor.', 'error'); return; }
+  closeModal();
+  toast(contributorId ? 'Contributor updated' : 'Contributor added', 'success');
+  await loadSocieties();
+  _societyTab = 'functions';
+  renderSocietiesPage();
+}
+
+async function deleteSocietyFunctionContributor(functionId, contributorId) {
+  if (!await confirmDialog('Delete this contributor entry?')) return;
+  const result = await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/contributors/${Number(contributorId)}`, { method: 'DELETE' });
+  if (!result?.success) { toast(result?.error || 'Could not delete contributor.', 'error'); return; }
+  toast('Contributor deleted', 'success');
   await loadSocieties();
 }
 
