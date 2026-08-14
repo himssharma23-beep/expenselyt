@@ -19874,14 +19874,21 @@ function fixedDepositPageState(rows = []) {
 
 function fixedDepositPaginationHtml(pageState) {
   if (!pageState || pageState.totalRows <= pageState.pageSize) return '';
+  const pages = typeof paginationPages === 'function'
+    ? paginationPages(pageState.currentPage, pageState.totalPages)
+    : Array.from({ length: pageState.totalPages }, (_, index) => index + 1);
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
-      <div style="font-size:12px;color:var(--t3)">Showing ${pageState.startIndex + 1}-${pageState.endIndex} of ${pageState.totalRows} fixed deposits</div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-s btn-sm" onclick="setFixedDepositPage(${pageState.currentPage - 1})" ${pageState.currentPage <= 1 ? 'disabled' : ''}>Prev</button>
-        <div style="font-size:12px;color:var(--t2)">Page ${pageState.currentPage} of ${pageState.totalPages}</div>
-        <button class="btn btn-s btn-sm" onclick="setFixedDepositPage(${pageState.currentPage + 1})" ${pageState.currentPage >= pageState.totalPages ? 'disabled' : ''}>Next</button>
+    <div class="pagination" style="margin-top:14px">
+      <button class="pg-btn" ${pageState.currentPage <= 1 ? 'disabled' : ''} onclick="setFixedDepositPage(${pageState.currentPage - 1})">&larr; Prev</button>
+      <div class="pg-info">
+        <span class="pg-range">${pageState.startIndex + 1}&ndash;${pageState.endIndex} of ${pageState.totalRows}</span>
+        <div class="pg-pages">
+            ${pages.map((page) => page === '...'
+              ? '<span class="pg-ellipsis">...</span>'
+              : `<button class="pg-num ${page === pageState.currentPage ? 'active' : ''}" onclick="setFixedDepositPage(${page})">${page}</button>`).join('')}
+        </div>
       </div>
+      <button class="pg-btn" ${pageState.currentPage >= pageState.totalPages ? 'disabled' : ''} onclick="setFixedDepositPage(${pageState.currentPage + 1})">Next &rarr;</button>
     </div>`;
 }
 
@@ -20650,6 +20657,7 @@ function renderBankAccounts() {
             <tbody>${fdTableRows}</tbody>
           </table>
         </div>
+        ${fixedDepositPaginationHtml(fdPageState)}
       </div>`;
     repairMojibakeInNode(document.getElementById('main'));
     return;
