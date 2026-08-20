@@ -373,6 +373,7 @@
     }
     const friends = monthData?.live_split_friends || [];
     const selected = new Set((monthData?.month_members || []).map((m) => Number(m.friend_id)).filter((id) => id > 0));
+    const isMeOnly = selected.size === 0;
     const options = friends.map((f) => {
       const sid = Number(f.id);
       const isSel = selected.has(sid) ? 'selected' : '';
@@ -384,7 +385,16 @@
           <input class="fi" id="petrolEditPrice" type="number" step="0.01" value="${escHtml(String(n(monthData?.month?.petrol_price || 0)))}">
         </label>
         <label class="fl">Members (Live Split friends)
-          <select class="fi" id="petrolEditMembers" multiple style="min-height:180px">${options}</select>
+          <div style="display:grid;gap:10px">
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--t2);font-weight:700">
+              <input type="checkbox" id="petrolMonthMeOnly" ${isMeOnly ? 'checked' : ''} onchange="togglePetrolMonthMeOnly(this.checked)">
+              <span>Add me only for this month</span>
+            </label>
+            <div id="petrolMonthMembersWrap" style="${isMeOnly ? 'display:none' : ''}">
+              <select class="fi" id="petrolEditMembers" multiple style="min-height:180px" ${isMeOnly ? 'disabled' : ''}>${options}</select>
+            </div>
+            <div id="petrolMonthMeOnlyHint" style="font-size:12px;color:${isMeOnly ? 'var(--green)' : 'var(--t3)'}">${isMeOnly ? 'This month will be created only for you.' : 'Leave this checked if you do not want to add any friend in this month.'}</div>
+          </div>
         </label>
       </div>
       <div class="fa" style="margin-top:12px">
@@ -392,14 +402,36 @@
         <button class="btn btn-g" onclick="closeModal()">Cancel</button>
       </div>
     `);
+    if (isMeOnly) togglePetrolMonthMeOnly(true);
+  }
+
+  function togglePetrolMonthMeOnly(checked) {
+    const memberSelect = document.getElementById('petrolEditMembers');
+    const memberWrap = document.getElementById('petrolMonthMembersWrap');
+    const hint = document.getElementById('petrolMonthMeOnlyHint');
+    if (!memberSelect) return;
+    memberSelect.disabled = !!checked;
+    if (checked) {
+      [...memberSelect.options].forEach((option) => {
+        option.selected = false;
+      });
+    }
+    if (memberWrap) memberWrap.style.display = checked ? 'none' : '';
+    if (hint) {
+      hint.textContent = checked
+        ? 'This month will be created only for you.'
+        : 'Leave this checked if you do not want to add any friend in this month.';
+      hint.style.color = checked ? 'var(--green)' : 'var(--t3)';
+    }
   }
 
   async function petrolSaveMonthConfigFromModal(monthKey, openAfterSave) {
     const price = n(document.getElementById('petrolEditPrice')?.value);
-    const memberIds = selectedValues(document.getElementById('petrolEditMembers'));
+    const meOnly = !!document.getElementById('petrolMonthMeOnly')?.checked;
+    const memberIds = meOnly ? [] : selectedValues(document.getElementById('petrolEditMembers'));
     const data = await api('/api/petrol-divide/config', {
       method: 'PUT',
-      body: { month_key: monthKey, petrol_price: price, member_friend_ids: memberIds },
+      body: { month_key: monthKey, petrol_price: price, member_friend_ids: memberIds, self_only: meOnly },
     });
     if (data?.error || !data?.month) return toast(data?.error || 'Could not save month', 'error');
     closeModal();

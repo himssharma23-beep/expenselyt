@@ -1348,6 +1348,7 @@ let _societyMembersView = 'list';
 let _societyFunctionSearch = '';
 let _societyFunctionExpenseSearch = '';
 let _societyFunctionContributorSearch = '';
+let _societyFunctionExpandedId = null;
 let _schoolKidsOverview = null;
 let _schoolKidsList = [];
 let _selectedSchoolKidId = null;
@@ -21496,6 +21497,12 @@ function setSocietyFunctionContributorSearch(value) {
   renderSocietiesPage();
 }
 
+function toggleSocietyFunctionExpanded(functionId) {
+  const nextId = String(functionId || '').trim();
+  _societyFunctionExpandedId = String(_societyFunctionExpandedId || '') === nextId ? null : nextId;
+  renderSocietiesPage();
+}
+
 function renderSocietyFunctionsSection(selected) {
   const functions = Array.isArray(selected?.functions) ? selected.functions : [];
   const functionNeedle = String(_societyFunctionSearch || '').trim().toLowerCase();
@@ -21517,6 +21524,10 @@ function renderSocietyFunctionsSection(selected) {
     if (normalized === 'upcoming') return 'background:#eef4ff;color:#4869b7';
     return 'background:#fff6db;color:#b87807';
   };
+  const visibleFunctionIds = new Set(filteredFunctions.map((item) => String(item?.id || '')));
+  if (_societyFunctionExpandedId && !visibleFunctionIds.has(String(_societyFunctionExpandedId))) {
+    _societyFunctionExpandedId = null;
+  }
   return `
     <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);font-weight:800;padding-left:4px">Functions Module</div>
     <div class="card" style="padding:0;overflow:hidden;margin-top:14px">
@@ -21526,6 +21537,7 @@ function renderSocietyFunctionsSection(selected) {
       </div>
       <div style="padding:18px 20px">
         ${filteredFunctions.length ? filteredFunctions.map((item) => {
+          const isExpanded = String(_societyFunctionExpandedId || '') === String(item.id || '');
           const expenses = (item.expenses || []).filter((entry) => {
             if (!expenseNeedle) return true;
             return [entry.title, entry.category, entry.notes, entry.expense_date].some((value) => String(value || '').toLowerCase().includes(expenseNeedle));
@@ -21552,6 +21564,7 @@ function renderSocietyFunctionsSection(selected) {
                   </div>
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-p btn-sm" type="button" aria-expanded="${isExpanded ? 'true' : 'false'}" onclick="toggleSocietyFunctionExpanded(${Number(item.id)})">${isExpanded ? 'Collapse' : 'Expand'}</button>
                   <button class="btn btn-s btn-sm" onclick="downloadSocietyFunctionPdf(${Number(item.id)})">PDF</button>
                   <button class="btn btn-s btn-sm" onclick="downloadSocietyFunctionExcel(${Number(item.id)})">Excel</button>
                   <button class="btn btn-s btn-sm" onclick="showSocietyFunctionContributorDropdownModal(${Number(item.id)})">+ Contributor</button>
@@ -21560,6 +21573,7 @@ function renderSocietyFunctionsSection(selected) {
                   <button class="btn btn-s btn-sm" onclick="deleteSocietyFunction(${Number(item.id)})">Delete</button>
                 </div>
               </div>
+              ${isExpanded ? `
               <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px">
                 <div class="card" style="padding:12px 14px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Contributors</div><div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${Number(item.contributor_count || 0)}</div></div>
                 <div class="card" style="padding:12px 14px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);font-weight:800">Expenses</div><div style="font-size:22px;font-weight:900;color:var(--t1);margin-top:4px">${Number(item.expense_count || 0)}</div></div>
@@ -21606,6 +21620,7 @@ function renderSocietyFunctionsSection(selected) {
                   </div>
                 </div>
               </div>
+              ` : ''}
             </div>`;
         }).join('') : '<div class="card" style="padding:24px;color:var(--t3)">No functions match the current search.</div>'}
       </div>
@@ -23105,6 +23120,32 @@ async function deleteSocietyFunction(functionId) {
   await loadSocieties();
 }
 
+async function downloadSocietyGeneratedFile(url, fallbackFileName) {
+  const fileUrl = String(url || '').trim();
+  if (!fileUrl) throw new Error('Missing download URL.');
+  const response = await fetch(fileUrl, {
+    credentials: 'same-origin',
+  });
+  if (!response.ok) {
+    throw new Error('Could not download generated file.');
+  }
+  const contentDisposition = response.headers.get('content-disposition') || '';
+  const fileNameMatch = contentDisposition.match(/filename\*?=(?:UTF-8''|\"?)([^\";]+)/i);
+  const fileName = fileNameMatch?.[1]
+    ? decodeURIComponent(fileNameMatch[1].replace(/\"/g, ''))
+    : String(fallbackFileName || `download-${Date.now()}`);
+  const blob = await response.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = fileName;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 async function downloadSocietyFunctionPdf(functionId) {
   if (!_selectedSocietyId || !_societyDetail?.society) return;
   const societyFunction = (_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId));
@@ -23128,18 +23169,27 @@ async function downloadSocietyFunctionPdf(functionId) {
   });
   const url = result?.absolute_url || result?.url || '';
   if (!url) { toast(result?.error || 'Could not generate function PDF.', 'error'); return; }
-  window.open(url, '_blank', 'noopener');
+  try {
+    await downloadSocietyGeneratedFile(url, `society-function-${societyFunction.function_name || 'export'}.pdf`);
+  } catch (err) {
+    toast(err?.message || 'Could not download function PDF.', 'error');
+  }
 }
 
 async function downloadSocietyFunctionExcel(functionId) {
   if (!_selectedSocietyId) return;
+  const societyFunction = (_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId));
   const result = await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/export-excel`, {
     method: 'POST',
     body: {},
   });
   const url = result?.absolute_url || result?.url || '';
   if (!url) { toast(result?.error || 'Could not generate function Excel.', 'error'); return; }
-  window.open(url, '_blank', 'noopener');
+  try {
+    await downloadSocietyGeneratedFile(url, `society-function-${societyFunction?.function_name || 'export'}.xlsx`);
+  } catch (err) {
+    toast(err?.message || 'Could not download function Excel.', 'error');
+  }
 }
 
 function showSocietyFunctionExpenseModal(functionId, expenseId = null) {

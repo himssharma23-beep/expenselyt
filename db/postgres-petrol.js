@@ -529,7 +529,8 @@ async function savePetrolDivideMonthConfig(userId, data = {}) {
   if (fakeIncreasePct !== null && (!Number.isFinite(fakeIncreasePct) || fakeIncreasePct < 0)) {
     throw validationError('Fake increase % must be 0 or more');
   }
-  const friendIds = normalizeFriendIds(data.member_friend_ids || []);
+  const selfOnly = data.self_only === true || String(data.self_only || '').toLowerCase() === 'true';
+  const friendIds = selfOnly ? [] : normalizeFriendIds(data.member_friend_ids || []);
 
   return withTransaction(async (client) => {
     const month = await getMonthRowTx(client, userId, monthKey);
@@ -537,6 +538,8 @@ async function savePetrolDivideMonthConfig(userId, data = {}) {
       'UPDATE petrol_divide_months SET petrol_price = $1, fake_increase_pct = COALESCE($2, fake_increase_pct), updated_at = NOW() WHERE id = $3',
       [petrolPrice, fakeIncreasePct, month.id]
     );
+
+    await client.query('DELETE FROM petrol_divide_month_members WHERE month_id = $1', [month.id]);
 
     if (friendIds.length) {
       const friendsR = await client.query(
@@ -549,7 +552,6 @@ async function savePetrolDivideMonthConfig(userId, data = {}) {
       );
       const friends = friendsR.rows || [];
       if (friends.length !== friendIds.length) throw validationError('Some selected members are invalid');
-      await client.query('DELETE FROM petrol_divide_month_members WHERE month_id = $1', [month.id]);
       for (const friend of friends) {
         await client.query(
           'INSERT INTO petrol_divide_month_members (month_id, friend_id, friend_name) VALUES ($1, $2, $3)',
