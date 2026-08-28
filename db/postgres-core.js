@@ -9252,6 +9252,7 @@ async function listLinkedExpenseRowsBySource(userId, sourceId, client) {
 }
 
 async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, client) {
+  const schoolExpenseDate = formatDateOnlyValue(schoolExpense?.expense_date);
   const linkedExpenseRows = await listLinkedExpenseRowsBySource(userId, schoolExpense.id, client);
   const linkedExpenseRow = linkedExpenseRows[0] || null;
   const linkedCcTxn = await pgBillingDb.getCcTxnBySource(userId, SCHOOL_KID_EXPENSE_SOURCE, schoolExpense.id, client);
@@ -9289,7 +9290,7 @@ async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, cli
       ? normalizeOptionalText(input.subcategory, 80)
       : (linkedExpenseRow?.subcategory || 'School Kids'),
     amount: schoolExpense.amount,
-    purchase_date: schoolExpense.expense_date,
+    purchase_date: schoolExpenseDate,
     is_extra: expenseType === 'extra',
     bank_account_id: cardId ? null : bankAccountId,
     source: SCHOOL_KID_EXPENSE_SOURCE,
@@ -9310,7 +9311,7 @@ async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, cli
 
   if (linkedCcTxn?.id && Number(linkedCcTxn.card_id || 0) === cardId) {
     await pgBillingDb.updateCcTxn(userId, linkedCcTxn.id, {
-      txn_date: schoolExpense.expense_date,
+      txn_date: schoolExpenseDate,
       description: schoolExpense.item_name,
       amount: schoolExpense.amount,
       discount_pct: cardDiscountPct,
@@ -9321,7 +9322,7 @@ async function syncSchoolKidExpenseLedger(userId, schoolExpense, input = {}, cli
   if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
   await pgBillingDb.addCcTxn(userId, {
     card_id: cardId,
-    txn_date: schoolExpense.expense_date,
+    txn_date: schoolExpenseDate,
     description: schoolExpense.item_name,
     amount: schoolExpense.amount,
     discount_pct: cardDiscountPct,
@@ -9710,7 +9711,7 @@ async function getSchoolKidsOverview(userId) {
     id: Number(row.id),
     kid_id: Number(row.kid_id),
     class_id: Number(row.class_id),
-    expense_date: row.expense_date,
+    expense_date: formatDateOnlyValue(row.expense_date),
     item_name: row.item_name,
     amount: num(row.amount),
     notes: row.notes || '',
@@ -9803,7 +9804,7 @@ async function getSchoolKidDetail(userId, kidId) {
     id: Number(row.id),
     kid_id: Number(row.kid_id),
     class_id: Number(row.class_id),
-    expense_date: row.expense_date,
+    expense_date: formatDateOnlyValue(row.expense_date),
     item_name: row.item_name,
     amount: num(row.amount),
     notes: row.notes || '',

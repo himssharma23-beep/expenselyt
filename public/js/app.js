@@ -24654,7 +24654,7 @@ async function showSchoolKidExpenseModal(expenseId = null, classId = null) {
       <label class="fl full">Class *
         <select class="fi" id="schoolKidExpenseClass">${classOptions}</select>
       </label>
-      <label class="fl">Date *<input class="fi" type="date" id="schoolKidExpenseDate" value="${escHtml(expense.expense_date || todayStr())}"></label>
+      <label class="fl">Date *<input class="fi" type="date" id="schoolKidExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || todayStr())}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="schoolKidExpenseAmount" value="${escHtml(String(expense.amount || ''))}"></label>
       <label class="fl full">Thing *<input class="fi" id="schoolKidExpenseItem" value="${escHtml(expense.item_name || '')}" placeholder="e.g. Registration fees, Books, Bus fees"></label>
       <label class="fl full">Notes<textarea class="fi" rows="4" id="schoolKidExpenseNotes" placeholder="Optional notes">${escHtml(expense.notes || '')}</textarea></label>
