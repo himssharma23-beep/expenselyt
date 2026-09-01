@@ -1035,19 +1035,30 @@
   function collapseMirroredLiveSplitAliases(rows = []) {
     const list = Array.isArray(rows) ? rows : [];
     return list.filter((row, index) => {
-      // Keep genuinely separate people. An alias is removed only when it mirrors a linked profile exactly.
-      if (Number(row?.linked_user_id || 0) > 0) return true;
+      // Keep genuinely separate people. An alias is removed only when it mirrors a profile exactly.
       const firstName = firstNameToken(row?.name);
       if (!firstName) return true;
-      const matchingLinkedRow = list.find((candidate, candidateIndex) => (
-        candidateIndex !== index
-        && Number(candidate?.linked_user_id || 0) > 0
-        && firstNameToken(candidate?.name) === firstName
-        && Math.abs(n(candidate?.amount) - n(row?.amount)) < 0.005
-      ));
-      if (!matchingLinkedRow) return true;
       const rowEvents = liveSplitRowEventSignature(row);
-      return !rowEvents || rowEvents !== liveSplitRowEventSignature(matchingLinkedRow);
+      if (!rowEvents) return true;
+      const matches = list
+        .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
+        .filter(({ candidate }) => (
+          firstNameToken(candidate?.name) === firstName
+          && Math.abs(n(candidate?.amount) - n(row?.amount)) < 0.005
+          && liveSplitRowEventSignature(candidate) === rowEvents
+        ));
+      if (matches.length < 2) return true;
+      // Prefer a linked profile, then one with an avatar or fuller display name.
+      matches.sort((a, b) => {
+        const aScore = (Number(a.candidate?.linked_user_id || 0) > 0 ? 4 : 0)
+          + (a.candidate?.linked_user_avatar_url ? 2 : 0)
+          + Math.min(String(a.candidate?.name || '').trim().split(/\s+/).length, 2);
+        const bScore = (Number(b.candidate?.linked_user_id || 0) > 0 ? 4 : 0)
+          + (b.candidate?.linked_user_avatar_url ? 2 : 0)
+          + Math.min(String(b.candidate?.name || '').trim().split(/\s+/).length, 2);
+        return bScore - aScore || a.candidateIndex - b.candidateIndex;
+      });
+      return index === matches[0].candidateIndex;
     });
   }
 
