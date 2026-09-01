@@ -1012,7 +1012,7 @@
         }
       });
 
-    return reconcileVisibleLiveSplitRows([...map.values()]);
+    return collapseMirroredLiveSplitAliases(reconcileVisibleLiveSplitRows([...map.values()]));
   }
 
   function reconcileVisibleLiveSplitRows(rows = []) {
@@ -1022,6 +1022,32 @@
         return { ...row, amount: computedAmount };
       }
       return { ...row, amount: r2(row?.amount) };
+    });
+  }
+
+  function liveSplitRowEventSignature(row) {
+    return buildRowEvents(row)
+      .map((event) => `${event.key}|${r2(event.delta)}`)
+      .sort()
+      .join('||');
+  }
+
+  function collapseMirroredLiveSplitAliases(rows = []) {
+    const list = Array.isArray(rows) ? rows : [];
+    return list.filter((row, index) => {
+      // Keep genuinely separate people. An alias is removed only when it mirrors a linked profile exactly.
+      if (Number(row?.linked_user_id || 0) > 0) return true;
+      const firstName = firstNameToken(row?.name);
+      if (!firstName) return true;
+      const matchingLinkedRow = list.find((candidate, candidateIndex) => (
+        candidateIndex !== index
+        && Number(candidate?.linked_user_id || 0) > 0
+        && firstNameToken(candidate?.name) === firstName
+        && Math.abs(n(candidate?.amount) - n(row?.amount)) < 0.005
+      ));
+      if (!matchingLinkedRow) return true;
+      const rowEvents = liveSplitRowEventSignature(row);
+      return !rowEvents || rowEvents !== liveSplitRowEventSignature(matchingLinkedRow);
     });
   }
 
@@ -4458,7 +4484,10 @@
     state.liveTrips = tripsResult.status === 'fulfilled' ? (tripsResult.value?.trips || []) : [];
     const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
     state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
-    state.totals = summary.totals;
+    state.totals = {
+      oweToMe: r2(state.rows.filter((row) => n(row?.amount) > 0).reduce((sum, row) => sum + n(row.amount), 0)),
+      iOwe: r2(state.rows.filter((row) => n(row?.amount) < 0).reduce((sum, row) => sum + Math.abs(n(row.amount)), 0)),
+    };
   }
 
   async function loadLiveSplit() {
