@@ -2081,7 +2081,7 @@
     }
 
     const doc = _P.init(true);
-    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  Â·  ${filteredEvents.length} entries`;
+    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  \u00b7  ${filteredEvents.length} entries`;
     const overallBalanceValue = r2(row?.amount || 0);
     const overallBalanceLabel = overallBalanceValue > 0.005 ? 'Overall to receive' : overallBalanceValue < -0.005 ? 'Overall to pay' : 'Overall settled';
     const rangeBalanceValue = r2(scoped.total || 0);
@@ -3180,7 +3180,7 @@
                               <div style="font-weight:700;font-size:14px;flex:1;min-width:0;word-break:break-word;line-height:1.4">${escHtml(event.details || '-')}</div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap;color:${tone}">${fmtCur(event.delta)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` \u00b7 ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
                               <div style="display:flex;flex-shrink:0">${mobileActionHtml}</div>
@@ -3251,7 +3251,7 @@
                         <div class="ls-mobile-event-title">${escHtml(event.details || '-')}</div>
                         <div class="ls-mobile-event-amount" style="color:${tone}">${fmtCur(event.delta)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
+                      <div class="ls-mobile-event-sub">${isTripSummary ? `${Number(event.expense_count || 0)} trip expenses` : `${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')}${formatFinanceSourceLabel(event) ? ` \u00b7 ${escHtml(formatFinanceSourceLabel(event))}` : ''}`}</div>
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
                         <div class="ls-mobile-event-actions">${actionHtml}</div>
@@ -3326,8 +3326,8 @@
               const tone = isPayer ? 'var(--green)' : (contextOnly ? 'var(--t2)' : 'var(--red)');
               const bg = isPayer ? '#edfbf3' : (contextOnly ? '#f4f7f5' : '#fff1f1');
               const label = contextOnly
-                ? `${escHtml(p.name)} Â· ${fmtCur(share)} in split`
-                : `${escHtml(p.name)} Â· ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
+                ? `${escHtml(p.name)} \u00b7 ${fmtCur(share)} in split`
+                : `${escHtml(p.name)} \u00b7 ${isPayer ? 'paid' : 'owes'} ${fmtCur(share)}`;
               return `<span class="ls-trip-inline-split-chip" style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:${bg};color:${tone};font-size:11px;font-weight:600;line-height:1.2">${label}</span>`;
             }).join('')}
           </div>
@@ -3347,7 +3347,7 @@
           </div>
           <div class="ls-trip-top-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
             ${trip.added_to_expense
-              ? `<span class="ls-trip-toolbar-pill" title="Added to expenses${trip.added_to_expense_is_extra ? ' Â· Extra' : ' Â· Fair'}" aria-label="Added to expenses${trip.added_to_expense_is_extra ? ' Â· Extra' : ' Â· Fair'}">
+              ? `<span class="ls-trip-toolbar-pill" title="Added to expenses${trip.added_to_expense_is_extra ? ' \u00b7 Extra' : ' \u00b7 Fair'}" aria-label="Added to expenses${trip.added_to_expense_is_extra ? ' \u00b7 Extra' : ' \u00b7 Fair'}">
                   <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 4v5c0 4.2-2.7 8-7 9-4.3-1-7-4.8-7-9V7l7-4z"/></svg>
                 </span>`
               : `<button class="live-split-icon-btn soft" title="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" aria-label="${Number(trip.my_share_amount || 0) > 0 ? `Add My Share (${fmtCur(trip.my_share_amount || 0)})` : 'Add My Share'}" ${Number(trip.my_share_amount || 0) > 0 ? `onclick="liveSplitAddTripToExpense(${tid}, decodeURIComponent('${encodeURIComponent(String(trip.name || 'Trip').trim())}'), ${Number(trip.my_share_amount || 0)})"` : 'disabled'}>
@@ -3365,6 +3365,7 @@
             <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
             </button>
+            <button class="btn btn-s btn-sm" onclick="liveSplitScanTrip(${tid})">Scan Bill</button>
             <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="liveSplitUseTrip(${tid})">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
             </button>
@@ -3453,7 +3454,7 @@
                               </div>
                               <div class="ls-hide-desktop" style="font-family:var(--mono);font-weight:700;font-size:14px;flex-shrink:0;white-space:nowrap">${fmtCur(event.total)}</div>
                             </div>
-                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
+                            <div style="font-size:12px;color:var(--t3);margin-top:5px">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `\u00b7 ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                             ${renderEventSplitHtml(event)}
                             <div class="ls-hide-desktop" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-top:10px" onclick="event.stopPropagation()">
                               <span style="font-size:11px;color:var(--t3);font-weight:600">${escHtml(shortDate(event.date))}</span>
@@ -3493,7 +3494,7 @@
                         </div>
                         <div class="ls-mobile-event-amount">${fmtCur(event.total)}</div>
                       </div>
-                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `Â· ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
+                      <div class="ls-mobile-event-sub">${fmtCur(event.total)} paid by ${escHtml(event.payer || '-')} ${formatFinanceSourceLabel(event) ? `\u00b7 ${escHtml(formatFinanceSourceLabel(event))}` : ''}</div>
                       ${renderEventSplitHtml(event)}
                       <div class="ls-mobile-event-foot" onclick="event.stopPropagation()">
                         <span class="ls-mobile-event-date">${escHtml(shortDate(event.date))}</span>
@@ -3559,14 +3560,14 @@
     if (createdDate && createdDate !== '-') subtitleParts.unshift(createdDate);
 
     const doc = _P.init(true);
-    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  Â·  '));
+    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  \u00b7  '));
     y = _P.cards(doc, y, [
       { label: 'Trip Total', value: _P.cur(trip.total_amount || 0), color: '' },
       { label: 'My Share', value: _P.cur(trip.my_share_amount || 0), color: 'amber' },
       { label: 'Expenses', value: String(Number(trip.expense_count || events.length || 0)), color: '' },
       { label: 'Members', value: String(members.length || memberSummary.length || 0), color: '' },
     ]);
-    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  Â·  ')}`);
+    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  \u00b7  ')}`);
 
     if (memberSummary.length) {
       y = _P.section(doc, y, 'Member Summary');
@@ -3765,6 +3766,7 @@
                     <button class="live-split-icon-btn soft" title="Voice split" aria-label="Voice split" onclick="liveSplitOpenVoiceFromTrip(${Number(trip.id)})">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
                     </button>
+                    <button class="btn btn-s btn-sm" onclick="liveSplitScanTrip(${Number(trip.id)})">Scan Bill</button>
                     <button class="btn btn-p btn-sm" onclick="liveSplitUseTrip(${Number(trip.id)})">Add Split</button>
                     ${trip.added_to_expense
                       ? `<button class="btn btn-s btn-sm" disabled>${trip.added_to_expense_is_extra ? 'Added Extra' : 'Added Fair'}</button>`
@@ -3903,9 +3905,9 @@
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
             <div style="min-width:0">
               <div style="font-size:13px;font-weight:800;color:var(--t1)">${index + 1}. ${escHtml(String(item?.details || 'Split expense'))}</div>
-              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} Â· ${escHtml(String(item?.paid_by || 'You'))}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml(String(item?.divide_date || todayLocalIso()))} \u00b7 ${escHtml(String(item?.paid_by || 'You'))}</div>
               <div style="font-size:11px;color:var(--t2);margin-top:4px">${escHtml((item?.participants || []).map((p) => `${p.name}: ${p.share_value}`).join(', ') || 'No participants')}</div>
-              <div style="font-size:11px;color:var(--t2);margin-top:4px">${formatFinanceSourceLabel(item) ? `${escHtml(formatFinanceSourceLabel(item))}` : 'No bank/card selected'}${item?.trip_name ? ` Â· Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` Â· ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:4px">${formatFinanceSourceLabel(item) ? `${escHtml(formatFinanceSourceLabel(item))}` : 'No bank/card selected'}${item?.trip_name ? ` \u00b7 Trip: ${escHtml(String(item.trip_name))}` : ''}${item?.addExpense ? ` \u00b7 ${item.expense_type === 'extra' ? 'Extra' : 'Fair'}` : ''}</div>
               ${validation.valid ? '' : `<div style="font-size:11px;color:var(--red);font-weight:700;margin-top:6px">${escHtml(validation.error || 'Invalid split values')}</div>`}
             </div>
             <div style="font-size:14px;font-weight:800;color:var(--green);white-space:nowrap">${fmtCur(Number(item?.total_amount || 0))}</div>
@@ -4759,6 +4761,77 @@
     });
   }
 
+  function getTripScanCurrentUser() {
+    // app.js declares a global lexical binding; `let` does not populate window.
+    return (typeof _currentUser !== 'undefined' && _currentUser) || window._currentUser || null;
+  }
+
+  async function ensureTripScanFriend(member, selfId = Number(getTripScanCurrentUser()?.id || 0)) {
+    if (!(selfId > 0)) throw new Error('Could not identify your account. Please refresh and try again.');
+    const targetId = Number(member.target_user_id || 0);
+    if (targetId === selfId) return null;
+    const name = String(member.linked_user_name || member.member_name || 'Member').trim();
+    const friends = state.friends || [];
+    let friend = targetId > 0
+      ? friends.find((item) => Number(item.linked_user_id) === targetId)
+      : null;
+    if (!friend) friend = friends.find((item) =>
+      Number(item.id) === Number(member.friend_id) &&
+      (!targetId || !Number(item.linked_user_id) || Number(item.linked_user_id) === targetId));
+    if (!friend) friend = friends.find((item) =>
+      textKey(item.name) === textKey(name) &&
+      (!targetId || !Number(item.linked_user_id) || Number(item.linked_user_id) === targetId));
+    if (!friend) {
+      const result = await api('/api/live-split/friends', { method: 'POST', body: { name } });
+      if (result?.error || !Number(result?.id)) throw new Error(result?.error || `Could not load trip member ${name}`);
+      friend = { id: Number(result.id), name };
+      state.friends.push(friend);
+    }
+    if (targetId > 0 && Number(friend.linked_user_id) !== targetId) {
+      const result = await api(`/api/live-split/friends/${friend.id}/link-user`, {
+        method: 'PUT', body: { linked_user_id: targetId },
+      });
+      if (result?.error) throw new Error(result.error);
+      friend.linked_user_id = targetId;
+    }
+    return Number(friend.id);
+  }
+
+  async function openTripScanModal(tripId) {
+    if (!Number(tripId) || state.tripSaveBusy) return;
+    state.tripSaveBusy = true;
+    try {
+      const trip = await fetchTripLedger(tripId, true);
+      await ensureFinanceOptionsLoaded();
+      const selected = new Set();
+      const currentUser = getTripScanCurrentUser() || await api('/api/auth/me');
+      const selfId = Number(currentUser?.id || 0);
+      if (!(selfId > 0)) throw new Error('Could not identify your account. Please refresh and try again.');
+      for (const member of trip.members || []) {
+        if ((selfId > 0 && Number(member.target_user_id) === selfId) ||
+            (trip.is_owner && String(member.permission).toLowerCase() === 'owner')) continue;
+        const friendId = await ensureTripScanFriend(member, selfId);
+        if (friendId > 0) selected.add(String(friendId));
+      }
+      state.tripCreate = {
+        ...createInitialTripForm(),
+        existing_trip_id: Number(trip.id),
+        name: trip.name,
+        start_date: toLocalIsoDate(trip.start_date, todayLocalIso()),
+        end_date: trip.end_date ? toLocalIsoDate(trip.end_date) : '',
+        show_add_to_expense_option: trip.show_add_to_expense_option !== false,
+        selected,
+        manual_items: [],
+      };
+      state.tripSaveBusy = false;
+      renderTripCreateModal();
+    } catch (error) {
+      toast(error?.message || 'Could not load all trip members', 'error');
+    } finally {
+      state.tripSaveBusy = false;
+    }
+  }
+
   function tripCreateSelectedFriends(form) {
     return [...(form?.selected || new Set())]
       .map((id) => (state.friends || []).find((friend) => String(friend?.id) === String(id)))
@@ -5133,7 +5206,7 @@
     const selectedTotalInclTax = r2(scanSelectedTotal + manualTotal);
     const selectedMyShare = r2(scanSelectedMyShare + manualMyShare);
     const shareTotals = computeTripCreateShareTotals(form);
-    openModal('Live Split Trip - New', `
+    openModal(form.existing_trip_id ? `Scan Bill - ${escHtml(form.name)}` : 'Live Split Trip - New', `
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
         <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
@@ -5151,7 +5224,7 @@
         ` : ''}
       ` : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
-      <div class="fg">
+      <div class="fg" ${form.existing_trip_id ? 'style="display:none"' : ''}>
         <label class="fl full">Trip Name
           <input class="fi" data-trip-field="name" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." onchange="liveSplitTripField('name', this.value)">
         </label>
@@ -5212,7 +5285,7 @@
           ` : ``}
         ` : ''}
       </div>
-      <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
+      <div style="${form.existing_trip_id ? 'display:none;' : ''}margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
         <label class="fc" style="align-items:flex-start">
           <input type="checkbox" ${form.show_add_to_expense_option !== false ? 'checked' : ''} onchange="liveSplitTripToggleExpenseOption(this.checked)">
           <span>
@@ -5221,7 +5294,7 @@
           </span>
         </label>
       </div>
-      <div style="margin-top:10px">
+      <div style="${form.existing_trip_id ? 'display:none;' : ''}margin-top:10px">
         <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Members</div>
         <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Pick from Live Split friends. Linked app users can also see this trip.</div>
         <div style="display:grid;gap:6px;max-height:240px;overflow:auto;padding-right:2px">
@@ -5310,7 +5383,7 @@
               </div>
             ` : ''}
           </div>
-          <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} â€¢ Receipt tax ${fmtCur(scanTaxTotal)} â€¢ Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
+          <div style="margin-top:2px;font-size:12px;color:var(--t3)">Subtotal ${fmtCur(scanSubtotalAll)} \u2022 Receipt tax ${fmtCur(scanTaxTotal)} \u2022 Tax currently added into selected rows ${fmtCur(scanSelectedTax)}.</div>
           ${form.scan_debug ? `
             <details style="margin-top:10px;border:1px solid var(--border);border-radius:12px;background:#fcfdfc;padding:10px">
               <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--t1)">Scan Debug View</summary>
@@ -5423,7 +5496,7 @@
                   <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
                     <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
                     ${splitPreview?.valid
-                      ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} â€¢ ${fmtCur(share.share)}</span>`).join('')}</div>`
+                      ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} \u2022 ${fmtCur(share.share)}</span>`).join('')}</div>`
                       : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                   </div>
                 </div>
@@ -5505,7 +5578,7 @@
                 <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:#fafcfb">
                   <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Preview</div>
                   ${splitPreview?.valid
-                    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} â€¢ ${fmtCur(share.share)}</span>`).join('')}</div>`
+                    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} \u2022 ${fmtCur(share.share)}</span>`).join('')}</div>`
                     : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                 </div>
               </div>
@@ -5515,14 +5588,14 @@
       </div>
       <div class="fa" style="margin-top:14px">
         <button class="btn btn-g" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : 'Create Trip'}</button>
+        <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : form.existing_trip_id ? 'Add Entries' : 'Create Trip'}</button>
       </div>
     `}`);
   }
 
   async function saveLiveSplitTrip() {
     const form = state.tripCreate;
-    if (!form) return;
+    if (!form || state.tripSaveBusy) return;
     syncTripCreateDraftFromDom();
     const voiceDrafts = Array.isArray(form.voice_drafts) ? form.voice_drafts : [];
     if (voiceDrafts.length) {
@@ -5633,35 +5706,41 @@
         return;
       }
     }
-    let createdTripId = 0;
+    if (form.existing_trip_id && !selectedScannedRows.length && !manualRowsToSave.length) {
+      toast('Scan a bill or add an entry first', 'warning');
+      return;
+    }
+    let createdTripId = Number(form.existing_trip_id || 0);
     let savedTripItemCount = 0;
     try {
       state.tripSaveBusy = true;
       renderTripCreateModal();
-      const result = await api('/api/live-split/trips', {
-        method: 'POST',
-        body: {
-          name,
-          start_date: toLocalIsoDate(form.start_date, todayLocalIso()),
-          end_date: form.end_date ? toLocalIsoDate(form.end_date) : null,
-          show_add_to_expense_option: form.show_add_to_expense_option !== false,
-          members,
-        },
-      });
-      if (!result || result.error) throw new Error(result?.error || 'Could not create live split trip');
-      createdTripId = Number(result?.id || 0);
+      if (!createdTripId) {
+        const result = await api('/api/live-split/trips', {
+          method: 'POST',
+          body: {
+            name,
+            start_date: toLocalIsoDate(form.start_date, todayLocalIso()),
+            end_date: form.end_date ? toLocalIsoDate(form.end_date) : null,
+            show_add_to_expense_option: form.show_add_to_expense_option !== false,
+            members,
+          },
+        });
+        if (!result || result.error) throw new Error(result?.error || 'Could not create live split trip');
+        createdTripId = Number(result?.id || 0);
+      }
       const rowsToPersist = [
-        ...selectedScannedRows.map((row) => ({ ...row, _source: 'scan' })),
+        ...selectedScannedRows.map((row) => ({ ...row, _source: 'scan', _amount: getTripScanRowEffectiveAmount(form, row), _split: computeTripScanRowSplit(row, form) })),
         ...manualRowsToSave.map((row) => ({ ...row, _source: 'manual' })),
       ];
       if (createdTripId > 0 && rowsToPersist.length) {
         for (const row of rowsToPersist) {
           const isScannedRow = String(row?._source || '') === 'scan';
-          const amountValue = isScannedRow ? getTripScanRowEffectiveAmount(form, row) : r2(row?.amount);
+          const amountValue = isScannedRow ? row._amount : r2(row?.amount);
           let participants = [{ key: 'self', name: 'You', share_value: amountValue }];
           let splitModeValue = 'amount';
           if (isScannedRow) {
-            const splitResult = computeTripScanRowSplit(row, form);
+            const splitResult = row._split;
             participants = (splitResult.shares || []).map((share) => ({
               key: String(share.key),
               name: String(share.name || 'Participant').trim() || 'Participant',
@@ -5678,7 +5757,7 @@
             splitModeValue = String(row?.split_mode || 'equal');
           }
 
-          await persistLiveSplitEntry({
+          const savedEntry = await persistLiveSplitEntry({
             divide_date: appliedBulkDate || toLocalIsoDate(row?.purchase_date || form.start_date, todayLocalIso()),
             details: String(row?.item_name || '').trim(),
             paid_by: appliedPaidBy,
@@ -5695,7 +5774,17 @@
             card_id: appliedCardId,
             card_discount_pct: appliedCardDiscountPct,
           });
-          savedTripItemCount += 1;
+          if (!savedEntry?.skipped) savedTripItemCount += 1;
+          // Keep only unsaved rows in the draft so retrying cannot duplicate successes.
+          if (form.existing_trip_id) {
+            if (isScannedRow) {
+              const taxShare = r2(row._amount - n(row.amount));
+              form.scan_tax_override = Math.max(0, r2(getTripScanReceiptTax(form) - taxShare));
+              form.scan_items = form.scan_items.filter((item) => item.key !== row.key);
+            } else {
+              form.manual_items = form.manual_items.filter((item) => item.key !== row.key);
+            }
+          }
         }
       }
       state.tripSaveBusy = false;
@@ -5703,13 +5792,13 @@
       closeModal();
       await loadLiveSplit();
       const totalSavedRows = selectedScannedRows.length + manualRowsToSave.length;
-      toast(totalSavedRows ? `Live split trip created with ${totalSavedRows} item${totalSavedRows === 1 ? '' : 's'}` : 'Live split trip created', 'success');
+      toast(form.existing_trip_id ? `${savedTripItemCount} item${savedTripItemCount === 1 ? '' : 's'} added to trip` : totalSavedRows ? `Live split trip created with ${totalSavedRows} item${totalSavedRows === 1 ? '' : 's'}` : 'Live split trip created', 'success');
     } catch (error) {
       state.tripSaveBusy = false;
       if (state.tripCreate) renderTripCreateModal();
       const totalRows = selectedScannedRows.length + manualRowsToSave.length;
       if (createdTripId > 0 && totalRows) {
-        toast(`Trip was created, but only ${savedTripItemCount} of ${totalRows} item${totalRows === 1 ? '' : 's'} were added. ${error?.message || ''}`.trim(), 'warning');
+        toast(`${form.existing_trip_id ? 'Trip saved partially' : 'Trip was created'}, but only ${savedTripItemCount} of ${totalRows} item${totalRows === 1 ? '' : 's'} were added. ${error?.message || ''}`.trim(), 'warning');
       } else {
         toast(error?.message || 'Could not create live split trip', 'error');
       }
@@ -6198,9 +6287,9 @@
       const targetUserId = Number(member?.target_user_id || 0);
       if (targetUserId > 0 && Number(window._currentUser?.id || 0) === targetUserId) return;
       let friendId = Number(member?.friend_id || 0);
-      if (!(friendId > 0) && targetUserId > 0) {
+      if (targetUserId > 0) {
         const linked = (state.friends || []).find((friend) => Number(friend?.linked_user_id || 0) === targetUserId);
-        friendId = Number(linked?.id || 0);
+        friendId = Number(linked?.id || friendId || 0);
       }
       if (friendId > 0) state.create.selected.add(String(friendId));
     });
@@ -7485,6 +7574,7 @@
   window.liveSplitApplyFriendPdfPreset = liveSplitApplyFriendPdfPreset;
   window.liveSplitSetFriendPdfCustom = liveSplitSetFriendPdfCustom;
   window.liveSplitUseTrip = openCreateFromTrip;
+  window.liveSplitScanTrip = openTripScanModal;
   window.liveSplitOpenVoiceFromTrip = openVoiceSplitFromTrip;
   window.liveSplitToggleTripStatus = updateLiveSplitTripStatus;
   window.liveSplitDeleteTrip = deleteLiveSplitTrip;

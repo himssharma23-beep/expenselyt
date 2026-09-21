@@ -1944,7 +1944,7 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
 
   const [membersResult, groupsResult] = await Promise.all([
     query(
-      `SELECT m.*, u.avatar_url AS linked_user_avatar_url
+      `SELECT m.*, u.avatar_url AS linked_user_avatar_url, u.display_name AS linked_user_name
        FROM live_split_trip_members m
        LEFT JOIN users u ON u.id = m.target_user_id AND u.deleted_at IS NULL
        WHERE m.trip_id = $1
@@ -2333,7 +2333,7 @@ async function getLiveSplitTrips(userId) {
   for (const row of result.rows) {
     const [membersResult, statsResult] = await Promise.all([
       query(
-        `SELECT m.*, u.avatar_url AS linked_user_avatar_url
+        `SELECT m.*, u.avatar_url AS linked_user_avatar_url, u.display_name AS linked_user_name
          FROM live_split_trip_members m
          LEFT JOIN users u ON u.id = m.target_user_id AND u.deleted_at IS NULL
          WHERE m.trip_id = $1
@@ -3323,14 +3323,21 @@ async function assertLiveSplitTripParticipants(client, tripId, normalizedSplits 
   const tid = Number(tripId || 0);
   if (!(tid > 0)) return;
   const membersResult = await client.query(
-    `SELECT friend_id, member_name, permission
-     FROM live_split_trip_members
-     WHERE trip_id = $1`,
+    `SELECT m.friend_id, m.member_name, m.permission,
+            COALESCE(m.target_user_id, f.linked_user_id) AS target_user_id
+     FROM live_split_trip_members m
+     LEFT JOIN live_split_friends f ON f.id = m.friend_id
+     WHERE m.trip_id = $1`,
     [tid]
   );
   const allowedFriendIds = new Set();
   const allowedNames = new Set();
+  const allowedUserIds = new Set();
   for (const member of (membersResult.rows || [])) {
+    const targetUserId = Number(member?.target_user_id || 0);
+    if (targetUserId > 0) allowedUserIds.add(targetUserId);
+    // The owner is also a participant when a different member creates the split.
+    // Match owners by account identity, never by the placeholder name 'You'.
     if (String(member?.permission || '').toLowerCase() === 'owner') continue;
     const fid = Number(member?.friend_id || 0);
     if (fid > 0) allowedFriendIds.add(fid);
@@ -3340,6 +3347,8 @@ async function assertLiveSplitTripParticipants(client, tripId, normalizedSplits 
   const invalid = (normalizedSplits || []).filter((split) => {
     const fid = Number(split?.friend_id || 0);
     const name = String(split?.friend_name || '').trim().toLowerCase();
+    const linkedUserId = Number(split?.linked_user_id || 0);
+    if (linkedUserId > 0 && allowedUserIds.has(linkedUserId)) return false;
     if (fid > 0 && allowedFriendIds.has(fid)) return false;
     if (name && allowedNames.has(name)) return false;
     return true;
