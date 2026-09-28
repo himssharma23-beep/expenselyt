@@ -901,6 +901,8 @@ CREATE TABLE IF NOT EXISTS daily_entries (
   UNIQUE(tracker_id, entry_date)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_entries_tracker ON daily_entries(tracker_id, entry_date);
+ALTER TABLE daily_tracker_prices ADD COLUMN IF NOT EXISTS settings JSONB;
+ALTER TABLE daily_entries ADD COLUMN IF NOT EXISTS tracker_settings JSONB;
 
 CREATE TABLE IF NOT EXISTS habit_trackers (
   id BIGSERIAL PRIMARY KEY,

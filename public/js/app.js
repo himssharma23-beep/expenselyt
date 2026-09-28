@@ -17705,9 +17705,9 @@ async function renderTrackerDetail() {
         : `<span class="badge b-fair" style="font-size:10px">Edited</span>`;
       rows += `<tr id="trow-${dateStr}" style="${rowStyle}">
         <td><strong>${d}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${isToday ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
-        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(tracker.unit)}</span></td>
+        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(e.unit || tracker.unit)}</span></td>
         <td style="text-align:right;font-weight:600">${fmtCur(e.amount)}</td>
-        <td>${badge}</td>
+        <td>${badge}${e.tracker_name && e.tracker_name !== tracker.name ? `<div style="font-size:11px;color:var(--t3)">${escHtml(e.tracker_name)}</div>` : ''}</td>
         <td><button class="btn-d" style="color:var(--em)" onclick="editDayEntry(${tracker.id},'${dateStr}',${e.quantity})">Edit</button></td>
       </tr>`;
     } else {
@@ -17894,7 +17894,7 @@ async function saveTracker(id) {
   const name = document.getElementById('trName').value.trim();
   const unit = document.getElementById('trUnit').value.trim() || 'unit';
   const price_per_unit = parseFloat(document.getElementById('trPrice').value);
-  const default_qty = parseFloat(document.getElementById('trDefaultQty').value) || 1;
+  const default_qty = Number(document.getElementById('trDefaultQty').value);
   if (!name || !price_per_unit) { toast('Name and price are required', 'warning'); return; }
   const body = { name, unit, price_per_unit, default_qty };
   const r = id
@@ -19382,9 +19382,9 @@ async function renderTrackerDetail() {
         : `<span class="badge b-fair" style="font-size:10px">Edited</span>`;
       rows += `<tr id="trow-${dateStr}" style="${rowStyle}">
         <td><strong>${d}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${isToday ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
-        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(tracker.unit)}</span></td>
+        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(e.unit || tracker.unit)}</span></td>
         <td style="text-align:right;font-weight:600">${fmtCur(e.amount)}</td>
-        <td>${badge}</td>
+        <td>${badge}${e.tracker_name && e.tracker_name !== tracker.name ? `<div style="font-size:11px;color:var(--t3)">${escHtml(e.tracker_name)}</div>` : ''}</td>
         <td><button class="btn-d" style="color:var(--em)" onclick="editDayEntry(${tracker.id},'${dateStr}',${e.quantity})">Edit</button></td>
       </tr>`;
     } else {
@@ -19497,6 +19497,7 @@ async function showTrackerModal(id) {
         <span>Active tracker</span>
       </label>
     </div>
+    ${id ? '<p style="font-size:12px;color:var(--t3)">Saved entries through today keep their original details. Changes apply from tomorrow when past entries exist.</p>' : ''}
     <p style="font-size:12px;color:var(--t3);margin:0 0 12px">When auto-add is enabled, the previous month is converted into an expense on the next month automatically.</p>
     <div class="fa">
       <button class="btn btn-p" onclick="saveTracker(${id || 'null'})">${id ? 'Update' : 'Add Tracker'}</button>
@@ -19509,7 +19510,7 @@ async function saveTracker(id) {
   const name = document.getElementById('trName').value.trim();
   const unit = document.getElementById('trUnit').value.trim() || 'unit';
   const price_per_unit = parseFloat(document.getElementById('trPrice').value);
-  const default_qty = parseFloat(document.getElementById('trDefaultQty').value) || 1;
+  const default_qty = Number(document.getElementById('trDefaultQty').value);
   const bankVal = document.getElementById('trExpenseBank')?.value;
   const expense_category = document.getElementById('eCategory')?.value.trim() || null;
   if (!name) { toast('Name is required', 'warning'); return; }
@@ -25604,9 +25605,9 @@ async function renderTrackerDetail() {
         : `<span class="badge b-fair" style="font-size:10px">Edited</span>`;
       rows += `<tr id="trow-${dateStr}" style="${rowStyle}">
         <td><strong>${d}</strong> <span style="font-size:11px;color:var(--t3)">${dayLabel}</span>${isToday ? ' <span style="font-size:10px;color:var(--em)">Today</span>' : ''}</td>
-        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(tracker.unit)}</span></td>
+        <td style="text-align:right" id="tqty-${dateStr}">${e.quantity} <span style="color:var(--t3);font-size:12px">${escHtml(e.unit || tracker.unit)}</span></td>
         <td style="text-align:right;font-weight:600">${fmtCur(e.amount)}</td>
-        <td>${badge}</td>
+        <td>${badge}${e.tracker_name && e.tracker_name !== tracker.name ? `<div style="font-size:11px;color:var(--t3)">${escHtml(e.tracker_name)}</div>` : ''}</td>
         <td><button class="btn-d" style="color:var(--em)" onclick="editDayEntry(${tracker.id},'${dateStr}',${e.quantity})">Edit</button></td>
       </tr>`;
     } else {

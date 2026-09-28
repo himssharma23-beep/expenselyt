@@ -291,6 +291,29 @@ async function getDailyTrackerPriceForDate(userId, trackerId, entryDate, fallbac
   return Number.isFinite(Number(fallbackPrice)) ? num(fallbackPrice) : 0;
 }
 
+function dailyTrackerSettings(tracker) {
+  return {
+    name: tracker.name, unit: tracker.unit,
+    price_per_unit: num(tracker.price_per_unit), default_qty: Number(tracker.default_qty),
+    is_active: !!tracker.is_active, auto_add_to_expense: !!tracker.auto_add_to_expense,
+    expense_bank_account_id: normalizeBankAccountId(tracker.expense_bank_account_id),
+    expense_category: tracker.expense_category || null,
+  };
+}
+
+async function getDailyTrackerSettingsForDate(userId, tracker, entryDate, client = null) {
+  const run = client || { query };
+  const result = await run.query(
+    `SELECT price_per_unit, settings FROM daily_tracker_prices
+     WHERE user_id = $1 AND tracker_id = $2 AND effective_from <= $3
+     ORDER BY effective_from DESC, id DESC LIMIT 1`,
+    [userId, tracker.id, entryDate]
+  );
+  const version = result.rows[0];
+  return { ...dailyTrackerSettings(tracker), ...(version?.settings || {}),
+    price_per_unit: version ? num(version.price_per_unit) : num(tracker.price_per_unit) };
+}
+
 async function getDefaultBankAccountId(userId, client = null) {
   const run = client || { query };
   const result = await run.query(
@@ -391,6 +414,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
 async function insertTrackerMonthExpense(userId, tracker, year, month, client, bankAccountId = null, expenseMonth = null, expenseCategory = null) {
   const summary = await getDailyMonthSummary(userId, tracker.id, year, month);
   if (!summary || !summary.total_amount) return 0;
+  tracker = { ...tracker, ...(summary.tracker_settings || {}) };
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const itemName = `${tracker.name} - ${months[month - 1]} ${year}`;
   const targetExpenseMonth = String(expenseMonth || `${year}-${String(month).padStart(2, '0')}`).trim();
@@ -424,8 +448,6 @@ async function autoAddCompletedTrackerExpenses(userId) {
     `SELECT *
      FROM daily_trackers
      WHERE user_id = $1
-       AND is_active = TRUE
-       AND COALESCE(auto_add_to_expense, FALSE) = TRUE
        AND deleted_at IS NULL`,
     [userId]
   );
@@ -436,6 +458,7 @@ async function autoAddCompletedTrackerExpenses(userId) {
     for (const tracker of trackersR.rows) {
       const statsR = await client.query(
         `SELECT
+           (array_agg(tracker_settings ORDER BY entry_date DESC) FILTER (WHERE tracker_settings IS NOT NULL))[1] AS tracker_settings,
            COUNT(*)::int AS day_count,
            COALESCE(SUM(amount), 0) AS total_amount,
            MAX(CASE WHEN added_to_expense = TRUE THEN 1 ELSE 0 END) AS already_added
@@ -446,16 +469,18 @@ async function autoAddCompletedTrackerExpenses(userId) {
       const stats = statsR.rows[0];
       if (!stats || Number(stats.day_count || 0) === 0) continue;
       if (Number(stats.already_added || 0) === 1) continue;
+      const historicalTracker = { ...tracker, ...(stats.tracker_settings || {}) };
+      if (!historicalTracker.is_active || !historicalTracker.auto_add_to_expense) continue;
       const nextExpenseMonth = addMonthToParts(year, month, 1);
       const amount = await insertTrackerMonthExpense(
         userId,
-        tracker,
+        historicalTracker,
         year,
         month,
         client,
-        tracker.expense_bank_account_id,
+        historicalTracker.expense_bank_account_id,
         `${nextExpenseMonth.year}-${String(nextExpenseMonth.month).padStart(2, '0')}`,
-        tracker.expense_category
+        historicalTracker.expense_category
       );
       if (amount > 0) applied.push({ tracker_id: Number(tracker.id), year, month, amount });
     }
@@ -1420,7 +1445,7 @@ async function addDailyTracker(userId, data) {
     `INSERT INTO daily_trackers (user_id, name, unit, price_per_unit, default_qty, is_active, auto_add_to_expense, expense_bank_account_id, expense_category, created_by, updated_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $1, $1)
      RETURNING id`,
-    [userId, name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory]
+    [userId, name, unit, pricePerUnit, defaultQty, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory]
   );
   const trackerId = Number(result.rows[0].id);
   await ensureDailyTrackerPriceBaseline(userId, trackerId, pricePerUnit);
@@ -1430,32 +1455,75 @@ async function addDailyTracker(userId, data) {
 async function updateDailyTracker(userId, id, data) {
   const trackerId = Number(id);
   if (!Number.isFinite(trackerId) || trackerId <= 0) throw validationError('Invalid tracker id');
-  const trackerR = await query(
-    'SELECT id, price_per_unit FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1',
-    [trackerId, userId]
-  );
-  const currentTracker = trackerR.rows[0];
-  if (!currentTracker) throw validationError('Tracker not found');
+  return withTransaction(async (client) => {
+    const query = (sql, params) => client.query(sql, params);
+    const trackerR = await query(
+      'SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE',
+      [trackerId, userId]
+    );
+    const currentTracker = trackerR.rows[0];
+    if (!currentTracker) throw validationError('Tracker not found');
 
-  const name = normalizeText(data.name, 'Tracker name', 80);
-  const unit = normalizeText(data.unit || 'unit', 'Unit', 30);
-  const pricePerUnit = normalizePositiveAmount(data.price_per_unit, 'Price per unit');
-  const defaultQty = Number(data.default_qty);
-  if (!Number.isFinite(defaultQty) || defaultQty < 0) throw validationError('Default quantity cannot be negative');
-  const expenseBankAccountId = normalizeBankAccountId(data.expense_bank_account_id);
-  const expenseCategory = normalizeOptionalText(data.expense_category, 80);
-  await query(
-    `UPDATE daily_trackers
-     SET name = $1, unit = $2, price_per_unit = $3, default_qty = $4, is_active = $5,
-         auto_add_to_expense = $6, expense_bank_account_id = $7, expense_category = $8, updated_at = NOW(), updated_by = $10
-     WHERE id = $9 AND user_id = $10`,
-    [name, unit, pricePerUnit, defaultQty || 1, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory, trackerId, userId]
-  );
+    const name = normalizeText(data.name, 'Tracker name', 80);
+    const unit = normalizeText(data.unit || 'unit', 'Unit', 30);
+    const pricePerUnit = normalizePositiveAmount(data.price_per_unit, 'Price per unit');
+    const defaultQty = Number(data.default_qty);
+    if (!Number.isFinite(defaultQty) || defaultQty < 0) throw validationError('Default quantity cannot be negative');
+    const expenseBankAccountId = normalizeBankAccountId(data.expense_bank_account_id);
+    const expenseCategory = normalizeOptionalText(data.expense_category, 80);
+    const today = _localDate(new Date());
+    const tomorrow = new Date(`${today}T12:00:00`);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const effectiveFrom = _localDate(tomorrow);
+    const oldSettings = dailyTrackerSettings(currentTracker);
+    await ensureDailyTrackerPriceBaseline(userId, trackerId, oldSettings.price_per_unit, client);
+    // Fill legacy history before changing any tracker metadata.
+    await query(`UPDATE daily_tracker_prices
+      SET settings = $3::jsonb || jsonb_build_object('price_per_unit', price_per_unit)
+      WHERE user_id = $1 AND tracker_id = $2 AND settings IS NULL`,
+      [userId, trackerId, JSON.stringify(oldSettings)]);
+    await query(`UPDATE daily_entries e SET tracker_settings =
+      COALESCE((SELECT p.settings FROM daily_tracker_prices p
+        WHERE p.tracker_id = e.tracker_id AND p.user_id = e.user_id AND p.effective_from <= e.entry_date
+        ORDER BY p.effective_from DESC, p.id DESC LIMIT 1), $3::jsonb)
+      || jsonb_build_object('price_per_unit', CASE WHEN e.quantity > 0 THEN e.amount / e.quantity ELSE COALESCE((SELECT p.price_per_unit FROM daily_tracker_prices p
+        WHERE p.tracker_id = e.tracker_id AND p.user_id = e.user_id AND p.effective_from <= e.entry_date
+        ORDER BY p.effective_from DESC, p.id DESC LIMIT 1), $4) END)
+      WHERE e.user_id = $1 AND e.tracker_id = $2 AND e.tracker_settings IS NULL`,
+      [userId, trackerId, JSON.stringify(oldSettings), oldSettings.price_per_unit]);
+    const history = await query(`SELECT 1 FROM daily_entries
+      WHERE user_id = $1 AND tracker_id = $2 AND entry_date <= $3 LIMIT 1`, [userId, trackerId, today]);
+    await query(
+      `UPDATE daily_trackers
+       SET name = $1, unit = $2, price_per_unit = $3, default_qty = $4, is_active = $5,
+           auto_add_to_expense = $6, expense_bank_account_id = $7, expense_category = $8, updated_at = NOW(), updated_by = $10
+       WHERE id = $9 AND user_id = $10`,
+      [name, unit, pricePerUnit, defaultQty, data.is_active != null ? !!data.is_active : true, !!data.auto_add_to_expense, expenseBankAccountId, expenseCategory, trackerId, userId]
+    );
 
-  // Keep historical tracker prices immutable for prior months.
-  await ensureDailyTrackerPriceBaseline(userId, trackerId, num(currentTracker.price_per_unit));
-  const currentMonthStart = monthStartFromYmd(_localDate(new Date()));
-  await setDailyTrackerPriceVersion(userId, trackerId, currentMonthStart, pricePerUnit);
+    const settings = dailyTrackerSettings({ name, unit, price_per_unit: pricePerUnit, default_qty: defaultQty,
+      is_active: data.is_active != null ? !!data.is_active : true,
+      auto_add_to_expense: !!data.auto_add_to_expense, expense_bank_account_id: expenseBankAccountId, expense_category: expenseCategory });
+    if (!history.rows.length) {
+      await query('DELETE FROM daily_tracker_prices WHERE user_id = $1 AND tracker_id = $2', [userId, trackerId]);
+    }
+    const versionDate = history.rows.length ? effectiveFrom : TRACKER_PRICE_BASELINE_DATE;
+    await setDailyTrackerPriceVersion(userId, trackerId, versionDate, pricePerUnit, client);
+    await query(`UPDATE daily_tracker_prices SET settings = $4::jsonb
+      WHERE user_id = $1 AND tracker_id = $2 AND effective_from = $3`,
+      [userId, trackerId, versionDate, JSON.stringify(settings)]);
+    // A whole month may already have been auto-filled. Only revise future days.
+    await query(`UPDATE daily_entries SET
+      quantity = CASE WHEN is_auto THEN $4 ELSE quantity END,
+      amount = ROUND((CASE WHEN is_auto THEN $4 ELSE quantity END) * $5, 2),
+      tracker_settings = $6::jsonb
+      WHERE user_id = $1 AND tracker_id = $2 AND entry_date > $3 AND added_to_expense = FALSE`,
+      [userId, trackerId, today, defaultQty, pricePerUnit, JSON.stringify(settings)]);
+    if (!settings.is_active) {
+      await query(`DELETE FROM daily_entries WHERE user_id = $1 AND tracker_id = $2
+        AND entry_date > $3 AND is_auto = TRUE AND added_to_expense = FALSE`, [userId, trackerId, today]);
+    }
+  });
 }
 
 async function deleteDailyTracker(userId, id) {
@@ -1474,6 +1542,9 @@ async function getDailyEntries(userId, trackerId, year, month) {
   return result.rows.map((row) => ({
     ...row,
     entry_date: dbDateToYmd(row.entry_date),
+    tracker_name: row.tracker_settings?.name || null,
+    unit: row.tracker_settings?.unit || null,
+    price_per_unit: row.tracker_settings?.price_per_unit ?? null,
     quantity: Number(row.quantity || 0),
     amount: num(row.amount),
     is_auto: !!row.is_auto,
@@ -1482,60 +1553,73 @@ async function getDailyEntries(userId, trackerId, year, month) {
 }
 
 async function upsertDailyEntry(userId, trackerId, date, qty, isAuto) {
-  const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
-  const tracker = trackerR.rows[0];
-  if (!tracker) throw validationError('Tracker not found');
-  const entryDate = normalizeDateValue(date, 'Entry date');
-  const quantity = Number(qty);
-  if (!Number.isFinite(quantity) || quantity < 0) throw validationError('Quantity cannot be negative');
-  const unitPrice = await getDailyTrackerPriceForDate(userId, trackerId, entryDate, tracker.price_per_unit);
-  const amount = Math.round(quantity * unitPrice * 100) / 100;
-  await query(
-    `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (tracker_id, entry_date)
-     DO UPDATE SET quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, is_auto = EXCLUDED.is_auto`,
-    [trackerId, userId, entryDate, quantity, amount, !!isAuto]
-  );
-  return { amount };
+  return withTransaction(async (client) => {
+    const query = (sql, params) => client.query(sql, params);
+    const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [trackerId, userId]);
+    const tracker = trackerR.rows[0];
+    if (!tracker) throw validationError('Tracker not found');
+    const entryDate = normalizeDateValue(date, 'Entry date');
+    const quantity = Number(qty);
+    if (!Number.isFinite(quantity) || quantity < 0) throw validationError('Quantity cannot be negative');
+    const saved = await query('SELECT tracker_settings, quantity, amount FROM daily_entries WHERE user_id = $1 AND tracker_id = $2 AND entry_date = $3', [userId, trackerId, entryDate]);
+    const previous = saved.rows[0];
+    const settings = previous?.tracker_settings || await getDailyTrackerSettingsForDate(userId, tracker, entryDate, client);
+    const unitPrice = previous?.tracker_settings?.price_per_unit ?? (previous && Number(previous.quantity) > 0
+      ? Number(previous.amount) / Number(previous.quantity) : settings.price_per_unit);
+    settings.price_per_unit = unitPrice;
+    const amount = Math.round(quantity * unitPrice * 100) / 100;
+    await query(
+      `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto, tracker_settings)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       ON CONFLICT (tracker_id, entry_date)
+       DO UPDATE SET quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, is_auto = EXCLUDED.is_auto, tracker_settings = EXCLUDED.tracker_settings`,
+      [trackerId, userId, entryDate, quantity, amount, !!isAuto, JSON.stringify(settings)]
+    );
+    return { amount };
+  });
 }
 
 async function autoFillDailyEntries(userId, trackerId, year, month) {
-  const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1', [trackerId, userId]);
-  const tracker = trackerR.rows[0];
-  if (!tracker) throw new Error('Tracker not found');
-  const prefix = `${year}-${String(month).padStart(2, '0')}`;
-  const existingR = await query(
-    `SELECT entry_date
-     FROM daily_entries
-     WHERE tracker_id = $1 AND entry_date::text LIKE $2`,
-    [trackerId, `${prefix}-%`]
-  );
-  const existing = new Set(existingR.rows.map((row) => dbDateToYmd(row.entry_date)));
-  const monthStart = `${prefix}-01`;
-  const unitPrice = await getDailyTrackerPriceForDate(userId, trackerId, monthStart, tracker.price_per_unit);
-  const amount = Math.round(parseFloat(tracker.default_qty) * unitPrice * 100) / 100;
-  const daysInMonth = new Date(year, month, 0).getDate();
-  let filled = 0;
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = `${prefix}-${String(day).padStart(2, '0')}`;
-    if (!existing.has(dateStr)) {
-      await query(
-        `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto)
-         VALUES ($1, $2, $3, $4, $5, TRUE)
-         ON CONFLICT (tracker_id, entry_date) DO NOTHING`,
-        [trackerId, userId, dateStr, parseFloat(tracker.default_qty), amount]
-      );
-      filled++;
+  return withTransaction(async (client) => {
+    const query = (sql, params) => client.query(sql, params);
+    const trackerR = await query('SELECT * FROM daily_trackers WHERE id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [trackerId, userId]);
+    const tracker = trackerR.rows[0];
+    if (!tracker) throw new Error('Tracker not found');
+    const prefix = `${year}-${String(month).padStart(2, '0')}`;
+    const existingR = await query(
+      `SELECT entry_date
+       FROM daily_entries
+       WHERE tracker_id = $1 AND entry_date::text LIKE $2`,
+      [trackerId, `${prefix}-%`]
+    );
+    const existing = new Set(existingR.rows.map((row) => dbDateToYmd(row.entry_date)));
+    const daysInMonth = new Date(year, month, 0).getDate();
+    let filled = 0;
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${prefix}-${String(day).padStart(2, '0')}`;
+      if (!existing.has(dateStr)) {
+        const settings = await getDailyTrackerSettingsForDate(userId, tracker, dateStr, client);
+        if (!settings.is_active) continue;
+        const quantity = Number(settings.default_qty);
+        const amount = Math.round(quantity * settings.price_per_unit * 100) / 100;
+        await query(
+          `INSERT INTO daily_entries (tracker_id, user_id, entry_date, quantity, amount, is_auto, tracker_settings)
+           VALUES ($1, $2, $3, $4, $5, TRUE, $6::jsonb)
+           ON CONFLICT (tracker_id, entry_date) DO NOTHING`,
+          [trackerId, userId, dateStr, quantity, amount, JSON.stringify(settings)]
+        );
+        filled++;
+      }
     }
-  }
-  return filled;
+    return filled;
+  });
 }
 
 async function getDailyMonthSummary(userId, trackerId, year, month) {
   const prefix = `${year}-${String(month).padStart(2, '0')}`;
   const result = await query(
     `SELECT
+       (array_agg(tracker_settings ORDER BY entry_date DESC) FILTER (WHERE tracker_settings IS NOT NULL))[1] AS tracker_settings,
        COUNT(*) AS days,
        ROUND(COALESCE(SUM(quantity), 0)::numeric, 3) AS total_qty,
        ROUND(COALESCE(SUM(amount), 0)::numeric, 2) AS total_amount,
@@ -1548,6 +1632,7 @@ async function getDailyMonthSummary(userId, trackerId, year, month) {
   );
   const row = result.rows[0] || {};
   return {
+    tracker_settings: row.tracker_settings || null,
     days: Number(row.days || 0),
     total_qty: Number(row.total_qty || 0),
     total_amount: num(row.total_amount),
@@ -2738,6 +2823,7 @@ async function getDailyTrackerPlannerItems(userId, month, options = {}) {
     `SELECT
        t.id AS daily_tracker_id,
        t.name,
+       (array_agg(e.tracker_settings ORDER BY e.entry_date DESC) FILTER (WHERE e.tracker_settings IS NOT NULL))[1] AS tracker_settings,
        COALESCE(t.auto_add_to_expense, FALSE) AS auto_add_to_expense,
        ROUND(COALESCE(SUM(e.amount), 0)::numeric, 2) AS total_amount
      FROM daily_trackers t
@@ -2753,11 +2839,11 @@ async function getDailyTrackerPlannerItems(userId, month, options = {}) {
   return result.rows.flatMap((row) => {
     const total = num(row.total_amount);
     if (total <= 0) return [];
-    if (row.auto_add_to_expense && !includeAutoAddToExpense) return [];
+    if ((row.tracker_settings?.auto_add_to_expense ?? row.auto_add_to_expense) && !includeAutoAddToExpense) return [];
     return [{
       daily_tracker_id: Number(row.daily_tracker_id),
       tracker_source_month: prevMonth,
-      name: `${row.name} - ${monthLabel}`,
+      name: `${row.tracker_settings?.name || row.name} - ${monthLabel}`,
       amount: total,
       due_date: dueDate,
       notes: `Daily tracker total for ${monthLabel}`,

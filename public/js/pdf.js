@@ -1078,7 +1078,7 @@ async function downloadTrackerMonthPdf(trackerId, trackerName, year, month) {
     entries.map(e=>[
       e.entry_date,
       new Date(e.entry_date+'T00:00:00').toLocaleDateString('en-IN',{weekday:'short'}),
-      e.quantity,
+      `${e.quantity} ${e.unit || ''}`.trim(),
       _P.cur(e.amount),
       e.is_auto?'Auto':'Edited',
     ]),
@@ -1099,7 +1099,7 @@ async function downloadTrackerMonthPdf(trackerId, trackerName, year, month) {
 
   const doc = _P.init();
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = _P.header(doc, `Daily Tracker - ${trackerName}`, label);
+  let y = _P.header(doc, `Daily Tracker - ${summary.tracker_settings?.name || trackerName}`, label);
   doc.setFontSize(7.25);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(95, 107, 122);
@@ -1117,7 +1117,7 @@ async function downloadTrackerMonthPdf(trackerId, trackerName, year, month) {
     body: entries.map((e) => ([
       _P.dt(e.entry_date),
       new Date(e.entry_date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' }),
-      e.quantity,
+      `${e.quantity} ${e.unit || ''}`.trim(),
       _P.cur(e.amount),
       e.is_auto ? 'Auto' : 'Edited',
     ])),
