@@ -773,7 +773,7 @@
     const meId = Number(window._currentUser?.id || 0);
     const appFriends = allFriends.filter((friend) => {
       const linkedId = Number(friend?.linked_user_id || 0);
-      return linkedId > 0 && !isSelfLinkedEntity(friend) && (!(meId > 0) || linkedId !== meId);
+      return !isSelfLinkedEntity(friend) && (!(meId > 0) || linkedId !== meId);
     });
     const friendById = new Map(allFriends.map((friend) => [Number(friend.id), friend]));
     const map = new Map();
@@ -989,7 +989,7 @@
     (state.friends || [])
       .filter((friend) => {
         const linkedId = Number(friend?.linked_user_id || 0);
-        return linkedId > 0 && !isSelfLinkedEntity(friend) && (!(meId > 0) || linkedId !== meId);
+        return !isSelfLinkedEntity(friend) && (!(meId > 0) || linkedId !== meId);
       })
       .forEach((friend) => {
         const linkedUserId = Number(friend?.linked_user_id || 0);
@@ -4300,125 +4300,9 @@
     }
   }
 
-  function getPendingInviteRows() {
-    const pendingFriends = (state.friends || []).filter((friend) => !Number(friend?.linked_user_id));
-    const outgoing = state.outgoingInvites || [];
-    const outgoingNames = new Set(outgoing.map((invite) => String(invite.target_name || invite.target_display_name || invite.target_username || '').trim().toLowerCase()).filter(Boolean));
-    const merged = [
-      ...outgoing.map((invite) => ({
-        id: invite.id,
-        inviteId: invite.id,
-        friendId: (state.friends || []).find((friend) => String(friend?.name || '').trim().toLowerCase() === String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || '').trim().toLowerCase())?.id || null,
-        linked_user_avatar_url: (state.friends || []).find((friend) => String(friend?.name || '').trim().toLowerCase() === String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || '').trim().toLowerCase())?.linked_user_avatar_url || '',
-        name: String(invite.target_name || invite.target_display_name || invite.target_username || invite.target_email || invite.target_phone || 'Friend').trim(),
-        canResend: true,
-      })),
-      ...pendingFriends
-        .filter((friend) => !outgoingNames.has(String(friend.name || '').trim().toLowerCase()))
-        .map((friend) => ({
-          id: `friend-${friend.id}`,
-          inviteId: null,
-          friendId: friend.id,
-          linked_user_avatar_url: friend.linked_user_avatar_url || '',
-          name: friend.name || 'Friend',
-          canResend: false,
-        })),
-    ];
-    return merged;
-  }
-
-  function renderPendingInviteCard(friend) {
-    const inviteId = Number(friend?.inviteId || 0);
-    const friendId = Number(friend?.friendId || 0);
-    const cancelBusy = inviteId > 0 && state.outgoingCancelBusy.has(inviteId);
-    const deleteBusy = friendId > 0 && state.friendDeleteBusy.has(friendId);
-    const canDelete = friendId > 0;
-    const resendAction = friend.canResend
-      ? `liveSplitResendInvite(${Number(friend.id)})`
-      : `liveSplitResendInviteByName('${encodeURIComponent(friend.name || '')}')`;
-    return `
-      <div class="friend-card live-split-card live-split-pending-card" style="cursor:default">
-        <div class="live-split-pending-main">
-          <div class="live-split-pending-avatar">
-            ${_renderAvatar(friend.name, friend.linked_user_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
-          </div>
-          <div class="friend-info live-split-pending-copy">
-            <div class="live-split-pending-head">
-              <div class="friend-name">${escHtml(friend.name || 'Friend')}</div>
-              <div class="live-split-pending-status">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.75a10.25 10.25 0 1 0 10.25 10.25A10.26 10.26 0 0 0 12 1.75Zm0 18.5A8.25 8.25 0 1 1 20.25 12 8.26 8.26 0 0 1 12 20.25Zm.75-13h-1.5v5.19l4.09 2.45.77-1.28-3.36-2.01Z"/></svg>
-                <span>Pending</span>
-              </div>
-            </div>
-            <div class="live-split-pending-meta">Invite sent. Waiting for them to join or link their account.</div>
-          </div>
-        </div>
-        <div class="live-split-pending-actions">
-          ${inviteId ? `<button class="live-split-icon-btn soft" title="${cancelBusy ? 'Cancelling...' : 'Cancel invite'}" aria-label="${cancelBusy ? 'Cancelling...' : 'Cancel invite'}" ${cancelBusy ? 'disabled' : ''} onclick="liveSplitCancelInvite(${inviteId})">${cancelBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.7 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>'}</button>` : ''}
-          <button class="live-split-icon-btn" title="Send invite again" aria-label="Send invite again" onclick="${resendAction}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.42l-1.42 1.42A7 7 0 1 0 12 6z"/></svg></button>
-          ${canDelete ? `<button class="live-split-icon-btn danger" title="${deleteBusy ? 'Deleting...' : 'Delete pending entry'}" aria-label="${deleteBusy ? 'Deleting...' : 'Delete pending entry'}" ${deleteBusy ? 'disabled' : ''} onclick="liveSplitDeleteFriend(${friendId})">${deleteBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12v2H6V7zm2 3h8l-.7 9.1c-.1 1.1-1 1.9-2.1 1.9h-2.4c-1.1 0-2-.8-2.1-1.9L8 10zm3-5h2l1 1h4v2H6V6h4l1-1z"/></svg>'}</button>` : ''}
-        </div>
-      </div>
-    `;
-  }
-
-  function renderPendingInvites() {
-    const pending = getPendingInviteRows();
-    if (!pending.length) return '';
-    return `
-      <div style="margin-top:14px">
-        <div style="font-size:13px;font-weight:800;color:var(--t2);margin-bottom:8px">Pending Invites (${pending.length})</div>
-        <div style="display:grid;gap:8px">
-          ${pending.map(renderPendingInviteCard).join('')}
-        </div>
-      </div>
-    `;
-  }
-
-  function openPendingInvitesModal() {
-    const pending = getPendingInviteRows();
-    if (!pending.length) {
-      toast('No pending invites right now.', false);
-      return;
-    }
-    openModal(`Pending Invites (${pending.length})`, `
-      <div style="display:grid;gap:8px">
-        ${pending.map(renderPendingInviteCard).join('')}
-      </div>
-    `);
-  }
-
-  function renderIncomingInvites() {
-    const incoming = dedupeIncomingInvites(state.incomingInvites || []);
-    if (!incoming.length) return '';
-    return `
-      <div style="margin-top:14px">
-        <div style="font-size:13px;font-weight:800;color:var(--t2);margin-bottom:8px">Received Requests (${incoming.length})</div>
-        <div style="display:grid;gap:8px">
-          ${incoming.map((invite) => `
-            <div class="friend-card live-split-request-card" style="cursor:default">
-              <div class="live-split-request-main" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-                ${_renderAvatar(invite.inviter_display_name || invite.inviter_username, invite.inviter_avatar_url, 'background:#f5f7fa;color:var(--t2)')}
-                <div class="friend-info">
-                  <div class="friend-name">${escHtml(invite.inviter_display_name || invite.inviter_username || 'User')}</div>
-                  <div style="font-size:11px;color:var(--t3)">Invited you to Live Split</div>
-                </div>
-              </div>
-              <div class="live-split-request-actions" style="display:flex;gap:8px">
-                <button class="btn btn-p btn-sm" ${state.inviteActionBusy.has(Number(invite.id)) ? 'disabled' : ''} onclick="liveSplitAcceptInvite(${Number(invite.id)})">Accept</button>
-                <button class="btn btn-g btn-sm" ${state.inviteActionBusy.has(Number(invite.id)) ? 'disabled' : ''} onclick="liveSplitRejectInvite(${Number(invite.id)})">Reject</button>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-
   function renderMain() {
     const { oweToMe, iOwe } = state.totals;
     const net = r2(oweToMe - iOwe);
-    const pendingCount = getPendingInviteRows().length;
     const main = document.getElementById('main');
     if (!main) return;
     main.innerHTML = `
@@ -4430,7 +4314,6 @@
         </div>
         <div class="filter-row">
           <button class="btn btn-p btn-sm" onclick="liveSplitOpenCreate()">+ Add Split</button>
-          ${pendingCount > 0 ? `<button class="btn btn-s btn-sm" onclick="liveSplitOpenPendingInvites()">Pending Invites (${pendingCount})</button>` : ''}
           <div class="chip-group">
             <button class="chip ${state.sort === 'az' ? 'active' : ''}" onclick="liveSplitSetSort('az')">A-Z</button>
             <button class="chip ${state.sort === 'high' ? 'active' : ''}" onclick="liveSplitSetSort('high')">Highest</button>
@@ -4445,7 +4328,6 @@
           ${renderRows()}
         </div>
         ${renderTripsSection()}
-        ${renderIncomingInvites()}
       </div>`;
   }
 
@@ -6680,7 +6562,7 @@
           ? '<div style="font-size:12px;font-weight:700;color:var(--green)">Added</div>'
           : pending
             ? '<div style="font-size:12px;font-weight:700;color:var(--orange)">Pending</div>'
-            : `<button class="btn btn-p btn-sm" ${state.requestActionBusy ? 'disabled' : ''} onclick="liveSplitLinkExistingUser(${Number(user.id)})">${state.requestActionBusy ? liveSplitBusyLabel('Sending...') : 'Request'}</button>`;
+            : `<button class="btn btn-p btn-sm" ${state.requestActionBusy ? 'disabled' : ''} onclick="liveSplitLinkExistingUser(${Number(user.id)})">${state.requestActionBusy ? liveSplitBusyLabel('Sending...') : 'Add Friend'}</button>`;
         return `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)">
         <div>
@@ -6724,7 +6606,7 @@
           ? '<div style="font-size:12px;font-weight:700;color:var(--green)">Added</div>'
           : pending
             ? '<div style="font-size:12px;font-weight:700;color:var(--orange)">Pending</div>'
-            : `<button class="btn btn-p btn-sm" ${state.createRequestActionBusy ? 'disabled' : ''} onclick="liveSplitCreateLinkExistingUser(${Number(user.id)})">${state.createRequestActionBusy ? liveSplitBusyLabel('Sending...') : 'Request'}</button>`;
+            : `<button class="btn btn-p btn-sm" ${state.createRequestActionBusy ? 'disabled' : ''} onclick="liveSplitCreateLinkExistingUser(${Number(user.id)})">${state.createRequestActionBusy ? liveSplitBusyLabel('Sending...') : 'Add Friend'}</button>`;
         return `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)">
         <div>
@@ -6850,10 +6732,10 @@
         method: 'POST',
         body: { target_user_id: Number(user.id) },
       });
-      if (!result?.success) throw new Error(result?.error || 'Could not send request');
+      if (!result?.success) throw new Error(result?.error || 'Could not add friend');
       closeModal();
       await loadLiveSplit();
-      toast(result?.message || 'Request sent', 'success');
+      toast(result?.message || 'Friend added', 'success');
     } catch (error) {
       toast(error?.message || 'Could not link user', 'error');
     } finally {
@@ -6884,6 +6766,7 @@
         body: { target: contact, fallback_name: name },
       });
       if (!result?.success) throw new Error(result?.error || 'Could not send invite');
+      state.friendFilter = 'all';
       closeModal();
       await loadLiveSplit();
       toast(result?.message || 'Invite processed', 'success');
@@ -6928,10 +6811,10 @@
           method: 'POST',
           body: { target_user_id: Number(user.id) },
         });
-        if (!result?.success) throw new Error(result?.error || 'Could not send request');
+        if (!result?.success) throw new Error(result?.error || 'Could not add friend');
         await fetchData();
         renderMain();
-        toast(result?.message || 'Request sent', 'success');
+        toast(result?.message || 'Friend added', 'success');
         return;
       }
 
@@ -6945,58 +6828,6 @@
     } finally {
       state.createRequestActionBusy = false;
       if (document.getElementById('liveSplitCreateInviteResults')) renderCreateInviteResults();
-    }
-  }
-
-  async function acceptIncomingInvite(id) {
-    const inviteId = Number(id);
-    const invite = (state.incomingInvites || []).find((item) => Number(item.id) === inviteId);
-    const inviteKey = liveSplitInviteIdentity(invite || { id: inviteId });
-    try {
-      state.inviteActionBusy.add(inviteId);
-      renderMain();
-      const result = await api(`/api/live-split/invites/${inviteId}/accept`, { method: 'POST' });
-      if (!result?.success) throw new Error(result?.error || 'Could not accept request');
-      hideIncomingInviteKeyTemporarily(inviteKey);
-      state.incomingInvites = dedupeIncomingInvites((state.incomingInvites || []).filter((item) => liveSplitInviteIdentity(item) !== inviteKey));
-      mergeAcceptedLiveSplitFriend(result, invite);
-      renderMain();
-      await fetchData();
-      renderMain();
-      setTimeout(async () => {
-        try {
-          await fetchData();
-          renderMain();
-        } catch (_) {}
-      }, 500);
-      toast('Live Split request accepted', 'success');
-    } catch (error) {
-      toast(error?.message || 'Could not accept request', 'error');
-    } finally {
-      state.inviteActionBusy.delete(inviteId);
-      renderMain();
-    }
-  }
-
-  async function rejectIncomingInvite(id) {
-    const inviteId = Number(id);
-    const invite = (state.incomingInvites || []).find((item) => Number(item.id) === inviteId);
-    const inviteKey = liveSplitInviteIdentity(invite || { id: inviteId });
-    try {
-      state.inviteActionBusy.add(inviteId);
-      renderMain();
-      const result = await api(`/api/live-split/invites/${inviteId}/reject`, { method: 'POST' });
-      if (!result?.success) throw new Error(result?.error || 'Could not reject request');
-      hideIncomingInviteKeyTemporarily(inviteKey);
-      state.incomingInvites = dedupeIncomingInvites((state.incomingInvites || []).filter((item) => liveSplitInviteIdentity(item) !== inviteKey));
-      await fetchData();
-      renderMain();
-      toast('Live Split request rejected', 'success');
-    } catch (error) {
-      toast(error?.message || 'Could not reject request', 'error');
-    } finally {
-      state.inviteActionBusy.delete(inviteId);
-      renderMain();
     }
   }
 
@@ -7150,7 +6981,7 @@
   async function deleteLiveSplitTrip(tripId) {
     const id = Number(tripId);
     if (!(id > 0)) return;
-    if (!await confirmDialog('Delete this trip and all its split entries?')) return;
+    if (!await confirmDialog('Delete this trip and all its split entries, including entries shown under friends?')) return;
     try {
       state.tripActionBusy = id;
       renderMain();
@@ -7271,7 +7102,7 @@
         method: 'POST',
         body: { target_user_id: Number(exact[0].id) },
       });
-      toast(result?.message || 'Request sent', 'success');
+      toast(result?.message || 'Friend added', 'success');
       await fetchData();
       renderMain();
     } catch (error) {
@@ -7304,7 +7135,7 @@
         method: 'POST',
         body: { target_user_id: Number(user.id) },
       });
-      if (!result?.success) throw new Error(result?.error || 'Could not send request');
+      if (!result?.success) throw new Error(result?.error || 'Could not add friend');
       await fetchData();
       renderMain();
       const pendingFriend = (state.friends || []).find((friend) => String(friend?.name || '').trim().toLowerCase() === String(user.display_name || user.username || '').trim().toLowerCase());
@@ -7314,7 +7145,7 @@
       state.createInvite.searching = false;
       state.createInvite.searched = false;
       renderCreateModal();
-      toast(result?.message || 'Request sent', 'success');
+      toast(result?.message || 'Friend added', 'success');
     } catch (error) {
       toast(error?.message || 'Could not link user', 'error');
     } finally {
@@ -7343,6 +7174,7 @@
         body: { target: raw, fallback_name: (isEmail ? raw.split('@')[0] : 'Friend') },
       });
       if (!result?.success) throw new Error(result?.error || 'Could not send invite');
+      state.friendFilter = 'all';
       await fetchData();
       renderMain();
       if (result?.mode === 'linked_existing') {
@@ -7694,10 +7526,7 @@
     state.showCompletedTrips = !state.showCompletedTrips;
     renderMain();
   };
-  window.liveSplitOpenPendingInvites = openPendingInvitesModal;
   window.liveSplitOpenAvatarPreview = openAvatarPreview;
-  window.liveSplitAcceptInvite = acceptIncomingInvite;
-  window.liveSplitRejectInvite = rejectIncomingInvite;
   window.liveSplitCancelInvite = cancelPendingInvite;
   window.liveSplitResendInvite = resendPendingInvite;
   window.liveSplitResendInviteByName = resendPendingInviteByName;
@@ -7904,6 +7733,25 @@
   window.liveSplitOpenDetails = openRowDetails;
   window.liveSplitOpenEvent = openEventDetails;
   bindAvatarPreviewClicks();
+  let friendRefreshBusy = false;
+  const friendSignature = (friends) => JSON.stringify((friends || []).map((friend) => [friend.id, friend.linked_user_id, friend.name]));
+  const refreshConnectedFriends = async () => {
+    if (document.hidden || typeof currentTab === 'undefined' || currentTab !== 'livesplit' || friendRefreshBusy) return;
+    friendRefreshBusy = true;
+    try {
+      const result = await api('/api/live-split/friends');
+      if (Array.isArray(result?.friends) && friendSignature(result.friends) !== friendSignature(state.friends)) {
+        await fetchData();
+        if (currentTab === 'livesplit') renderMain();
+      }
+    } catch (_) {
+      // Retry on the next refresh without interrupting the current screen.
+    } finally {
+      friendRefreshBusy = false;
+    }
+  };
+  setInterval(refreshConnectedFriends, 5000);
+  document.addEventListener('visibilitychange', refreshConnectedFriends);
 })();
 
 

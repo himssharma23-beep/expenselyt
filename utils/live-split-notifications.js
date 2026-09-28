@@ -217,8 +217,10 @@ async function notifyLiveSplitInviteReceived(inviterUserId, targetUserId, invite
   if (!inviter || !target) return { notified: false };
   const inviterName = String(inviter.display_name || inviter.username || 'A friend').trim();
   const resent = !!options.resent;
-  const title = resent ? 'Live Split invite sent again' : 'New Live Split friend request';
-  const body = resent
+  const title = options.connected ? 'New Live Split friend' : resent ? 'Live Split invite sent again' : 'New Live Split friend request';
+  const body = options.connected
+    ? `${inviterName} added you in Live Split. You are now in each other's friend lists.`
+    : resent
     ? `${inviterName} sent the Live Split request again.`
     : `${inviterName} wants to add you in Live Split.`;
   const created = await createAndSendUserNotification(target, {

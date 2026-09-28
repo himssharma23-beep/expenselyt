@@ -1731,6 +1731,7 @@ async function deleteFriend(userId, id) {
 }
 
 async function getLiveSplitFriends(userId) {
+  await connectPendingLiveSplitFriends(userId);
   try {
     await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
   } catch (err) {
@@ -2485,10 +2486,14 @@ async function deleteLiveSplitTrip(userId, tripId) {
        FROM live_split_trips
        WHERE id = $1
          AND user_id = $2
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [tid, uid]
     );
     if (!own.rows[0]) throw validationError('Trip not found');
+    // Delete every participant's trip entries before the trip FK can set
+    // trip_id to NULL. Splits and shared friend entries cascade from groups.
+    await client.query('DELETE FROM live_split_groups WHERE trip_id = $1', [tid]);
     await client.query('DELETE FROM live_split_trip_members WHERE trip_id = $1', [tid]);
     await client.query('DELETE FROM live_split_trips WHERE id = $1', [tid]);
   });
@@ -5965,61 +5970,105 @@ async function createLiveSplitInvite({
   if (!inviterId || (!userId && !email && !phone)) throw validationError('Invalid invite target');
   if (userId && userId === inviterId) throw validationError('You cannot invite yourself');
 
-  if (userId) {
-    const linkedAlready = await query(
-      `SELECT 1
-       FROM live_split_friends
-       WHERE user_id = $1
-         AND linked_user_id = $2
-         AND deleted_at IS NULL
-       LIMIT 1`,
-      [inviterId, userId]
-    );
-    if (linkedAlready.rows[0]) {
-      throw validationError('User is already in your Live Split list');
+  return withTransaction(async (client) => {
+    const query = (sql, params) => client.query(sql, params);
+    if (userId) {
+      // Serialize adding the same pair, including simultaneous reciprocal adds.
+      await query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [Math.min(inviterId, userId), Math.max(inviterId, userId)]);
     }
-  }
+    const finishInvite = async (invite) => {
+      if (!userId) return invite;
+      const target = await query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL', [userId]);
+      if (!target.rows[0]) throw validationError('User not found');
+      const linked = await acceptLiveSplitInvite(userId, invite.id, target.rows[0], client);
+      return { ...invite, ...linked, connected: true };
+    };
 
-  const existing = await query(
-    `SELECT id, invite_token
-     FROM live_split_invites
-     WHERE inviter_user_id = $1
-       AND status = 'pending'
-       AND (
-         (target_user_id IS NOT NULL AND target_user_id = $2)
-         OR ($3::text IS NOT NULL AND lower(target_email) = lower($3::text))
-         OR ($4::text IS NOT NULL AND target_phone = $4::text)
-       )
-     ORDER BY id DESC
-    LIMIT 1`,
-    [inviterId, userId, email, phone]
-  );
-  if (existing.rows[0]) {
-    const inviteId = Number(existing.rows[0].id);
-    let inviteToken = String(existing.rows[0].invite_token || '').trim();
-    if (!inviteToken) {
-      const updated = await query(
-        `UPDATE live_split_invites
-         SET invite_token = $2
-         WHERE id = $1
-         RETURNING invite_token`,
-        [inviteId, nextInviteToken]
+    if (userId) {
+      const linkedAlready = await query(
+        `SELECT 1
+         FROM live_split_friends
+         WHERE user_id = $1
+           AND linked_user_id = $2
+           AND deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM live_split_friends reverse_friend
+             WHERE reverse_friend.user_id = $2 AND reverse_friend.linked_user_id = $1
+               AND reverse_friend.deleted_at IS NULL
+           )
+         LIMIT 1`,
+        [inviterId, userId]
       );
-      inviteToken = String(updated.rows[0]?.invite_token || nextInviteToken).trim();
+      if (linkedAlready.rows[0]) {
+        return { connected: true, already_linked: true };
+      }
     }
-    return { id: inviteId, invite_token: inviteToken };
-  }
 
-  const inserted = await query(
-    `INSERT INTO live_split_invites (inviter_user_id, target_user_id, invite_token, target_email, target_phone, target_name, status)
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-     RETURNING id, invite_token`,
-    [inviterId, userId, nextInviteToken, email, phone, name]
+    const existing = await query(
+      `SELECT id, invite_token
+       FROM live_split_invites
+       WHERE inviter_user_id = $1
+         AND status = 'pending'
+         AND (
+           (target_user_id IS NOT NULL AND target_user_id = $2)
+           OR ($3::text IS NOT NULL AND lower(target_email) = lower($3::text))
+           OR ($4::text IS NOT NULL AND target_phone = $4::text)
+         )
+       ORDER BY id DESC
+      LIMIT 1`,
+      [inviterId, userId, email, phone]
+    );
+    if (existing.rows[0]) {
+      const inviteId = Number(existing.rows[0].id);
+      let inviteToken = String(existing.rows[0].invite_token || '').trim();
+      if (!inviteToken) {
+        const updated = await query(
+          `UPDATE live_split_invites
+           SET invite_token = $2
+           WHERE id = $1
+           RETURNING invite_token`,
+          [inviteId, nextInviteToken]
+        );
+        inviteToken = String(updated.rows[0]?.invite_token || nextInviteToken).trim();
+      }
+      return finishInvite({ id: inviteId, invite_token: inviteToken });
+    }
+
+    const inserted = await query(
+      `INSERT INTO live_split_invites (inviter_user_id, target_user_id, invite_token, target_email, target_phone, target_name, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       RETURNING id, invite_token`,
+      [inviterId, userId, nextInviteToken, email, phone, name]
+    );
+    return finishInvite({
+      id: Number(inserted.rows[0].id),
+      invite_token: String(inserted.rows[0].invite_token || nextInviteToken).trim(),
+    });
+  });
+}
+
+// Resolve old requests and contacts who have since joined, on either user's load.
+async function connectPendingLiveSplitFriends(userId) {
+  const matches = await query(
+    `SELECT i.id AS invite_id, u.*
+     FROM live_split_invites i
+     JOIN users u ON u.deleted_at IS NULL AND (
+       i.target_user_id = u.id
+       OR (i.target_user_id IS NULL AND (
+         (NULLIF(trim(i.target_email), '') IS NOT NULL AND lower(trim(i.target_email)) = lower(trim(u.email)))
+         OR (NULLIF(regexp_replace(COALESCE(i.target_phone, ''), '[^0-9]', '', 'g'), '') IS NOT NULL
+           AND regexp_replace(i.target_phone, '[^0-9]', '', 'g') = regexp_replace(COALESCE(u.mobile, ''), '[^0-9]', '', 'g'))
+       ))
+     )
+     JOIN users owner ON owner.id = i.inviter_user_id AND owner.deleted_at IS NULL
+     WHERE i.status = 'pending' AND i.inviter_user_id <> u.id
+       AND (i.inviter_user_id = $1 OR u.id = $1)
+     ORDER BY i.id, u.id`,
+    [Number(userId)]
   );
-  return {
-    id: Number(inserted.rows[0].id),
-    invite_token: String(inserted.rows[0].invite_token || nextInviteToken).trim(),
-  };
+  for (const target of matches.rows) {
+    await acceptLiveSplitInvite(Number(target.id), Number(target.invite_id), target);
+  }
 }
 
 async function getLiveSplitInviteByToken(inviteToken) {
@@ -6059,39 +6108,12 @@ async function bindLiveSplitInviteToUser(inviteToken, userId) {
 }
 
 async function getIncomingLiveSplitInvites(userId, email = '', mobile = '') {
-  const uid = Number(userId);
-  const em = String(email || '').trim().toLowerCase();
-  const phoneDigits = String(mobile || '').replace(/\D/g, '');
-  const result = await query(
-    `SELECT i.*, u.display_name AS inviter_display_name, u.username AS inviter_username, u.avatar_url AS inviter_avatar_url
-     FROM live_split_invites i
-     JOIN users u ON u.id = i.inviter_user_id
-     WHERE i.status = 'pending'
-       AND i.inviter_user_id <> $1
-       AND NOT EXISTS (
-         SELECT 1
-         FROM live_split_friends f
-         WHERE f.user_id = i.inviter_user_id
-           AND f.linked_user_id = $1
-           AND f.deleted_at IS NULL
-       )
-       AND (
-         i.target_user_id = $1
-         OR ($2::text <> '' AND lower(i.target_email) = lower($2::text))
-         OR ($3::text <> '' AND regexp_replace(COALESCE(i.target_phone,''), '[^0-9]', '', 'g') = $3::text)
-       )
-     ORDER BY i.created_at DESC`,
-    [uid, em, phoneDigits]
-  );
-  return result.rows.map((row) => ({
-    ...row,
-    id: Number(row.id),
-    inviter_user_id: Number(row.inviter_user_id),
-    target_user_id: row.target_user_id ? Number(row.target_user_id) : null,
-  }));
+  await connectPendingLiveSplitFriends(userId);
+  return [];
 }
 
 async function getOutgoingLiveSplitInvites(userId) {
+  await connectPendingLiveSplitFriends(userId);
   const uid = Number(userId);
   const result = await query(
     `SELECT i.*, u.display_name AS target_display_name, u.username AS target_username
@@ -6135,9 +6157,9 @@ async function getLiveSplitInviteByIdForInviter(userId, inviteId) {
   return result.rows[0] || null;
 }
 
-async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
+async function acceptLiveSplitInvite(userId, inviteId, me = {}, transactionClient = null) {
   const uid = Number(userId);
-  return withTransaction(async (client) => {
+  const execute = async (client) => {
     const expandNameCandidates = (value = '') => {
       const raw = String(value || '').trim();
       if (!raw) return [];
@@ -6187,6 +6209,7 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
            FROM live_split_friends
            WHERE user_id = $1
              AND deleted_at IS NULL
+             AND linked_user_id IS NULL
              AND lower(name) = ANY($2::text[])
            ORDER BY
              CASE WHEN lower(name) = lower($3) THEN 0 ELSE 1 END,
@@ -6230,6 +6253,7 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
            FROM live_split_friends
            WHERE user_id = $1
              AND deleted_at IS NOT NULL
+             AND linked_user_id IS NULL
              AND lower(name) = ANY($2::text[])
            ORDER BY
              CASE WHEN lower(name) = lower($3) THEN 0 ELSE 1 END,
@@ -6264,18 +6288,20 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
       return Number(insertR.rows[0].id);
     };
 
-    const inviteR = await client.query('SELECT * FROM live_split_invites WHERE id = $1 LIMIT 1', [inviteId]);
+    const inviteR = await client.query('SELECT * FROM live_split_invites WHERE id = $1 LIMIT 1 FOR UPDATE', [inviteId]);
     const invite = inviteR.rows[0];
     if (!invite) throw new Error('Invite not found');
-    if (invite.status !== 'pending') throw new Error('Invite already processed');
     const myEmail = String(me.email || '').trim().toLowerCase();
     const myPhoneDigits = String(me.mobile || '').replace(/\D/g, '');
     const targetEmail = String(invite.target_email || '').trim().toLowerCase();
     const targetPhoneDigits = String(invite.target_phone || '').replace(/\D/g, '');
-    const allowed = Number(invite.target_user_id) === uid
-      || (myEmail && targetEmail && myEmail === targetEmail)
-      || (myPhoneDigits && targetPhoneDigits && myPhoneDigits === targetPhoneDigits);
+    const allowed = invite.target_user_id
+      ? Number(invite.target_user_id) === uid
+      : ((myEmail && targetEmail && myEmail === targetEmail)
+        || (myPhoneDigits && targetPhoneDigits && myPhoneDigits === targetPhoneDigits));
     if (!allowed) throw new Error('Invite is not for this user');
+    if (invite.status === 'accepted') return { connected: true, inviter_user_id: Number(invite.inviter_user_id) };
+    if (invite.status !== 'pending') throw new Error('Invite already processed');
 
     const inviterId = Number(invite.inviter_user_id);
     if (inviterId === uid) throw new Error('Invalid invite');
@@ -6341,6 +6367,7 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
          WHERE f.user_id = $1
            AND f.deleted_at IS NULL
            AND f.id <> $2
+           AND f.linked_user_id IS NULL
            AND (
              lower(f.name) = ANY($3::text[])
              OR EXISTS (
@@ -6432,7 +6459,8 @@ async function acceptLiveSplitInvite(userId, inviteId, me = {}) {
       inviter_name: inviterDisplay,
       reverse_friend_id: reverseFriendId,
     };
-  });
+  };
+  return transactionClient ? execute(transactionClient) : withTransaction(execute);
 }
 
 async function rejectLiveSplitInvite(userId, inviteId, me = {}) {

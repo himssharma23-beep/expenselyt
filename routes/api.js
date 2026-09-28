@@ -7378,6 +7378,12 @@ router.put('/live-split/friends/:id', async (req, res) => {
 router.put('/live-split/friends/:id/link-user', async (req, res) => {
   try {
     await Promise.resolve(getCoreDb().linkLiveSplitFriendToUser(req.session.userId, req.params.id, req.body?.linked_user_id ?? null));
+    if (Number(req.body?.linked_user_id) > 0) {
+      await Promise.resolve(getCoreDb().createLiveSplitInvite({
+        inviterUserId: req.session.userId,
+        targetUserId: Number(req.body.linked_user_id),
+      }));
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
@@ -7420,7 +7426,7 @@ router.post('/live-split/invite', async (req, res) => {
       return res.status(400).json({ error: 'You cannot invite yourself.' });
     }
 
-    // If app user already exists, create request so they can accept from their Live Split screen.
+    // Matched app users are linked on both sides before returning.
     if (existing?.id) {
       const targetName = String(existing.display_name || existing.username || deriveInviteName(targetRaw)).trim();
       const liveFriends = await Promise.resolve(getCoreDb().getLiveSplitFriends(req.session.userId));
@@ -7438,8 +7444,8 @@ router.post('/live-split/invite', async (req, res) => {
         targetPhone: existing.mobile || null,
         targetName,
       }));
-      notifyLiveSplitInviteReceived(req.session.userId, Number(existing.id), Number(invite?.id || 0), { resent: false }).catch(() => {});
-      return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
+      notifyLiveSplitInviteReceived(req.session.userId, Number(existing.id), Number(invite?.id || 0), { connected: true }).catch(() => {});
+      return res.json({ success: true, mode: 'connected', message: 'Friend added to both Live Split lists.' });
     }
 
     const fallbackName = String(req.body?.fallback_name || '').trim();
@@ -7458,30 +7464,25 @@ router.post('/live-split/invite', async (req, res) => {
       targetName: inviteName,
     }));
     const inviteLink = buildLiveSplitInviteRegisterUrl(appBase, invite?.invite_token);
+    const friendAddedMessage = 'Friend added to your split list. You will appear in their list when they sign up with this email or phone.';
 
     if (byEmail) {
       const emailResult = await sendLiveSplitInviteEmail({
         to: targetRaw.toLowerCase(),
         inviterName,
         inviteLink,
-      });
-      if (!emailResult?.sent) {
-        return res.status(400).json({ error: 'Email not configured on server. Set SMTP settings first.' });
-      }
-      return res.json({ success: true, mode: 'invite_sent', channel: 'email', message: 'Invite email sent.' });
+      }).catch(() => ({ sent: false }));
+      return res.json({ success: true, mode: 'friend_added', channel: 'email', invite_sent: !!emailResult?.sent, message: friendAddedMessage });
     }
 
     if (!isSmsEnabled()) {
-      return res.status(400).json({ error: 'SMS not configured on server. Set Twilio settings first.' });
+      return res.json({ success: true, mode: 'friend_added', invite_sent: false, message: friendAddedMessage });
     }
     const smsResult = await sendSms({
       to: normalizedPhone,
       body: `${inviterName} invited you to join Live Split on Expense Lite AI. Sign up: ${inviteLink}`,
-    });
-    if (!smsResult?.sent) {
-      return res.status(400).json({ error: 'Could not send SMS invite.' });
-    }
-    return res.json({ success: true, mode: 'invite_sent', channel: 'sms', message: 'Invite SMS sent.' });
+    }).catch(() => ({ sent: false }));
+    return res.json({ success: true, mode: 'friend_added', channel: 'sms', invite_sent: !!smsResult?.sent, message: friendAddedMessage });
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send invite.' });
   }
@@ -7514,8 +7515,8 @@ router.post('/live-split/invite-user', async (req, res) => {
       targetPhone: target.mobile || null,
       targetName,
     }));
-    notifyLiveSplitInviteReceived(req.session.userId, Number(target.id), Number(invite?.id || 0), { resent: false }).catch(() => {});
-    return res.json({ success: true, mode: 'invite_created', message: 'Request sent. User can accept in Live Split.' });
+    notifyLiveSplitInviteReceived(req.session.userId, Number(target.id), Number(invite?.id || 0), { connected: true }).catch(() => {});
+    return res.json({ success: true, mode: 'connected', message: 'Friend added to both Live Split lists.' });
   } catch (err) {
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send request.' });
   }
@@ -7595,8 +7596,11 @@ router.post('/live-split/invites/:id/resend', async (req, res) => {
     const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
     const targetUserId = Number(invite.target_user_id || 0);
     if (targetUserId > 0) {
-      notifyLiveSplitInviteReceived(req.session.userId, targetUserId, Number(invite.id || 0), { resent: true }).catch(() => {});
-      return res.json({ success: true, channel: 'push', message: 'Invite sent again as a push notification.' });
+      const target = await Promise.resolve(pgDb.findUserById(targetUserId));
+      if (!target) return res.status(404).json({ error: 'User not found' });
+      await Promise.resolve(getCoreDb().acceptLiveSplitInvite(targetUserId, invite.id, target));
+      notifyLiveSplitInviteReceived(req.session.userId, targetUserId, Number(invite.id || 0), { connected: true }).catch(() => {});
+      return res.json({ success: true, mode: 'connected', message: 'Friend added to both Live Split lists.' });
     }
 
     const targetEmail = String(invite.target_email || invite.target_user_email || '').trim().toLowerCase();
@@ -7623,7 +7627,7 @@ router.post('/live-split/invites/:id/resend', async (req, res) => {
       return res.json({ success: true, channel: 'sms', message: 'Invite sent again by SMS.' });
     }
 
-    return res.json({ success: true, message: 'Request is still pending. User can accept in Live Split.' });
+    return res.json({ success: true, message: 'Friend will connect automatically when they join with this email or phone.' });
   } catch (err) {
     return res.status(400).json({ error: err.message || 'Could not resend invite.' });
   }

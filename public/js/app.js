@@ -23198,7 +23198,7 @@ function showSocietyFunctionExpenseModal(functionId, expenseId = null) {
   const expense = expenseId ? ((societyFunction.expenses || []).find((item) => String(item.id) === String(expenseId)) || {}) : {};
   openModal(expenseId ? 'Edit Function Expense' : `Add Expense · ${escHtml(societyFunction.function_name || 'Function')}`, `
     <div class="fg">
-      <label class="fl">Expense Date *<input class="fi" type="date" id="societyFunctionExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Expense Date *<input class="fi" type="date" id="societyFunctionExpenseDate" value="${escHtml(normalizeInputDate(expense.expense_date) || todayStr())}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionExpenseAmount" value="${escHtml(String(expense.amount ?? ''))}"></label>
       <label class="fl full">Title *<input class="fi" id="societyFunctionExpenseTitle" value="${escHtml(expense.title || '')}" placeholder="e.g. Sound system"></label>
       <label class="fl">Category<input class="fi" id="societyFunctionExpenseCategory" value="${escHtml(expense.category || '')}" placeholder="e.g. Decor"></label>
@@ -23273,7 +23273,7 @@ function showSocietyFunctionContributorModal(functionId, contributorId = null) {
       <label class="fl full">Society Member *
         <select class="fi" id="societyFunctionContributorMember">${memberOptions}</select>
       </label>
-      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || todayStr())}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionContributorAmount" value="${escHtml(String(contributor.amount ?? ''))}"></label>
       <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionContributorNotes" placeholder="Optional notes">${escHtml(contributor.notes || '')}</textarea></label>
     </div>
@@ -23340,7 +23340,7 @@ function showSocietyFunctionContributorDropdownModal(functionId, contributorId =
           <div id="societyFunctionContributorDropdownOptions" style="max-height:240px;overflow:auto">${memberOptions || '<div style="padding:12px;color:var(--t3)">No members available.</div>'}</div>
         </div>
       </div>
-      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || normalizeInputDate(societyFunction.function_date) || todayStr())}"></label>
+      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || todayStr())}"></label>
       <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionContributorAmount" value="${escHtml(String(contributor.amount ?? ''))}"></label>
       <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionContributorNotes" placeholder="Optional notes">${escHtml(contributor.notes || '')}</textarea></label>
     </div>
