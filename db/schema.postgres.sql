@@ -1378,4 +1378,7 @@ CREATE TABLE IF NOT EXISTS society_function_contributors (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE society_function_contributors ALTER COLUMN member_id DROP NOT NULL;
+ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS outside_name TEXT;
+ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS outside_phone TEXT;
 CREATE INDEX IF NOT EXISTS idx_society_function_contributors_function_id ON society_function_contributors(function_id, contributed_on DESC);

@@ -155,7 +155,10 @@ function mapSocietyFunctionContributorRow(row) {
     id: Number(row.id),
     society_id: Number(row.society_id),
     function_id: Number(row.function_id),
-    member_id: Number(row.member_id),
+    member_id: row.member_id ? Number(row.member_id) : null,
+    contributor_type: row.member_id ? 'member' : 'outside',
+    outside_name: row.outside_name || '',
+    outside_phone: row.outside_phone || '',
     amount: num(row.amount),
     contributed_on: formatDateOnlyValue(row.contributed_on),
     notes: row.notes || '',
@@ -6912,6 +6915,9 @@ async function ensureSocietyTables() {
     )`);
   await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS contributed_on DATE`);
   await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await query(`ALTER TABLE society_function_contributors ALTER COLUMN member_id DROP NOT NULL`);
+  await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS outside_name TEXT`);
+  await query(`ALTER TABLE society_function_contributors ADD COLUMN IF NOT EXISTS outside_phone TEXT`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_functions_society_id ON society_functions(society_id, function_date DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_function_expenses_function_id ON society_function_expenses(function_id, expense_date DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_society_function_contributors_function_id ON society_function_contributors(function_id, contributed_on DESC)`);
@@ -8275,14 +8281,19 @@ async function saveSocietyFunctionContributor(userId, societyId, functionId, dat
   if (!society) throw validationError('Society not found');
   const parent = await getSocietyFunctionOwnedBySociety(societyId, functionId);
   if (!parent) throw validationError('Function not found');
-  const memberId = Number(data.member_id || data.memberId || 0);
-  if (!(memberId > 0)) throw validationError('Member is required');
-  const memberResult = await query('SELECT id FROM society_members WHERE id = $1 AND society_id = $2 LIMIT 1', [memberId, societyId]);
-  if (!memberResult.rows[0]) throw validationError('Member not found');
+  const outside = data.contributor_type === 'outside' || (!data.member_id && !data.memberId && !!data.outside_name);
+  const memberId = outside ? null : Number(data.member_id || data.memberId || 0);
+  const outsideName = outside ? normalizeText(data.outside_name, 'Outside person name', 160) : null;
+  const outsidePhone = outside ? normalizeOptionalText(data.outside_phone, 40) : null;
+  if (!outside) {
+    if (!(memberId > 0)) throw validationError('Member is required');
+    const memberResult = await query('SELECT id FROM society_members WHERE id = $1 AND society_id = $2 LIMIT 1', [memberId, societyId]);
+    if (!memberResult.rows[0]) throw validationError('Member not found');
+  }
   const amount = normalizeAmount(data.amount, 'Contribution amount');
   const contributedOn = data.contributed_on || data.date ? normalizeDateValue(data.contributed_on || data.date, 'Contribution date') : null;
   const notes = normalizeOptionalText(data.notes || '', 1000);
-  const params = [memberId, amount, contributedOn, notes];
+  const params = [memberId, amount, contributedOn, notes, outsideName, outsidePhone];
   if (contributorId) {
     const current = await query(
       `SELECT id
@@ -8298,17 +8309,18 @@ async function saveSocietyFunctionContributor(userId, societyId, functionId, dat
            amount = $2,
            contributed_on = $3,
            notes = $4,
+           outside_name = $5, outside_phone = $6,
            updated_at = NOW()
-       WHERE id = $5 AND society_id = $6 AND function_id = $7
-       RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at`,
+       WHERE id = $7 AND society_id = $8 AND function_id = $9
+       RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, outside_name, outside_phone, created_at, updated_at`,
       [...params, contributorId, societyId, functionId]
     );
     return mapSocietyFunctionContributorRow(result.rows[0] || null);
   }
   const result = await query(
-    `INSERT INTO society_function_contributors (society_id, function_id, member_id, amount, contributed_on, notes, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
-     RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at`,
+    `INSERT INTO society_function_contributors (society_id, function_id, member_id, amount, contributed_on, notes, outside_name, outside_phone, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+     RETURNING id, society_id, function_id, member_id, amount, contributed_on, notes, outside_name, outside_phone, created_at, updated_at`,
     [societyId, functionId, ...params]
   );
   return mapSocietyFunctionContributorRow(result.rows[0] || null);
@@ -8433,7 +8445,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       [societyId]
     ),
     query(
-      `SELECT id, society_id, function_id, member_id, amount, contributed_on, notes, created_at, updated_at
+      `SELECT id, society_id, function_id, member_id, amount, contributed_on, notes, outside_name, outside_phone, created_at, updated_at
        FROM society_function_contributors
        WHERE society_id = $1
        ORDER BY COALESCE(contributed_on, created_at::date) DESC, id DESC`,
@@ -8626,9 +8638,9 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       const member = memberById.get(Number(item.member_id)) || {};
       return {
         ...item,
-        member_name: member.member_name || '',
-        unit_label: member.unit_label || '',
-        phone_number: member.phone_number || '',
+        member_name: item.outside_name || member.member_name || '',
+        unit_label: item.contributor_type === 'outside' ? 'Outside person' : (member.unit_label || ''),
+        phone_number: item.outside_phone || member.phone_number || '',
         phone_numbers: Array.isArray(member.phone_numbers) ? member.phone_numbers.filter(Boolean) : [],
       };
     });

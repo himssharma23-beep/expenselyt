@@ -23261,28 +23261,7 @@ async function deleteSocietyFunctionExpense(functionId, expenseId) {
 }
 
 function showSocietyFunctionContributorModal(functionId, contributorId = null) {
-  if (!_selectedSocietyId) return;
-  const societyFunction = ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {});
-  const contributor = contributorId ? ((societyFunction.contributors || []).find((item) => String(item.id) === String(contributorId)) || {}) : {};
-  const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
-  const memberOptions = ['<option value="">Select member</option>', ...members.map((member) => `<option value="${Number(member.id)}" ${String(contributor.member_id || '') === String(member.id) ? 'selected' : ''}>${escHtml(societyMemberDisplayLabel(member))} · ${escHtml(member.unit_label || '-')}</option>`)].join('');
-  openModal(contributorId ? 'Edit Contributor' : `Add Contributor · ${escHtml(societyFunction.function_name || 'Function')}`, `
-    <div class="fg">
-      <label class="fl full">Search Member
-        <input class="fi" id="societyFunctionContributorMemberSearch" placeholder="Search name, house number or mobile" oninput="filterSocietyFunctionContributorMemberOptions(this.value)">
-      </label>
-      <label class="fl full">Society Member *
-        <select class="fi" id="societyFunctionContributorMember">${memberOptions}</select>
-      </label>
-      <label class="fl">Contribution Date<input class="fi" type="date" id="societyFunctionContributorDate" value="${escHtml(normalizeInputDate(contributor.contributed_on) || todayStr())}"></label>
-      <label class="fl">Amount *<input class="fi" type="number" step="0.01" min="0.01" id="societyFunctionContributorAmount" value="${escHtml(String(contributor.amount ?? ''))}"></label>
-      <label class="fl full">Notes<textarea class="fi" rows="3" id="societyFunctionContributorNotes" placeholder="Optional notes">${escHtml(contributor.notes || '')}</textarea></label>
-    </div>
-    <div class="fa" style="margin-top:16px">
-      <button class="btn btn-p" onclick="saveSocietyFunctionContributor(${Number(functionId)}, ${contributorId || 'null'})">${contributorId ? 'Update Contributor' : 'Add Contributor'}</button>
-      <button class="btn btn-g" onclick="closeModal()">Cancel</button>
-    </div>`);
-  bindModalSubmit(() => saveSocietyFunctionContributor(functionId, contributorId));
+  showSocietyFunctionContributorDropdownModal(functionId, contributorId);
 }
 
 function filterSocietyFunctionContributorMemberOptions(value) {
@@ -23307,6 +23286,7 @@ function showSocietyFunctionContributorDropdownModal(functionId, contributorId =
   const societyFunction = ((_societyDetail?.functions || []).find((item) => String(item.id) === String(functionId)) || {});
   const contributor = contributorId ? ((societyFunction.contributors || []).find((item) => String(item.id) === String(contributorId)) || {}) : {};
   const members = Array.isArray(_societyDetail?.members) ? _societyDetail.members : [];
+  const isOutside = contributor.contributor_type === 'outside';
   const selectedMemberId = String(contributor.member_id || '');
   const memberOptions = members.map((member) => {
     const active = String(member.id) === selectedMemberId;
@@ -23331,8 +23311,18 @@ function showSocietyFunctionContributorDropdownModal(functionId, contributorId =
   }).join('');
   openModal(contributorId ? 'Edit Contributor' : `Add Contributor - ${escHtml(societyFunction.function_name || 'Function')}`, `
     <div class="fg">
+      <label class="fl full">Contributor Type
+        <select class="fi" id="societyFunctionContributorType" onchange="toggleSocietyFunctionContributorType(this.value)">
+          <option value="member" ${!isOutside ? 'selected' : ''}>Society Member</option>
+          <option value="outside" ${isOutside ? 'selected' : ''}>Outside Person</option>
+        </select>
+      </label>
+      <div class="fl full" id="societyFunctionContributorOutsideFields" style="display:${isOutside ? 'flex' : 'none'}">
+        <label class="fl">Name *<input class="fi" id="societyFunctionContributorOutsideName" maxlength="160" value="${escHtml(contributor.outside_name || '')}" placeholder="Outside person's name"></label>
+        <label class="fl">Phone (optional)<input class="fi" type="tel" id="societyFunctionContributorOutsidePhone" maxlength="40" value="${escHtml(contributor.outside_phone || '')}"></label>
+      </div>
       <input type="hidden" id="societyFunctionContributorMember" value="${escHtml(selectedMemberId)}">
-      <div class="fl full">
+      <div class="fl full" id="societyFunctionContributorMemberFields" style="display:${isOutside ? 'none' : 'flex'}">
         <div style="font-size:13px;font-weight:700;color:var(--t2);margin-bottom:6px">Society Member *</div>
         <div style="border:1px solid var(--border-l);border-radius:14px;background:#fff;overflow:hidden">
           <div style="padding:10px;border-bottom:1px solid var(--border-l);background:#f8fbf9">
@@ -23350,6 +23340,11 @@ function showSocietyFunctionContributorDropdownModal(functionId, contributorId =
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>`);
   bindModalSubmit(() => saveSocietyFunctionContributor(functionId, contributorId));
+}
+
+function toggleSocietyFunctionContributorType(value) {
+  document.getElementById('societyFunctionContributorOutsideFields').style.display = value === 'outside' ? 'flex' : 'none';
+  document.getElementById('societyFunctionContributorMemberFields').style.display = value === 'outside' ? 'none' : 'flex';
 }
 
 function selectSocietyFunctionContributorDropdownMember(memberId) {
@@ -23391,13 +23386,17 @@ function filterSocietyFunctionContributorDropdownMembers(value) {
   }
 }
 async function saveSocietyFunctionContributor(functionId, contributorId = null) {
+  const outside = document.getElementById('societyFunctionContributorType')?.value === 'outside';
   const body = {
-    member_id: Number(document.getElementById('societyFunctionContributorMember')?.value || 0),
+    contributor_type: outside ? 'outside' : 'member',
+    outside_name: outside ? document.getElementById('societyFunctionContributorOutsideName')?.value?.trim() || '' : null,
+    outside_phone: outside ? document.getElementById('societyFunctionContributorOutsidePhone')?.value?.trim() || '' : null,
+    member_id: outside ? null : Number(document.getElementById('societyFunctionContributorMember')?.value || 0),
     contributed_on: document.getElementById('societyFunctionContributorDate')?.value || '',
     amount: Number(document.getElementById('societyFunctionContributorAmount')?.value || 0),
     notes: document.getElementById('societyFunctionContributorNotes')?.value?.trim() || '',
   };
-  if (!(body.member_id > 0) || !(body.amount > 0)) { toast('Member and amount are required.', 'warning'); return; }
+  if ((outside ? !body.outside_name : !(body.member_id > 0)) || !(body.amount > 0)) { toast('Contributor name or member, and amount are required.', 'warning'); return; }
   const result = contributorId
     ? await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/contributors/${Number(contributorId)}`, { method: 'PUT', body })
     : await api(`/api/societies/${Number(_selectedSocietyId)}/functions/${Number(functionId)}/contributors`, { method: 'POST', body });
