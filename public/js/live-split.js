@@ -4321,7 +4321,7 @@
           </div>
           <div class="chip-group">
             <button class="chip ${state.friendFilter === 'all' ? 'active' : ''}" onclick="liveSplitSetFriendFilter('all')">All Friends</button>
-            <button class="chip ${state.friendFilter === 'hide_settled' ? 'active' : ''}" onclick="liveSplitSetFriendFilter('hide_settled')">Hide Settled Friends</button>
+            <button class="chip ${state.friendFilter === 'hide_settled' ? 'active' : ''}" onclick="liveSplitSetFriendFilter('hide_settled')">${state.friendFilter === 'hide_settled' ? 'Show Settled Friends' : 'Hide Settled Friends'}</button>
           </div>
         </div>
         <div>
@@ -7519,7 +7519,7 @@
     renderMain();
   };
   window.liveSplitSetFriendFilter = function liveSplitSetFriendFilter(filterKey) {
-    state.friendFilter = filterKey === 'hide_settled' ? 'hide_settled' : 'all';
+    state.friendFilter = filterKey === 'hide_settled' && state.friendFilter !== 'hide_settled' ? 'hide_settled' : 'all';
     renderMain();
   };
   window.liveSplitToggleCompletedTrips = function liveSplitToggleCompletedTrips() {
