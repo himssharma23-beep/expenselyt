@@ -378,15 +378,13 @@ function renderTables(tables = []) {
       <div class="table-card">
         <table>
           <thead>
-            <tr>
-              ${(table.columns || []).map((column) => `<th>${escapeHtml(column)}</th>`).join('')}
-            </tr>
+            ${(table.headerRows || [(table.columns || []).map((content) => ({ content }))]).map((headers) => `<tr>${headers.map((cell) => `<th colspan="${Math.max(1, Number(cell.colSpan) || 1)}" rowspan="${Math.max(1, Number(cell.rowSpan) || 1)}">${escapeHtml(cell.content || '')}</th>`).join('')}</tr>`).join('')}
           </thead>
           <tbody>
             ${(table.rows || []).map((row) => `
               <tr>
                 ${(row || []).map((cell, index) => `
-                  <td class="${index === (table.amountColumnIndex ?? -1) ? 'amount' : index === (table.metaColumnIndex ?? -1) ? 'meta' : ''}">
+                  <td style="${(table.boldColumnIndices || []).includes(index) ? 'font-weight:700;' : ''}${table.headerRows && index >= 3 ? 'text-align:right;' : ''}" class="${index === (table.amountColumnIndex ?? -1) ? 'amount' : index === (table.metaColumnIndex ?? -1) ? 'meta' : ''}">
                     ${escapeHtml(cell ?? '')}
                   </td>
                 `).join('')}
@@ -399,7 +397,7 @@ function renderTables(tables = []) {
   `).join('');
 }
 
-function buildStructuredPdfHtml({ title, subtitle, breadcrumb, totals = null, rows = [], sections = [], tables = [] }) {
+function buildStructuredPdfHtml({ title, subtitle, breadcrumb, totals = null, rows = [], sections = [], tables = [], landscape = false }) {
   return `
     <!DOCTYPE html>
     <html>
@@ -407,7 +405,7 @@ function buildStructuredPdfHtml({ title, subtitle, breadcrumb, totals = null, ro
         <meta charset="utf-8" />
         <title>${escapeHtml(title)}</title>
         <style>
-          @page { size: A4 portrait; margin: 10mm; }
+          @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 10mm; }
           * { box-sizing: border-box; }
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #173228; padding: 0; margin: 0; font-size: 11px; }
           .hero { background: linear-gradient(135deg, #2d6a43, #3f8258); color: white; border-radius: 18px; padding: 18px; margin-bottom: 14px; }

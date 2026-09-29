@@ -406,9 +406,10 @@
       : r2(total - ownerShareBase);
     const payerName = canonicalTripPayerName(group);
     const participants = [
-      { name: ownerName, share: ownerShare, paid: namesMatchLoosely(ownerName, payerName) },
+      { name: ownerName, linked_user_id: Number(group?.user_id) || null, share: ownerShare, paid: namesMatchLoosely(ownerName, payerName) },
       ...splits.map((split) => ({
         name: canonicalLiveSplitName(split?.friend_name),
+        linked_user_id: Number(split?.linked_user_id) || null,
         share: r2(split?.share_amount),
         paid: namesMatchLoosely(split?.friend_name, payerName),
       })),
@@ -2047,6 +2048,77 @@
     return { filteredEvents, tripSections, total };
   }
 
+  function buildFriendTripPdfTables(section, focus, money, dateLabel) {
+    const key = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const people = new Map();
+    const rawIdentity = (person) => Number(person.linked_user_id || person.target_user_id || 0) > 0
+      ? `u:${Number(person.linked_user_id || person.target_user_id)}` : `n:${key(person.name || person.member_name)}`;
+    // Older entries can identify the same member by name while newer ones use an account ID.
+    const accountsByName = new Map();
+    const knownPeople = [focus, ...(section.trip?.members || []),
+      ...(section.events || []).flatMap((event) => event.participants || [])];
+    knownPeople.forEach((person) => {
+      if (!person) return;
+      const id = rawIdentity(person);
+      const name = key(person.name || person.member_name);
+      if (!name || !id.startsWith('u:')) return;
+      if (!accountsByName.has(name)) accountsByName.set(name, new Set());
+      accountsByName.get(name).add(id);
+    });
+    const identity = (person) => {
+      const id = rawIdentity(person);
+      if (id.startsWith('u:')) return id;
+      const accounts = accountsByName.get(key(person.name || person.member_name));
+      // Do not merge separate registered people who happen to share a name.
+      return accounts?.size === 1 ? [...accounts][0] : id;
+    };
+    const addPerson = (person) => {
+      const name = String(person.name || person.member_name || '').trim();
+      if (!name) return;
+      const id = identity(person);
+      if (!people.has(id)) people.set(id, { ...person, name, id });
+    };
+    const events = section.events || [];
+    events.forEach((event) => (event.participants || []).forEach(addPerson));
+    (section.trip?.members || []).forEach((member) => {
+      if (people.has(identity(member))) return;
+      const name = member.member_name || member.name || '';
+      if (key(name) !== 'you' && ![...people.values()].some((person) => key(person.name) === key(name))) addPerson({ ...member, name });
+    });
+    const focusId = Number(focus?.linked_user_id || 0) > 0 ? `u:${Number(focus.linked_user_id)}` : null;
+    let focused = focusId ? people.get(focusId) : null;
+    if (!focused) focused = [...people.values()].find((person) => key(person.name) === key(focus?.name));
+    if (!focused) focused = { id: focusId || `n:${key(focus?.name)}`, name: focus?.name || 'Friend' };
+    const others = [...people.values()].filter((person) => person.id !== focused.id);
+    const batches = [];
+    for (let offset = 0; offset < Math.max(1, others.length); offset += 4) {
+      const members = [...others.slice(offset, offset + 4), focused];
+      const otherCount = members.length - 1;
+      const focusColumn = 3 + otherCount;
+      const headerRows = [[
+        { content: 'Date', rowSpan: 2 }, { content: 'Item', rowSpan: 2 }, { content: 'Paid By', rowSpan: 2 },
+        ...(otherCount ? [{ content: 'Other Members', colSpan: otherCount }] : []),
+        { content: 'My Split' }, { content: 'Total', rowSpan: 2 },
+      ], members.map((person) => ({ content: person.id === focused.id ? (focus?.name || person.name) : person.name }))];
+      batches.push({
+        title: `Trip Details - ${section.title || 'Trip'}${offset ? ' (continued)' : ''}`,
+        columns: ['Date', 'Item', 'Paid By', ...members.map((person) => person.id === focused.id ? (focus?.name || person.name) : person.name), 'Total'],
+        headerRows, boldColumnIndices: [focusColumn], amountColumnIndex: focusColumn + 1,
+        rows: events.map((event) => [
+          dateLabel(event.date), event.details || '-', event.payer || '-',
+          ...members.map((person) => {
+            const participants = (event.participants || []).filter((item) => identity(item) === person.id
+              || (person.id.startsWith('n:') && identity(item).startsWith('n:') && key(item.name) === key(person.name)));
+            if (!participants.length) return '-';
+            const amount = Math.round(participants.reduce((sum, item) => sum + (item.paid ? 1 : -1) * Number(item.share || 0), 0) * 100) / 100;
+            return `${amount > 0 ? '+' : amount < 0 ? '-' : ''}${money(Math.abs(amount))}`;
+          }), money(event.total || 0),
+        ]),
+      });
+    }
+    return batches;
+  }
+
   async function liveSplitDownloadFriendPdf(rowRef, fromDate = '', toDate = '') {
     const refToken = String(rowRef ?? '');
     let row = findVisibleRow(refToken);
@@ -2116,87 +2188,18 @@
     );
 
     (scoped.tripSections || []).forEach((section) => {
-      const focusKey = String(row?.name || '').trim().toLowerCase();
-      y = _P.section(doc, y, `Trip Details - ${section.title}`);
-      y = _P.note(
-        doc,
-        y,
-        `Net in range: ${section.delta > 0.005 ? '+' : section.delta < -0.005 ? '-' : ''}${_P.cur(Math.abs(section.delta || 0))}`,
-        section.delta > 0.005 ? 'green' : section.delta < -0.005 ? 'red' : ''
-      );
-      y = _P.table(
-        doc,
-        y,
-        [['Date', 'Item', 'Paid By', 'Each Split', 'Amount']],
-        (section.events || []).map((event) => [
-          _P.dt(event?.date),
-          String(event?.details || '-'),
-          String(event?.payer || '-'),
-          (() => {
-            const participants = (Array.isArray(event?.participants) ? event.participants : [])
-              .filter((participant) => String(participant?.name || '').trim())
-              .map((participant) => {
-                const name = String(participant?.name || '').trim();
-                return {
-                  name,
-                  matched: name.toLowerCase() === focusKey,
-                  paid: !!participant.paid,
-                  share: _P.cur(participant.share || 0),
-                };
-              });
-            const splitText = participants.length
-              ? participants.map((participant) => `${participant.name}: ${participant.paid ? 'paid' : 'owes'} ${participant.share}`).join('\n')
-              : '-';
-            return {
-              content: splitText,
-              raw: {
-                focusKey,
-                participants,
-              },
-            };
-          })(),
-          _P.cur(event?.total || 0),
-        ]),
-        { 0: { cellWidth: 24 }, 1: { cellWidth: 62 }, 2: { cellWidth: 30 }, 3: { cellWidth: 64 }, 4: { cellWidth: 24, halign: 'right' } },
-        true,
-        {
-          didDrawCell: (data) => {
-            if (data.section !== 'body' || data.column.index !== 3) return;
-            const raw = data.cell.raw || {};
-            const participants = Array.isArray(raw.participants) ? raw.participants : [];
-            if (!participants.length) return;
-
-            const x = data.cell.x + 1.6;
-            const y0 = data.cell.y + 3.6;
-            const w = data.cell.width - 3.2;
-            const h = data.cell.height - 2.6;
-            const fill = Array.isArray(data.cell.styles?.fillColor)
-              ? data.cell.styles.fillColor
-              : [255, 255, 255];
-
-            doc.setFillColor(fill[0], fill[1], fill[2]);
-            doc.rect(x - 0.8, data.cell.y + 0.8, w + 1.6, h, 'F');
-
-            let lineY = y0;
-            participants.forEach((participant) => {
-              const isFocus = !!participant.matched;
-              const paid = !!participant.paid;
-              const color = isFocus
-                ? [20, 90, 60]
-                : paid
-                  ? [100, 116, 139]
-                  : [100, 116, 139];
-              doc.setTextColor(color[0], color[1], color[2]);
-              doc.setFont('helvetica', isFocus ? 'bold' : 'normal');
-              doc.setFontSize(isFocus ? 8.4 : 7.6);
-              doc.text(`${participant.name}: ${paid ? 'paid' : 'owes'} ${participant.share}`, x + 1.0, lineY, { maxWidth: w - 2.0 });
-              lineY += isFocus ? 4.6 : 4.0;
-            });
-            doc.setTextColor(0, 0, 0);
-            doc.setFont('helvetica', 'normal');
-          },
+      buildFriendTripPdfTables(section, row, _P.cur, _P.dt).forEach((table) => {
+        y = _P.section(doc, y, table.title);
+        y = _P.note(doc, y, `Net in range: ${section.delta > 0.005 ? '+' : section.delta < -0.005 ? '-' : ''}${_P.cur(Math.abs(section.delta || 0))}`,
+          section.delta > 0.005 ? 'green' : section.delta < -0.005 ? 'red' : '');
+        const memberWidth = (doc.internal.pageSize.getWidth() - 28 - 110) / (table.columns.length - 4);
+        const styles = { 0: { cellWidth: 24 }, 1: { cellWidth: 36 }, 2: { cellWidth: 28 },
+          [table.amountColumnIndex]: { cellWidth: 22, halign: 'right' } };
+        for (let column = 3; column < table.amountColumnIndex; column++) {
+          styles[column] = { cellWidth: memberWidth, halign: 'right', fontStyle: table.boldColumnIndices.includes(column) ? 'bold' : 'normal' };
         }
-      );
+        y = _P.table(doc, y, table.headerRows, table.rows, styles, true);
+      });
     });
 
     _P.save(doc, `Live_Split_${row?.name || 'Friend'}_${safeFrom}_${safeTo}`);
@@ -3048,75 +3051,10 @@
     `);
   }
 
-  async function openRowDetails(rowRef) {
-    state.activeTripDetail = null;
-    const refToken = String(rowRef ?? '');
-    state.rowDetailRef = refToken;
-    state.eventDetailContext = null;
-    let row = findVisibleRow(refToken);
-    if (!row) return;
-    let rowFriendId = resolveFriendIdForRow(row);
-    let friendActivities = [];
-    const rowRefToken = encodeURIComponent(String(row?.key || refToken || rowFriendId || ''));
-    let events = buildRowEvents(row);
-    if (!events.length) {
-      try {
-        const sharedData = await api(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
-        if (Array.isArray(sharedData?.groups)) {
-          state.sharedGroups = sharedData.groups;
-          const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
-          state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
-          state.totals = summary.totals;
-          row = findVisibleRow(refToken) || row;
-          rowFriendId = resolveFriendIdForRow(row);
-          events = buildRowEvents(row);
-        }
-      } catch (_) {
-        // keep existing state and show current details fallback
-      }
-    }
-    await loadTripLedgersForSummaryEvents(events);
-    events = buildRowEvents(row);
-    const computedRowAmount = r2(events.reduce((sum, event) => sum + n(event?.delta), 0));
-    const dateBounds = getLiveSplitFriendPdfDateBounds(events);
-    if (rowFriendId > 0) {
-      try {
-        const activityData = await api(`/api/live-split/friends/${rowFriendId}/activity`);
-        friendActivities = Array.isArray(activityData?.activities) ? activityData.activities : [];
-      } catch (_) {
-        friendActivities = [];
-      }
-    }
-    const grouped = groupEventsByMonth(events, (event) => event.delta);
-    window.__modalClassName = 'modal-wide live-split-detail-modal';
-    window.__modalOverlayClassName = 'live-split-detail-overlay';
-    openModal(`Live Split - ${escHtml(row.name)}`, `
-      <div class="live-split-modal-shell" style="display:grid;gap:10px">
-        <div class="live-split-modal-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <div style="font-size:13px;color:var(--t2)">Current balance: <b style="color:${computedRowAmount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(computedRowAmount)}</b></div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="this_month" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'this_month')">This month</button>
-              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="last_30_days" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'last_30_days')">Last 30 days</button>
-              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="all_time" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'all_time')">All time</button>
-            </div>
-            <input id="liveSplitPdfFrom_${rowRefToken}" type="date" value="${escHtml(dateBounds.min)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
-            <input id="liveSplitPdfTo_${rowRefToken}" type="date" value="${escHtml(dateBounds.max)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
-            <button class="live-split-icon-btn soft" title="Download PDF" aria-label="Download PDF" onclick="liveSplitDownloadFriendPdf('${rowRefToken}', document.getElementById('liveSplitPdfFrom_${rowRefToken}')?.value || '', document.getElementById('liveSplitPdfTo_${rowRefToken}')?.value || '')">
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v13H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 15h8M8 18h5"/></svg>
-            </button>
-            <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="${rowFriendId > 0 ? `liveSplitOpenCreateForFriend(${rowFriendId})` : 'liveSplitOpenCreate()'}">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
-            </button>
-          </div>
-        </div>
-        <div>
-          ${events.length ? grouped.map(([month, monthData]) => `
-            <div style="margin-bottom:10px">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0">
-                <div style="font-size:14px;font-weight:800;color:var(--t1)">${escHtml(month)}</div>
-                <div style="font-size:13px;font-weight:800;color:${monthData.total >= 0 ? 'var(--green)' : 'var(--red)'};text-align:right">${fmtCur(monthData.total)}</div>
-              </div>
+  let friendDetailView = null;
+
+  function renderFriendMonthContent(monthData, rowRefToken) {
+    return `
               <div class="live-split-table-wrap ls-desktop-event-wrap" style="border-radius:12px;border:1px solid var(--border);background:var(--white);overflow:hidden">
                 <table class="live-split-event-table" style="min-width:0;table-layout:fixed;width:100%">
                   <thead><tr><th>Date</th><th>Details</th><th class="td-m live-split-action-col"></th><th class="td-m live-split-amount-col">Amount</th></tr></thead>
@@ -3260,14 +3198,120 @@
                   `;
                 }).join('')}
               </div>
+    `;
+  }
+
+  async function toggleFriendMonth(element, index) {
+    element.querySelector('[data-toggle-label]').textContent = element.open ? 'Collapse' : 'Expand';
+    if (!element.open || element.dataset.loaded || element.dataset.loading) return;
+    const view = friendDetailView;
+    const [month, monthData] = view?.grouped[index] || [];
+    if (!monthData) return;
+    const content = element.querySelector('[data-month-content]');
+    element.dataset.loading = '1';
+    content.textContent = 'Loading entries...';
+    try {
+      const tripIds = [...new Set(monthData.events.map((event) => Number(event.trip_id || 0)).filter((id) => id > 0))];
+      await Promise.all(tripIds.map((id) => fetchTripLedger(id, true)));
+      if (!element.isConnected || view !== friendDetailView) return;
+      const refreshed = groupEventsByMonth(buildRowEvents(view.row), (event) => event.delta).find(([label]) => label === month)?.[1] || monthData;
+      content.innerHTML = renderFriendMonthContent(refreshed, view.rowRefToken);
+      element.dataset.loaded = '1';
+    } catch (_) {
+      content.textContent = 'Could not load entries. Collapse and expand to retry.';
+    } finally {
+      delete element.dataset.loading;
+    }
+  }
+
+  async function toggleFriendActivity(element) {
+    element.querySelector('[data-toggle-label]').textContent = element.open ? 'Collapse' : 'Expand';
+    if (!element.open || element.dataset.loaded || element.dataset.loading) return;
+    const view = friendDetailView;
+    if (!(view?.rowFriendId > 0)) return;
+    const content = element.querySelector('[data-activity-content]');
+    element.dataset.loading = '1';
+    content.textContent = 'Loading activity...';
+    try {
+      const result = await api(`/api/live-split/friends/${view.rowFriendId}/activity`);
+      if (!element.isConnected || view !== friendDetailView) return;
+      content.innerHTML = friendActivityHtml(result?.activities || []);
+      element.dataset.loaded = '1';
+    } catch (_) {
+      content.textContent = 'Could not load activity. Collapse and expand to retry.';
+    } finally {
+      delete element.dataset.loading;
+    }
+  }
+
+  async function openRowDetails(rowRef) {
+    state.activeTripDetail = null;
+    const refToken = String(rowRef ?? '');
+    state.rowDetailRef = refToken;
+    state.eventDetailContext = null;
+    let row = findVisibleRow(refToken);
+    if (!row) return;
+    let rowFriendId = resolveFriendIdForRow(row);
+    const rowRefToken = encodeURIComponent(String(row?.key || refToken || rowFriendId || ''));
+    let events = buildRowEvents(row);
+    if (!events.length) {
+      try {
+        const sharedData = await api(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
+        if (Array.isArray(sharedData?.groups)) {
+          state.sharedGroups = sharedData.groups;
+          const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
+          state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
+          state.totals = summary.totals;
+          row = findVisibleRow(refToken) || row;
+          rowFriendId = resolveFriendIdForRow(row);
+          events = buildRowEvents(row);
+        }
+      } catch (_) {
+        // keep existing state and show current details fallback
+      }
+    }
+    const computedRowAmount = r2(events.reduce((sum, event) => sum + n(event?.delta), 0));
+    const dateBounds = getLiveSplitFriendPdfDateBounds(events);
+    const grouped = groupEventsByMonth(events, (event) => event.delta);
+    friendDetailView = { row, rowFriendId, rowRefToken, grouped };
+    window.__modalClassName = 'modal-wide live-split-detail-modal';
+    window.__modalOverlayClassName = 'live-split-detail-overlay';
+    openModal(`Live Split - ${escHtml(row.name)}`, `
+      <div class="live-split-modal-shell" style="display:grid;gap:10px">
+        <div class="live-split-modal-top" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div style="font-size:13px;color:var(--t2)">Current balance: <b style="color:${computedRowAmount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(computedRowAmount)}</b></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="this_month" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'this_month')">This month</button>
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="last_30_days" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'last_30_days')">Last 30 days</button>
+              <button data-live-split-pdf-preset-for="${rowRefToken}" data-preset="all_time" class="btn btn-s" style="padding:7px 10px;border-radius:999px" onclick="liveSplitApplyFriendPdfPreset('${rowRefToken}', 'all_time')">All time</button>
             </div>
+            <input id="liveSplitPdfFrom_${rowRefToken}" type="date" value="${escHtml(dateBounds.min)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
+            <input id="liveSplitPdfTo_${rowRefToken}" type="date" value="${escHtml(dateBounds.max)}" min="${escHtml(dateBounds.min)}" max="${escHtml(dateBounds.max)}" onchange="liveSplitSetFriendPdfCustom('${rowRefToken}')" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--t1);font:inherit" />
+            <button class="live-split-icon-btn soft" title="Download PDF" aria-label="Download PDF" onclick="liveSplitDownloadFriendPdf('${rowRefToken}', document.getElementById('liveSplitPdfFrom_${rowRefToken}')?.value || '', document.getElementById('liveSplitPdfTo_${rowRefToken}')?.value || '')">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v13H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 15h8M8 18h5"/></svg>
+            </button>
+            <button class="live-split-icon-btn" title="Add split" aria-label="Add split" onclick="${rowFriendId > 0 ? `liveSplitOpenCreateForFriend(${rowFriendId})` : 'liveSplitOpenCreate()'}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div>
+          ${events.length ? grouped.map(([month, monthData], index) => `
+            <details style="margin-bottom:10px" ontoggle="liveSplitToggleFriendMonth(this, ${index})">
+              <summary style="cursor:pointer;padding:12px 0;font-weight:800">
+                ${escHtml(month)} <span data-toggle-label style="font-size:12px;color:var(--t3)">Expand</span>
+                <span style="float:right;color:${monthData.total >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(monthData.total)}</span>
+              </summary>
+              <div data-month-content></div>
+            </details>
           `).join('') : '<div class="empty-td">No split details yet.</div>'}
         </div>
         ${rowFriendId > 0 ? `
-          <div style="margin-top:6px">
-            <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Friend Activity</div>
-            <div class="live-split-activity-list" style="max-height:240px;overflow:auto;padding-right:4px">${friendActivityHtml(friendActivities)}</div>
-          </div>
+          <details style="margin-top:6px" ontoggle="liveSplitToggleFriendActivity(this)">
+            <summary style="cursor:pointer;font-weight:700;padding:12px 0">Friend Activity <span data-toggle-label>Expand</span></summary>
+            <div data-activity-content class="live-split-activity-list" style="max-height:240px;overflow:auto;padding-right:4px"></div>
+          </details>
         ` : ''}
       </div>
     `);
@@ -7731,6 +7775,8 @@
     renderSettleModal();
   };
   window.liveSplitOpenDetails = openRowDetails;
+  window.liveSplitToggleFriendMonth = toggleFriendMonth;
+  window.liveSplitToggleFriendActivity = toggleFriendActivity;
   window.liveSplitOpenEvent = openEventDetails;
   bindAvatarPreviewClicks();
   let friendRefreshBusy = false;

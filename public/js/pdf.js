@@ -84,7 +84,7 @@ const _P = (() => {
   }
 
   function table(doc, y, head, body, colStyles, landscape, opts = {}) {
-    const safeHead = (head || []).map((row) => (row || []).map(cleanCellValue));
+    const safeHead = (head || []).map((row) => (row || []).map(cleanTableCell));
     const safeBody = (body || []).map((row) => (row || []).map(cleanTableCell));
     doc.autoTable({
       startY: y, head: safeHead, body: safeBody,
