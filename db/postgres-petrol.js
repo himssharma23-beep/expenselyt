@@ -64,6 +64,9 @@ async function ensureSchema() {
   // Run lightweight healing alters every time so newly added columns are available
   // even when server process is hot and schemaEnsured was already true.
   await query('ALTER TABLE IF EXISTS petrol_divide_months ADD COLUMN IF NOT EXISTS fake_increase_pct NUMERIC(7,2) NOT NULL DEFAULT 0');
+  // Preserve existing months; newly created months require an explicit opt-in.
+  await query('ALTER TABLE IF EXISTS petrol_divide_months ADD COLUMN IF NOT EXISTS fake_entries_enabled BOOLEAN NOT NULL DEFAULT TRUE');
+  await query('ALTER TABLE IF EXISTS petrol_divide_months ALTER COLUMN fake_entries_enabled SET DEFAULT FALSE');
   await query('ALTER TABLE IF EXISTS petrol_divide_entries ADD COLUMN IF NOT EXISTS self_share_amount NUMERIC(12,2) NOT NULL DEFAULT 0');
   if (schemaEnsured) return;
   await query(`
@@ -73,6 +76,7 @@ async function ensureSchema() {
       month_key TEXT NOT NULL,
       petrol_price NUMERIC(12,2) NOT NULL DEFAULT 0,
       fake_increase_pct NUMERIC(7,2) NOT NULL DEFAULT 0,
+      fake_entries_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, month_key)
@@ -180,6 +184,8 @@ function buildFakeEntryFromOriginal(original, pct) {
 async function syncMonthFakeEntriesTx(client, userId, monthId, fakeIncreasePct) {
   const pct = r2(fakeIncreasePct);
   await client.query('DELETE FROM petrol_divide_entries WHERE user_id = $1 AND month_id = $2 AND is_fake = TRUE', [userId, monthId]);
+  const settings = await client.query('SELECT fake_entries_enabled FROM petrol_divide_months WHERE user_id = $1 AND id = $2', [userId, monthId]);
+  if (settings.rows[0]?.fake_entries_enabled !== true) return;
 
   const originalsR = await client.query(
     `SELECT id, entry_date, remarks, distance_km, average_kmpl, petrol_price
@@ -465,6 +471,7 @@ async function getPetrolDivideMonthTx(client, userId, monthKeyInput) {
       month_key: month.month_key,
       petrol_price: r2(month.petrol_price),
       fake_increase_pct: r2(month.fake_increase_pct || 0),
+      fake_entries_enabled: !!month.fake_entries_enabled,
     },
     month_members: monthMembers,
     entries,
@@ -477,7 +484,7 @@ async function getPetrolDivideMonthTx(client, userId, monthKeyInput) {
 async function getPetrolDivideMonths(userId) {
   await ensureSchema();
   const rowsR = await query(
-    `SELECT m.month_key, m.petrol_price, m.fake_increase_pct,
+    `SELECT m.month_key, m.petrol_price, m.fake_increase_pct, m.fake_entries_enabled,
             COUNT(DISTINCT mm.friend_id) AS members_count,
             COUNT(DISTINCT e.id) AS entries_count
      FROM petrol_divide_months m
@@ -498,6 +505,7 @@ async function getPetrolDivideMonths(userId) {
       month_key: String(row.month_key),
       petrol_price: r2(row.petrol_price),
       fake_increase_pct: r2(row.fake_increase_pct || 0),
+      fake_entries_enabled: !!row.fake_entries_enabled,
       members_count: Number(row.members_count || 0),
       entries_count: Number(row.entries_count || 0),
       total_amount: total,
@@ -526,6 +534,8 @@ async function savePetrolDivideMonthConfig(userId, data = {}) {
   const petrolPrice = r2(data.petrol_price);
   if (!Number.isFinite(petrolPrice) || petrolPrice < 0) throw validationError('Petrol price must be 0 or more');
   const fakeIncreasePct = data.fake_increase_pct === undefined ? null : r2(data.fake_increase_pct);
+  const fakeEnabled = data.fake_entries_enabled === undefined ? null : data.fake_entries_enabled;
+  if (fakeEnabled !== null && typeof fakeEnabled !== 'boolean') throw validationError('Fake entries setting must be true or false');
   if (fakeIncreasePct !== null && (!Number.isFinite(fakeIncreasePct) || fakeIncreasePct < 0)) {
     throw validationError('Fake increase % must be 0 or more');
   }
@@ -535,8 +545,8 @@ async function savePetrolDivideMonthConfig(userId, data = {}) {
   return withTransaction(async (client) => {
     const month = await getMonthRowTx(client, userId, monthKey);
     await client.query(
-      'UPDATE petrol_divide_months SET petrol_price = $1, fake_increase_pct = COALESCE($2, fake_increase_pct), updated_at = NOW() WHERE id = $3',
-      [petrolPrice, fakeIncreasePct, month.id]
+      'UPDATE petrol_divide_months SET petrol_price = $1, fake_increase_pct = COALESCE($2, fake_increase_pct), fake_entries_enabled = COALESCE($4, fake_entries_enabled), updated_at = NOW() WHERE id = $3',
+      [petrolPrice, fakeIncreasePct, month.id, fakeEnabled]
     );
 
     await client.query('DELETE FROM petrol_divide_month_members WHERE month_id = $1', [month.id]);
@@ -763,7 +773,7 @@ async function generatePetrolDivideFakeEntries(userId, monthKeyInput, increasePc
     const month = await getMonthRowTx(client, userId, monthKey);
     const monthId = Number(month.id);
     await client.query(
-      'UPDATE petrol_divide_months SET fake_increase_pct = $1, updated_at = NOW() WHERE id = $2',
+      'UPDATE petrol_divide_months SET fake_increase_pct = $1, fake_entries_enabled = TRUE, updated_at = NOW() WHERE id = $2',
       [pct, monthId]
     );
     await syncMonthFakeEntriesTx(client, userId, monthId, pct);

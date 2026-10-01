@@ -384,6 +384,13 @@
         <label class="fl">Petrol Price (per litre)
           <input class="fi" id="petrolEditPrice" type="number" step="0.01" value="${escHtml(String(n(monthData?.month?.petrol_price || 0)))}">
         </label>
+        ${(typeof canAccessFeature !== 'function' || canAccessFeature('petrol_fake')) ? `
+          <label style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="petrolMonthFakeEnabled" ${monthData?.month?.fake_entries_enabled ? 'checked' : ''}>
+            Create fake entries for this month
+          </label>
+          <div style="font-size:12px;color:var(--t3)">Turning this off removes this month's generated fake entries and stops automatic generation. Original entries are kept.</div>
+        ` : ''}
         <label class="fl">Members (Live Split friends)
           <div style="display:grid;gap:10px">
             <label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--t2);font-weight:700">
@@ -431,7 +438,9 @@
     const memberIds = meOnly ? [] : selectedValues(document.getElementById('petrolEditMembers'));
     const data = await api('/api/petrol-divide/config', {
       method: 'PUT',
-      body: { month_key: monthKey, petrol_price: price, member_friend_ids: memberIds, self_only: meOnly },
+      body: { month_key: monthKey, petrol_price: price, member_friend_ids: memberIds, self_only: meOnly,
+        ...(document.getElementById('petrolMonthFakeEnabled') ? { fake_entries_enabled: document.getElementById('petrolMonthFakeEnabled').checked } : {}),
+      },
     });
     if (data?.error || !data?.month) return toast(data?.error || 'Could not save month', 'error');
     closeModal();
@@ -557,7 +566,7 @@
         <label class="fl">Increase entries by (%)
           <input id="petrolFakePct" class="fi" type="number" step="0.01" value="${escHtml(String(currentPct))}" placeholder="5">
         </label>
-        <div style="font-size:12px;color:var(--t3)">This sets month fake % and auto-syncs fake rows from original entries.</div>
+        <div style="font-size:12px;color:var(--t3)">Generate enables fake entries for this month and automatically updates them when original entries change. Turn it off in Edit Month.</div>
       </div>
       <div class="fa" style="margin-top:12px">
         <button class="btn btn-p" onclick="petrolGenerateFakeFromModal()">Generate</button>
