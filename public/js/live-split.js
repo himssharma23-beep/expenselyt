@@ -2048,77 +2048,6 @@
     return { filteredEvents, tripSections, total };
   }
 
-  function buildFriendTripPdfTables(section, focus, money, dateLabel) {
-    const key = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    const people = new Map();
-    const rawIdentity = (person) => Number(person.linked_user_id || person.target_user_id || 0) > 0
-      ? `u:${Number(person.linked_user_id || person.target_user_id)}` : `n:${key(person.name || person.member_name)}`;
-    // Older entries can identify the same member by name while newer ones use an account ID.
-    const accountsByName = new Map();
-    const knownPeople = [focus, ...(section.trip?.members || []),
-      ...(section.events || []).flatMap((event) => event.participants || [])];
-    knownPeople.forEach((person) => {
-      if (!person) return;
-      const id = rawIdentity(person);
-      const name = key(person.name || person.member_name);
-      if (!name || !id.startsWith('u:')) return;
-      if (!accountsByName.has(name)) accountsByName.set(name, new Set());
-      accountsByName.get(name).add(id);
-    });
-    const identity = (person) => {
-      const id = rawIdentity(person);
-      if (id.startsWith('u:')) return id;
-      const accounts = accountsByName.get(key(person.name || person.member_name));
-      // Do not merge separate registered people who happen to share a name.
-      return accounts?.size === 1 ? [...accounts][0] : id;
-    };
-    const addPerson = (person) => {
-      const name = String(person.name || person.member_name || '').trim();
-      if (!name) return;
-      const id = identity(person);
-      if (!people.has(id)) people.set(id, { ...person, name, id });
-    };
-    const events = section.events || [];
-    events.forEach((event) => (event.participants || []).forEach(addPerson));
-    (section.trip?.members || []).forEach((member) => {
-      if (people.has(identity(member))) return;
-      const name = member.member_name || member.name || '';
-      if (key(name) !== 'you' && ![...people.values()].some((person) => key(person.name) === key(name))) addPerson({ ...member, name });
-    });
-    const focusId = Number(focus?.linked_user_id || 0) > 0 ? `u:${Number(focus.linked_user_id)}` : null;
-    let focused = focusId ? people.get(focusId) : null;
-    if (!focused) focused = [...people.values()].find((person) => key(person.name) === key(focus?.name));
-    if (!focused) focused = { id: focusId || `n:${key(focus?.name)}`, name: focus?.name || 'Friend' };
-    const others = [...people.values()].filter((person) => person.id !== focused.id);
-    const batches = [];
-    for (let offset = 0; offset < Math.max(1, others.length); offset += 4) {
-      const members = [...others.slice(offset, offset + 4), focused];
-      const otherCount = members.length - 1;
-      const focusColumn = 3 + otherCount;
-      const headerRows = [[
-        { content: 'Date', rowSpan: 2 }, { content: 'Item', rowSpan: 2 }, { content: 'Paid By', rowSpan: 2 },
-        ...(otherCount ? [{ content: 'Other Members', colSpan: otherCount }] : []),
-        { content: 'My Split' }, { content: 'Total', rowSpan: 2 },
-      ], members.map((person) => ({ content: person.id === focused.id ? (focus?.name || person.name) : person.name }))];
-      batches.push({
-        title: `Trip Details - ${section.title || 'Trip'}${offset ? ' (continued)' : ''}`,
-        columns: ['Date', 'Item', 'Paid By', ...members.map((person) => person.id === focused.id ? (focus?.name || person.name) : person.name), 'Total'],
-        headerRows, boldColumnIndices: [focusColumn], amountColumnIndex: focusColumn + 1,
-        rows: events.map((event) => [
-          dateLabel(event.date), event.details || '-', event.payer || '-',
-          ...members.map((person) => {
-            const participants = (event.participants || []).filter((item) => identity(item) === person.id
-              || (person.id.startsWith('n:') && identity(item).startsWith('n:') && key(item.name) === key(person.name)));
-            if (!participants.length) return '-';
-            const amount = Math.round(participants.reduce((sum, item) => sum + (item.paid ? 1 : -1) * Number(item.share || 0), 0) * 100) / 100;
-            return `${amount > 0 ? '+' : amount < 0 ? '-' : ''}${money(Math.abs(amount))}`;
-          }), money(event.total || 0),
-        ]),
-      });
-    }
-    return batches;
-  }
-
   async function liveSplitDownloadFriendPdf(rowRef, fromDate = '', toDate = '') {
     const refToken = String(rowRef ?? '');
     let row = findVisibleRow(refToken);
@@ -2126,7 +2055,7 @@
       toast('Could not find this friend in live split.', 'warning');
       return;
     }
-    if (typeof _P === 'undefined' || !_P || typeof _P.init !== 'function') {
+    if (typeof renderSharedPdfFileWindow !== 'function') {
       toast('PDF tools are not ready yet', 'warning');
       return;
     }
@@ -2152,57 +2081,11 @@
       return;
     }
 
-    const doc = _P.init(true);
-    const subtitle = `${_P.dt(safeFrom)}  ->  ${_P.dt(safeTo)}  \u00b7  ${filteredEvents.length} entries`;
-    const overallBalanceValue = r2(row?.amount || 0);
-    const overallBalanceLabel = overallBalanceValue > 0.005 ? 'Overall to receive' : overallBalanceValue < -0.005 ? 'Overall to pay' : 'Overall settled';
-    const rangeBalanceValue = r2(scoped.total || 0);
-    const rangeBalanceLabel = rangeBalanceValue > 0.005 ? 'Selected range receive' : rangeBalanceValue < -0.005 ? 'Selected range pay' : 'Selected range settled';
-    let y = _P.header(doc, `Live Split - ${row?.name || 'Friend'}`, subtitle);
-    y = _P.cards(doc, y, [
-      { label: overallBalanceLabel, value: _P.cur(Math.abs(overallBalanceValue)), color: overallBalanceValue > 0.005 ? 'green' : overallBalanceValue < -0.005 ? 'red' : '' },
-      { label: 'Entries', value: String(filteredEvents.length), color: '' },
-      { label: rangeBalanceLabel, value: _P.cur(Math.abs(rangeBalanceValue)), color: rangeBalanceValue > 0.005 ? 'green' : rangeBalanceValue < -0.005 ? 'red' : '' },
-      { label: 'Trips', value: String((scoped.tripSections || []).length), color: '' },
-    ]);
-    y = _P.section(doc, y, 'Live Split Entries');
-    y = _P.table(
-      doc,
-      y,
-      [['Date', 'Details', 'Type', 'Paid By', 'Amount']],
-      filteredEvents.map((event) => [
-        _P.dt(event?.date),
-        String(event?.details || '-'),
-        String(event?.type || '') === 'trip_summary' ? 'Trip' : 'Split',
-        String(event?.payer || '-'),
-        {
-          content: `${n(event?.delta) > 0.005 ? '+' : n(event?.delta) < -0.005 ? '-' : ''}${_P.cur(Math.abs(n(event?.delta || 0)))}`,
-          styles: {
-            textColor: n(event?.delta) > 0.005 ? [22, 163, 74] : n(event?.delta) < -0.005 ? [185, 55, 55] : [31, 41, 55],
-            fontStyle: 'bold',
-          },
-        },
-      ]),
-      { 0: { cellWidth: 28 }, 1: { cellWidth: 70 }, 2: { cellWidth: 20 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30, halign: 'right' } },
-      true
-    );
+    await renderSharedPdfFileWindow({
+      template: 'live-split-friend',
+      payload: { row: { name: row.name, linked_user_id: row.linked_user_id, amount: row.amount }, scoped, fromDate: safeFrom, toDate: safeTo, currency: (typeof _currentUser !== 'undefined' && _currentUser?.currency_code) || 'INR' },
+    }, `Live Split - ${row.name || 'Friend'}`, `Live_Split_${row.name || 'Friend'}_${safeFrom}_${safeTo}`);
 
-    (scoped.tripSections || []).forEach((section) => {
-      buildFriendTripPdfTables(section, row, _P.cur, _P.dt).forEach((table) => {
-        y = _P.section(doc, y, table.title);
-        y = _P.note(doc, y, `Net in range: ${section.delta > 0.005 ? '+' : section.delta < -0.005 ? '-' : ''}${_P.cur(Math.abs(section.delta || 0))}`,
-          section.delta > 0.005 ? 'green' : section.delta < -0.005 ? 'red' : '');
-        const memberWidth = (doc.internal.pageSize.getWidth() - 28 - 110) / (table.columns.length - 4);
-        const styles = { 0: { cellWidth: 24 }, 1: { cellWidth: 36 }, 2: { cellWidth: 28 },
-          [table.amountColumnIndex]: { cellWidth: 22, halign: 'right' } };
-        for (let column = 3; column < table.amountColumnIndex; column++) {
-          styles[column] = { cellWidth: memberWidth, halign: 'right', fontStyle: table.boldColumnIndices.includes(column) ? 'bold' : 'normal' };
-        }
-        y = _P.table(doc, y, table.headerRows, table.rows, styles, true);
-      });
-    });
-
-    _P.save(doc, `Live_Split_${row?.name || 'Friend'}_${safeFrom}_${safeTo}`);
   }
 
   function liveSplitApplyFriendPdfPreset(rowRef, preset = 'this_month') {
@@ -3582,92 +3465,7 @@
     }
 
     const events = buildCanonicalTripEventsFromLedger(trip);
-    const memberSummaryMap = {};
-    events.forEach((event) => {
-      (event.participants || []).forEach((p) => {
-        if (!p?.name) return;
-        if (!memberSummaryMap[p.name]) memberSummaryMap[p.name] = { name: p.name, paid: 0, share: 0, items: 0 };
-        memberSummaryMap[p.name].share = r2(memberSummaryMap[p.name].share + r2(p.share));
-        if (p.paid) memberSummaryMap[p.name].paid = r2(memberSummaryMap[p.name].paid + r2(event.total));
-        memberSummaryMap[p.name].items = r2(memberSummaryMap[p.name].items + 1);
-      });
-    });
-    const memberSummary = Object.values(memberSummaryMap);
-    const members = Array.isArray(trip.members) ? trip.members : [];
-    const memberNames = members.map((member) => String(member?.name || member?.display_name || member?.username || '').trim()).filter(Boolean);
-    const subtitleParts = [
-      `${members.length} members`,
-      `${events.length} item${events.length === 1 ? '' : 's'}`,
-      `${String(trip.status || 'active').toUpperCase()}`,
-    ];
-    const createdDate = trip.created_at ? _P.dt(trip.created_at) : '';
-    if (createdDate && createdDate !== '-') subtitleParts.unshift(createdDate);
-
-    const doc = _P.init(true);
-    let y = _P.header(doc, `Live Split Trip: ${trip.name || 'Trip'}`, subtitleParts.join('  \u00b7  '));
-    y = _P.cards(doc, y, [
-      { label: 'Trip Total', value: _P.cur(trip.total_amount || 0), color: '' },
-      { label: 'My Share', value: _P.cur(trip.my_share_amount || 0), color: 'amber' },
-      { label: 'Expenses', value: String(Number(trip.expense_count || events.length || 0)), color: '' },
-      { label: 'Members', value: String(members.length || memberSummary.length || 0), color: '' },
-    ]);
-    if (memberNames.length) y = _P.note(doc, y, `Members: ${memberNames.join('  \u00b7  ')}`);
-
-    if (memberSummary.length) {
-      y = _P.section(doc, y, 'Member Summary');
-      y = _P.table(
-        doc,
-        y,
-        [['Member', 'Paid', 'Share', 'Net']],
-        memberSummary.map((member) => {
-          const net = r2(member.paid - member.share);
-          return [
-            member.name || '-',
-            _P.cur(member.paid || 0),
-            _P.cur(member.share || 0),
-            `${net > 0.005 ? '+' : net < -0.005 ? '-' : ''}${_P.cur(Math.abs(net))}`,
-          ];
-        }),
-        { 0: { cellWidth: 52 }, 1: { cellWidth: 34 }, 2: { cellWidth: 34 }, 3: { cellWidth: 34 } },
-        true
-      );
-    }
-
-    y = _P.section(doc, y, 'Item Splits');
-    y = _P.table(
-      doc,
-      y,
-      [['Date', 'Item', 'Paid By', 'Amount', 'Each Split']],
-      events.map((event) => {
-        const splitText = Array.isArray(event?.participants) && event.participants.length
-          ? event.participants
-            .filter((p) => String(p?.name || '').trim())
-            .map((p) => {
-              const share = _P.cur(r2(p?.share));
-              if (p?.contextOnly) return `${p.name}: ${share} in split`;
-              return `${p.name}: ${p?.paid ? `paid ${share}` : `owes ${share}`}`;
-            })
-            .join('\n')
-          : '-';
-        return [
-          _P.dt(event?.date),
-          event?.details || '-',
-          event?.payer || '-',
-          _P.cur(event?.total || 0),
-          splitText,
-        ];
-      }),
-      {
-        0: { cellWidth: 24 },
-        1: { cellWidth: 68 },
-        2: { cellWidth: 34 },
-        3: { cellWidth: 26 },
-        4: { cellWidth: 'auto' },
-      },
-      true
-    );
-
-    _P.save(doc, String(trip.name || 'Live_Split_Trip').replace(/[^\w\s-]/g, '_').trim() || 'Live_Split_Trip');
+    await downloadSharedWebReport('liveSplitTripReport', [], { trip, events });
   }
 
   async function toggleTripSplitView(tripId) {

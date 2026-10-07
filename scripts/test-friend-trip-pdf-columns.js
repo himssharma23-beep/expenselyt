@@ -2,19 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const vm = require('node:vm');
 const { buildStructuredPdfHtml } = require('../utils/shared-pdf-html');
 
-function loadBuilder(file) {
-  const source = fs.readFileSync(file, 'utf8');
-  const start = source.indexOf('function buildFriendTripPdfTables(');
-  const end = source.indexOf('\n}', start); // Mobile uses no outer indentation.
-  const webEnd = source.indexOf('\n  async function liveSplitDownloadFriendPdf(', start);
-  const context = vm.createContext({});
-  vm.runInContext(source.slice(start, webEnd >= 0 ? webEnd : end + 2), context);
-  return context.buildFriendTripPdfTables;
-}
-const web = loadBuilder(path.join(__dirname, '../public/js/live-split.js'));
+const { buildFriendTripPdfTables: web } = require('../utils/live-split-friend-pdf');
 const mobilePath = path.resolve(__dirname, '../../ExpenseManager_mobile/src/screens/LiveSplitScreen.js');
 const section = {
   title: 'Example Trip',
@@ -45,7 +35,11 @@ test('friend trip table matches the spreadsheet signs and column ordering', () =
 });
 
 test('mobile and web create identical trip columns', { skip: !fs.existsSync(mobilePath) }, () => {
-  assert.deepEqual(build(loadBuilder(mobilePath)), build(web));
+  for (const file of [mobilePath, path.join(__dirname, '../public/js/live-split.js')]) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.match(source, /["']live-split-friend["']/);
+    assert.doesNotMatch(source, /function buildFriendTripPdfTables/);
+  }
 });
 
 test('renamed friend is matched by account identity and remains immediately before Total', () => {
@@ -59,7 +53,7 @@ test('mixed linked and name-only entries show the friend only in My Split on web
   const data = structuredClone(section);
   delete data.events[1].participants[2].linked_user_id;
   data.events[1].participants[2].name = '  HARPREET  ';
-  const builders = [web, ...(fs.existsSync(mobilePath) ? [loadBuilder(mobilePath)] : [])];
+  const builders = [web];
   builders.forEach((builder) => {
     const [table] = build(builder, data);
     assert.deepEqual(table.columns, ['Date', 'Item', 'Paid By', 'Saurav', 'Hims', 'Harpreet', 'Total']);

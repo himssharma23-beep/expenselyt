@@ -274,7 +274,7 @@ function createFormatters(prefs = {}) {
 }
 
 function renderSummaryCards(totals) {
-  const cards = [
+  const cards = Array.isArray(totals.cards) ? totals.cards : [
     { label: 'Total', value: totals.total },
     { label: 'Fair', value: totals.fair },
     { label: 'Extra', value: totals.extra },
@@ -375,6 +375,7 @@ function renderTables(tables = []) {
   return tables.map((table) => `
     <div class="table-section">
       <h2>${escapeHtml(table.title || '')}</h2>
+      ${table.subtitle ? `<div class="meta">${escapeHtml(table.subtitle)}</div>` : ''}
       <div class="table-card">
         <table>
           <thead>
@@ -384,7 +385,7 @@ function renderTables(tables = []) {
             ${(table.rows || []).map((row) => `
               <tr>
                 ${(row || []).map((cell, index) => `
-                  <td style="${(table.boldColumnIndices || []).includes(index) ? 'font-weight:700;' : ''}${table.headerRows && index >= 3 ? 'text-align:right;' : ''}" class="${index === (table.amountColumnIndex ?? -1) ? 'amount' : index === (table.metaColumnIndex ?? -1) ? 'meta' : ''}">
+                  <td style="${(table.boldColumnIndices || []).includes(index) ? 'font-weight:700;' : ''}${['left', 'center', 'right'].includes(table.columnAlignments?.[index]) ? `text-align:${table.columnAlignments[index]};` : !table.columnAlignments && table.headerRows && index >= 3 ? 'text-align:right;' : ''}" class="${index === (table.amountColumnIndex ?? -1) ? 'amount' : index === (table.metaColumnIndex ?? -1) ? 'meta' : ''}">
                     ${escapeHtml(cell ?? '')}
                   </td>
                 `).join('')}

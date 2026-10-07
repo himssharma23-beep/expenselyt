@@ -1,3 +1,13 @@
+function tenantMeterPreviousUnits(room, month, previousInvoice, openingUnits = 0) {
+  const replacement = (Array.isArray(room?.meter_replacements) ? room.meter_replacements : [])
+    .filter(item => String(item.effective_month) <= String(month))
+    .sort((a, b) => String(b.effective_month).localeCompare(String(a.effective_month)))[0];
+  if (replacement && (!previousInvoice || String(previousInvoice.invoice_month) < String(replacement.effective_month))) {
+    return Number(replacement.starting_reading || 0);
+  }
+  return previousInvoice ? Number(previousInvoice.current_electricity_units || 0) : Number(openingUnits || 0);
+}
+
 ﻿let _tenantOverview = null;
 let _tenantLoading = false;
 let _selectedTenantBuildingId = null;
@@ -68,7 +78,7 @@ function tenantChargeProfileForMonth(tenant, invoiceMonth) {
 
 function tenantInvoiceReadingDefaults(tenant, invoiceMonth = tenantCurrentMonthKey()) {
   const monthKey = String(invoiceMonth || '').trim();
-  const ownLatestInvoice = (tenant?.invoices || [])[0] || null;
+  const ownLatestInvoice = (tenant?.invoices || []).filter(item => String(item.invoice_month) < monthKey).sort((a, b) => String(b.invoice_month).localeCompare(String(a.invoice_month)))[0] || null;
   const roomInvoice = tenantSharedRoomInvoiceForMonth(tenant, monthKey, { excludeTenantId: tenant?.id });
   const chargeProfile = tenantChargeProfileForMonth(tenant, monthKey);
   if (roomInvoice) {
@@ -79,9 +89,7 @@ function tenantInvoiceReadingDefaults(tenant, invoiceMonth = tenantCurrentMonthK
     };
   }
   return {
-    previousUnits: ownLatestInvoice
-      ? Number(ownLatestInvoice.current_electricity_units || 0)
-      : Number((chargeProfile?.opening_electricity_units ?? tenant?.opening_electricity_units) || 0),
+    previousUnits: tenantMeterPreviousUnits(tenantFindRoom(tenant.room_id), monthKey, ownLatestInvoice, chargeProfile?.opening_electricity_units ?? tenant?.opening_electricity_units),
     currentUnits: '',
     sourceLabel: '',
   };
@@ -654,7 +662,7 @@ function tenantBulkInvoiceEstimate(tenant, monthKey) {
   const priorInvoice = tenantBulkInvoicePriorInvoice(tenant, monthKey);
   const roommateCount = tenantBulkRoommateCount(tenant);
   const splitConfig = tenantReadSplitConfig(tenantBulkSplitPrefix(tenantId));
-  const previousUnits = priorInvoice ? Number(priorInvoice.current_electricity_units || 0) : Number(profile.opening_electricity_units || tenant?.opening_electricity_units || 0);
+  const previousUnits = tenantMeterPreviousUnits(tenantFindRoom(tenant.room_id), monthKey, priorInvoice, profile.opening_electricity_units ?? tenant?.opening_electricity_units);
   const currentUnits = Number(document.getElementById(`tenantBulkCurrentUnits_${tenantId}`)?.value || previousUnits);
   const usedUnits = Math.max(0, currentUnits - previousUnits);
   const electricityAmount = tenantDivideChargeAmount(
@@ -983,123 +991,16 @@ function getTenantReportSnapshot(building) {
   };
 }
 
-function downloadTenantInvoicePdf(invoiceId) {
-  const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
-  if (!invoice) { toast('Invoice not found.', 'error'); return; }
-  renderSharedPdfFileWindow({
-    template: 'structured',
-    payload: {
-      title: `${invoice.tenant_name_snapshot || 'Tenant'} Invoice`,
-      subtitle: `${invoice.room_label_snapshot || 'Room'} · ${tenantMonthLabel(invoice.invoice_month)}`,
-      breadcrumb: `${invoice.building_name_snapshot || 'Building'} · Invoice snapshot`,
-      sections: [
-        {
-          title: 'Invoice Summary',
-          rows: [
-            { label: 'Rent', value: fmtCur(invoice.rent_amount_snapshot || 0) },
-            { label: 'Electricity', value: tenantElectricityUsageText(invoice) },
-            { label: 'Other Charges', value: fmtCur(invoice.other_charges_snapshot || 0) },
-            { label: 'Status', value: String(invoice.payment_status || 'pending').replace(/_/g, ' ') },
-            { label: 'Due Date', value: invoice.due_date ? tenantDateLabel(invoice.due_date) : '-' },
-            { label: 'Total', value: fmtCur(invoice.total_amount || 0) },
-          ],
-        },
-      ],
-    },
-  }, `Tenant_Invoice_${invoice.tenant_name_snapshot || 'Tenant'}_${tenantMonthLabel(invoice.invoice_month)}`, `tenant-invoice-${invoice.tenant_name_snapshot || 'tenant'}-${invoice.invoice_month || 'invoice'}`);
+async function downloadTenantInvoicePdf(invoiceId) {
+  return downloadSharedWebReport('downloadTenantInvoicePdf', [invoiceId], { _tenantOverview });
 }
 
-function downloadTenantReportPdf(buildingId = _selectedTenantBuildingId) {
-  const building = tenantFindBuilding(buildingId);
-  if (!building) { toast('Building not found.', 'error'); return; }
-  const snapshot = getTenantReportSnapshot(building);
-  renderSharedPdfFileWindow({
-    template: 'structured',
-    payload: {
-      title: `${building.name || 'Building'} Report`,
-      subtitle: `${snapshot.invoiceCount || 0} invoice snapshots`,
-      breadcrumb: 'Tenant analytics',
-      sections: [
-        {
-          title: 'Summary',
-          rows: [
-            { label: 'Selected Total', value: fmtCur(snapshot.totalAmount || 0) },
-            { label: 'Paid', value: fmtCur((snapshot.filteredInvoices || []).reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0)) },
-            { label: 'Rent Total', value: fmtCur(snapshot.totalRent || 0) },
-            { label: 'Electricity', value: fmtCur(snapshot.totalElectricity || 0) },
-            { label: 'Avg / Invoice', value: fmtCur(snapshot.avgInvoice || 0) },
-            { label: 'Rows', value: String(snapshot.invoiceCount || 0) },
-          ],
-        },
-      ],
-      tables: [
-        {
-          title: 'Top Tenants',
-          columns: ['Tenant', 'Total'],
-          amountColumnIndex: 1,
-          rows: (snapshot.tenantTotals || []).map((entry) => [
-            entry.tenant?.tenant_name || 'No rows',
-            fmtCur(entry.total || 0),
-          ]),
-        },
-        {
-          title: 'Room Totals',
-          columns: ['Room', 'Total'],
-          amountColumnIndex: 1,
-          rows: (snapshot.roomTotals || []).map((entry) => [
-            entry.room?.room_label || 'No rows',
-            fmtCur(entry.total || 0),
-          ]),
-        },
-        {
-          title: 'Monthly Breakdown',
-          columns: ['Month', 'Total'],
-          amountColumnIndex: 1,
-          rows: (snapshot.monthRows || []).map((row) => [
-            tenantMonthLabel(row.monthKey),
-            fmtCur(row.total || 0),
-          ]),
-        },
-      ],
-    },
-  }, `Tenant_Report_${building.name || 'Building'}`, `tenant-report-${building.name || 'building'}`);
+async function downloadTenantReportPdf(buildingId = _selectedTenantBuildingId) {
+  return downloadSharedWebReport('downloadTenantReportPdf', [buildingId], { building: tenantFindBuilding(buildingId), snapshot: getTenantReportSnapshot(tenantFindBuilding(buildingId)) });
 }
 
-function downloadTenantMonthInvoicesPdf(buildingId = _selectedTenantBuildingId, monthKey = tenantCurrentMonthKey()) {
-  const building = tenantFindBuilding(buildingId);
-  if (!building) { toast('Building not found.', 'error'); return; }
-  const monthInvoices = getTenantMonthInvoices(building, monthKey);
-  if (!monthInvoices.length) { toast('No invoices found for this month.', 'warning'); return; }
-  const totalAmount = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.total_amount || 0), 0));
-  const totalPaid = tenantNum(monthInvoices.reduce((sum, invoice) => sum + tenantNum(invoice.paid_amount || 0), 0));
-  renderSharedPdfFileWindow({
-    template: 'structured',
-    payload: {
-      title: `${building.name || 'Building'} Invoices`,
-      subtitle: tenantMonthLabel(monthKey),
-      breadcrumb: `${monthInvoices.length} invoices · Total ${fmtCur(totalAmount)}`,
-      totals: {
-        total: fmtCur(totalAmount),
-        fair: fmtCur(monthInvoices.reduce((sum, invoice) => sum + Number(invoice.electricity_amount || 0), 0)),
-        extra: String(monthInvoices.length),
-        count: String(monthInvoices.filter((invoice) => String(invoice.payment_status || 'pending') === 'paid').length),
-      },
-      tables: [
-        {
-          title: 'Month Invoices',
-          columns: ['Tenant', 'Room', 'Electricity', 'Total', 'Status'],
-          amountColumnIndex: 3,
-          rows: monthInvoices.map((invoice) => [
-            invoice.tenant_name_snapshot || 'Tenant',
-            invoice.room_label_snapshot || 'Room',
-            fmtCur(invoice.electricity_amount || 0),
-            fmtCur(invoice.total_amount || 0),
-            String(invoice.payment_status || 'pending').replace(/_/g, ' '),
-          ]),
-        },
-      ],
-    },
-  }, `Tenant_Invoices_${building.name || 'Building'}_${tenantMonthLabel(monthKey)}`, `tenant-month-${building.name || 'building'}-${monthKey}`);
+async function downloadTenantMonthInvoicesPdf(buildingId = _selectedTenantBuildingId, monthKey = tenantCurrentMonthKey()) {
+  return downloadSharedWebReport('downloadTenantMonthInvoicesPdf', [buildingId, monthKey], { building: tenantFindBuilding(buildingId), monthInvoices: getTenantMonthInvoices(tenantFindBuilding(buildingId), monthKey) });
 }
 
 function renderTenantReportsTab(building) {
@@ -1597,6 +1498,7 @@ function renderTenantsPage() {
     ['overview', 'Overview'],
     ['tenants', 'Tenants'],
     ['invoices', 'Invoices'],
+    ['inverters', 'Inverters'],
     ['reports', 'Reports'],
   ].map(([key, label]) => `<button type="button" class="tenant-ledger-tab ${_tenantPageTab === key ? 'active' : ''}" data-tenant-tab="${escHtml(key)}" onclick="setTenantPageTab('${key}')">${label}</button>`).join('');
   const buildingOptions = buildings.map((building) => `
@@ -1604,7 +1506,9 @@ function renderTenantsPage() {
   `).join('');
   const content = !selectedBuilding
     ? emptyBlock
-    : _tenantPageTab === 'tenants'
+    : _tenantPageTab === 'inverters'
+      ? '<div id="tenantInvertersPanel" class="card" style="padding:16px">Loading inverter meters...</div>'
+      : _tenantPageTab === 'tenants'
       ? renderTenantRecordsTab(selectedBuilding)
       : _tenantPageTab === 'invoices'
         ? renderTenantInvoicesTab(selectedBuilding)
@@ -1721,6 +1625,7 @@ function renderTenantsPage() {
       ` : ''}
     </div>`;
   bindTenantsPageInteractions(main);
+  if (_tenantPageTab === 'inverters' && selectedBuilding) showTenantInverterMeters(selectedBuilding.id);
 }
 
 function showTenantBuildingModal(buildingId = null) {
@@ -2306,6 +2211,8 @@ function showTenantRecordDetailsModal(recordId) {
           </div>`, 'No provided items saved')}
       </div>
       <div class="card" style="padding:16px">
+        <button class="btn btn-s" onclick="showTenantMeterReplacementModal(${Number(tenant.id)})">Replace Meter</button>
+        <div style="font-size:12px;color:var(--t3);margin:8px 0">${(room?.meter_replacements || []).map(item => `New meter from ${escHtml(item.effective_month)}: starting reading ${Number(item.starting_reading)}`).join('<br>')}</div>
         <div style="font-size:15px;font-weight:800;color:var(--t1);margin-bottom:8px">Charge History</div>
         <div style="font-size:12px;color:var(--t3);margin-bottom:10px">Saved rate changes and effective periods for this tenant.</div>
         ${tenantChargeHistoryHtml(tenant.charge_history || [])}
@@ -3019,7 +2926,7 @@ function showTenantInvoiceViewModal(invoiceId) {
   const invoice = (_tenantOverview?.invoices || []).find((item) => String(item.id) === String(invoiceId));
   if (!invoice) { toast('Invoice not found.', 'error'); return; }
   const otherChargesHtml = (invoice.other_charge_items || []).length
-    ? `<div style="display:grid;gap:6px">${invoice.other_charge_items.map((item) => `<div style="display:flex;justify-content:space-between;gap:12px"><span>${escHtml(item.detail || 'Other charge')}</span><strong>${fmtCur(item.amount || 0)}</strong></div>`).join('')}</div>`
+    ? `<div style="display:grid;gap:6px">${invoice.other_charge_items.map((item) => `<div style="display:flex;align-items:baseline;gap:8px;min-width:0"><span style="min-width:0;overflow-wrap:anywhere">${escHtml(item.detail || 'Other charge')}</span><strong style="flex-shrink:0;white-space:nowrap">${fmtCur(item.amount || 0)}</strong></div>`).join('')}</div>`
     : fmtCur(invoice.other_charges_snapshot || 0);
   openModal(`Invoice - ${escHtml(tenantMonthLabel(invoice.invoice_month))}`, `
     <div style="display:grid;gap:12px">
@@ -3028,7 +2935,8 @@ function showTenantInvoiceViewModal(invoiceId) {
         <div style="font-size:12px;color:var(--t3);margin-top:4px">${escHtml(invoice.building_name_snapshot || '')} • ${escHtml(invoice.room_label_snapshot || '')}</div>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
-        <table>
+        <table class="tenant-invoice-detail-table" style="width:100%;min-width:0;table-layout:fixed">
+          <colgroup><col style="width:32%"><col style="width:68%"></colgroup>
           <tbody>
             <tr><td>Invoice Month</td><td>${escHtml(tenantMonthLabel(invoice.invoice_month))}</td></tr>
             <tr><td>Rent</td><td>${fmtCur(invoice.rent_amount_snapshot || 0)}</td></tr>
@@ -3283,3 +3191,121 @@ window.createTenantInvoiceMonthShareLink = createTenantInvoiceMonthShareLink;
 window.deleteTenantInvoiceShareLink = deleteTenantInvoiceShareLink;
 window.deleteTenantInvoiceMonthShareLink = deleteTenantInvoiceMonthShareLink;
 window.copyTenantInvoiceShareLink = copyTenantInvoiceShareLink;
+
+function showTenantMeterReplacementModal(tenantId) {
+  const tenant = tenantFindRecord(tenantId);
+  if (!tenant) return;
+  const room = tenantFindRoom(tenant.room_id);
+  const latest = (_tenantOverview?.invoices || []).filter(item => Number(tenantFindRecord(item.tenant_id)?.room_id) === Number(tenant.room_id)).map(item => String(item.invoice_month)).sort().pop();
+  let month = tenantCurrentMonthKey();
+  if (latest && latest >= month) {
+    const [year, index] = latest.split('-').map(Number);
+    month = `${index === 12 ? year + 1 : year}-${String(index === 12 ? 1 : index + 1).padStart(2, '0')}`;
+  }
+  openModal('Replace Electricity Meter', `
+    <p>Set the new meter for ${escHtml(room?.room_label || 'this room')}. This applies to all tenants sharing this room. Existing invoices stay unchanged.</p>
+    <label class="fl">First billing month<input id="tenantMeterMonth" class="fi" type="month" value="${month}"></label>
+    <label class="fl">New meter starting reading<input id="tenantMeterStart" class="fi" type="number" min="0" max="100000000" step="1" value="0"></label>
+    <p style="font-size:12px;color:var(--t3)">The next invoice uses this starting reading. Include any unbilled old-meter usage using Extra Units on the invoice.</p>
+    <div class="fa"><button class="btn btn-p" onclick="saveTenantMeterReplacement(${Number(tenantId)})">Save Meter</button><button class="btn btn-s" onclick="closeModal()">Cancel</button></div>
+  `);
+}
+async function saveTenantMeterReplacement(tenantId) {
+  const result = await api(`/api/tenants/records/${tenantId}/meter-replacement`, { method: 'POST', body: {
+    effective_month: document.getElementById('tenantMeterMonth').value,
+    starting_reading: document.getElementById('tenantMeterStart').value,
+  } });
+  if (!result?.success) return toast(result?.error || 'Could not save meter', 'error');
+  closeModal();
+  await loadTenantsPage();
+  toast('New meter saved for this room', 'success');
+}
+window.showTenantMeterReplacementModal = showTenantMeterReplacementModal;
+window.saveTenantMeterReplacement = saveTenantMeterReplacement;
+
+async function showTenantInverterMeters(buildingId) {
+  const building = tenantFindBuilding(buildingId);
+  const panel = document.getElementById('tenantInvertersPanel');
+  if (!building || !panel) return;
+  try {
+    const result = await api(`/api/tenants/buildings/${buildingId}/inverter-meters`);
+    if (!result?.success) throw new Error(result?.error || 'Could not load inverter meters');
+    if (!panel.isConnected) return;
+    const rooms = building.rooms || [];
+    const tenants = (_tenantOverview?.tenants || []).filter(item => Number(item.building_id) === Number(buildingId));
+    panel.innerHTML = `<h3>Inverters</h3>
+      <p>Reading records only. Inverter usage does not add charges to invoices.</p>
+      ${(result.meters || []).map(meter => `<div class="card" style="padding:14px;margin-bottom:14px">
+        <strong>${escHtml(meter.name)}</strong>
+        <p>${meter.tenant_id ? `Tenant: ${escHtml(tenantFindRecord(meter.tenant_id)?.tenant_name || 'Tenant')}` : `Shared rooms: ${(meter.rooms || []).map(room => escHtml(room.room_label)).join(', ')}`}</p>
+        <details><summary>Reading history (${meter.readings.length})</summary>
+          ${meter.readings.map(row => `<div style="padding:8px 0;border-bottom:1px solid var(--br)">${escHtml(row.reading_date)}: <strong>${Number(row.reading)}</strong> · ${row.units_used == null ? 'Opening reading' : `${Number(row.units_used)} units used`}${row.note ? `<div>${escHtml(row.note)}</div>` : ''}</div>`).join('')}
+        </details>
+        <p>Current month (${tenantDefaultStartDate().slice(0, 7)}): <strong>${Number(meter.monthly_units?.[tenantDefaultStartDate().slice(0, 7)] || 0)} units recorded</strong></p>
+        <p>Previous reading: <strong>${Number(meter.readings[0]?.reading || 0)}</strong> (${escHtml(meter.readings[0]?.reading_date || '')})</p>
+        <label class="fl">Reading date<input class="fi" type="date" id="inverterDate${meter.id}" value="${tenantDefaultStartDate()}" onchange="previewTenantInverterUnits(${Number(meter.id)})"></label>
+        <label class="fl">Current reading<input class="fi" type="number" min="${Number(meter.readings[0]?.reading || 0)}" max="100000000" step="0.01" id="inverterValue${meter.id}" oninput="previewTenantInverterUnits(${Number(meter.id)})"></label>
+        <p id="inverterPreview${meter.id}" aria-live="polite" data-previous="${Number(meter.readings[0]?.reading || 0)}" data-months="${escHtml(JSON.stringify(meter.monthly_units || {}))}">Enter the current reading to calculate units.</p>
+        <p style="font-size:12px;color:var(--t3)">Usage is recorded in the month of the reading date.</p>
+        <label class="fl">Note (optional)<input class="fi" maxlength="500" id="inverterNote${meter.id}"></label>
+        <button class="btn btn-p" onclick="saveTenantInverterReading(${Number(buildingId)},${Number(meter.id)},this)">Save Reading</button>
+      </div>`).join('') || '<p>No inverter meter added yet.</p>'}
+      <details><summary>Add Inverter Meter</summary>
+        <label class="fl">Meter name / number<input id="inverterName" class="fi" maxlength="100" placeholder="Inverter meter"></label>
+        <label class="fl">Used by<select id="inverterScope" class="fi" onchange="document.getElementById('inverterRooms').hidden=this.value!=='shared';document.getElementById('inverterTenantField').hidden=this.value!=='tenant'"><option value="shared">Shared by room(s)</option><option value="tenant">One tenant</option></select></label>
+        <label id="inverterTenantField" class="fl" hidden>Tenant<select id="inverterTenant" class="fi"><option value="">Select tenant</option>${tenants.map(tenant => `<option value="${Number(tenant.id)}">${escHtml(tenant.tenant_name)}</option>`).join('')}</select></label>
+        <div id="inverterRooms"><p>Select rooms sharing this meter. All tenants in these rooms use the same reading history.</p>
+          ${rooms.map(room => `<label style="display:block;padding:6px"><input type="checkbox" name="inverterRoom" value="${Number(room.id)}"> ${escHtml(room.room_label)}</label>`).join('')}
+        </div>
+        <label class="fl">Opening reading date<input id="inverterOpeningDate" class="fi" type="date" value="${tenantDefaultStartDate()}"></label>
+        <label class="fl">Opening reading<input id="inverterOpening" class="fi" type="number" min="0" step="0.01" value="0"></label>
+        <button class="btn btn-p" onclick="saveTenantInverterMeter(${Number(buildingId)},this)">Add Meter</button>
+      </details>
+    `;
+  } catch (err) { if (panel.isConnected) panel.innerHTML = `<p>${escHtml(err.message || 'Could not load inverter meters')}</p><button class="btn btn-s" onclick="showTenantInverterMeters(${Number(buildingId)})">Retry</button>`; }
+}
+async function saveTenantInverterMeter(buildingId, button) {
+  const body = {
+    name: document.getElementById('inverterName').value,
+    scope: document.getElementById('inverterScope').value,
+    tenant_id: document.getElementById('inverterTenant').value || null,
+    room_ids: [...document.querySelectorAll('input[name="inverterRoom"]:checked')].map(input => Number(input.value)),
+    reading_date: document.getElementById('inverterOpeningDate').value,
+    reading: document.getElementById('inverterOpening').value,
+  };
+  await submitTenantInverter(`/api/tenants/buildings/${buildingId}/inverter-meters`, body, buildingId, button);
+}
+async function saveTenantInverterReading(buildingId, meterId, button) {
+  await submitTenantInverter(`/api/tenants/inverter-meters/${meterId}/readings`, {
+    reading_date: document.getElementById(`inverterDate${meterId}`).value,
+    reading: document.getElementById(`inverterValue${meterId}`).value,
+    note: document.getElementById(`inverterNote${meterId}`).value,
+  }, buildingId, button);
+}
+async function submitTenantInverter(url, body, buildingId, button) {
+  button.disabled = true;
+  try {
+    const result = await api(url, { method: 'POST', body });
+    if (!result?.success) throw new Error(result?.error || 'Could not save inverter meter');
+    await showTenantInverterMeters(buildingId);
+    toast('Inverter record saved', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+  finally { button.disabled = false; }
+}
+window.showTenantInverterMeters = showTenantInverterMeters;
+window.saveTenantInverterMeter = saveTenantInverterMeter;
+window.saveTenantInverterReading = saveTenantInverterReading;
+
+function previewTenantInverterUnits(meterId) {
+  const output = document.getElementById(`inverterPreview${meterId}`);
+  const value = document.getElementById(`inverterValue${meterId}`).value;
+  const month = document.getElementById(`inverterDate${meterId}`).value.slice(0, 7);
+  const previous = Number(output.dataset.previous);
+  if (!value.trim()) { output.textContent = 'Enter the current reading to calculate units.'; return; }
+  const current = Number(value);
+  if (!Number.isFinite(current) || current < previous) { output.textContent = 'Current reading cannot be lower than the previous reading.'; return; }
+  const units = Math.round((current - previous) * 100) / 100;
+  const saved = Number(JSON.parse(output.dataset.months)[month] || 0);
+  output.textContent = `${current} - ${previous} = ${units} units used. ${month ? `${month} total after saving: ${Math.round((saved + units) * 100) / 100} units.` : 'Choose a reading date.'}`;
+}
+window.previewTenantInverterUnits = previewTenantInverterUnits;

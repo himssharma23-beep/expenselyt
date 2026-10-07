@@ -657,65 +657,8 @@
     }
   }
 
-  function petrolDownloadPdf(kind = 'real') {
-    try {
-      if (typeof _P === 'undefined') return toast('PDF helper not loaded', 'error');
-      const monthKey = String(petrolData?.month?.month_key || petrolMonth || '');
-      const entries = Array.isArray(petrolData?.entries) ? petrolData.entries : [];
-      const isFake = String(kind || '').toLowerCase() === 'fake';
-      const selectedEntries = entries.filter((entry) => isFake ? !!entry.is_fake : !entry.is_fake);
-      const totals = Array.isArray(petrolData?.totals) ? petrolData.totals : [];
-      const shareRows = totals.map((row) => {
-        const share = isFake ? n(row.final_fake) : n(row.final_real);
-        return [row.friend_name || 'Member', share];
-      });
-      const totalAmount = shareRows.reduce((sum, row) => sum + n(row[1]), 0);
-
-      const doc = _P.init(true);
-      let y = _P.header(doc, `Petrol Entries - ${monthKey}`, new Date().toLocaleDateString('en-IN'));
-      y = _P.cards(doc, y, [
-        { label: 'Total Entries', value: selectedEntries.length, color: '' },
-        { label: 'Month Total', value: _P.cur(totalAmount), color: '' },
-      ]);
-
-      y = _P.section(doc, y, 'Each Member Share');
-      y = _P.table(doc, y, [['Name', 'Share']], shareRows.length ? shareRows.map((row) => [row[0], _P.cur(row[1])]) : [['-', _P.cur(0)]], {
-        0: { cellWidth: 90 },
-        1: { halign: 'right', cellWidth: 70, fontStyle: 'bold' },
-      });
-
-      y = _P.section(doc, y, 'Daily Entries');
-      _P.table(
-        doc,
-        y,
-        [['Date', 'Remarks', 'Distance', 'Average', 'Petrol', 'Amount', 'Per Person Share']],
-        selectedEntries.length
-          ? selectedEntries.map((entry) => [
-            _P.dt(entry.entry_date),
-            cleanFakeSuffix(entry.remarks) || '-',
-            n(entry.distance_km).toFixed(1),
-            n(entry.average_kmpl).toFixed(1),
-            `${n(entry.petrol_used_litre).toFixed(2)} L`,
-            _P.cur(entry.amount_used),
-            (entry.members || []).map((m) => `${m.friend_name}: ${_P.cur(m.share_amount)}`).join(' | ') || '-',
-          ])
-          : [['-', '-', '-', '-', '-', _P.cur(0), '-']],
-        {
-          0: { cellWidth: 25 },
-          1: { cellWidth: 40 },
-          2: { halign: 'right', cellWidth: 20 },
-          3: { halign: 'right', cellWidth: 20 },
-          4: { halign: 'right', cellWidth: 24 },
-          5: { halign: 'right', cellWidth: 26, fontStyle: 'bold' },
-          6: { cellWidth: 95 },
-        },
-        true
-      );
-
-      _P.save(doc, `Petrol_Entries_${monthKey}_${isFake ? '2' : '1'}`);
-    } catch (err) {
-      toast(err?.message || 'Could not generate PDF', 'error');
-    }
+  async function petrolDownloadPdf(kind = 'real') {
+    return downloadSharedWebReport('petrolDownloadPdf', [kind], { petrolData, petrolMonth });
   }
 
   function petrolOpenShareModal(mode = 'real') {

@@ -1,3 +1,13 @@
+function tenantMeterPreviousUnits(room, month, previousInvoice, openingUnits = 0) {
+  const replacement = (Array.isArray(room?.meter_replacements) ? room.meter_replacements : [])
+    .filter(item => String(item.effective_month) <= String(month))
+    .sort((a, b) => String(b.effective_month).localeCompare(String(a.effective_month)))[0];
+  if (replacement && (!previousInvoice || String(previousInvoice.invoice_month) < String(replacement.effective_month))) {
+    return Number(replacement.starting_reading || 0);
+  }
+  return previousInvoice ? Number(previousInvoice.current_electricity_units || 0) : Number(openingUnits || 0);
+}
+
 const crypto = require('crypto');
 const { query, withTransaction } = require('./postgres');
 
@@ -575,6 +585,7 @@ async function ensureTenantTables() {
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_month_share_links_user_id ON tenant_invoice_month_share_links(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_payment_requests_invoice_id ON tenant_invoice_payment_requests(invoice_id, requested_at DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_tenant_invoice_payment_requests_tenant_id ON tenant_invoice_payment_requests(tenant_id, requested_at DESC)`);
+  await query(`ALTER TABLE tenant_rooms ADD COLUMN IF NOT EXISTS meter_replacements JSONB NOT NULL DEFAULT '[]'::jsonb`);
   tenantSchemaEnsured = true;
 }
 
@@ -593,7 +604,7 @@ async function getBuildingOwnedByUser(userId, buildingId) {
 async function getRoomOwnedByUser(userId, roomId) {
   await ensureTenantTables();
   const result = await query(
-    `SELECT r.id, r.building_id, r.room_label, r.floor_label, r.room_type, r.notes, r.is_active, r.created_at, r.updated_at
+    `SELECT r.id, r.building_id, r.room_label, r.floor_label, r.room_type, r.notes, r.is_active, r.meter_replacements, r.created_at, r.updated_at
      FROM tenant_rooms r
      INNER JOIN tenant_buildings b ON b.id = r.building_id
      WHERE r.id = $1 AND b.user_id = $2
@@ -901,7 +912,7 @@ async function listTenantsOverview(userId) {
       [userId]
     ),
     query(
-      `SELECT r.id, r.building_id, r.room_label, r.floor_label, r.room_type, r.notes, r.is_active, r.created_at, r.updated_at
+      `SELECT r.id, r.building_id, r.room_label, r.floor_label, r.room_type, r.notes, r.is_active, r.meter_replacements, r.created_at, r.updated_at
        FROM tenant_rooms r
        INNER JOIN tenant_buildings b ON b.id = r.building_id
        WHERE b.user_id = $1
@@ -962,6 +973,7 @@ async function listTenantsOverview(userId) {
     id: Number(row.id),
     building_id: Number(row.building_id),
     room_label: row.room_label,
+    meter_replacements: Array.isArray(row.meter_replacements) ? row.meter_replacements : [],
     floor_label: row.floor_label || '',
     room_type: row.room_type || '',
     notes: row.notes || '',
@@ -1827,14 +1839,14 @@ async function deleteTenantRecord(userId, tenantId) {
   return result.rowCount > 0;
 }
 
-async function getLastInvoiceForTenant(tenantId) {
+async function getLastInvoiceForTenant(tenantId, invoiceMonth) {
   const result = await query(
     `SELECT *
      FROM tenant_invoices
-     WHERE tenant_id = $1
+     WHERE tenant_id = $1 AND invoice_month < $2
      ORDER BY invoice_month DESC, id DESC
      LIMIT 1`,
-    [tenantId]
+    [tenantId, invoiceMonth]
   );
   return result.rows[0] || null;
 }
@@ -1921,15 +1933,12 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
     ? sumOtherChargeItems(otherChargeItems)
     : num(existing.other_charges_snapshot);
 
-  let previousUnits = Number((chargeProfile?.opening_electricity_units ?? tenant.opening_electricity_units) || 0);
+  let previousUnits;
   if (existing) previousUnits = Number(existing.previous_electricity_units || 0);
   else {
-    const sameRoomInvoice = await getSameRoomInvoiceForMonth(room.id, invoiceMonth, tenantId);
-    if (sameRoomInvoice) previousUnits = Number(sameRoomInvoice.current_electricity_units || 0);
-    else {
-      const lastInvoice = await getLastInvoiceForTenant(tenantId);
-      if (lastInvoice) previousUnits = Number(lastInvoice.current_electricity_units || 0);
-    }
+    const prior = await getSameRoomInvoiceForMonth(room.id, invoiceMonth, tenantId)
+      || await getLastInvoiceForTenant(tenantId, invoiceMonth);
+    previousUnits = tenantMeterPreviousUnits(room, invoiceMonth, prior, chargeProfile?.opening_electricity_units ?? tenant.opening_electricity_units);
   }
   if (currentUnits < previousUnits) throw validationError('Current electricity units cannot be less than previous units');
 
@@ -2818,7 +2827,34 @@ async function importTenantWorkbook(userId, buildingId, payload = {}) {
   });
 }
 
+async function replaceTenantMeter(userId, tenantId, data = {}) {
+  await ensureTenantTables();
+  const tenant = await getTenantOwnedByUser(userId, tenantId);
+  if (!tenant) throw validationError('Tenant not found');
+  const month = normalizeMonthKey(data.effective_month);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw validationError('Choose a valid billing month');
+  if (data.starting_reading === '' || data.starting_reading == null) throw validationError('New meter starting reading is required');
+  const reading = normalizeInteger(data.starting_reading, 'New meter starting reading', { min: 0, max: 100000000 });
+  return withTransaction(async client => {
+    const roomResult = await client.query('SELECT * FROM tenant_rooms WHERE id = $1 FOR UPDATE', [tenant.room_id]);
+    const room = roomResult.rows[0];
+    if (!room) throw validationError('Room not found');
+    const billed = await client.query(`SELECT MAX(inv.invoice_month) AS latest_month FROM tenant_invoices inv
+      JOIN tenant_records t ON t.id = inv.tenant_id WHERE t.room_id = $1`, [tenant.room_id]);
+    if (billed.rows[0]?.latest_month && month <= billed.rows[0].latest_month) {
+      throw validationError(`Choose a billing month after ${billed.rows[0].latest_month}. Existing invoices must keep their original meter readings.`);
+    }
+    const history = (Array.isArray(room.meter_replacements) ? room.meter_replacements : []).filter(item => item.effective_month !== month);
+    history.push({ effective_month: month, starting_reading: reading });
+    history.sort((a, b) => String(b.effective_month).localeCompare(String(a.effective_month)));
+    await client.query('UPDATE tenant_rooms SET meter_replacements = $1::jsonb, updated_at = NOW() WHERE id = $2', [JSON.stringify(history), tenant.room_id]);
+    return { effective_month: month, starting_reading: reading, room_id: Number(tenant.room_id) };
+  });
+}
+
 module.exports = {
+  ensureTenantTables,
+  replaceTenantMeter,
   listTenantsOverview,
   getTenantPortalRecordByPhone,
   getTenantPortalDashboard,

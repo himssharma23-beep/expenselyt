@@ -1,3 +1,6 @@
+const { buildLiveSplitFriendPdfPayload } = require('../utils/live-split-friend-pdf');
+const { buildWebReport } = require('../utils/web-pdf-reports');
+const { createPdfReportApi } = require('../utils/pdf-report-api');
 // ============================================================
 // API Routes — Expenses, Friends, Loans, Divide
 // ============================================================
@@ -12,6 +15,7 @@ const Tesseract = require('tesseract.js');
 const pgDb = require('../db/postgres-auth');
 const pgCoreDb = require('../db/postgres-core');
 const pgTenantDb = require('../db/postgres-tenants');
+const tenantInverterDb = require('../db/tenant-inverter-meters');
 const pgVideoDb = require('../db/postgres-videos');
 const pgPetrolDb = require('../db/postgres-petrol');
 const pgOpsDb = require('../db/postgres-ops');
@@ -95,8 +99,12 @@ router.post('/pdf/render-html', requireAuth, async (req, res) => {
     const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
     let html = '';
 
-    if (template === 'report-basic') {
+    if (template === 'web-report') {
+      html = buildStructuredPdfHtml(await buildWebReport(payload, createPdfReportApi(req)));
+    } else if (template === 'report-basic') {
       html = buildReportPdfHtml(payload);
+    } else if (template === 'live-split-friend') {
+      html = buildStructuredPdfHtml(buildLiveSplitFriendPdfPayload(payload));
     } else if (template === 'structured') {
       html = buildStructuredPdfHtml(payload);
     } else if (template === 'society') {
@@ -131,9 +139,13 @@ router.post('/pdf/render-file', requireAuth, async (req, res) => {
     let html = '';
     let fileNameBase = String(req.body?.file_name || req.body?.fileName || '').trim();
 
-    if (template === 'report-basic') {
+    if (template === 'web-report') {
+      html = buildStructuredPdfHtml(await buildWebReport(payload, createPdfReportApi(req)));
+    } else if (template === 'report-basic') {
       html = buildReportPdfHtml(payload);
       if (!fileNameBase) fileNameBase = payload?.title || 'report';
+    } else if (template === 'live-split-friend') {
+      html = buildStructuredPdfHtml(buildLiveSplitFriendPdfPayload(payload));
     } else if (template === 'structured') {
       html = buildStructuredPdfHtml(payload);
       if (!fileNameBase) fileNameBase = payload?.title || 'report';
@@ -13900,6 +13912,41 @@ router.post('/tenants/records/:id/invoices', async (req, res) => {
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not save invoice.' });
   }
+});
+
+router.post('/tenants/records/:id/meter-replacement', async (req, res) => {
+  try {
+    const replacement = await pgTenantDb.replaceTenantMeter(req.session.userId, req.params.id, req.body || {});
+    res.json({ success: true, replacement });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not replace meter.' });
+  }
+});
+
+router.get('/tenants/records/:id/inverter-meters', async (req, res) => {
+  try {
+    res.json({ success: true, meters: await tenantInverterDb.list(req.session.userId, req.params.id) });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message || 'Could not load inverter meters.' }); }
+});
+router.get('/tenants/buildings/:id/inverter-meters', async (req, res) => {
+  try {
+    res.json({ success: true, meters: await tenantInverterDb.list(req.session.userId, null, req.params.id) });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message || 'Could not load inverter meters.' }); }
+});
+router.post('/tenants/buildings/:id/inverter-meters', async (req, res) => {
+  try {
+    res.json({ success: true, meter: await tenantInverterDb.create(req.session.userId, null, req.body || {}, req.params.id) });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message || 'Could not save inverter meter.' }); }
+});
+router.post('/tenants/records/:id/inverter-meters', async (req, res) => {
+  try {
+    res.json({ success: true, meter: await tenantInverterDb.create(req.session.userId, req.params.id, req.body || {}) });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message || 'Could not save inverter meter.' }); }
+});
+router.post('/tenants/inverter-meters/:id/readings', async (req, res) => {
+  try {
+    res.json({ success: true, reading: await tenantInverterDb.addReading(req.session.userId, req.params.id, req.body || {}) });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message || 'Could not save inverter reading.' }); }
 });
 
 router.patch('/tenants/invoices/:id/status', async (req, res) => {

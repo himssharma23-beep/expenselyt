@@ -857,6 +857,7 @@ input, select, textarea { font-family: var(--ff); }
 table { width:100%; border-collapse:collapse; font-size:13.5px; min-width:640px; }
 th { text-align:left; padding:10px 14px; background:var(--em-xl); color:var(--t2); font-weight:600; font-size:12px; cursor:pointer; user-select:none; white-space:nowrap; }
 td { padding:10px 14px; border-bottom:1px solid var(--border-l); }
+.tenant-invoice-detail-table td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; }
 tr:hover { background:#FAFBFC; }
 .td-m { text-align:right; font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums; }
 .empty-td { text-align:center; padding:32px; color:var(--t3); font-size:14px; }
