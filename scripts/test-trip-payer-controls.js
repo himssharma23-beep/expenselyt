@@ -51,5 +51,47 @@ test('each manual and scanned trip entry renders exactly one payer control outsi
     assert.equal(await page.$eval('select[data-trip-manual-key="manual-1"]', element => element.value), 'Friend');
     assert.equal(await page.$eval('select[data-trip-scan-key="scan-1"]', element => element.value), 'Friend');
     assert.equal(await page.$eval('select[data-trip-manual-key="manual-2"]', element => element.value), '');
+    // Exercise real row updates and focus restoration, without blur/change events.
+    await page.evaluate(() => {
+      document.body.innerHTML = '<div id="modalOverlay"><div id="modalContent"><div class="modal-body"></div></div></div>';
+      window.openModal = (title, html) => { document.querySelector('.modal-body').innerHTML = html; };
+      window.computeTripRowSelfShare = (form, row) => Number(row.amount) / 2;
+    });
+    await page.addScriptTag({ content: source.slice(source.indexOf('  function captureTripCreateModalUiState()'), source.indexOf('  function renderTripCreateModal()')) });
+    await page.evaluate(() => {
+      window.liveSplitTripManualItem = (key, field, value) => updateTripManualItemWeb(key, { [field]: value });
+      window.liveSplitTripScanItem = (key, field, value) => updateTripScanItemWeb(key, { [field]: value });
+      renderTripCreateModal();
+    });
+    for (const kind of ['manual', 'scan']) {
+      const selector = `[data-trip-${kind}-key="${kind}-1"][data-trip-${kind}-field="amount"]`;
+      await page.focus(selector);
+      await page.keyboard.down('Control');
+      await page.keyboard.press('A');
+      await page.keyboard.up('Control');
+      await page.keyboard.press('Backspace');
+      await page.evaluate(() => { window.typingInput = document.activeElement; });
+      let typed = '';
+      for (const character of '454.5') {
+        typed += character;
+        await page.keyboard.type(character);
+        const actual = await page.evaluate(kind => {
+          const row = state.tripCreate[`${kind}_items`][0];
+          const input = document.activeElement;
+          const card = input.closest('[style*="border:1px"]');
+          return { amount: Number(row.amount), sameInput: input === window.typingInput, card: card?.textContent, totals: document.querySelector('.tw-totals').textContent };
+        }, kind);
+        assert.equal(actual.amount, Number(typed));
+        assert.equal(actual.sameInput, true, 'typing retains the active input');
+        assert.ok(actual.card.includes(String(Number(typed))), 'amount badge refreshes immediately');
+        const expectedTotal = Number(typed) + (kind === 'manual' ? 200 : 554.5);
+        assert.ok(actual.totals.includes(String(expectedTotal)), 'trip total refreshes immediately');
+      }
+      const nameSelector = `[data-trip-${kind}-key="${kind}-1"][data-trip-${kind}-field="item_name"]`;
+      await page.focus(nameSelector);
+      await page.keyboard.press('Home');
+      await page.keyboard.type('New ');
+      assert.equal(await page.evaluate(kind => state.tripCreate[`${kind}_items`][0].item_name, kind), 'New Meal');
+    }
   } finally { await browser.close(); }
 });

@@ -2642,14 +2642,16 @@
     const mode = inferEditSplitMode(group?.total_amount, shareByKey, group?.split_mode);
     const splitValues = buildEditSplitValuesForMode(group?.total_amount, shareByKey, mode);
     return {
+      isSettlement: String(group?.split_mode || '').toLowerCase() === 'settlement',
+      originalTotal: r2(group?.total_amount),
       id: Number(group?.id),
       trip_id: Number(group?.trip_id || 0) > 0 ? Number(group?.trip_id) : null,
       divide_date: toLocalIsoDate(group?.divide_date, todayLocalIso()),
       details: String(group?.details || '').trim(),
       heading: String(group?.heading || group?.details || '').trim(),
       total_amount: r2(group?.total_amount),
-      paid_by: String(group?.paid_by || ownerName).trim(),
-      original_paid_by: String(group?.paid_by || ownerName).trim(),
+      paid_by: (String(group?.paid_by || '').trim().toLowerCase() === 'you' ? ownerName : String(group?.paid_by || ownerName).trim()),
+      original_paid_by: (String(group?.paid_by || '').trim().toLowerCase() === 'you' ? ownerName : String(group?.paid_by || ownerName).trim()),
       owner_key: 'owner',
       owner_name: ownerName,
       splits: splitRows,
@@ -2662,9 +2664,30 @@
     };
   }
 
+  function settlementEditSplits(amount, originalTotal, splits) {
+    return (splits || []).map(split => ({ ...split,
+      share_amount: r2(Number(amount) * Number(split.share_amount) / Number(originalTotal)),
+    }));
+  }
+
+  function renderSettlementEditor(form) {
+    const payers = editPayerPeople(form);
+    const payer = String(form.paid_by || form.original_paid_by);
+    const receiver = payers.find(person => String(person.name) !== payer)?.name || '';
+    openModal('Edit settlement', `<div style="display:grid;gap:16px">
+      <label>Amount<input class="fi" type="number" min="0.01" step="0.01" value="${escHtml(String(form.total_amount))}" oninput="liveSplitEditExpenseField('total_amount', this.value)"></label>
+      <label>Date<input class="fi" type="date" value="${escHtml(form.divide_date)}" onchange="liveSplitEditExpenseField('divide_date', this.value)"></label>
+      <label>Paid by<select class="fi" onchange="liveSplitEditExpenseField('paid_by', this.value)">${payers.map(person => `<option value="${escHtml(person.name)}" ${person.name === payer ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('')}</select></label>
+      <p>Paid to: <strong>${escHtml(receiver)}</strong></p>
+      <label>Details<input class="fi" value="${escHtml(form.details)}" oninput="liveSplitEditExpenseField('details', this.value)"></label>
+      <div style="display:flex;justify-content:flex-end;gap:10px"><button type="button" class="btn" onclick="liveSplitCancelEditedExpense()">Cancel</button><button type="button" class="btn btn-p" onclick="liveSplitSaveEditedExpense()" ${state.saveBusy ? 'disabled' : ''}>${state.saveBusy ? 'Saving...' : 'Save changes'}</button></div>
+    </div>`);
+  }
+
   function renderExpenseEditorModal() {
     const form = state.editExpense;
     if (!form) return;
+    if (form.isSettlement) return renderSettlementEditor(form);
     const people = peopleForEditExpense(form);
     const selectablePeople = editSelectablePeople(form);
     const payerPeople = editPayerPeople(form);
@@ -4835,8 +4858,20 @@
 
   function rerenderTripCreateModalPreservingUi() {
     const snapshot = captureTripCreateModalUiState();
+    const active = document.activeElement;
+    const bodyScroll = document.querySelector('#modalContent .modal-body')?.scrollTop || 0;
     renderTripCreateModal();
+    // Retain the actual input while typing (including unfinished decimals and IME text).
+    if (active?.tagName === 'INPUT' && /trip-(scan|manual)-field/.test(snapshot.focus?.kind || '')) {
+      const kind = snapshot.focus.kind.includes('manual') ? 'manual' : 'scan';
+      const replacement = [...document.querySelectorAll(`[data-trip-${kind}-key][data-trip-${kind}-field]`)]
+        .find(node => node.getAttribute(`data-trip-${kind}-key`) === snapshot.focus.key
+          && node.getAttribute(`data-trip-${kind}-field`) === snapshot.focus.field);
+      if (replacement) replacement.replaceWith(active);
+    }
     restoreTripCreateModalUiState(snapshot);
+    const body = document.querySelector('#modalContent .modal-body');
+    if (body) body.scrollTop = bodyScroll;
   }
 
   function updateTripScanItemWeb(itemKey, patch = {}) {
@@ -5268,14 +5303,14 @@
                           <span class="badge" style="background:#f3f6ff;color:#4268b2">${fmtCur(getTripScanRowEffectiveAmount(form, normalizedItem))}</span>
                         </div>
                       </div>
-                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="item_name" style="font-size:15px;font-weight:800;min-width:0;width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "item_name", this.value)'>
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="item_name" style="font-size:15px;font-weight:800;min-width:0;width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput='liveSplitTripScanItem(${toJsArg(rowKey)}, "item_name", this.value)'>
                     </div>
                     <button type="button" class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick='liveSplitTripScanDelete(${toJsArg(rowKey)})' title="Delete row">&times;</button>
                   </div>
                   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:10px">
                     <label style="display:block;min-width:0">
                       <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Amount After Discount</div>
-                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "amount", this.value)'>
+                      <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput='liveSplitTripScanItem(${toJsArg(rowKey)}, "amount", this.value)'>
                     </label>
                   </div>
                 <label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="paid_by" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
@@ -5357,8 +5392,8 @@
                       <span class="badge" style="background:#f3f6ff;color:#4268b2">${fmtCur(n(item.amount))}</span>
                     </div>
                     <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(120px,.8fr);gap:8px">
-                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="item_name" style="width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" onchange="liveSplitTripManualItem(${toJsArg(rowKey)}, 'item_name', this.value)">
-                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="amount" style="width:100%;text-align:right" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" onchange="liveSplitTripManualItem(${toJsArg(rowKey)}, 'amount', this.value)">
+                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="item_name" style="width:100%" value="${escHtml(String(item.item_name || ''))}" placeholder="Item name" oninput='liveSplitTripManualItem(${toJsArg(rowKey)}, "item_name", this.value)'>
+                      <input class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="amount" style="width:100%;text-align:right" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput='liveSplitTripManualItem(${toJsArg(rowKey)}, "amount", this.value)'>
                     </div>
                   </div>
                   <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripManualDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
@@ -6981,7 +7016,7 @@
       toast('At least one participant is required', 'warning');
       return;
     }
-    const preview = computeShares(n(form.total_amount), form.splitMode, people, form.splitValues);
+    const preview = form.isSettlement ? { valid: true, shares: [] } : computeShares(n(form.total_amount), form.splitMode, people, form.splitValues);
     if (!preview.valid) {
       toast(preview.error || 'Invalid split values', 'warning');
       return;
@@ -6998,9 +7033,9 @@
       heading: String(form.heading || form.details || '').trim(),
        paid_by: String(matchedPayer?.name || payerName).trim(),
       total_amount: Number(form.total_amount),
-      split_mode: String(form.splitMode || 'equal'),
+      split_mode: form.isSettlement ? 'settlement' : String(form.splitMode || 'equal'),
       trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,
-      splits: preview.shares
+      splits: form.isSettlement ? settlementEditSplits(form.total_amount, form.originalTotal, form.splits) : preview.shares
         .filter((share) => String(share.key) !== String(form.owner_key || 'owner'))
         .map((share) => {
           const source = people.find((person) => String(person.key) === String(share.key));
@@ -7636,7 +7671,7 @@
     } else {
       state.editExpense[field] = field === 'total_amount' ? value : (value || '');
     }
-    if (field === 'total_amount') {
+    if ((field === 'total_amount' && !state.editExpense.isSettlement) || (field === 'paid_by' && state.editExpense.isSettlement)) {
       renderExpenseEditorModal();
     }
     // paid_by and details changes: state-only update, no full re-render to avoid DOM race conditions
