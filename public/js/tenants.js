@@ -3231,39 +3231,56 @@ async function showTenantInverterMeters(buildingId) {
     const result = await api(`/api/tenants/buildings/${buildingId}/inverter-meters`);
     if (!result?.success) throw new Error(result?.error || 'Could not load inverter meters');
     if (!panel.isConnected) return;
-    const rooms = building.rooms || [];
-    const tenants = (_tenantOverview?.tenants || []).filter(item => Number(item.building_id) === Number(buildingId));
-    panel.innerHTML = `<h3>Inverters</h3>
-      <p>Reading records only. Inverter usage does not add charges to invoices.</p>
-      ${(result.meters || []).map(meter => `<div class="card" style="padding:14px;margin-bottom:14px">
-        <strong>${escHtml(meter.name)}</strong>
-        <p>${meter.tenant_id ? `Tenant: ${escHtml(tenantFindRecord(meter.tenant_id)?.tenant_name || 'Tenant')}` : `Shared rooms: ${(meter.rooms || []).map(room => escHtml(room.room_label)).join(', ')}`}</p>
-        <details><summary>Reading history (${meter.readings.length})</summary>
-          ${meter.readings.map(row => `<div style="padding:8px 0;border-bottom:1px solid var(--br)">${escHtml(row.reading_date)}: <strong>${Number(row.reading)}</strong> · ${row.units_used == null ? 'Opening reading' : `${Number(row.units_used)} units used`}${row.note ? `<div>${escHtml(row.note)}</div>` : ''}</div>`).join('')}
-        </details>
-        <p>Current month (${tenantDefaultStartDate().slice(0, 7)}): <strong>${Number(meter.monthly_units?.[tenantDefaultStartDate().slice(0, 7)] || 0)} units recorded</strong></p>
-        <p>Previous reading: <strong>${Number(meter.readings[0]?.reading || 0)}</strong> (${escHtml(meter.readings[0]?.reading_date || '')})</p>
-        <label class="fl">Reading date<input class="fi" type="date" id="inverterDate${meter.id}" value="${tenantDefaultStartDate()}" onchange="previewTenantInverterUnits(${Number(meter.id)})"></label>
-        <label class="fl">Current reading<input class="fi" type="number" min="${Number(meter.readings[0]?.reading || 0)}" max="100000000" step="0.01" id="inverterValue${meter.id}" oninput="previewTenantInverterUnits(${Number(meter.id)})"></label>
-        <p id="inverterPreview${meter.id}" aria-live="polite" data-previous="${Number(meter.readings[0]?.reading || 0)}" data-months="${escHtml(JSON.stringify(meter.monthly_units || {}))}">Enter the current reading to calculate units.</p>
-        <p style="font-size:12px;color:var(--t3)">Usage is recorded in the month of the reading date.</p>
-        <label class="fl">Note (optional)<input class="fi" maxlength="500" id="inverterNote${meter.id}"></label>
-        <button class="btn btn-p" onclick="saveTenantInverterReading(${Number(buildingId)},${Number(meter.id)},this)">Save Reading</button>
-      </div>`).join('') || '<p>No inverter meter added yet.</p>'}
-      <details><summary>Add Inverter Meter</summary>
-        <label class="fl">Meter name / number<input id="inverterName" class="fi" maxlength="100" placeholder="Inverter meter"></label>
-        <label class="fl">Used by<select id="inverterScope" class="fi" onchange="document.getElementById('inverterRooms').hidden=this.value!=='shared';document.getElementById('inverterTenantField').hidden=this.value!=='tenant'"><option value="shared">Shared by room(s)</option><option value="tenant">One tenant</option></select></label>
-        <label id="inverterTenantField" class="fl" hidden>Tenant<select id="inverterTenant" class="fi"><option value="">Select tenant</option>${tenants.map(tenant => `<option value="${Number(tenant.id)}">${escHtml(tenant.tenant_name)}</option>`).join('')}</select></label>
-        <div id="inverterRooms"><p>Select rooms sharing this meter. All tenants in these rooms use the same reading history.</p>
-          ${rooms.map(room => `<label style="display:block;padding:6px"><input type="checkbox" name="inverterRoom" value="${Number(room.id)}"> ${escHtml(room.room_label)}</label>`).join('')}
-        </div>
-        <label class="fl">Opening reading date<input id="inverterOpeningDate" class="fi" type="date" value="${tenantDefaultStartDate()}"></label>
-        <label class="fl">Opening reading<input id="inverterOpening" class="fi" type="number" min="0" step="0.01" value="0"></label>
-        <button class="btn btn-p" onclick="saveTenantInverterMeter(${Number(buildingId)},this)">Add Meter</button>
-      </details>
+    const meters = result.meters || [];
+    const month = tenantDefaultStartDate().slice(0, 7);
+    const monthLabel = tenantMonthLabel(month);
+    const units = Math.round(meters.reduce((sum, meter) => sum + Number(meter.monthly_units?.[month] || 0), 0) * 100) / 100;
+    const lastDate = meters.flatMap(meter => meter.readings || []).map(row => row.reading_date).sort().pop();
+    panel.className = 'inverter-workspace';
+    panel.removeAttribute('style');
+    panel.innerHTML = `
+      <div class="inverter-toolbar"><div><h3>Inverters</h3><p>Reading records only &mdash; inverter usage is not added to invoices.</p></div><button class="btn btn-p" onclick="showTenantInverterAddModal(${Number(buildingId)})">+ Add inverter meter</button></div>
+      <div class="inverter-stats">
+        <div><span class="inverter-stat-icon">&#9889;</span><section><small>Meters</small><strong>${meters.length}</strong></section></div>
+        <div><span class="inverter-stat-icon amber">&#8599;</span><section><small>Units &middot; ${escHtml(monthLabel)}</small><strong>${units}</strong></section></div>
+        <div><span class="inverter-stat-icon">&#9638;</span><section><small>Last reading</small><strong>${lastDate ? escHtml(tenantDateLabel(lastDate)) : '&mdash;'}</strong></section></div>
+      </div>
+      ${meters.map(meter => `<article class="inverter-meter">
+        <header class="inverter-meter-head"><div class="inverter-identity"><span class="inverter-meter-icon">&#9889;</span><div><h4>${escHtml(meter.name)}</h4><div class="inverter-assignment">${meter.tenant_id ? `Tenant <span>${escHtml(tenantFindRecord(meter.tenant_id)?.tenant_name || 'Tenant')}</span>` : `Shared by ${(meter.rooms || []).map(room => `<span>${escHtml(room.room_label)}</span>`).join(' ')}`}</div></div></div>
+        <div class="inverter-meter-totals"><div><small>Latest reading</small><strong>${Number(meter.readings[0]?.reading || 0)}</strong></div><div class="amber"><small>Used in ${escHtml(monthLabel)}</small><strong>${Number(meter.monthly_units?.[month] || 0)} <small>units</small></strong></div></div></header>
+        <div class="inverter-meter-body"><section class="inverter-history"><div class="inverter-section-heading"><h4>Reading history</h4><small>${meter.readings.length} ${meter.readings.length === 1 ? 'entry' : 'entries'}</small></div>
+          <div class="inverter-table-scroll"><table><thead><tr><th>Date</th><th>Reading</th><th>Units used</th><th>Type</th><th>Note</th></tr></thead><tbody>
+          ${meter.readings.map(row => `<tr><td>${escHtml(tenantDateLabel(row.reading_date))}</td><td>${Number(row.reading)}</td><td>${row.units_used == null ? '&mdash;' : Number(row.units_used)}</td><td><span class="inverter-badge">${row.units_used == null ? 'Opening' : 'Reading'}</span></td><td>${escHtml(row.note || '-' )}</td></tr>`).join('')}
+          </tbody></table></div></section>
+        <section class="inverter-reading-form"><h4>Record new reading</h4>
+          <label>Reading date<input class="fi" type="date" id="inverterDate${meter.id}" value="${tenantDefaultStartDate()}" onchange="previewTenantInverterUnits(${Number(meter.id)})"></label>
+          <label>Current meter reading<input class="fi" placeholder="e.g. 37" type="number" min="${Number(meter.readings[0]?.reading || 0)}" max="100000000" step="0.01" id="inverterValue${meter.id}" oninput="previewTenantInverterUnits(${Number(meter.id)})"></label>
+          <small>Previous: ${Number(meter.readings[0]?.reading || 0)}${meter.readings[0] ? ` on ${escHtml(tenantDateLabel(meter.readings[0].reading_date))}` : ''} &middot; usage counts in the month of the reading date.</small>
+          <p id="inverterPreview${meter.id}" aria-live="polite" data-previous="${Number(meter.readings[0]?.reading || 0)}" data-months="${escHtml(JSON.stringify(meter.monthly_units || {}))}"></p>
+          <label>Note (optional)<input class="fi" placeholder="e.g. Power cut most of the week" maxlength="500" id="inverterNote${meter.id}"></label>
+          <button class="btn btn-p" onclick="saveTenantInverterReading(${Number(buildingId)},${Number(meter.id)},this)">Save reading</button>
+        </section></div></article>`).join('') || '<div class="card" style="padding:24px">No inverter meters yet. Add a meter to start recording readings.</div>'}
     `;
   } catch (err) { if (panel.isConnected) panel.innerHTML = `<p>${escHtml(err.message || 'Could not load inverter meters')}</p><button class="btn btn-s" onclick="showTenantInverterMeters(${Number(buildingId)})">Retry</button>`; }
 }
+function showTenantInverterAddModal(buildingId) {
+  const building = tenantFindBuilding(buildingId);
+  if (!building) return;
+  const rooms = building.rooms || [];
+  const tenants = (_tenantOverview?.tenants || []).filter(item => Number(item.building_id) === Number(buildingId));
+  openModal('Add inverter meter', `<div class="inverter-add-form"><p>Rooms that share a meter use one common reading history.</p>
+    <div class="inverter-add-grid">
+      <label class="fl">Meter name / number<input class="fi" id="inverterName" maxlength="100" placeholder="e.g. Ground floor inverter"></label>
+      <label class="fl">Used by<select class="fi" id="inverterScope" onchange="document.getElementById('inverterRooms').hidden=this.value!=='shared';document.getElementById('inverterTenantField').hidden=this.value!=='tenant'"><option value="shared">Shared by room(s)</option><option value="tenant">One tenant</option></select></label>
+      <label class="fl">Opening reading date<input class="fi" type="date" id="inverterOpeningDate" value="${tenantDefaultStartDate()}"></label>
+      <label class="fl">Opening reading<input class="fi" type="number" min="0" step="0.01" id="inverterOpening" value="0"></label>
+    </div>
+    <label class="fl" id="inverterTenantField" hidden>Tenant<select class="fi" id="inverterTenant"><option value="">Select tenant</option>${tenants.map(tenant => `<option value="${Number(tenant.id)}">${escHtml(tenant.tenant_name)}</option>`).join('')}</select></label>
+    <div class="inverter-room-options" id="inverterRooms"><p>Rooms sharing this meter</p>${rooms.map(room => `<label class="inverter-room-chip"><input type="checkbox" name="inverterRoom" value="${Number(room.id)}">${escHtml(room.room_label)}</label>`).join('')}</div>
+    <button class="btn btn-p inverter-add-submit" onclick="saveTenantInverterMeter(${Number(buildingId)},this)">Add meter</button>
+  </div>`);
+}
+window.showTenantInverterAddModal = showTenantInverterAddModal;
 async function saveTenantInverterMeter(buildingId, button) {
   const body = {
     name: document.getElementById('inverterName').value,
@@ -3273,7 +3290,7 @@ async function saveTenantInverterMeter(buildingId, button) {
     reading_date: document.getElementById('inverterOpeningDate').value,
     reading: document.getElementById('inverterOpening').value,
   };
-  await submitTenantInverter(`/api/tenants/buildings/${buildingId}/inverter-meters`, body, buildingId, button);
+  await submitTenantInverter(`/api/tenants/buildings/${buildingId}/inverter-meters`, body, buildingId, button, true);
 }
 async function saveTenantInverterReading(buildingId, meterId, button) {
   await submitTenantInverter(`/api/tenants/inverter-meters/${meterId}/readings`, {
@@ -3282,11 +3299,12 @@ async function saveTenantInverterReading(buildingId, meterId, button) {
     note: document.getElementById(`inverterNote${meterId}`).value,
   }, buildingId, button);
 }
-async function submitTenantInverter(url, body, buildingId, button) {
+async function submitTenantInverter(url, body, buildingId, button, closeOnSuccess = false) {
   button.disabled = true;
   try {
     const result = await api(url, { method: 'POST', body });
     if (!result?.success) throw new Error(result?.error || 'Could not save inverter meter');
+    if (closeOnSuccess) closeModal();
     await showTenantInverterMeters(buildingId);
     toast('Inverter record saved', 'success');
   } catch (err) { toast(err.message, 'error'); }

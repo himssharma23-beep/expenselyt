@@ -2590,20 +2590,10 @@
 
   function inferEditSplitMode(totalAmount, splitValues = {}, persistedMode = '') {
     const saved = String(persistedMode || '').trim().toLowerCase();
-    const values = Object.values(splitValues).map((value) => r2(value)).filter((value) => value >= 0);
-    if (values.length > 1) {
-      const first = values[0];
-      if (values.every((value) => Math.abs(value - first) <= 0.009)) return 'equal';
-      const sum = r2(values.reduce((acc, value) => acc + value, 0));
-      if (Math.abs(sum - r2(totalAmount)) <= 0.009) return 'amount';
-    }
-    if (['percent', 'fraction', 'parts'].includes(saved)) return saved;
-    if (saved === 'equal' && values.length > 1) {
-      const first = values[0];
-      if (!values.every((value) => Math.abs(value - first) <= 0.009)) return 'amount';
-    }
-    if (saved === 'amount') return 'amount';
-    if (saved === 'equal') return 'equal';
+    if (['equal', 'percent', 'fraction', 'amount', 'parts'].includes(saved)) return saved;
+    // Infer only for legacy entries with no supported saved mode.
+    const values = Object.values(splitValues).map(value => r2(value)).filter(value => value >= 0);
+    if (values.length > 1 && values.every(value => Math.abs(value - values[0]) <= 0.009)) return 'equal';
     return 'amount';
   }
 
@@ -2664,6 +2654,8 @@
       owner_name: ownerName,
       splits: splitRows,
       selected_keys: ['owner', ...splitRows.map((split) => String(split.friend_id))],
+      existing_participant_keys: ['owner', ...splitRows.map((split) => String(split.friend_id))],
+      showMoreFriends: false,
       splitMode: mode,
       splitValues,
       activities: group?.activities || [],
@@ -2677,6 +2669,9 @@
     const selectablePeople = editSelectablePeople(form);
     const payerPeople = editPayerPeople(form);
     const selectedKeys = new Set((form.selected_keys || []).map((key) => String(key)));
+    const existingKeys = new Set((form.existing_participant_keys || form.selected_keys || []).map(String));
+    const visiblePeople = selectablePeople.filter(person => form.showMoreFriends || existingKeys.has(String(person.key)) || selectedKeys.has(String(person.key)));
+    const hasMoreFriends = selectablePeople.some(person => !existingKeys.has(String(person.key)) && !selectedKeys.has(String(person.key)));
     const ownerKey = String(form.owner_key || 'owner');
     const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
     const preview = computeShares(n(form.total_amount), form.splitMode, people, form.splitValues);
@@ -2685,53 +2680,31 @@
       .filter((value, index, arr) => value && arr.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index)
       .map((name) => `<option value="${escHtml(name)}" ${String(form.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`)
       .join('');
-    window.__modalHeaderActionsHTML = `<button class="live-split-icon-btn" title="Update expense" aria-label="Update expense" onclick="liveSplitSaveEditedExpense()">${state.saveBusy ? '<span style="font-size:11px;line-height:1">...</span>' : '<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\"/></svg>'}</button>`;
-    openModal('Edit Live Split Expense', `
-      <div style="display:grid;gap:12px;margin-top:-8px">
-        <div class="fg">
-          <label class="fl">Date<input class="fi" type="date" value="${escHtml(form.divide_date)}" onchange="liveSplitEditExpenseField('divide_date', this.value)"></label>
-          <label class="fl">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(form.total_amount))}" onchange="liveSplitEditExpenseField('total_amount', this.value)"></label>
-          <label class="fl full">Details<input class="fi" value="${escHtml(form.details)}" onchange="liveSplitEditExpenseField('details', this.value)"></label>
-          <label class="fl">Paid By<select class="fi" onchange="liveSplitEditExpenseField('paid_by', this.value)">${payerOptions}</select></label>
+    window.__modalHeaderActionsHTML = '';
+    window.__modalClassName = 'split-editor-modal';
+    openModal('Edit live split expense', `
+      <div class="split-editor">
+        <p class="se-subtitle">Changes update everyone's balance once saved.</p>
+        <div class="se-fields">
+          <label class="se-amount">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(form.total_amount))}" onchange="liveSplitEditExpenseField('total_amount', this.value)"></label>
+          <label>Date<input class="fi" type="date" value="${escHtml(form.divide_date)}" onchange="liveSplitEditExpenseField('divide_date', this.value)"></label>
+          <label>Paid by<select class="fi" onchange="liveSplitEditExpenseField('paid_by', this.value)">${payerOptions}</select></label>
+          <label class="se-details">Details<input class="fi" value="${escHtml(form.details)}" onchange="liveSplitEditExpenseField('details', this.value)"></label>
         </div>
-        <div>
-          <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Participants ${Number(form.trip_id || 0) > 0 ? '(Trip members)' : ''}</div>
-          <div style="display:grid;gap:8px">
-            ${selectablePeople.map((person) => `
-              <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--t1)">
-                <input type="checkbox" ${selectedKeys.has(String(person.key)) ? 'checked' : ''} onchange="liveSplitEditExpenseToggleParticipant('${escHtml(String(person.key))}')">
-                <span>${escHtml(person.name)}${String(person.key) === ownerKey ? ' (You)' : ''}</span>
-              </label>
-            `).join('')}
-          </div>
-          ${scopedFriendIds ? '<div style="margin-top:6px;font-size:12px;color:var(--t3)">Only trip members can be participants. Payer can still be you or any trip member.</div>' : ''}
+        <div class="se-participant-head"><strong>Participants <small>&middot; ${selectedKeys.size} selected</small></strong>${hasMoreFriends || form.showMoreFriends ? `<button class="btn btn-s" aria-expanded="${!!form.showMoreFriends}" onclick="liveSplitEditExpenseShowFriends()">${form.showMoreFriends ? 'Hide other friends' : '+ Add friends'}</button>` : ''}</div>
+        <div class="se-participants">${visiblePeople.map((person, index) => `<label class="se-person ${selectedKeys.has(String(person.key)) ? 'selected' : ''}"><span class="se-avatar" style="background:${index % 2 ? '#bb7b20' : '#205e45'}">${escHtml(String(person.name).split(/\s+/).map(word => word[0]).slice(0,2).join(''))}</span><span>${escHtml(person.name)}${String(person.key) === ownerKey ? ' (You)' : ''}</span><input type="checkbox" ${selectedKeys.has(String(person.key)) ? 'checked' : ''} onchange="liveSplitEditExpenseToggleParticipant('${escHtml(String(person.key))}')"></label>`).join('')}</div>
+        ${scopedFriendIds ? '<small>Only trip members can be participants.</small>' : ''}
+        <strong>Split mode</strong>
+        <div class="se-modes">${MODES.map(mode => `<button class="${form.splitMode === mode.key ? 'active' : ''}" aria-pressed="${form.splitMode === mode.key}" onclick="liveSplitEditExpenseMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}</div>
+        <p class="se-subtitle">${({equal:'Divide the amount equally between selected participants.',percent:'Give each person a percentage - total must be 100%.',fraction:'Give each person a fraction - total must be 1.',amount:'Enter each share - the amounts must match the total.',parts:'Enter relative parts for each person.'})[form.splitMode] || ''}</p>
+        <div class="se-shares"><div class="se-share-head"><span>Person</span><span>${escHtml(MODES.find(mode => mode.key === form.splitMode)?.label || 'Split')}</span><span>Share</span></div>
+          ${people.map((person,index) => `<div class="se-share-row"><div class="se-share-person"><span class="se-avatar" style="background:${index % 2 ? '#bb7b20' : '#205e45'}">${escHtml(String(person.name).slice(0,1))}</span><span>${escHtml(person.name)}</span></div><div>${form.splitMode === 'equal' ? '<small>Equal share</small>' : `<input class="fi" aria-label="${escHtml(person.name)} split value" type="number" min="0" step="${form.splitMode === 'fraction' ? '0.0001' : '0.01'}" value="${escHtml(String(form.splitValues[person.key] ?? ''))}" oninput="liveSplitEditExpenseValue('${escHtml(String(person.key))}',this.value)">`}</div><strong data-se-share="${escHtml(String(person.key))}"></strong></div>`).join('')}
+          <div class="se-balance"><div id="lsSplitProgress"></div><div id="seBalanceStatus"></div><div class="se-track"><div id="seProgressFill"></div></div></div>
         </div>
-        <div>
-          <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:8px">Split Mode</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">
-            ${MODES.map((mode) => `<button class="chip ${form.splitMode === mode.key ? 'active' : ''}" onclick="liveSplitEditExpenseMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}
-          </div>
-          ${renderSplitInputRows(form, people).replace(/liveSplitSetValue/g, 'liveSplitEditExpenseValue')}
-          <div id="lsSplitProgress" style="margin-top:8px;font-size:12px;color:var(--t2)">
-            ${progress
-              ? (progress.unit === 'amount'
-                ? `${escHtml(progress.label)}: ${fmtCur(progress.entered)} / ${fmtCur(progress.target)} \u00b7 Remaining: ${fmtCur(progress.remaining)}`
-                : progress.unit === '%'
-                  ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}% / 100% \u00b7 Remaining: ${progress.remaining.toFixed(2)}%`
-                  : progress.unit === 'parts'
-                    ? `${escHtml(progress.label)}: ${progress.entered.toFixed(2)}`
-                    : `${escHtml(progress.label)}: ${progress.entered.toFixed(4)} / 1.0000 \u00b7 Remaining: ${progress.remaining.toFixed(4)}`)
-              : ''}
-          </div>
-          <div id="lsSplitPreview" style="margin-top:10px;padding:10px;border-radius:10px;background:var(--green-l2)">
-            <div style="font-size:11px;color:var(--t3);text-transform:uppercase;font-weight:700">${preview.valid ? 'Split Preview' : 'Fix Split Values'}</div>
-            <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:3px">
-              ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
-            </div>
-          </div>
-        </div>
-      </div>
-    `);
+        <div id="lsSplitPreview" class="se-preview"></div>
+        <div class="se-footer"><strong id="seReady"></strong><button class="btn btn-s" ${state.saveBusy ? 'disabled' : ''} onclick="liveSplitCancelEditedExpense()">Cancel</button><button class="btn btn-p" ${state.saveBusy ? 'disabled' : ''} onclick="liveSplitSaveEditedExpense()">${state.saveBusy ? 'Saving...' : 'Save changes'}</button></div>
+      </div>`);
+    refreshSplitStatus(form, people);
   }
 
   async function openEventDetails(rowRef, eventKeyOrGroupId) {
@@ -3181,9 +3154,9 @@
         </div>
         <div>
           ${events.length ? grouped.map(([month, monthData], index) => `
-            <details style="margin-bottom:10px" ontoggle="liveSplitToggleFriendMonth(this, ${index})">
+            <details ${month === monthLabel(todayLocalIso()) ? 'open' : ''} style="margin-bottom:10px" ontoggle="liveSplitToggleFriendMonth(this, ${index})">
               <summary style="cursor:pointer;padding:12px 0;font-weight:800">
-                ${escHtml(month)} <span data-toggle-label style="font-size:12px;color:var(--t3)">Expand</span>
+                ${escHtml(month)} <span data-toggle-label style="font-size:12px;color:var(--t3)">${month === monthLabel(todayLocalIso()) ? 'Collapse' : 'Expand'}</span>
                 <span style="float:right;color:${monthData.total >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtCur(monthData.total)}</span>
               </summary>
               <div data-month-content></div>
@@ -4284,6 +4257,18 @@
     const preview = computeShares(total, form.splitMode, people, form.splitValues);
     const progress = splitProgress(total, form.splitMode, people, form.splitValues);
 
+    const editor = document.querySelector('.split-editor');
+    if (editor) {
+      editor.querySelectorAll('[data-se-share]').forEach(element => {
+        const share = preview.shares?.find(item => String(item.key) === element.dataset.seShare);
+        element.textContent = preview.valid && share ? fmtCur(share.share) : '-';
+      });
+      document.getElementById('seBalanceStatus').textContent = preview.valid ? 'Balanced' : 'Check split values';
+      document.getElementById('seReady').textContent = preview.valid ? 'Ready to save' : 'Check split values';
+      const fill = document.getElementById('seProgressFill');
+      fill.style.width = `${preview.valid ? 100 : progress?.target > 0 ? Math.max(0, Math.min(100, progress.entered / progress.target * 100)) : 0}%`;
+      fill.style.background = preview.valid ? '#205e45' : '#bb7b20';
+    }
     const progressEl = document.getElementById('lsSplitProgress');
     if (progressEl) {
       progressEl.innerHTML = progress
@@ -4304,12 +4289,106 @@
         <div style="font-size:13px;color:${preview.valid ? 'var(--t1)' : 'var(--red)'};margin-top:3px">
           ${preview.valid ? preview.shares.map((share) => `${escHtml(share.name)}: ${fmtCur(share.share)}`).join(' | ') : escHtml(preview.error || 'Enter valid split values')}
         </div>`;
+    }    if (editor && previewEl) {
+      const palette = ['#205e45', '#bb7b20', '#427ba1', '#9563a3'];
+      previewEl.innerHTML = `<div class="se-participant-head"><small>SPLIT PREVIEW</small><strong>${fmtCur(total)}</strong></div>${preview.valid ? `<div class="se-distribution">${preview.shares.map((share,index) => `<span style="width:${total > 0 ? Math.max(0,share.share / total * 100) : 0}%;background:${palette[index % palette.length]}"></span>`).join('')}</div><div class="se-legend">${preview.shares.map((share,index) => `<span><i style="background:${palette[index % palette.length]}"></i>${escHtml(share.name)} <b>${fmtCur(share.share)}</b></span>`).join('')}</div>` : `<p>${escHtml(preview.error || 'Enter valid split values')}</p>`}`;
     }
+
+  }
+
+  function renderCompactCreateModal(form) {
+    const people = peopleForForm(form);
+    const payerPeople = payerPeopleForForm(form);
+    const scopedFriendIds = getTripScopedFriendIds(form.trip_id);
+    const selectedKeys = form.selected;
+    const ownerKey = 'self';
+    const selectablePeople = [{key:'self', name:'You'}, ...(state.friends || []).filter(friend => !scopedFriendIds || scopedFriendIds.has(Number(friend.id))).map(friend => ({key:String(friend.id), name:friend.name}))];
+    const visiblePeople = selectablePeople.filter(person => form.showMoreFriends || selectedKeys.has(person.key));
+    const hasMoreFriends = !scopedFriendIds || selectablePeople.some(person => !selectedKeys.has(person.key));
+    const payerOptions = payerPeople.map(person => `<option value="${escHtml(person.key)}" ${form.paidBy === person.key ? 'selected' : ''}>${escHtml(person.name)}</option>`).join('');
+    const tripAllowsExpenseOption = Number(form.trip_id || 0) > 0 ? tripAllowsOwnerExpenseOption(form.trip_id) : true;
+    window.__modalHeaderActionsHTML = '';
+    window.__modalClassName = 'split-editor-modal';
+    openModal('Add live split expense', `
+      <div class="split-editor">
+        <p class="se-subtitle">Add an expense and choose how to share it.</p>
+        <div class="se-fields">
+          <label class="se-amount">Amount<input class="fi" type="number" step="0.01" value="${escHtml(String(form.amount))}" onchange="liveSplitSetAmount(this.value)"></label>
+          <label>Date<input class="fi" type="date" value="${escHtml(form.date)}" onchange="liveSplitSetDate(this.value)"></label>
+          <label>Paid by<select class="fi" onchange="liveSplitSetPaidBy(this.value)">${payerOptions}</select></label>
+          <label class="se-details">Details<input class="fi" value="${escHtml(form.details)}" onchange="liveSplitSetDetails(this.value)"></label>
+        </div>
+        <div class="se-participant-head"><strong>Participants <small>&middot; ${selectedKeys.size} selected</small></strong>${hasMoreFriends || form.showMoreFriends ? `<button class="btn btn-s" aria-expanded="${!!form.showMoreFriends}" onclick="liveSplitCreateShowFriends()">${form.showMoreFriends ? 'Hide other friends' : '+ Add friends'}</button>` : ''}</div>
+        <div class="se-participants">${visiblePeople.map((person, index) => `<label class="se-person ${selectedKeys.has(String(person.key)) ? 'selected' : ''}"><span class="se-avatar" style="background:${index % 2 ? '#bb7b20' : '#205e45'}">${escHtml(String(person.name).split(/\s+/).map(word => word[0]).slice(0,2).join(''))}</span><span>${escHtml(person.name)}${String(person.key) === ownerKey ? ' (You)' : ''}</span><input type="checkbox" ${selectedKeys.has(String(person.key)) ? 'checked' : ''} onchange="liveSplitToggleParticipant('${escHtml(String(person.key))}')"></label>`).join('')}</div>
+        ${scopedFriendIds ? '<small>Only trip members can be participants.</small>' : ''}
+        ${form.showMoreFriends && !scopedFriendIds ? `<div class="se-fields"><label class="se-details">Find or add friend<input class="fi" id="liveSplitCreateInviteQ" value="${escHtml(state.createInvite.query || '')}" placeholder="Name, email or phone" onkeydown="if(event.key==='Enter')liveSplitDoCreateInviteSearch()"></label><button class="btn btn-s" onclick="liveSplitDoCreateInviteSearch()">Search</button><div class="se-details" id="liveSplitCreateInviteResults"></div></div>` : ''}
+        <strong>Split mode</strong>
+        <div class="se-modes">${MODES.map(mode => `<button class="${form.splitMode === mode.key ? 'active' : ''}" aria-pressed="${form.splitMode === mode.key}" onclick="liveSplitSetMode('${mode.key}')">${escHtml(mode.label)}</button>`).join('')}</div>
+        <p class="se-subtitle">${({equal:'Divide the amount equally between selected participants.',percent:'Give each person a percentage - total must be 100%.',fraction:'Give each person a fraction - total must be 1.',amount:'Enter each share - the amounts must match the total.',parts:'Enter relative parts for each person.'})[form.splitMode] || ''}</p>
+        <div class="se-shares"><div class="se-share-head"><span>Person</span><span>${escHtml(MODES.find(mode => mode.key === form.splitMode)?.label || 'Split')}</span><span>Share</span></div>
+          ${people.map((person,index) => `<div class="se-share-row"><div class="se-share-person"><span class="se-avatar" style="background:${index % 2 ? '#bb7b20' : '#205e45'}">${escHtml(String(person.name).slice(0,1))}</span><span>${escHtml(person.name)}</span></div><div>${form.splitMode === 'equal' ? '<small>Equal share</small>' : `<input class="fi" aria-label="${escHtml(person.name)} split value" type="number" min="0" step="${form.splitMode === 'fraction' ? '0.0001' : '0.01'}" value="${escHtml(String(form.splitValues[person.key] ?? ''))}" oninput="liveSplitSetValue('${escHtml(String(person.key))}',this.value)">`}</div><strong data-se-share="${escHtml(String(person.key))}"></strong></div>`).join('')}
+          <div class="se-balance"><div id="lsSplitProgress"></div><div id="seBalanceStatus"></div><div class="se-track"><div id="seProgressFill"></div></div></div>
+        </div>
+        <div id="lsSplitPreview" class="se-preview"></div>
+      <div id="lsAddExpenseBlock" style="margin-top:12px">
+        ${tripAllowsExpenseOption ? `
+        <label class="fc"><input type="checkbox" ${form.addExpense ? 'checked' : ''} ${form.selected.has('self') ? '' : 'disabled'} onchange="liveSplitSetAddExpense(this.checked)"><span style="font-weight:600">Add my share to expenses${form.selected.has('self') ? '' : ' (select You first)'}</span></label>
+        ${form.addExpense ? `
+          <div style="margin-top:8px">
+            <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Expense Type</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="chip ${form.expense_type !== 'extra' ? 'active' : ''}" onclick="liveSplitSetExpenseType('fair')">Fair / Regular</button>
+              <button class="chip ${form.expense_type === 'extra' ? 'active' : ''}" onclick="liveSplitSetExpenseType('extra')">Extra / Non-essential</button>
+            </div>
+          </div>
+          <label class="fl" style="margin-top:8px">Expense Category (optional)
+            <input class="fi" value="${escHtml(form.category)}" placeholder="Food, travel..." onchange="liveSplitSetCategory(this.value)">
+          </label>
+          ${form.paidBy === 'self' ? `
+            <div style="margin-top:8px">
+              <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Post Full Amount To (optional)</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="chip ${form.finance_target === 'none' ? 'active' : ''}" onclick="liveSplitSetFinanceTarget('none')">None</button>
+                <button class="chip ${form.finance_target === 'expense' ? 'active' : ''}" onclick="liveSplitSetFinanceTarget('expense')">Expense / Bank</button>
+                <button class="chip ${form.finance_target === 'card' ? 'active' : ''}" onclick="liveSplitSetFinanceTarget('card')">Credit Card</button>
+              </div>
+            </div>
+            ${form.finance_target === 'expense' ? `
+              <label class="fl" style="margin-top:8px">Deduct From Bank (optional)
+                <select class="fi" onchange="liveSplitSetFinanceBank(this.value)">
+                  <option value="">Do not deduct</option>
+                  ${(state.bankAccounts || []).map((bank) => `<option value="${Number(bank.id)}" ${Number(form.bank_account_id) === Number(bank.id) ? 'selected' : ''}>${escHtml(String(bank.bank_name || 'Bank').trim())}${bank.account_name ? ` - ${escHtml(String(bank.account_name).trim())}` : ''}</option>`).join('')}
+                </select>
+              </label>
+            ` : form.finance_target === 'card' ? `
+              <label class="fl" style="margin-top:8px">Credit Card
+                <select class="fi" onchange="liveSplitSetFinanceCard(this.value)">
+                  <option value="">None</option>
+                  ${(state.creditCards || []).map((card) => `<option value="${Number(card.id)}" ${Number(form.card_id) === Number(card.id) ? 'selected' : ''}>${escHtml(String(card.card_name || 'Card').trim())} (${escHtml(String(card.bank_name || 'Bank').trim())} **${escHtml(String(card.last4 || ''))})</option>`).join('')}
+                </select>
+              </label>
+              <label class="fl">Discount % (optional)
+                <input class="fi" type="number" step="0.1" min="0" max="100" value="${escHtml(String(form.card_discount_pct ?? 0))}" onchange="liveSplitSetFinanceCardDiscount(this.value)">
+              </label>
+            ` : ``}
+          ` : ''}
+        ` : ''}
+        ` : (Number(form.trip_id || 0) > 0 ? '<div style="font-size:12px;color:var(--t3)">This trip is set to keep Live Split only, so "Add my share to expenses" is hidden.</div>' : '')}
+      </div>
+
+        <div class="se-footer"><strong id="seReady"></strong><button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" ${state.saveBusy ? 'disabled' : ''} onclick="liveSplitSave()">${state.saveBusy ? 'Saving...' : 'Save split'}</button></div>
+      </div>`);
+    refreshSplitStatus(form, people);
+    if (form.showMoreFriends && !scopedFriendIds) renderCreateInviteResults();
   }
 
   function renderCreateModal() {
     const form = state.create;
     if (!form) return;
+    if (!form.voice_only && !hasLiveSplitVoiceDrafts(form)) {
+      renderCompactCreateModal(form);
+      return;
+    }
     const voiceOnly = !!form.voice_only;
     const voiceDraftValidation = validateLiveSplitVoiceDrafts(form.voice_drafts || []);
     const people = peopleForForm(form);
@@ -4930,7 +5009,11 @@
     const selectedTotalInclTax = r2(scanSelectedTotal + manualTotal);
     const selectedMyShare = r2(scanSelectedMyShare + manualMyShare);
     const shareTotals = computeTripCreateShareTotals(form);
-    openModal(form.existing_trip_id ? `Scan Bill - ${escHtml(form.name)}` : 'Live Split Trip - New', `
+    const wizard = !form.existing_trip_id && !voiceOnly && !hasLiveSplitVoiceDrafts(form);
+    const step = Number(form.wizardStep || 1);
+    const appendMode = Number(form.existing_trip_id || 0) > 0;
+    if (wizard || appendMode) window.__modalClassName = appendMode ? 'trip-wizard-modal trip-scan-modal' : 'trip-wizard-modal';
+    openModal(form.existing_trip_id ? `Scan Bill - ${escHtml(form.name)}` : 'New trip', `
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? renderLiveSplitVoiceCard('trip', form.voice_drafts, form.voice_transcript) : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? `
         <div style="padding:12px;border:1px solid rgba(22,101,52,.14);border-radius:12px;background:#ecfdf3;font-size:12px;color:var(--t2);margin-bottom:12px">
@@ -4948,6 +5031,8 @@
         ` : ''}
       ` : ''}
       ${(voiceOnly || hasLiveSplitVoiceDrafts(form)) ? '' : `
+      ${wizard ? `<div class="tw-steps">${['Trip details','Members','Expenses'].map((label,index) => `<div class="${step >= index + 1 ? 'done' : ''}"><span></span>${index + 1}. ${label}</div>`).join('')}</div><p class="tw-step-label">Step ${step} of 3 &middot; ${['Trip details','Members','Expenses'][step - 1]}</p>` : ''}
+      <section class="tw-panel" ${wizard && step !== 1 ? 'hidden' : ''}>
       <div class="fg" ${form.existing_trip_id ? 'style="display:none"' : ''}>
         <label class="fl full">Trip Name
           <input class="fi" data-trip-field="name" value="${escHtml(form.name || '')}" placeholder="Goa 2026, Team Offsite..." onchange="liveSplitTripField('name', this.value)">
@@ -4959,6 +5044,8 @@
           <input class="fi" type="date" value="${escHtml(form.end_date || '')}" onchange="liveSplitTripField('end_date', this.value)">
         </label>
       </div>
+      <details class="tw-defaults" ${form.defaultsOpen ? 'open' : ''} ontoggle="liveSplitTripDefaultsOpen(this.open)">
+        <summary><strong>Entry defaults</strong><span>Paid by ${escHtml(form.paid_by || 'You')} &middot; ${escHtml(form.bulk_date || form.start_date || todayLocalIso())} &middot; ${escHtml(form.finance_target || 'none')}</span><b>Edit / Hide</b></summary>
       <div style="margin-top:10px;padding:14px;border:1px solid #d8deea;border-radius:14px;background:linear-gradient(180deg,#f8fbff 0%,#f4faf7 100%)">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
@@ -5018,28 +5105,35 @@
           </span>
         </label>
       </div>
+      </details></section>
+      <section class="tw-panel" ${appendMode || (wizard && step !== 2) ? 'hidden' : ''}>
+      <h3>Who's going?</h3><p>You're included automatically. App users can also see this trip.</p>
+      <div class="tw-member-chips"><span>You</span>${selectedFriends.map(friend => `<button onclick="liveSplitTripToggleMember('${Number(friend.id)}')">${escHtml(friend.name)} &times;</button>`).join('')}</div>
+      <input class="fi" placeholder="Search friends" aria-label="Search trip friends" oninput="liveSplitTripSearchMembers(this.value)">
       <div style="${form.existing_trip_id ? 'display:none;' : ''}margin-top:10px">
         <div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:6px">Members</div>
         <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Pick from Live Split friends. Linked app users can also see this trip.</div>
         <div style="display:grid;gap:6px;max-height:240px;overflow:auto;padding-right:2px">
           ${selectableFriends.map((friend) => `
-            <label class="fc">
+            <label class="fc tw-member" data-member-name="${escHtml(String(friend.name || '').toLowerCase())}">
               <input type="checkbox" ${form.selected.has(String(friend.id)) ? 'checked' : ''} onchange="liveSplitTripToggleMember('${String(friend.id)}')">
               <span>${escHtml(String(friend.name || 'Friend').trim())}${Number(friend?.linked_user_id) > 0 ? ' <span style="color:var(--t3);font-size:11px">(app user)</span>' : ''}</span>
             </label>
           `).join('')}
         </div>
       </div>
+      </section><section class="tw-panel" ${wizard && step !== 3 ? 'hidden' : ''}><h3>${appendMode ? 'Add entries' : 'Add expenses <small>optional</small>'}</h3><p>Scan a bill or add items manually. Review each split before saving.</p>
+      <button class="btn btn-s tw-add-item" onclick="liveSplitTripManualAdd()">+ Add an item manually</button>
       <div style="margin-top:12px;padding:14px;border:1px solid #cfe5d9;border-radius:14px;background:#f6fbf8">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
-            <div style="font-size:14px;font-weight:800;color:var(--em)">Scan Bill To Trip</div>
+            <div style="font-size:14px;font-weight:800;color:var(--em)">Scan a bill</div>
             <div style="font-size:12px;color:var(--t2);margin-top:3px">Upload images or click a receipt photo. AI reads the receipt, merges pages, and prepares editable rows before saving them into this trip.</div>
             ${(form.scan_files || []).length ? `<div style="margin-top:6px;font-size:12px;color:var(--t2);font-weight:700">${Number(form.scan_files.length)} page${Number(form.scan_files.length) === 1 ? '' : 's'} added</div>` : ''}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-s btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('camera')">${(form.scan_items || []).length ? 'Add Clicked Image' : 'Click Image'}</button>
-            <button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('upload')">${(form.scan_items || []).length ? 'Add Upload Image' : 'Upload Image'}</button>
+            <button class="btn btn-s btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('camera')">${(form.scan_items || []).length ? 'Add Clicked Image' : 'Take photo'}</button>
+            <button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanPick('upload')">${(form.scan_items || []).length ? 'Add Upload Image' : 'Upload'}</button>
             ${(form.scan_items || []).length ? `<button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanRemoveLast()">Remove Last Page</button>` : ''}
             ${(form.scan_items || []).length ? `<button class="btn btn-g btn-sm" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripScanClear()">Clear</button>` : ''}
           </div>
@@ -5183,6 +5277,9 @@
                       <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Amount After Discount</div>
                       <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "amount", this.value)'>
                     </label>
+                  </div>
+                <label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="paid_by" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
+                <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people</span><b>Change split / Done</b></summary>
                     <div style="display:block;min-width:0">
                       <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
                       <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
@@ -5191,7 +5288,6 @@
                           : `<div style="font-size:12px;color:var(--t3)">Select trip members above to enable participants.</div>`}
                       </div>
                     </div>
-                  </div>
                   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px">
                     <label class="fc" style="margin:0;font-size:12px;color:var(--t2)"><input type="checkbox" ${participantKeys.includes('self') ? 'checked' : ''} onchange='liveSplitTripScanToggleSelf(${toJsArg(rowKey)}, this.checked)'><span>Include me in this item</span></label>
                     <div style="font-size:12px;color:var(--t3)">${participantKeys.length} participant${participantKeys.length === 1 ? '' : 's'}</div>
@@ -5223,6 +5319,7 @@
                       ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} \u2022 ${fmtCur(share.share)}</span>`).join('')}</div>`
                       : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                   </div>
+                    </details>
                 </div>
               `;
             }).join('')}
@@ -5266,6 +5363,8 @@
                   </div>
                   <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripManualDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
                 </div>
+                    <label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="paid_by" onchange='liveSplitTripManualItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
+                <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${n(item.amount) > 0 ? `${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people` : 'Enter an amount for this item.'}</span><b>Change split / Done</b></summary>
                 <div style="display:block;min-width:0;margin-top:10px">
                   <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
                   <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
@@ -5305,14 +5404,18 @@
                     ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${(splitPreview.shares || []).map((share) => `<span class="chip active">${escHtml(share.name)} \u2022 ${fmtCur(share.share)}</span>`).join('')}</div>`
                     : `<div style="font-size:12px;color:var(--red)">${escHtml(splitPreview?.error || 'Invalid split')}</div>`}
                 </div>
+              </details>
               </div>
             `;
           }).join('')}
         </div>
       </div>
-      <div class="fa" style="margin-top:14px">
-        <button class="btn btn-g" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="liveSplitTripSave()">${state.tripSaveBusy ? liveSplitBusyLabel('Saving...') : form.existing_trip_id ? 'Add Entries' : 'Create Trip'}</button>
+      </section>
+      ${appendMode || (wizard && step === 3) ? `<div class="tw-totals"><div><small>${appendMode ? 'ENTRIES TOTAL' : 'TRIP TOTAL'}</small><strong>${fmtCur(selectedTotalInclTax)}</strong></div><div><small>MY SHARE</small><strong>${fmtCur(selectedMyShare)}</strong></div></div>` : ''}
+      <div class="tw-footer">
+        <button class="btn btn-s" ${state.tripSaveBusy ? 'disabled' : ''} onclick="${wizard && step > 1 ? `liveSplitTripWizardStep(${step - 1})` : 'closeModal()'}">${wizard && step > 1 ? 'Back' : 'Cancel'}</button>
+        ${wizard && step === 2 ? `<small>${selectedFriendCount + 1} people on this trip</small>` : ''}
+        <button class="btn btn-p" ${state.tripSaveBusy ? 'disabled' : ''} onclick="${wizard && step < 3 ? `liveSplitTripWizardStep(${step + 1})` : 'liveSplitTripSave()'}">${state.tripSaveBusy ? 'Saving...' : wizard && step < 3 ? step === 1 ? 'Next: members' : 'Next: expenses' : form.existing_trip_id ? 'Add entries' : 'Create trip'}</button>
       </div>
     `}`);
   }
@@ -5334,7 +5437,14 @@
           if (endDate && endDate < startDate) {
             throw new Error(`Trip "${String(draft?.name || 'Trip').trim() || 'Trip'}" has an end date before its start date.`);
           }
-          const members = buildVoiceTripMembersPayload(draft);
+          for (const row of [...selectedScannedRows, ...manualRowsToSave]) {
+      const payer = String(row.paid_by || appliedPaidBy).trim();
+      if (!tripCreatePayerOptions(form).some(name => textKey(name) === textKey(payer))) {
+        toast(`Choose a current trip member as payer for ${row.item_name || 'this entry'}`, 'warning');
+        return;
+      }
+    }
+    const members = buildVoiceTripMembersPayload(draft);
           const result = await api('/api/live-split/trips', {
             method: 'POST',
             body: {
@@ -5386,6 +5496,7 @@
       .map((item) => normalizeTripManualRowSplitState({
         key: String(item?.key || ''),
         item_name: String(item?.item_name || '').trim(),
+        paid_by: String(item?.paid_by || ''),
         amount: item?.amount,
         assignment: String(item?.assignment || 'self'),
         category: '',
@@ -5481,11 +5592,13 @@
             splitModeValue = String(row?.split_mode || 'equal');
           }
 
+          const rowPaidBy = String(row.paid_by || appliedPaidBy).trim();
+          const rowPaidBySelf = textKey(rowPaidBy) === 'you';
           const savedEntry = await persistLiveSplitEntry({
             divide_date: appliedBulkDate || toLocalIsoDate(row?.purchase_date || form.start_date, todayLocalIso()),
             details: String(row?.item_name || '').trim(),
-            paid_by: appliedPaidBy,
-            paid_by_key: textKey(appliedPaidBy) === 'you' ? 'self' : '',
+            paid_by: rowPaidBy,
+            paid_by_key: rowPaidBySelf ? 'self' : '',
             total_amount: amountValue,
             split_mode: splitModeValue,
             trip_id: createdTripId,
@@ -5493,10 +5606,10 @@
             category: String(row?.category || '').trim(),
             expense_type: row?.is_extra ? 'extra' : 'fair',
             addExpense: false,
-            finance_target: appliedFinanceTarget,
-            bank_account_id: appliedBankAccountId,
-            card_id: appliedCardId,
-            card_discount_pct: appliedCardDiscountPct,
+            finance_target: rowPaidBySelf ? appliedFinanceTarget : 'none',
+            bank_account_id: rowPaidBySelf ? appliedBankAccountId : null,
+            card_id: rowPaidBySelf ? appliedCardId : null,
+            card_discount_pct: rowPaidBySelf ? appliedCardDiscountPct : 0,
           });
           if (!savedEntry?.skipped) savedTripItemCount += 1;
           // Keep only unsaved rows in the draft so retrying cannot duplicate successes.
@@ -6795,7 +6908,17 @@
     renderExpenseEditorModal();
   }
 
+  function cancelEditedExpense() {
+    if (state.saveBusy) return;
+    state.editExpense = null;
+    closeModal();
+  }
+
   async function reopenExpenseDetails(groupId) {
+    if (!Number.isSafeInteger(Number(groupId)) || Number(groupId) <= 0) {
+      cancelEditedExpense();
+      return;
+    }
     const detail = await api(`/api/live-split/groups/${Number(groupId)}`);
     const group = detail?.group;
     if (!group) {
@@ -7051,6 +7174,25 @@
   };
   window.liveSplitOpenTripCreate = openTripCreateModal;
   window.liveSplitOpenVoiceTripCreate = openVoiceTripCreate;
+  window.liveSplitTripRowExpanded = function(key, open) {
+    if (!state.tripCreate) return;
+    state.tripCreate.expandedSplits = { ...state.tripCreate.expandedSplits, [key]: open };
+  };
+  window.liveSplitTripWizardStep = function(next) {
+    const form = state.tripCreate;
+    if (!form || state.tripSaveBusy) return;
+    syncTripCreateDraftFromDom();
+    if (next > Number(form.wizardStep || 1)) {
+      if (!String(form.name || '').trim()) return toast('Enter a trip name', 'warning');
+      if (form.end_date && form.end_date < form.start_date) return toast('End date cannot be before start date', 'warning');
+    }
+    form.wizardStep = Math.max(1, Math.min(3, next));
+    renderTripCreateModal();
+  };
+  window.liveSplitTripDefaultsOpen = function(open) { if (state.tripCreate) state.tripCreate.defaultsOpen = open; };
+  window.liveSplitTripSearchMembers = function(value) {
+    document.querySelectorAll('.tw-member').forEach(element => { element.hidden = !element.dataset.memberName.includes(String(value).toLowerCase()); });
+  };
   window.liveSplitTripField = function liveSplitTripField(field, value) {
     if (!state.tripCreate) return;
     state.tripCreate[field] = value || '';
@@ -7294,6 +7436,11 @@
     state.create.step = 1;
     renderCreateModal();
   };
+  window.liveSplitCreateShowFriends = function () {
+    if (!state.create) return;
+    state.create.showMoreFriends = !state.create.showMoreFriends;
+    renderCreateModal();
+  };
   window.liveSplitSetMode = setSplitMode;
   window.liveSplitSetDate = function liveSplitSetDate(value) {
     if (!state.create) return;
@@ -7479,6 +7626,7 @@
   };
   window.liveSplitEditExpense = openEditExpense;
   window.liveSplitReopenExpenseDetails = reopenExpenseDetails;
+  window.liveSplitCancelEditedExpense = cancelEditedExpense;
   window.liveSplitSaveEditedExpense = saveEditedExpense;
   window.liveSplitDeleteExpense = deleteLiveSplitExpense;
   window.liveSplitEditExpenseField = function liveSplitEditExpenseField(field, value) {
@@ -7489,11 +7637,6 @@
       state.editExpense[field] = field === 'total_amount' ? value : (value || '');
     }
     if (field === 'total_amount') {
-      state.editExpense.splitValues = autoFillValues(
-        state.editExpense.splitMode,
-        peopleForEditExpense(state.editExpense),
-        n(value)
-      );
       renderExpenseEditorModal();
     }
     // paid_by and details changes: state-only update, no full re-render to avoid DOM race conditions
@@ -7541,6 +7684,11 @@
     const paidExists = payerPeople.some((person) => String(person.name || '').trim().toLowerCase() === String(form.paid_by || '').trim().toLowerCase());
     if (!paidExists) form.paid_by = payerPeople[0]?.name || '';
     form.splitValues = autoFillValues(form.splitMode, people, n(form.total_amount));
+    renderExpenseEditorModal();
+  };
+  window.liveSplitEditExpenseShowFriends = function liveSplitEditExpenseShowFriends() {
+    if (!state.editExpense) return;
+    state.editExpense.showMoreFriends = !state.editExpense.showMoreFriends;
     renderExpenseEditorModal();
   };
   window.liveSplitDeleteFriend = deleteLiveSplitFriend;
