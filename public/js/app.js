@@ -15247,6 +15247,7 @@ function renderBankAccounts() {
           <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions">
+            <button class="btn btn-p btn-sm" onclick="showBankAddAmount(${a.id})">+ Add amount</button>
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
             <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
@@ -15318,6 +15319,7 @@ function renderBankAccountsPageView() {
           <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-p btn-sm" onclick="showBankAddAmount(${a.id})">+ Add amount</button>
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
             <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
@@ -16000,6 +16002,35 @@ async function setDefaultBank(id) {
   const r = await api(`/api/banks/${id}/default`, { method: 'PUT' });
   if (r?.success) { toast('Default bank updated', 'success'); loadBankAccounts(); }
   else toast(r?.error || 'Failed', 'error');
+}
+
+let bankAddAmountBusy = false;
+function showBankAddAmount(id) {
+  const account = _bankAccounts.find(item => Number(item.id) === Number(id));
+  if (!account) return;
+  openModal('Add amount', `<div style="display:grid;gap:16px">
+    <div><strong>${escHtml(account.bank_name)}</strong><p>Current balance: ${fmtCur(account.balance)}</p></div>
+    <label class="fl">Amount to add<input id="bankAddAmount" class="fi" type="number" min="0.01" step="0.01" placeholder="0.00"></label>
+    <label class="fl">Note (optional)<input id="bankAddNote" class="fi" placeholder="e.g. Cash deposit"></label>
+    <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" class="btn btn-s" onclick="closeModal()">Cancel</button><button id="bankAddSave" type="button" class="btn btn-p" onclick="saveBankAddAmount(${Number(id)})">Add amount</button></div>
+  </div>`);
+}
+async function saveBankAddAmount(id) {
+  if (bankAddAmountBusy) return;
+  const amount = Number(document.getElementById('bankAddAmount')?.value);
+  if (!Number.isFinite(amount) || amount <= 0) return toast('Enter a valid positive amount', 'warning');
+  const note = String(document.getElementById('bankAddNote')?.value || '').trim();
+  const button = document.getElementById('bankAddSave');
+  bankAddAmountBusy = true;
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/bank-accounts/adjust-balance', { method: 'POST', body: { bank_account_id: Number(id), amount, note } });
+    if (!result?.success) throw new Error(result?.error || 'Could not add amount');
+    closeModal();
+    await loadBankAccounts();
+    toast('Amount added', 'success');
+  } catch (error) { toast(error.message || 'Could not add amount', 'error'); }
+  finally { bankAddAmountBusy = false; if (button) button.disabled = false; }
 }
 
 function startBalanceEdit(id, currentBalance) {
@@ -18002,6 +18033,7 @@ function renderBankAccounts() {
           <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-p btn-sm" onclick="showBankAddAmount(${a.id})">+ Add amount</button>
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
             <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
@@ -20247,6 +20279,7 @@ function renderBankAccounts() {
           <div class="bank-card-spendable" id="bankSpend_${a.id}">Spendable: ${fmtCur(Math.max(0, spnd))}</div>
           <div class="bank-card-minbal">Min. balance locked: ${fmtCur(a.min_balance)}</div>
           <div class="bank-card-actions" onclick="stopEvent(event)">
+            <button class="btn btn-p btn-sm" onclick="showBankAddAmount(${a.id})">+ Add amount</button>
             <button class="btn btn-s btn-sm" onclick="showBankModal(${a.id})">Edit</button>
             <button class="btn btn-s btn-sm" onclick="showBankHistoryModal(${a.id})">History</button>
             ${!a.is_default ? `<button class="btn btn-sm" style="border:1px solid var(--acc);background:transparent;color:var(--acc)" onclick="setDefaultBank(${a.id})">Set Default</button>` : ''}
