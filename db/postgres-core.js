@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { query, withTransaction } = require('./postgres');
 const pgBillingDb = require('./postgres-billing');
+const { buildTripPaymentObligations } = require('../utils/trip-payment-obligations');
 
 function num(value) {
   return Number(value || 0);
@@ -2121,6 +2122,7 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     .filter((item) => Math.abs(num(item?.amount)) > 0.0001)
     .sort((a, b) => Math.abs(num(b?.amount)) - Math.abs(num(a?.amount)));
   const memberBalanceMap = new Map();
+  const paymentEdges = [];
   const ensureMemberBalance = (participant) => {
     const linkedUserId = Number(participant?.linked_user_id || 0);
     const friendId = Number(participant?.friend_id || 0);
@@ -2147,6 +2149,9 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     const payerParticipant = participants.find((participant) => namesMatch(participant?.name, payerName)) || null;
     participants.forEach((participant) => {
       const balance = ensureMemberBalance(participant);
+      if (payerParticipant && participant !== payerParticipant) {
+        paymentEdges.push({ from: balance, to: ensureMemberBalance(payerParticipant), amount: participant.share });
+      }
       balance.share = Math.round((balance.share + num(participant.share)) * 100) / 100;
       if (payerParticipant && participant === payerParticipant) {
         balance.paid = Math.round((balance.paid + total) * 100) / 100;
@@ -2172,6 +2177,7 @@ async function getLiveSplitTripLedgerForUser(userId, tripId) {
     my_share_amount: num(stats.my_share_amount),
     latest_divide_date: stats.latest_divide_date || null,
     member_balances: memberBalances,
+    payment_obligations: buildTripPaymentObligations(paymentEdges),
     pair_balances: pairBalances,
     groups: normalizedGroups,
   };
@@ -3051,6 +3057,90 @@ async function getLiveSplitFriendActivities(userId, friendId, limit = 60) {
   }));
 }
 
+async function paymentManagerSplit(userId, data = {}, post = false) {
+  return withTransaction(async client => {
+    const uid = Number(userId);
+    const date = normalizeDateValue(data.date, 'Date');
+    const title = normalizeText(data.title, 'Description', 120);
+    if (!Array.isArray(data.people) || data.people.length > 50) throw validationError('Select between 2 and 50 people');
+    const me = (await client.query('SELECT display_name, username FROM users WHERE id = $1', [uid])).rows[0];
+    const ownerName = String(me?.display_name || me?.username || 'You').trim();
+    const people = [];
+    const names = new Set();
+    const identities = new Set();
+    for (const person of data.people) {
+      const key = String(person.key);
+      let row;
+      if (key === 'self') row = { key, name: ownerName, friend_id: null, linked_user_id: uid, paid: person.paid, share_value: person.share_value };
+      else {
+        const friend = (await client.query('SELECT id, name, linked_user_id FROM live_split_friends WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [Number(key) || 0, uid])).rows[0];
+        if (!friend || Number(friend.linked_user_id) === uid) throw validationError('Select a valid friend');
+        row = { key: String(friend.id), name: friend.name, friend_id: Number(friend.id), linked_user_id: friend.linked_user_id, paid: person.paid, share_value: person.share_value };
+      }
+      const identity = row.linked_user_id ? `user:${row.linked_user_id}` : `friend:${row.friend_id}`;
+      const name = String(row.name).trim().toLowerCase();
+      if (identities.has(identity) || names.has(name) || (key !== 'self' && (name === 'you' || name === ownerName.toLowerCase()))) throw validationError('Selected people must have distinct names and accounts');
+      names.add(name); identities.add(identity); people.push(row);
+    }
+    let plan;
+    try { plan = require('../utils/payment-manager-plan').buildPaymentManagerPlan(people, data.manager_key, data.split_mode || 'equal'); }
+    catch (error) { throw validationError(error.message); }
+    const self = plan.people.find(person => person.key === 'self');
+    const finance = {
+      add_expense: data.add_expense === true,
+      source: String(data.payment_source || 'none'),
+      account_id: Number(data.payment_account_id || 0),
+    };
+    if (!['none', 'bank', 'card'].includes(finance.source)) throw validationError('Choose a valid payment source');
+    if (finance.add_expense && !(self?.share > 0)) throw validationError('Select yourself with a positive share to add it to Expenses');
+    if (finance.source !== 'none') {
+      if (!(self?.paid > 0)) throw validationError('Enter the amount you paid before choosing a payment source');
+      const table = finance.source === 'bank' ? 'bank_accounts' : 'credit_cards';
+      const condition = finance.source === 'bank' ? ' AND deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE' : ' AND is_active = TRUE';
+      const account = await client.query(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2${condition}${post ? ' FOR UPDATE' : ''}`, [finance.account_id, uid]);
+      if (!account.rows.length) throw validationError('Select one of your own active accounts');
+    } else finance.account_id = 0;
+    plan.finance = { ...finance, expense_amount: finance.add_expense ? self.share : 0, payment_amount: finance.source !== 'none' ? self.paid : 0 };
+    if (!post) return plan;
+    if (!plan.entries.length) throw validationError('There are no friend amounts owed to post. Add a personal expense instead.');
+    const requestId = String(data.request_id || '');
+    if (!/^[a-zA-Z0-9-]{12,80}$/.test(requestId)) throw validationError('Invalid request. Reopen the payment manager form');
+    const requestKey = `manager-${uid}-${requestId}`;
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ title, date, plan })).digest('hex').slice(0, 20);
+    const session = `${requestKey}-${fingerprint}`;
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [requestKey]);
+    const existing = await client.query('SELECT id, session_id FROM live_split_groups WHERE user_id = $1 AND session_id LIKE $2', [uid, `${requestKey}-%`]);
+    if (existing.rows.length) {
+      if (existing.rows.some(row => row.session_id !== session)) throw validationError('This split was already posted. Open a new payment manager split for different entries.');
+      return { ...plan, group_ids: existing.rows.map(row => Number(row.id)), already_posted: true };
+    }
+    const groupIds = [];
+    for (const entry of plan.entries) {
+      const debtor = people.find(person => person.key === entry.from);
+      const creditor = people.find(person => person.key === entry.to);
+      const details = `${title} - ${entry.kind === 'collection' ? 'Share owed' : 'Reimbursement owed'}: ${debtor.name} to ${creditor.name}`;
+      // An amount split represents money owed, not a completed payment.
+      const result = await client.query(`INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id, owner_added_to_expense)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'amount', NULL, FALSE) RETURNING id`,
+        [uid, date, details, creditor.key === 'self' ? 'You' : creditor.name, entry.amount, title, session]);
+      const groupId = Number(result.rows[0].id);
+      const splits = [debtor, creditor].filter(person => person.friend_id).map(person => ({ friend_id: person.friend_id, friend_name: person.name, linked_user_id: person.linked_user_id, share_amount: person.key === debtor.key ? entry.amount : 0 }));
+      await insertLiveSplitSplitsWithSequenceRecovery(client, groupId, splits);
+      await syncSingleLiveSplitGroupShares(client, uid, groupId, splits.map(split => split.friend_id));
+      await logLiveSplitGroupActivity(client, { groupId, actorUserId: uid, action: 'created', summary: details });
+      await logLiveSplitFriendActivities(client, { ownerUserId: uid, groupId, actorUserId: uid, action: 'created', summary: details, expenseDetails: details, divideDate: date, totalAmount: entry.amount, splits });
+      groupIds.push(groupId);
+    }
+    // Only the personal share is an expense. The payment source records the full
+    // amount actually paid by this user; reimbursements remain unpaid debts.
+    const sourceId = groupIds[0];
+    if (finance.add_expense) await addExpense(uid, { item_name: `${title} - My share`, amount: self.share, purchase_date: date, bank_account_id: null, source: 'payment_manager', source_id: sourceId }, client);
+    if (finance.source === 'bank') await adjustBankBalance(uid, finance.account_id, -self.paid, client, { entry_type: 'fund_removed', note: `${title} - Payment manager payment` });
+    if (finance.source === 'card') await pgBillingDb.addCcTxn(uid, { card_id: finance.account_id, txn_date: date, description: `${title} - Payment manager payment`, amount: self.paid, discount_pct: 0, source: 'payment_manager', source_id: sourceId }, client);
+    return { ...plan, group_ids: groupIds };
+  });
+}
+
 async function addLiveSplitGroup(userId, data) {
   return withTransaction(async (client) => {
     const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
@@ -3069,7 +3159,7 @@ async function addLiveSplitGroup(userId, data) {
       if (!trip) throw validationError('Live split trip not found');
       if (normalizeLiveSplitTripStatus(trip.status) !== 'active') throw validationError('Trip is completed. Re-open it to add expenses.');
       await assertLiveSplitTripParticipants(client, tripId, normalizedSplits);
-      await assertLiveSplitTripPayerAllowed(client, tripId, data.paid_by);
+      await assertLiveSplitTripPayerAllowed(client, tripId, data.paid_by, ownerUserId);
     }
     const groupResult = await client.query(
       `INSERT INTO live_split_groups (user_id, divide_date, details, paid_by, total_amount, heading, session_id, split_mode, trip_id, owner_added_to_expense)
@@ -3308,20 +3398,35 @@ async function assertNoDuplicateLiveSplitGroup(client, userId, data, excludeGrou
   }
 }
 
-async function assertLiveSplitTripPayerAllowed(client, tripId, paidBy) {
+async function assertLiveSplitTripPayerAllowed(client, tripId, paidBy, ownerUserId) {
   const tid = Number(tripId || 0);
   if (!(tid > 0)) return;
   const payerKey = normalizeLiveSplitPayerName(paidBy);
   if (!payerKey || payerKey === 'you') return;
   const membersResult = await client.query(
-    `SELECT member_name
-     FROM live_split_trip_members
-     WHERE trip_id = $1`,
-    [tid]
+    `SELECT m.member_name, f.name AS friend_name,
+            u.display_name, u.username, local_friend.name AS local_friend_name
+     FROM live_split_trip_members m
+     JOIN live_split_trips t ON t.id = m.trip_id
+     LEFT JOIN live_split_friends f ON f.id = m.friend_id
+     LEFT JOIN users u ON u.id = COALESCE(m.target_user_id, f.linked_user_id,
+       CASE WHEN m.permission = 'owner' THEN t.user_id END)
+     LEFT JOIN live_split_friends local_friend
+       ON local_friend.user_id = $2 AND local_friend.linked_user_id = u.id
+       AND local_friend.deleted_at IS NULL
+     WHERE m.trip_id = $1
+     UNION ALL
+     SELECT display_name, NULL, display_name, username, NULL
+     FROM users WHERE id = $2`,
+    [tid, Number(ownerUserId)]
   );
   const allowedNames = new Set(
     (membersResult.rows || [])
-      .map((member) => normalizeLiveSplitPayerName(member?.member_name))
+      // Names shown in an editor can differ from the trip's saved label.
+      // Resolve aliases only through actual members and the entry owner.
+      .flatMap((member) => [member.member_name, member.friend_name,
+        member.display_name, member.username, member.local_friend_name])
+      .map(normalizeLiveSplitPayerName)
       .filter(Boolean)
   );
   if (!allowedNames.has(payerKey)) throw validationError('Trip split payer must be you or one of the trip members');
@@ -3476,7 +3581,7 @@ async function updateLiveSplitGroup(userId, groupId, data) {
     }
     if (nextTripId) {
       await assertLiveSplitTripParticipants(client, nextTripId, normalizedSplits);
-      await assertLiveSplitTripPayerAllowed(client, nextTripId, data.paid_by);
+      await assertLiveSplitTripPayerAllowed(client, nextTripId, data.paid_by, ownerUserId);
     }
     const previousState = {
       divide_date: group.divide_date,
@@ -9968,6 +10073,7 @@ module.exports = {
   getLiveSplitGroups,
   getLiveSplitGroupDetailForUser,
   markLiveSplitExpenseAdded,
+  paymentManagerSplit,
   addLiveSplitGroup,
   updateLiveSplitGroup,
   deleteLiveSplitGroup,

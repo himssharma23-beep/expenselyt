@@ -1338,13 +1338,6 @@
     const availableKeys = getTripScanParticipantOptions(form).map((person) => String(person.key));
     const availableKeySet = new Set(availableKeys);
     const nextKeys = [...new Set((Array.isArray(row?.participant_keys) ? row.participant_keys : []).map((key) => String(key)).filter((key) => availableKeySet.has(key)))];
-    const looksUntouchedDefaultRow = nextKeys.length === 1
-      && nextKeys[0] === 'self'
-      && availableKeys.length > 1
-      && !String(row?.item_name || '').trim()
-      && !(n(row?.amount) > 0)
-      && !(row?.split_values && Object.keys(row.split_values).length);
-    if (looksUntouchedDefaultRow) return [...availableKeys];
     if (nextKeys.length) return nextKeys;
     const assignment = String(row?.assignment || 'self');
     if (assignment === 'shared') return [...availableKeys];
@@ -1646,8 +1639,8 @@
     return { valid: true };
   }
 
-  async function ensureFinanceOptionsLoaded() {
-    if ((state.bankAccounts || []).length && (state.creditCards || []).length) return;
+  async function ensureFinanceOptionsLoaded(force = false, strict = false) {
+    if (!force && (state.bankAccounts || []).length && (state.creditCards || []).length) return;
     const [banksResult, cardsResult] = await Promise.allSettled([
       api('/api/banks'),
       api('/api/cc/cards'),
@@ -1657,6 +1650,9 @@
     }
     if (cardsResult.status === 'fulfilled') {
       state.creditCards = Array.isArray(cardsResult.value?.cards) ? cardsResult.value.cards : [];
+    }
+    if (strict && (banksResult.status !== 'fulfilled' || !Array.isArray(banksResult.value?.accounts) || cardsResult.status !== 'fulfilled' || !Array.isArray(cardsResult.value?.cards))) {
+      throw new Error('Could not load bank accounts and credit cards. Please try again.');
     }
   }
 
@@ -3342,6 +3338,15 @@
             }).join('')}
           </div>
         ` : ''}
+        <section class="ls-trip-payments" aria-label="Who pays whom" style="background:var(--card,#fff);border:1px solid var(--border);border-radius:16px;padding:16px;margin-top:16px;color:var(--t1)">
+          <h3 style="font-size:15px;margin:0 0 6px">Who pays whom</h3>
+          <p style="font-size:12px;color:var(--t2);margin:0 0 12px">Remaining amounts after recorded repayments.</p>
+          ${Array.isArray(trip.payment_obligations) ? (trip.payment_obligations.length ? trip.payment_obligations.map(payment => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--border)">
+              <span style="min-width:0;overflow-wrap:anywhere"><b>${escHtml(payment.from_name)}</b> pays <b>${escHtml(payment.to_name)}</b></span>
+              <strong style="white-space:nowrap;color:var(--green)">${fmtCur(payment.amount)}</strong>
+            </div>`).join('') : '<div style="font-size:13px;color:var(--green)">All settled up. No payments remaining.</div>') : '<div style="font-size:13px;color:var(--t2)">Payment details are unavailable. Please refresh after updating the server.</div>'}
+        </section>
         <div class="ls-trip-month-stack">
           ${events.length ? grouped.map(([month, monthData]) => `
             <div class="ls-trip-month-card" style="margin-bottom:10px">
@@ -4152,6 +4157,7 @@
         </div>
         <div class="filter-row">
           <button class="btn btn-p btn-sm" onclick="liveSplitOpenCreate()">+ Add Split</button>
+          <button class="btn btn-s btn-sm" onclick="liveSplitOpenPaymentManager()">Payment manager</button>
           <div class="chip-group">
             <button class="chip ${state.sort === 'az' ? 'active' : ''}" onclick="liveSplitSetSort('az')">A-Z</button>
             <button class="chip ${state.sort === 'high' ? 'active' : ''}" onclick="liveSplitSetSort('high')">Highest</button>
@@ -5313,8 +5319,7 @@
                       <input class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="amount" style="text-align:right;width:100%" type="number" step="0.01" min="0" value="${escHtml(String(item.amount ?? ''))}" placeholder="0" oninput='liveSplitTripScanItem(${toJsArg(rowKey)}, "amount", this.value)'>
                     </label>
                   </div>
-                <label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="paid_by" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
-                <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people</span><b>Change split / Done</b></summary>
+
                     <div style="display:block;min-width:0">
                       <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
                       <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
@@ -5327,7 +5332,9 @@
                     <label class="fc" style="margin:0;font-size:12px;color:var(--t2)"><input type="checkbox" ${participantKeys.includes('self') ? 'checked' : ''} onchange='liveSplitTripScanToggleSelf(${toJsArg(rowKey)}, this.checked)'><span>Include me in this item</span></label>
                     <div style="font-size:12px;color:var(--t3)">${participantKeys.length} participant${participantKeys.length === 1 ? '' : 's'}</div>
                   </div>
-                  <div style="margin-top:10px">
+                  <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people</span><b>Change split / Done</b></summary>
+<label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-scan-key="${escHtml(rowKey)}" data-trip-scan-field="paid_by" onchange='liveSplitTripScanItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
+                <div style="margin-top:10px">
                     <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Mode</div>
                     <div style="display:flex;flex-wrap:wrap;gap:6px">
                       ${[
@@ -5398,8 +5405,7 @@
                   </div>
                   <button class="btn btn-g btn-sm" style="min-width:0;padding:8px 10px;flex-shrink:0" onclick="liveSplitTripManualDelete(${toJsArg(rowKey)})" title="Delete row">&times;</button>
                 </div>
-                    <label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="paid_by" onchange='liveSplitTripManualItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
-                <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${n(item.amount) > 0 ? `${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people` : 'Enter an amount for this item.'}</span><b>Change split / Done</b></summary>
+
                 <div style="display:block;min-width:0;margin-top:10px">
                   <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:4px">Participants</div>
                   <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#fff;min-height:44px">
@@ -5412,6 +5418,8 @@
                   <label class="fc" style="margin:0;font-size:12px;color:var(--t2)"><input type="checkbox" ${participantKeys.includes('self') ? 'checked' : ''} onchange='liveSplitTripManualToggleSelf(${toJsArg(rowKey)}, this.checked)'><span>Include me in this item</span></label>
                   <div style="font-size:12px;color:var(--t3)">${participantKeys.length} participant${participantKeys.length === 1 ? '' : 's'}</div>
                 </div>
+                <details class="tw-row-split" ${form.expandedSplits?.[rowKey] ? 'open' : ''} ontoggle='liveSplitTripRowExpanded(${toJsArg(rowKey)},this.open)'><summary><span>${n(item.amount) > 0 ? `${escHtml(splitMode === 'equal' ? 'Split equally' : splitMode)} &middot; ${participantKeys.length} people` : 'Enter an amount for this item.'}</span><b>Change split / Done</b></summary>
+<label class="fl" style="margin-top:10px">Paid by<select class="fi" data-trip-manual-key="${escHtml(rowKey)}" data-trip-manual-field="paid_by" onchange='liveSplitTripManualItem(${toJsArg(rowKey)}, "paid_by", this.value)'><option value="">Default: ${escHtml(form.paid_by || 'You')}</option>${tripCreatePayerOptions(form).map(name => `<option value="${escHtml(name)}" ${String(item.paid_by || '') === name ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}</select></label>
                 <div style="margin-top:10px">
                   <div style="font-size:11px;color:var(--t3);font-weight:700;margin-bottom:6px">Split Mode</div>
                   <div style="display:flex;flex-wrap:wrap;gap:6px">
@@ -6933,6 +6941,142 @@
     }
   }
 
+function paymentManagerValidation(people, mode) {
+  const cents = value => Math.round(Number(value) * 100);
+  const validMoney = value => Number.isFinite(Number(value)) && Number(value) >= 0 && Math.abs(Number(value) * 100 - cents(value)) < 0.00001;
+  if (people.length < 2) return { valid: false, message: 'Select at least two people.' };
+  if (people.some(person => !validMoney(person.paid || 0))) return { valid: false, message: 'Enter valid paid amounts with up to two decimal places.' };
+  const total = people.reduce((sum, person) => sum + cents(person.paid || 0), 0);
+  if (total <= 0) return { valid: false, message: 'Enter the total paid before dividing shares.' };
+  if (mode === 'equal') return { valid: true, message: `Total paid: ${(total / 100).toFixed(2)}. Equal shares will match this total.` };
+  if (people.some(person => person.share_value == null || String(person.share_value).trim() === '' || !Number.isFinite(paymentManagerShareNumber(person.share_value, mode)) || paymentManagerShareNumber(person.share_value, mode) < 0)) return { valid: false, message: 'Enter a non-negative share for each person (use 0 for no share).' };
+  const sum = people.reduce((acc, person) => acc + paymentManagerShareNumber(person.share_value, mode), 0);
+  if (mode === 'fraction') {
+    const remaining = 1 - sum;
+    return { valid: Math.abs(remaining) <= 0.000001, message: `Fraction total: ${Number(sum.toFixed(6))} / 1` + (Math.abs(remaining) <= 0.000001 ? ' - Balanced' : ' - Fractions must total 1') };
+  }
+  if (mode === 'percent') {
+    const remaining = 100 - sum;
+    return { valid: Math.abs(remaining) <= 0.000001, message: `Percent total: ${Number(sum.toFixed(6))}% / 100%` + (Math.abs(remaining) <= 0.000001 ? ' - Balanced' : ` - ${Number(Math.abs(remaining).toFixed(6))}% ${remaining > 0 ? 'remaining' : 'over'}`) };
+  }
+  if (mode === 'amount') {
+    if (people.some(person => !validMoney(person.share_value))) return { valid: false, message: 'Direct shares allow up to two decimal places.' };
+    const entered = people.reduce((acc, person) => acc + cents(person.share_value), 0);
+    const remaining = total - entered;
+    return { valid: remaining === 0, message: `Shares: ${(entered / 100).toFixed(2)} / ${(total / 100).toFixed(2)}` + (remaining === 0 ? ' - Balanced' : ` - ${(Math.abs(remaining) / 100).toFixed(2)} ${remaining > 0 ? 'remaining' : 'over'}`) };
+  }
+  return { valid: mode === 'parts' && sum > 0, message: sum > 0 ? `Ratio total: ${sum} parts. Allocated shares will total ${(total / 100).toFixed(2)}.` : 'Enter at least one positive ratio part.' };
+}
+function paymentManagerShareNumber(value, mode) {
+  const text = String(value ?? '').trim();
+  if (mode === 'fraction' && text.includes('/')) {
+    const parts = text.split('/');
+    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim() || !Number.isFinite(Number(parts[0])) || !Number.isFinite(Number(parts[1])) || !(Number(parts[1]) > 0)) return NaN;
+    return Number(parts[0]) / Number(parts[1]);
+  }
+  return Number(text);
+}
+
+function paymentManagerPreview(people, mode) {
+  const total = people.reduce((sum, person) => sum + Math.round(Number(person.paid || 0) * 100), 0);
+  if (!paymentManagerValidation(people, mode).valid) return { total: Number.isFinite(total) ? total / 100 : 0, shares: [] };
+  const weights = people.map(person => mode === 'equal' ? 1 : paymentManagerShareNumber(person.share_value, mode));
+  const sum = weights.reduce((acc, value) => acc + value, 0);
+  const exact = weights.map(value => mode === 'amount' ? Math.round(value * 100) : total * value / sum);
+  const cents = exact.map(Math.floor);
+  const order = exact.map((value, index) => ({index, rest: value - cents[index]})).sort((a,b) => b.rest-a.rest || a.index-b.index);
+  const remainder = total - cents.reduce((acc,value) => acc+value,0);
+  for (let i=0;i<remainder;i++) cents[order[i].index]++;
+  return { total: total / 100, shares: cents.map(value => value / 100) };
+}
+
+
+  let managerDraft = null;
+  function renderPaymentManager() {
+    const form = managerDraft;
+    if (!form) return;
+    const all = [{ key: 'self', name: 'You' }, ...(state.friends || []).map(friend => ({ key: String(friend.id), name: friend.name }))];
+    const people = [...form.selected].map(key => all.find(person => person.key === key)).filter(Boolean);
+    const input = people.map(person => ({paid:form.paid[person.key] || 0,share_value:form.share_values[person.key]}));
+    const validation = paymentManagerValidation(input, form.split_mode);
+    const live = paymentManagerPreview(input, form.split_mode);
+    const plan = form.plan;
+    const modes = [['equal','Equal'],['percent','%'],['fraction','Fraction'],['amount','Direct &#8377;'],['parts','Parts']];
+    const modeName = {equal:'Equal',percent:'Percentage',fraction:'Fraction',amount:'Direct amount',parts:'Parts / Ratio'}[form.split_mode];
+    const name = key => key === 'self' ? 'You' : all.find(person => person.key === key)?.name || plan?.people.find(person => person.key === key)?.name || key;
+    const initials = name => name.split(/\s+/).map(word => word[0]).slice(0,2).join('').toUpperCase();
+    const avatar = (person,index=0) => `<span class="pm-avatar" style="--avatar:${['#205e45','#a75132','#38768a','#886294'][index%4]}">${escHtml(person.key === 'self' ? 'ME' : initials(person.name))}</span>`;
+    const busy = form.busy ? 'disabled' : '';
+    const account = (plan?.finance?.source === 'bank' ? state.bankAccounts : state.creditCards)?.find(item => Number(item.id) === Number(plan?.finance?.account_id));
+    window.__modalClassName = 'payment-manager-modal';
+    openModal('Payment manager split', `<section class="pm-shell">
+      <header class="pm-header"><span class="pm-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="7" r="3"/><path d="M6 20v-2a6 6 0 0 1 12 0v2M4 6a3 3 0 0 0 0 6M20 6a3 3 0 0 1 0 6"/></svg></span><div class="pm-heading"><h3>Payment manager split</h3><p>${plan ? 'Check everything before posting' : 'Track who paid and who owes the manager'}</p></div><div class="pm-steps"><button type="button" ${busy} class="${!plan?'active':''}" onclick="liveSplitManagerBack()">1 Details</button><span class="${plan?'active':''}">2 Review</span></div><button class="pm-close" aria-label="Close" ${busy} onclick="closeModal()">&times;</button></header>
+      <div class="pm-content">
+      ${plan ? `
+        <div class="pm-hero"><small>TOTAL PAID</small><strong>${fmtCur(plan.total)}</strong><div><span>${escHtml(form.title)} &middot; ${escHtml(form.date)} &middot; <button class="pm-hero-edit" ${busy} onclick="liveSplitManagerBack()" aria-label="Edit split type">${escHtml(modeName)}</button> &middot; ${people.length} people</span><b>Manager: ${escHtml(name(form.manager_key))}</b></div></div>
+        <div class="pm-table-wrap"><table class="pm-review-table"><thead><tr><th>Person</th><th>Paid</th><th>Share</th><th>Balance</th></tr></thead><tbody>${plan.people.map((person,index)=> { const balance = Math.round((person.paid-person.share)*100)/100; return `<tr><td><div class="pm-person">${avatar({...person,name:name(person.key)},index)}<span>${escHtml(name(person.key))}</span></div></td><td>${fmtCur(person.paid)}</td><td>${fmtCur(person.share)}</td><td class="${balance < 0?'pm-negative':'pm-positive'}">${balance < 0?'owes':balance > 0?'gets':'settled'} ${fmtCur(Math.abs(balance))}</td></tr>`; }).join('')}</tbody></table></div>
+        <h4>Will be posted to friend transactions</h4><div class="pm-transfers">${plan.entries.map(entry=>`<div class="pm-transfer ${entry.kind==='reimbursement'?'reimbursement':''}"><div><strong>${escHtml(name(entry.from))} ${entry.from === 'self' ? 'owe' : 'owes'} ${escHtml(name(entry.to))}</strong><small>${entry.kind==='collection'?'Share contribution':'Reimbursement'}</small></div><b>${fmtCur(entry.amount)}</b></div>`).join('')}</div>
+        <div class="pm-two-col"><div class="pm-finance-summary expense"><small>My expense</small><strong>${fmtCur(plan.finance?.expense_amount || 0)} &middot; ${plan.finance?.add_expense?'added on posting':'not added'}</strong></div><div class="pm-finance-summary"><small>Account payment</small><strong>${['bank','card'].includes(plan.finance?.source)?`${fmtCur(plan.finance.payment_amount)} &middot; ${escHtml(account?.bank_name || account?.card_name || 'Selected account')}`:'Not recorded'}</strong></div></div>
+      ` : `
+        <div class="pm-explainer"><div><span>Everyone</span><b>&rarr;</b><span class="manager">Manager</span><b>&rarr;</b><span>Payers</span></div><p>Each person owes their share to the manager, and the manager pays back whoever paid. These are amounts owed, not payments made.</p></div>
+        <div class="pm-description"><label>Description<input class="fi" value="${escHtml(form.title)}" oninput="liveSplitManagerField('title', this.value)" placeholder="e.g. Dinner with friends" ${busy}></label><label>Date<input class="fi" type="date" value="${escHtml(form.date)}" onchange="liveSplitManagerField('date', this.value)" ${busy}></label></div>
+        <div class="pm-section-title"><h4>Who's in, and who paid</h4><small>${people.length} ${people.length===1?'person':'people'}</small></div>
+        <div class="pm-table-wrap"><table class="pm-people-table"><thead><tr><th>Person</th><th>Already paid</th><th>Share</th><th></th></tr></thead><tbody>${people.map((person,index)=>`<tr><td><div class="pm-person">${avatar(person,index)}<div>${escHtml(person.name)}${person.key===form.manager_key?'<small class="pm-manager-label">Manager</small>':''}</div></div></td><td><div class="pm-money-input"><span>&#8377;</span><input type="number" min="0" step="0.01" aria-label="Amount paid by ${escHtml(person.name)}" placeholder="0" value="${escHtml(String(form.paid[person.key] || ''))}" oninput="liveSplitManagerPaid('${person.key}', this.value)" ${busy}></div></td><td><div class="pm-share-line">${form.split_mode!=='equal'?`<input class="pm-share-input" type="text" inputmode="${form.split_mode==='fraction'?'text':'decimal'}" aria-label="Share for ${escHtml(person.name)}" placeholder="${form.split_mode==='fraction'?'1/2':form.split_mode==='percent'?'%':form.split_mode==='parts'?'Parts':'Amount'}" value="${escHtml(String(form.share_values[person.key]??''))}" oninput="liveSplitManagerShare('${person.key}', this.value)" ${busy}>`:''}<span class="pm-share" data-pm-share="${person.key}">${live.shares[index] === undefined?'&mdash;':fmtCur(live.shares[index])}</span></div></td><td><button class="pm-remove" aria-label="Remove ${escHtml(person.name)}" onclick="liveSplitManagerToggle('${person.key}', false)" ${busy}>&times;</button></td></tr>`).join('')}</tbody><tfoot><tr><td colspan="2">Total paid</td><td colspan="2" id="managerPaidTotal">${fmtCur(live.total)}</td></tr></tfoot></table></div>
+        <div class="pm-add-people"><small>Add:</small>${all.filter(person=>!form.selected.has(person.key)).map(person=>`<button type="button" ${busy} onclick="liveSplitManagerToggle('${person.key}', true)">+ ${escHtml(person.name)}</button>`).join('')}</div>
+        <h4>Split the total</h4><div class="pm-modes" role="radiogroup" aria-label="Split type">${modes.map(([key,label])=>`<button type="button" role="radio" aria-checked="${form.split_mode===key}" data-pm-mode="${key}" class="${form.split_mode===key?'active':''}" onclick="liveSplitManagerField('split_mode', '${key}')" ${busy}>${label}</button>`).join('')}</div><p class="pm-hint">${form.split_mode==='equal'?'The total paid is divided equally between everyone above.':form.split_mode==='percent'?'Enter percentages that total 100%.':form.split_mode==='fraction'?'Enter fractions such as 1/2 and 1/4. They must total 1.':form.split_mode==='amount'?'Enter each share. Amounts must match the total paid.':'Enter relative parts, such as 2, 1, 1 for a 2:1:1 ratio.'}</p>
+        <div class="pm-two-col"><div class="pm-option"><label>Payment manager<select class="fi" onchange="liveSplitManagerField('manager_key', this.value)" ${busy}>${people.map(person=>`<option value="${person.key}" ${form.manager_key===person.key?'selected':''}>${escHtml(person.name)}</option>`).join('')}</select></label><p>Collects shares and pays everyone back.</p></div>
+        <div class="pm-option">${form.selected.has('self')?`<label class="pm-switch-label">Add my share to Expenses<input class="pm-switch" type="checkbox" role="switch" ${form.add_expense?'checked':''} onchange="liveSplitManagerField('add_expense', this.checked)" ${busy}></label><label>I paid from<select class="fi" onchange="liveSplitManagerField('payment_source', this.value)" ${busy}>${[['none',"Don't record a payment"],['bank','Bank account'],['card','Credit card']].map(([key,label])=>`<option value="${key}" ${form.payment_source===key?'selected':''}>${label}</option>`).join('')}</select></label>${form.payment_source!=='none'?`<label>${form.payment_source==='bank'?'Bank account':'Credit card'}<select class="fi" onchange="liveSplitManagerField('payment_account_id', this.value)" ${busy}><option value="">${(form.payment_source==='bank'?state.bankAccounts:state.creditCards)?.length ? 'Select account' : form.payment_source==='bank'?'No bank accounts added':'No credit cards added'}</option>${(form.payment_source==='bank'?state.bankAccounts || []:state.creditCards || []).map(account=>`<option value="${account.id}" ${Number(form.payment_account_id)===Number(account.id)?'selected':''}>${escHtml(form.payment_source==='bank'?`${account.bank_name} ${account.account_name || ''}`:`${account.card_name} ${account.last4 || ''}`)}</option>`).join('')}</select></label>`:''}<p>Expenses gets only your share; the account gets the full amount you paid.</p>`:'<p>Add yourself above to record your share or payment.</p>'}</div></div>
+      `}</div>
+      <footer class="pm-footer"><div id="managerSplitValidation" role="status" class="${validation.valid?'pm-positive':'pm-negative'}">${plan?`${plan.entries.length} ${plan.entries.length===1?'entry':'entries'} to post`:validation.valid?'Balanced - ready to review':escHtml(validation.message)}</div><div class="pm-footer-actions"><button class="btn btn-s" ${busy} onclick="${plan?'liveSplitManagerBack()':'closeModal()'}">${plan?'Back':'Cancel'}</button><button id="managerSplitSubmit" class="btn btn-p" ${form.busy || !validation.valid?'disabled':''} onclick="liveSplitManagerSubmit(${!!plan})">${form.busy?'Please wait...':plan?'Post to friend transactions':'Review split'}</button></div></footer>
+    </section>`);
+  }
+  window.liveSplitOpenPaymentManager = async () => {
+    try { await ensureFinanceOptionsLoaded(true, true); }
+    catch (error) { toast(error.message, 'error'); return; }
+    managerDraft = { title: '', date: todayLocalIso(), selected: new Set(['self']), paid: {}, share_values: {}, split_mode: 'equal', add_expense: false, payment_source: 'none', payment_account_id: '', manager_key: 'self', request_id: typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `web-${Date.now()}-${Math.random().toString(36).slice(2)}`, busy: false, plan: null };
+    renderPaymentManager();
+  };
+  window.liveSplitManagerField = (key, value) => { if (!managerDraft || managerDraft.busy) return; managerDraft[key] = value; if (key === 'payment_source') managerDraft.payment_account_id = ''; if (key === 'split_mode' || key === 'payment_source' || key === 'manager_key') { managerDraft.plan = null; renderPaymentManager(); } };
+  function updatePaymentManagerValidation() {
+    const form = managerDraft;
+    if (!form) return;
+    const result = paymentManagerValidation([...form.selected].map(key => ({paid: form.paid[key] || 0, share_value: form.share_values[key]})), form.split_mode);
+    const status = document.getElementById('managerSplitValidation');
+    if (status) { status.textContent = result.message; status.style.color = result.valid ? 'var(--green)' : 'var(--red)'; }
+    const keys = [...form.selected];
+    const preview = paymentManagerPreview(keys.map(key => ({paid:form.paid[key] || 0,share_value:form.share_values[key]})), form.split_mode);
+    const total = document.getElementById('managerPaidTotal');
+    if (total) total.textContent = fmtCur(preview.total);
+    document.querySelectorAll('[data-pm-share]').forEach(node => { const value = preview.shares[keys.indexOf(node.dataset.pmShare)]; node.textContent = value === undefined ? '\u2014' : fmtCur(value); });
+    const button = document.getElementById('managerSplitSubmit');
+    if (button) button.disabled = form.busy || !result.valid;
+  }
+  window.liveSplitManagerShare = (key, value) => { if (managerDraft && !managerDraft.busy) { managerDraft.share_values[key] = value; updatePaymentManagerValidation(); } };
+  window.liveSplitManagerPaid = (key, value) => { if (managerDraft && !managerDraft.busy) { managerDraft.paid[key] = value; updatePaymentManagerValidation(); } };
+  window.liveSplitManagerToggle = (key, checked) => {
+    if (!managerDraft || managerDraft.busy) return;
+    checked ? managerDraft.selected.add(key) : managerDraft.selected.delete(key);
+    if (!managerDraft.selected.has(managerDraft.manager_key)) managerDraft.manager_key = [...managerDraft.selected][0] || '';
+    if (!managerDraft.selected.has('self')) { managerDraft.add_expense = false; managerDraft.payment_source = 'none'; managerDraft.payment_account_id = ''; }
+    renderPaymentManager();
+  };
+  window.liveSplitManagerBack = () => { if (managerDraft && !managerDraft.busy) { managerDraft.plan = null; renderPaymentManager(); } };
+  window.liveSplitManagerSubmit = async (post) => {
+    const form = managerDraft;
+    if (!form || form.busy) return;
+    const validation = paymentManagerValidation([...form.selected].map(key => ({paid: form.paid[key] || 0, share_value: form.share_values[key]})), form.split_mode);
+    if (!validation.valid) { toast(validation.message, 'warning'); return; }
+    form.busy = true;
+    renderPaymentManager();
+    try {
+      const result = await api(`/api/live-split/payment-manager${post ? '' : '/preview'}`, { method: 'POST', body: { title: form.title, date: form.date, split_mode: form.split_mode, add_expense: form.add_expense, payment_source: form.payment_source, payment_account_id: form.payment_account_id, manager_key: form.manager_key, request_id: form.request_id, people: [...form.selected].map(key => ({ key, paid: form.paid[key] || 0, share_value: form.share_values[key] })) } });
+      if (!result?.success) throw new Error(result?.error || 'Could not save payment manager split');
+      if (post) { managerDraft = null; closeModal(); await loadLiveSplit(); toast('Entries added to friend transactions', 'success'); }
+      else form.plan = result.plan;
+    } catch (error) { toast(error.message, 'error'); }
+    finally { form.busy = false; if (managerDraft === form) renderPaymentManager(); }
+  };
+
   async function openEditExpense(groupId) {
     const detail = await api(`/api/live-split/groups/${Number(groupId)}`);
     if (!detail?.group) {
@@ -7031,7 +7175,8 @@
       divide_date: toLocalIsoDate(form.divide_date, todayLocalIso()),
       details: String(form.details || '').trim(),
       heading: String(form.heading || form.details || '').trim(),
-       paid_by: String(matchedPayer?.name || payerName).trim(),
+      paid_by: matchedPayer && String(matchedPayer.key) === String(form.owner_key || 'owner')
+        ? 'You' : String(matchedPayer?.name || payerName).trim(),
       total_amount: Number(form.total_amount),
       split_mode: form.isSettlement ? 'settlement' : String(form.splitMode || 'equal'),
       trip_id: Number(form.trip_id || 0) > 0 ? Number(form.trip_id) : null,

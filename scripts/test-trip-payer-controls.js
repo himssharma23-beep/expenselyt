@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
 
-test('each manual and scanned trip entry renders exactly one payer control outside collapsed split settings', async () => {
+test('trip entries show participants and keep payer controls inside collapsed split settings', async () => {
   const browser = await puppeteer.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -43,7 +43,11 @@ test('each manual and scanned trip entry renders exactly one payer control outsi
     await page.evaluate(() => renderTripCreateModal());
     const controls = await page.$$eval('select[data-trip-manual-field="paid_by"],select[data-trip-scan-field="paid_by"]', elements => elements.map(element => ({ key: element.dataset.tripManualKey || element.dataset.tripScanKey, hidden: !!element.closest('details:not([open]),[hidden]'), options: [...element.options].map(option => option.value) })));
     assert.deepEqual(controls.map(item => item.key).sort(), ['manual-1', 'manual-2', 'scan-1']);
-    assert.ok(controls.every(item => !item.hidden));
+    assert.ok(controls.every(item => item.hidden));
+    const participants = await page.$$eval('button[onclick*="ToggleParticipant"],input[onchange*="ToggleSelf"]', elements => elements.map(element => ({ hidden: !!element.closest('details:not([open]),[hidden]'), selected: element.type === 'checkbox' ? element.checked : element.classList.contains('active') })));
+    assert.equal(participants.length, 6);
+    assert.ok(participants.every(item => !item.hidden && item.selected));
+    await page.$$eval('details.tw-row-split', elements => elements.forEach(element => { element.open = true; }));
     assert.ok(controls.every(item => item.options.includes('Friend')));
     await page.select('select[data-trip-manual-key="manual-1"]', 'Friend');
     await page.select('select[data-trip-scan-key="scan-1"]', 'Friend');
@@ -94,4 +98,38 @@ test('each manual and scanned trip entry renders exactly one payer control outsi
       assert.equal(await page.evaluate(kind => state.tripCreate[`${kind}_items`][0].item_name, kind), 'New Meal');
     }
   } finally { await browser.close(); }
+});
+
+test('mobile new rows select everyone while participants remain visible', () => {
+  const root = path.resolve(__dirname, '../../ExpenseManager_mobile');
+  const source = fs.readFileSync(path.join(root, 'src/screens/LiveSplitScreen.js'), 'utf8');
+  const ast = require(path.join(root, 'node_modules/@babel/parser')).parse(source, {sourceType:'module',plugins:['jsx']});
+  const functions = new Map();
+  function walk(node, callback, ancestors = []) {
+    if (!node || typeof node !== 'object') return;
+    callback(node, ancestors);
+    for (const [key, child] of Object.entries(node)) {
+      if (['loc','start','end'].includes(key)) continue;
+      if (Array.isArray(child)) child.forEach(value => walk(value, callback, [...ancestors,node]));
+      else if (child && typeof child === 'object') walk(child, callback, [...ancestors,node]);
+    }
+  }
+  walk(ast, node => { if(node.type === 'FunctionDeclaration') functions.set(node.id.name,node); });
+  const vm = require('node:vm');
+  const context = vm.createContext({selectedTripFriends:[{id:2},{id:3}], tripBulkDate:'2026-10-12', tripStartDate:'', todayISO:()=> '2026-10-12', toLocalIsoDate:value=>value, rows:[{selected_keys:['self']}]});
+  vm.runInContext('function setTripManualItems(update) { rows = update(rows); }',context);
+  for(const name of ['createTripCreateRow','addTripManualItem']) {
+    const node=functions.get(name);
+    vm.runInContext(source.slice(node.start,node.end),context);
+  }
+  vm.runInContext('addTripManualItem()',context);
+  assert.deepEqual(Array.from(context.rows[1].selected_keys),['self','2','3']);
+  assert.deepEqual(Array.from(context.rows[0].selected_keys),['self']);
+  const labels=[];
+  walk(functions.get('renderTripCreateRowEditor'), (node, ancestors)=> {
+    if(node.type === 'JSXText' && ['Participants','Include me in this item','Paid by','Split Mode'].includes(node.value.trim())) {
+      labels.push([node.value.trim(),ancestors.some(parent=>parent.type==='LogicalExpression' && source.slice(parent.left.start,parent.left.end).includes('tripExpandedRows.has'))]);
+    }
+  });
+  assert.deepEqual(labels,[['Participants',false],['Include me in this item',false],['Paid by',true],['Split Mode',true]]);
 });

@@ -7645,6 +7645,16 @@ router.post('/live-split/invites/:id/resend', async (req, res) => {
   }
 });
 
+// Both clients use this calculation and atomic posting path.
+router.post('/live-split/payment-manager/preview', async (req, res) => {
+  try { res.json({ success: true, plan: await getCoreDb().paymentManagerSplit(req.session.userId, req.body || {}, false) }); }
+  catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+router.post('/live-split/payment-manager', async (req, res) => {
+  try { res.json({ success: true, plan: await getCoreDb().paymentManagerSplit(req.session.userId, req.body || {}, true) }); }
+  catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
 router.get('/live-split/groups', async (req, res) => {
   try {
     const groups = await Promise.resolve(getCoreDb().getLiveSplitGroups(req.session.userId));
