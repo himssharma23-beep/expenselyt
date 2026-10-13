@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { bankEntryDate } = require('../utils/bank-entry-date');
 const { syncSourceBankPayment } = require('./source-bank-payment');
 const { query, withTransaction } = require('./postgres');
 const pgBillingDb = require('./postgres-billing');
@@ -1151,6 +1152,8 @@ async function canonicalizeLiveSplitFriendRowsForOwner(ownerUserId) {
 }
 
 async function adjustBankBalance(userId, bankAccountId, delta, client = null, meta = {}) {
+  const transactionDate = bankEntryDate(meta.transaction_date);
+  if (!client) return withTransaction(tx => adjustBankBalance(userId, bankAccountId, delta, tx, meta));
   const normalizedId = normalizeBankAccountId(bankAccountId);
   const amount = Number(delta || 0);
   if (!normalizedId || !amount) return;
@@ -1174,6 +1177,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
     CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
     ON bank_account_history(user_id, bank_account_id, created_at DESC)
   `);
+  await run.query('ALTER TABLE bank_account_history ADD COLUMN IF NOT EXISTS transaction_date DATE');
   const currentR = await run.query(
     `SELECT balance
      FROM bank_accounts
@@ -1193,8 +1197,8 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
   );
   const history = await run.query(
     `INSERT INTO bank_account_history (
-       user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+       user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note, transaction_date
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
     [
       userId,
       normalizedId,
@@ -1204,6 +1208,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
       balanceBefore,
       balanceAfter,
       meta.note != null ? String(meta.note).trim() : null,
+      transactionDate,
     ]
   );
   return Number(history.rows[0].id);
@@ -3160,7 +3165,7 @@ async function addLiveSplitShareToExpense(userId, groupId, data = {}) {
     if (!(amount > 0)) throw validationError('No personal share to add');
     const existing = (await client.query("SELECT id FROM expenses WHERE user_id = $1 AND source = 'live_split' AND source_id = $2 AND deleted_at IS NULL ORDER BY id LIMIT 1", [userId, groupId])).rows[0];
     const id = existing?.id || await addExpense(userId, { item_name: group.details, amount,
-      purchase_date: group.divide_date, is_extra: !!data.is_extra, source: 'live_split', source_id: groupId }, client);
+      purchase_date: formatDateOnlyValue(group.divide_date), is_extra: !!data.is_extra, source: 'live_split', source_id: groupId }, client);
     await syncGroupFinance(client, Number(groupId));
     return { id: Number(id), already_added: !!existing };
   });
@@ -3168,7 +3173,7 @@ async function addLiveSplitShareToExpense(userId, groupId, data = {}) {
 
 async function syncGroupFinance(client, groupId, finance = null, remove = false) {
   return require('./live-split-finance').syncLiveSplitFinance(client,
-    { adjustBankBalance, addExpense, updateExpense, deleteExpense, billing: pgBillingDb }, groupId, finance, remove);
+    { adjustBankBalance, addExpense, updateExpense, deleteExpense, formatDateOnlyValue, billing: pgBillingDb }, groupId, finance, remove);
 }
 
 async function addLiveSplitGroup(userId, data) {

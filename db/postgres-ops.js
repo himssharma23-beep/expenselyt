@@ -347,6 +347,7 @@ async function ensureBankAccountHistorySchema(run = null) {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      await db.query('ALTER TABLE bank_account_history ADD COLUMN IF NOT EXISTS transaction_date DATE');
       await db.query(`
         CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
         ON bank_account_history(user_id, bank_account_id, created_at DESC)
@@ -953,7 +954,7 @@ async function getBankAccountHistory(userId, bankAccountId, limit = 200) {
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 200));
   const result = await query(
     `SELECT
-       h.*,
+       h.*, to_char(h.transaction_date, 'YYYY-MM-DD') AS effective_date,
        b.bank_name,
        b.account_name,
        rb.bank_name AS related_bank_name,
@@ -965,7 +966,7 @@ async function getBankAccountHistory(userId, bankAccountId, limit = 200) {
        ON rb.id = h.related_bank_account_id
      WHERE h.user_id = $1
        AND h.bank_account_id = $2
-     ORDER BY h.created_at DESC, h.id DESC
+     ORDER BY COALESCE(h.transaction_date, h.created_at::date) DESC, h.created_at DESC, h.id DESC
      LIMIT $3`,
     [userId, normalizedId, safeLimit]
   );
@@ -983,6 +984,7 @@ async function getBankAccountHistory(userId, bankAccountId, limit = 200) {
     balance_before: num(row.balance_before),
     balance_after: num(row.balance_after),
     note: row.note || '',
+    transaction_date: row.effective_date || null,
     created_at: row.created_at,
   }));
 }

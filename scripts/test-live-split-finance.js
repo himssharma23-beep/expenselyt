@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { syncLiveSplitFinance } = require('../db/live-split-finance');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const coreSource = fs.readFileSync(require.resolve('../db/postgres-core'), 'utf8');
+const dateContext = vm.createContext({ Date });
+vm.runInContext(coreSource.slice(coreSource.indexOf('function formatDateOnlyValue('), coreSource.indexOf('function mapSocietyExpenseRow(')), dateContext);
 
 function fixture() {
   let state = {
@@ -38,6 +43,7 @@ function fixture() {
     throw Error(`Unexpected SQL: ${sql}`);
   } };
   const deps = {
+    formatDateOnlyValue: dateContext.formatDateOnlyValue,
     adjustBankBalance: async (uid, bank, delta, transaction) => {
       assert.equal(transaction, client);
       state.banks[bank] += delta;
@@ -46,11 +52,13 @@ function fixture() {
     },
     addExpense: async (uid, data, transaction) => {
       assert.equal(transaction, client);
+      assert.match(data.purchase_date, /^\d{4}-\d{2}-\d{2}$/);
       if (failExpense) throw Error('Expense write failed');
       const id = ++state.sequence; state.expenses.push({ ...data, id, user_id: uid }); return id;
     },
     updateExpense: async (uid, id, data, transaction) => {
       assert.equal(transaction, client);
+      assert.match(data.purchase_date, /^\d{4}-\d{2}-\d{2}$/);
       if (failExpense) throw Error('Expense write failed');
       Object.assign(state.expenses.find(row => row.id === id && row.user_id === uid), data);
     },
@@ -63,9 +71,11 @@ function fixture() {
         assert.equal(transaction, client); return state.cards.find(row => row.source === source && row.source_id === id);
       },
       addCcTxn: async (uid, data, transaction) => {
+        assert.match(data.txn_date, /^\d{4}-\d{2}-\d{2}$/);
         assert.equal(transaction, client); state.cards.push({ ...data, id: ++state.sequence });
       },
       updateCcTxn: async (uid, id, data, transaction) => {
+        assert.match(data.txn_date, /^\d{4}-\d{2}-\d{2}$/);
         assert.equal(transaction, client); Object.assign(state.cards.find(row => row.id === id), data);
       },
       deleteCcTxn: async (uid, id, transaction) => {
@@ -100,6 +110,16 @@ test('bank payment and personal share update in place and are removed together',
   assert.equal(db.state().banks[1], 1000);
   assert.equal(db.state().history.length, 0);
   assert.equal(db.state().expenses[0].deleted_at, true);
+});
+
+test('database Date objects preserve the default calendar day when creating and editing a split', async () => {
+  const db = fixture();
+  await db.save({ divide_date: new Date(2026, 9, 13) }, { card_id: 7, add_expense: true });
+  assert.equal(db.state().expenses[0].purchase_date, '2026-10-13');
+  assert.equal(db.state().cards[0].txn_date, '2026-10-13');
+  await db.save({ divide_date: new Date(2026, 9, 14), total_amount: 150 });
+  assert.equal(db.state().expenses[0].purchase_date, '2026-10-14');
+  assert.equal(db.state().cards[0].txn_date, '2026-10-14');
 });
 
 test('received settlement updates its bank credit and deletion reverses it', async () => {

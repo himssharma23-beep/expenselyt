@@ -121,7 +121,7 @@ async function ensureExpenseIncomeHistoryLoaded(force = false) {
           id: `income-${bank.id}-${entry.id || entry.created_at || Math.random()}`,
           item_name: String(entry?.note || '').trim() || 'Income Added',
           amount: Number(entry?.amount || 0),
-          purchase_date: bankHistoryDateOnly(entry?.created_at) || new Date().toISOString().slice(0, 10),
+          purchase_date: bankHistoryDateOnly(entry?.transaction_date || entry?.created_at) || new Date().toISOString().slice(0, 10),
           is_extra: false,
           is_income_history: true,
           bank_account_id: Number(bank?.id || 0) || null,
@@ -2601,6 +2601,7 @@ async function showExpenseForm(id) {
               <div id="eIncomeMinBalance" class="income-balance-note"></div>
             </div>
             <label class="fl">Add Funds (&#8377;)<input class="fi" type="number" step="0.01" id="eIncomeAmount" value="" placeholder="0.00" oninput="updateIncomeBankPreview()"></label>
+            <label class="fl">Date<input class="fi" type="date" id="eIncomeDate" value="${bankTopUpToday()}" required></label>
             <div id="eIncomePreviewCard" class="income-preview-card">
               <div class="income-balance-label">Updated Balance</div>
               <div id="eIncomeNextBalance" class="income-balance-value">₹0.00</div>
@@ -2690,8 +2691,9 @@ async function saveExpense(id) {
     if (!Number.isFinite(incomeAmount) || incomeAmount <= 0) { toast('Enter a valid income amount', 'warning'); return; }
     const bank = (_bankAccounts || []).find((item) => Number(item.id) === Number(incomeBankId));
     if (!bank) { toast('Selected bank account was not found', 'error'); return; }
-    const nextBalance = Math.round((Number(bank.balance || 0) + incomeAmount) * 100) / 100;
-    const incomeRes = await api(`/api/banks/${incomeBankId}/balance`, { method: 'PATCH', body: { balance: nextBalance } });
+    const transactionDate = document.getElementById('eIncomeDate')?.value;
+    if (!transactionDate) { toast('Select a transaction date', 'warning'); return; }
+    const incomeRes = await api('/api/bank-accounts/adjust-balance', { method: 'POST', body: { bank_account_id: incomeBankId, amount: incomeAmount, transaction_date: transactionDate } });
     if (!incomeRes?.success) { toast(incomeRes?.error || 'Could not add income to bank balance', 'error'); return; }
     closeModal();
     toast(`${fmtCur(incomeAmount)} added to ${bank.bank_name}${bank.account_name ? ` - ${bank.account_name}` : ''}`, 'success');
@@ -15594,7 +15596,7 @@ function _bankHistoryFilterMatches(entry, filter = 'all') {
 }
 
 function _bankHistoryEntryDate(entry) {
-  const value = String(entry?.created_at || '');
+  const value = String(entry?.transaction_date || entry?.created_at || '');
   const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
   if (match) return match[1];
   const dt = new Date(value);
@@ -15618,6 +15620,7 @@ function _bankHistoryFilteredRows() {
 
 function _bankHistoryTimeLabel(value) {
   if (!value) return '-';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return escHtml(fmtDate(value));
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return escHtml(String(value));
   return escHtml(dt.toLocaleString('en-IN', {
@@ -15711,7 +15714,7 @@ function renderBankHistoryModalBody() {
                 noteParts.push(`Other bank: ${escHtml(entry.related_bank_name)}${entry.related_account_name ? ` - ${escHtml(entry.related_account_name)}` : ''}`);
               }
               return `<tr>
-                <td>${_bankHistoryTimeLabel(entry.created_at)}</td>
+                <td>${_bankHistoryTimeLabel(entry.transaction_date || entry.created_at)}</td>
                 <td style="text-transform:capitalize">${escHtml(_bankHistoryTypeLabel(entry))}</td>
                 <td>${noteParts.join('<br>') || '-'}</td>
                 <td style="text-align:right;font-weight:700;color:${isCredit ? 'var(--green)' : 'var(--em)'}">${isCredit ? '+' : '-'}${fmtCur(entry.amount || 0)}</td>
@@ -15861,7 +15864,7 @@ function renderBankHistoryModalBody() {
                   noteParts.push(`Other bank: ${escHtml(entry.related_bank_name)}${entry.related_account_name ? ` - ${escHtml(entry.related_account_name)}` : ''}`);
                 }
                 return `<tr>
-                  <td>${_bankHistoryTimeLabel(entry.created_at)}</td>
+                  <td>${_bankHistoryTimeLabel(entry.transaction_date || entry.created_at)}</td>
                   <td style="text-transform:capitalize">${escHtml(_bankHistoryTypeLabel(entry))}</td>
                   <td>${noteParts.join('<br>') || '-'}</td>
                   <td style="text-align:right;font-weight:700;color:${isCredit ? 'var(--green)' : 'var(--em)'}">${isCredit ? '+' : '-'}${fmtCur(entry.amount || 0)}</td>
@@ -16005,6 +16008,10 @@ async function setDefaultBank(id) {
 }
 
 let bankAddAmountBusy = false;
+function bankTopUpToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
 function showBankAddAmount(id) {
   const account = _bankAccounts.find(item => Number(item.id) === Number(id));
   if (!account) return;
@@ -16012,6 +16019,7 @@ function showBankAddAmount(id) {
     <div><strong>${escHtml(account.bank_name)}</strong><p>Current balance: ${fmtCur(account.balance)}</p></div>
     <label class="fl">Amount to add<input id="bankAddAmount" class="fi" type="number" min="0.01" step="0.01" placeholder="0.00"></label>
     <label class="fl">Note (optional)<input id="bankAddNote" class="fi" placeholder="e.g. Cash deposit"></label>
+    <label class="fl">Date<input id="bankAddDate" class="fi" type="date" value="${bankTopUpToday()}" required></label>
     <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" class="btn btn-s" onclick="closeModal()">Cancel</button><button id="bankAddSave" type="button" class="btn btn-p" onclick="saveBankAddAmount(${Number(id)})">Add amount</button></div>
   </div>`);
 }
@@ -16020,11 +16028,13 @@ async function saveBankAddAmount(id) {
   const amount = Number(document.getElementById('bankAddAmount')?.value);
   if (!Number.isFinite(amount) || amount <= 0) return toast('Enter a valid positive amount', 'warning');
   const note = String(document.getElementById('bankAddNote')?.value || '').trim();
+  const transactionDate = document.getElementById('bankAddDate')?.value;
+  if (!transactionDate) return toast('Select a transaction date', 'warning');
   const button = document.getElementById('bankAddSave');
   bankAddAmountBusy = true;
   if (button) button.disabled = true;
   try {
-    const result = await api('/api/bank-accounts/adjust-balance', { method: 'POST', body: { bank_account_id: Number(id), amount, note } });
+    const result = await api('/api/bank-accounts/adjust-balance', { method: 'POST', body: { bank_account_id: Number(id), amount, note, transaction_date: transactionDate } });
     if (!result?.success) throw new Error(result?.error || 'Could not add amount');
     closeModal();
     await loadBankAccounts();

@@ -5380,7 +5380,7 @@ router.post('/expenses', async (req, res) => {
 
 router.post('/bank-accounts/adjust-balance', async (req, res) => {
   try {
-    const { bank_account_id, amount, note } = req.body || {};
+    const { bank_account_id, amount, note, transaction_date } = req.body || {};
     const bankAccountId = Number(bank_account_id || 0);
     const delta = Number(amount || 0);
     if (!(bankAccountId > 0)) return res.status(400).json({ error: 'Bank account is required' });
@@ -5388,6 +5388,7 @@ router.post('/bank-accounts/adjust-balance', async (req, res) => {
     await Promise.resolve(getCoreDb().adjustBankBalance(req.session.userId, bankAccountId, delta, null, {
       entry_type: delta > 0 ? 'fund_added' : 'fund_removed',
       note: note ? String(note).trim() : '',
+      transaction_date,
     }));
     res.json({
       success: true,
@@ -5396,7 +5397,7 @@ router.post('/bank-accounts/adjust-balance', async (req, res) => {
       note: note ? String(note).trim() : '',
     });
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Could not update bank balance' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not update bank balance' });
   }
 });
 

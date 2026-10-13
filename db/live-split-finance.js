@@ -18,6 +18,9 @@ async function syncLiveSplitFinance(client, deps, groupId, finance = null, remov
   const group = (await client.query(`SELECT g.*, u.display_name AS owner_name, u.username AS owner_username
     FROM live_split_groups g JOIN users u ON u.id = g.user_id WHERE g.id = $1 FOR UPDATE OF g`, [groupId])).rows[0];
   if (!group) throw new Error('Split entry not found');
+  // PostgreSQL DATE values can arrive as local-midnight Date objects.
+  // Expense/card writers expect a calendar-date string, not Date.toString().
+  group.divide_date = deps.formatDateOnlyValue(group.divide_date);
   const ownerId = Number(group.user_id);
   if (finance?.bank_account_id && finance?.card_id) throw new Error('Choose one payment source');
   const splits = (await client.query(`SELECT s.*, f.linked_user_id FROM live_split_splits s
