@@ -24,6 +24,8 @@ function fixture(t, failOnTripDelete = false) {
       id INTEGER PRIMARY KEY, user_id INTEGER,
       trip_id INTEGER REFERENCES live_split_trips(id) ON DELETE SET NULL
     );
+    CREATE TABLE linked_payments (id INTEGER PRIMARY KEY);
+    INSERT INTO linked_payments VALUES (101), (102), (103), (104);
     CREATE TABLE live_split_splits (
       id INTEGER PRIMARY KEY,
       group_id INTEGER REFERENCES live_split_groups(id) ON DELETE CASCADE
@@ -40,6 +42,12 @@ function fixture(t, failOnTripDelete = false) {
     INSERT INTO live_split_group_shares VALUES (1, 101), (2, 102), (3, 103), (4, 104);
   `);
   const context = vm.createContext({
+    syncGroupFinance: async (client, id, finance, remove) => {
+      assert.equal(remove, true);
+      assert.equal(finance, null);
+      assert.ok(db.prepare('SELECT id FROM live_split_groups WHERE id = ?').get(id));
+      await client.query('DELETE FROM linked_payments WHERE id = $1', [id]);
+    },
     validationError: (message) => new Error(message),
     withTransaction: async (work) => {
       db.exec('BEGIN');
@@ -73,6 +81,7 @@ test('deleting a trip removes owner and participant entries from friends, preser
   assert.deepEqual(ids('live_split_trips'), [2]);
   assert.deepEqual(ids('live_split_trip_members'), [2]);
   assert.deepEqual(ids('live_split_groups'), [103, 104]);
+  assert.deepEqual(ids('linked_payments'), [103, 104]);
   assert.deepEqual(ids('live_split_splits'), [3, 4]);
   assert.deepEqual(ids('live_split_group_shares'), [3, 4]);
 });
@@ -92,6 +101,7 @@ test('a failure rolls back trip entries, friend shares, and membership together'
   assert.deepEqual(ids('live_split_trips'), [1, 2]);
   assert.deepEqual(ids('live_split_trip_members'), [1, 2]);
   assert.deepEqual(ids('live_split_groups'), [101, 102, 103, 104]);
+  assert.deepEqual(ids('linked_payments'), [101, 102, 103, 104]);
   assert.deepEqual(ids('live_split_splits'), [1, 2, 3, 4]);
   assert.deepEqual(ids('live_split_group_shares'), [1, 2, 3, 4]);
 });

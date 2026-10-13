@@ -701,6 +701,17 @@ CREATE TABLE IF NOT EXISTS bank_account_history (
 CREATE INDEX IF NOT EXISTS idx_bank_account_history_user_bank_created
   ON bank_account_history(user_id, bank_account_id, created_at DESC);
 
+-- One signed bank movement for each source entry and paying user.
+CREATE TABLE IF NOT EXISTS source_bank_payments (
+  source TEXT NOT NULL,
+  source_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL REFERENCES users(id),
+  bank_account_id BIGINT REFERENCES bank_accounts(id),
+  amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  history_id BIGINT,
+  PRIMARY KEY (source, source_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS default_payments (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

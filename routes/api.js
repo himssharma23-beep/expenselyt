@@ -7776,12 +7776,20 @@ router.delete('/live-split/trips/:id(\\d+)/members/:mid(\\d+)', async (req, res)
   }
 });
 
+router.post('/live-split/groups/:id(\\d+)/add-to-expense', async (req, res) => {
+  try {
+    const result = await getCoreDb().addLiveSplitShareToExpense(req.session.userId, Number(req.params.id), req.body || {});
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
 router.post('/live-split/groups', async (req, res) => {
   try {
     const { divide_date, details, paid_by, total_amount, splits, heading, session_id, split_mode, trip_id, owner_added_to_expense, allow_duplicate } = req.body;
     if (!details || !total_amount || !Array.isArray(splits)) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(
       getCoreDb().addLiveSplitGroup(req.session.userId, {
+        finance: req.body.finance || null,
         divide_date,
         details,
         paid_by,

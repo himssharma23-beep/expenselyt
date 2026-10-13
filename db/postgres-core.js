@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { syncSourceBankPayment } = require('./source-bank-payment');
 const { query, withTransaction } = require('./postgres');
 const pgBillingDb = require('./postgres-billing');
 const { buildTripPaymentObligations } = require('../utils/trip-payment-obligations');
@@ -1177,7 +1178,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
     `SELECT balance
      FROM bank_accounts
      WHERE id = $1 AND user_id = $2 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL
-     LIMIT 1`,
+     LIMIT 1 FOR UPDATE`,
     [normalizedId, userId]
   );
   const current = currentR.rows[0] || null;
@@ -1190,10 +1191,10 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
      WHERE id = $2 AND user_id = $3 AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL`,
     [balanceAfter, normalizedId, userId]
   );
-  await run.query(
+  const history = await run.query(
     `INSERT INTO bank_account_history (
        user_id, bank_account_id, entry_type, direction, amount, balance_before, balance_after, note
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
     [
       userId,
       normalizedId,
@@ -1205,6 +1206,7 @@ async function adjustBankBalance(userId, bankAccountId, delta, client = null, me
       meta.note != null ? String(meta.note).trim() : null,
     ]
   );
+  return Number(history.rows[0].id);
 }
 
 function yearGuardSql(alias = '') {
@@ -2502,6 +2504,8 @@ async function deleteLiveSplitTrip(userId, tripId) {
     if (!own.rows[0]) throw validationError('Trip not found');
     // Delete every participant's trip entries before the trip FK can set
     // trip_id to NULL. Splits and shared friend entries cascade from groups.
+    const linkedGroups = await client.query('SELECT id FROM live_split_groups WHERE trip_id = $1 ORDER BY id FOR UPDATE', [tid]);
+    for (const row of linkedGroups.rows) await syncGroupFinance(client, Number(row.id), null, true);
     await client.query('DELETE FROM live_split_groups WHERE trip_id = $1', [tid]);
     await client.query('DELETE FROM live_split_trip_members WHERE trip_id = $1', [tid]);
     await client.query('DELETE FROM live_split_trips WHERE id = $1', [tid]);
@@ -3135,10 +3139,36 @@ async function paymentManagerSplit(userId, data = {}, post = false) {
     // amount actually paid by this user; reimbursements remain unpaid debts.
     const sourceId = groupIds[0];
     if (finance.add_expense) await addExpense(uid, { item_name: `${title} - My share`, amount: self.share, purchase_date: date, bank_account_id: null, source: 'payment_manager', source_id: sourceId }, client);
-    if (finance.source === 'bank') await adjustBankBalance(uid, finance.account_id, -self.paid, client, { entry_type: 'fund_removed', note: `${title} - Payment manager payment` });
+    if (finance.source === 'bank') await syncSourceBankPayment(client, adjustBankBalance, {
+      source: 'payment_manager', sourceId, userId: uid, bankId: finance.account_id,
+      amount: -self.paid, note: `${title} - Payment manager payment`,
+    });
     if (finance.source === 'card') await pgBillingDb.addCcTxn(uid, { card_id: finance.account_id, txn_date: date, description: `${title} - Payment manager payment`, amount: self.paid, discount_pct: 0, source: 'payment_manager', source_id: sourceId }, client);
     return { ...plan, group_ids: groupIds };
   });
+}
+
+async function addLiveSplitShareToExpense(userId, groupId, data = {}) {
+  return withTransaction(async (client) => {
+    const group = (await client.query(`SELECT g.* FROM live_split_groups g WHERE g.id = $1 AND
+      (g.user_id = $2 OR EXISTS (SELECT 1 FROM live_split_group_shares s WHERE s.group_id = g.id
+       AND s.target_user_id = $2 AND s.owner_hidden_at IS NULL AND s.target_hidden_at IS NULL)) FOR UPDATE OF g`, [groupId, userId])).rows[0];
+    if (!group) throw new Error('Not found');
+    const splits = (await client.query(`SELECT s.*, f.linked_user_id FROM live_split_splits s
+      LEFT JOIN live_split_friends f ON f.id = s.friend_id WHERE s.group_id = $1`, [groupId])).rows;
+    const amount = require('./live-split-finance').personalShare(group, splits, userId);
+    if (!(amount > 0)) throw validationError('No personal share to add');
+    const existing = (await client.query("SELECT id FROM expenses WHERE user_id = $1 AND source = 'live_split' AND source_id = $2 AND deleted_at IS NULL ORDER BY id LIMIT 1", [userId, groupId])).rows[0];
+    const id = existing?.id || await addExpense(userId, { item_name: group.details, amount,
+      purchase_date: group.divide_date, is_extra: !!data.is_extra, source: 'live_split', source_id: groupId }, client);
+    await syncGroupFinance(client, Number(groupId));
+    return { id: Number(id), already_added: !!existing };
+  });
+}
+
+async function syncGroupFinance(client, groupId, finance = null, remove = false) {
+  return require('./live-split-finance').syncLiveSplitFinance(client,
+    { adjustBankBalance, addExpense, updateExpense, deleteExpense, billing: pgBillingDb }, groupId, finance, remove);
 }
 
 async function addLiveSplitGroup(userId, data) {
@@ -3186,6 +3216,7 @@ async function addLiveSplitGroup(userId, data) {
       totalAmount: data.total_amount,
       splits: normalizedSplits,
     });
+    await syncGroupFinance(client, groupId, data.finance || null);
     return groupId;
   });
 }
@@ -3550,7 +3581,7 @@ async function updateLiveSplitGroup(userId, groupId, data) {
                AND share.target_hidden_at IS NULL
            )
          )
-       LIMIT 1`,
+       LIMIT 1 FOR UPDATE OF g`,
       [uid, gid]
     );
     const group = accessResult.rows[0];
@@ -3617,7 +3648,6 @@ async function updateLiveSplitGroup(userId, groupId, data) {
            heading = $5,
            split_mode = $6,
            trip_id = $7,
-           owner_added_to_expense = FALSE,
            updated_at = NOW(),
            updated_by = $8
        WHERE id = $9`,
@@ -3632,13 +3662,6 @@ async function updateLiveSplitGroup(userId, groupId, data) {
         uid,
         gid,
       ]
-    );
-    await client.query(
-      `UPDATE live_split_group_shares
-       SET added_to_expense = FALSE,
-           updated_at = NOW()
-       WHERE group_id = $1`,
-      [gid]
     );
     await client.query('DELETE FROM live_split_splits WHERE group_id = $1', [gid]);
     for (const split of normalizedSplits) {
@@ -3669,6 +3692,7 @@ async function updateLiveSplitGroup(userId, groupId, data) {
       totalAmount: data.total_amount,
       splits: activitySplits,
     });
+    await syncGroupFinance(client, gid);
     return gid;
   });
 }
@@ -3690,7 +3714,7 @@ async function deleteLiveSplitGroup(userId, id) {
                AND share.target_hidden_at IS NULL
            )
          )
-       LIMIT 1`,
+       LIMIT 1 FOR UPDATE OF g`,
       [userId, id]
     );
     if (!own.rows[0]) throw new Error('Not found');
@@ -3723,6 +3747,7 @@ async function deleteLiveSplitGroup(userId, id) {
         share_amount: num(split.share_amount),
       })),
     });
+    await syncGroupFinance(client, Number(id), null, true);
     await client.query('DELETE FROM live_split_group_shares WHERE group_id = $1', [id]);
     await client.query('DELETE FROM live_split_splits WHERE group_id = $1', [id]);
     await client.query('DELETE FROM live_split_groups WHERE id = $1', [id]);
@@ -5482,6 +5507,8 @@ async function updateTrip(userId, id, data) {
 
 async function deleteTrip(userId, id) {
   await withTransaction(async (client) => {
+    const owned = await client.query('SELECT id FROM trips WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+    if (!owned.rows.length) throw validationError('Trip not found');
     const expenseIdsR = await client.query('SELECT id FROM trip_expenses WHERE trip_id = $1', [id]);
     await removeTripExpenseLedgerLinks(userId, expenseIdsR.rows.map((row) => Number(row.id)), client);
     await client.query('DELETE FROM trip_itinerary_items WHERE trip_id = $1', [id]);
@@ -5612,10 +5639,12 @@ async function addTripExpense(userId, tripId, data) {
 
 async function updateTripExpense(userId, expenseId, data) {
   const expR = await query('SELECT * FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
-  const exp = expR.rows[0];
+  let exp = expR.rows[0];
   if (!exp) throw new Error('Not found');
   await _assertTripOwner(userId, exp.trip_id);
   await withTransaction(async (client) => {
+    exp = (await client.query('SELECT * FROM trip_expenses WHERE id = $1 FOR UPDATE', [expenseId])).rows[0];
+    if (!exp) throw new Error('Not found');
     const userCurrencyCode = await getUserCurrencyCode(userId, client);
     const payload = normalizeTripExpensePayload(data, userCurrencyCode);
     await client.query(
@@ -9509,28 +9538,11 @@ async function syncTripExpenseLedger(userId, previousExpense = null, nextExpense
   const prevAmount = Math.abs(num(prev?.amount));
   const nextAmount = Math.abs(num(next?.amount));
 
-  if (prevBankId && nextBankId && String(prevBankId) === String(nextBankId)) {
-    const diff = Math.round((nextAmount - prevAmount) * 100) / 100;
-    if (diff !== 0) {
-      await adjustBankBalance(userId, nextBankId, -diff, client, {
-        entry_type: diff > 0 ? 'fund_removed' : 'fund_added',
-        note: `Trip expense updated: ${String(next?.details || prev?.details || 'Trip expense').trim()}`,
-      });
-    }
-  } else {
-    if (prevBankId && (!nextBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
-      await adjustBankBalance(userId, prevBankId, prevAmount, client, {
-        entry_type: 'fund_added',
-        note: `Trip expense refund: ${String(prev?.details || 'Trip expense').trim()}`,
-      });
-    }
-    if (nextBankId && (!prevBankId || String(prevBankId) !== String(nextBankId) || Math.abs(prevAmount - nextAmount) > 0.005)) {
-      await adjustBankBalance(userId, nextBankId, -nextAmount, client, {
-        entry_type: 'fund_removed',
-        note: `Trip expense: ${String(next?.details || 'Trip expense').trim()}`,
-      });
-    }
-  }
+  await syncSourceBankPayment(client, adjustBankBalance, {
+    source: TRIP_EXPENSE_SOURCE, sourceId: sourceExpenseId, userId,
+    bankId: nextBankId, amount: -nextAmount, note: 'Trip expense: ' + String(next?.details || prev?.details || 'Trip expense'),
+    previous: { bank_account_id: prevBankId, amount: -prevAmount },
+  });
 
   if (!next?.card_id) {
     if (linkedCcTxn?.id) await pgBillingDb.deleteCcTxn(userId, linkedCcTxn.id, client);
@@ -9567,7 +9579,7 @@ async function syncTripExpenseLedger(userId, previousExpense = null, nextExpense
 async function removeTripExpenseLedgerLinks(userId, expenseIds = [], client) {
   const normalized = [...new Set((expenseIds || []).map((value) => Number(value)).filter((value) => value > 0))];
   for (const expenseId of normalized) {
-    const expenseR = await client.query('SELECT * FROM trip_expenses WHERE id = $1 LIMIT 1', [expenseId]);
+    const expenseR = await client.query('SELECT * FROM trip_expenses WHERE id = $1 LIMIT 1 FOR UPDATE', [expenseId]);
     const expense = expenseR.rows[0] || null;
     if (expense) await syncTripExpenseLedger(userId, expense, null, client);
   }
@@ -10073,6 +10085,7 @@ module.exports = {
   getLiveSplitGroups,
   getLiveSplitGroupDetailForUser,
   markLiveSplitExpenseAdded,
+  addLiveSplitShareToExpense,
   paymentManagerSplit,
   addLiveSplitGroup,
   updateLiveSplitGroup,

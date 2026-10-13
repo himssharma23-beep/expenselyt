@@ -3921,6 +3921,12 @@
       heading: details,
       session_id: sessionKey,
       owner_added_to_expense: !!(entry?.addExpense && selfShare > 0),
+      finance: {
+        add_expense: !!entry?.addExpense, category: entry?.category || null, is_extra: entry?.expense_type === 'extra',
+        bank_account_id: String(entry?.paid_by_key || 'self') === 'self' && entry?.finance_target === 'expense' ? Number(entry?.bank_account_id) || null : null,
+        card_id: String(entry?.paid_by_key || 'self') === 'self' && entry?.finance_target === 'card' ? Number(entry?.card_id) || null : null,
+        card_discount_pct: Number(entry?.card_discount_pct || 0),
+      },
     };
     let createResult = await api('/api/live-split/groups', {
       method: 'POST',
@@ -3950,49 +3956,6 @@
       if (shareResult?.error) throw new Error(shareResult.error);
     }
 
-    if (entry?.addExpense && selfShare > 0) {
-      const expenseResult = await api('/api/expenses', {
-        method: 'POST',
-        body: {
-          item_name: details,
-          category: entry?.category ? String(entry.category).trim() : null,
-          amount: selfShare,
-          purchase_date: normalizedDate,
-          is_extra: String(entry?.expense_type || 'fair') === 'extra',
-          bank_account_id: null,
-        },
-      });
-      if (expenseResult?.error) throw new Error(expenseResult.error);
-    }
-
-    const payerIsSelf = String(entry?.paid_by_key || 'self') === 'self';
-    if (payerIsSelf && total > 0) {
-      if (String(entry?.finance_target || 'none') === 'card' && Number(entry?.card_id || 0) > 0) {
-        const cardTxnResult = await api('/api/cc/txns', {
-          method: 'POST',
-          body: {
-            card_id: Number(entry.card_id),
-            txn_date: normalizedDate,
-            description: details,
-            amount: total,
-            discount_pct: Number(entry?.card_discount_pct || 0),
-            source: 'live_split',
-          },
-        });
-        if (cardTxnResult?.error) throw new Error(cardTxnResult.error);
-      } else if (String(entry?.finance_target || 'none') === 'expense' && Number(entry?.bank_account_id || 0) > 0) {
-        const bankId = Number(entry.bank_account_id);
-        const bank = (state.bankAccounts || []).find((item) => Number(item.id) === bankId);
-        if (bank) {
-          const nextBalance = r2(Number(bank.balance || 0) - total);
-          const bankResult = await api(`/api/banks/${bankId}/balance`, {
-            method: 'PATCH',
-            body: { balance: nextBalance >= 0 ? nextBalance : 0 },
-          });
-          if (bankResult?.error) throw new Error(bankResult.error);
-        }
-      }
-    }
     return { skipped: false };
   }
 
@@ -4098,6 +4061,11 @@
           splits: [{ friend_id: Number(friend.id), friend_name: String(friend.name || '').trim(), share_amount: amount }],
           heading: 'Settlement',
           session_id: sessionKey,
+          finance: {
+            bank_account_id: settle.record_finance && settle.finance_target === 'expense' ? Number(settle.bank_account_id) || null : null,
+            card_id: settle.record_finance && settle.finance_target === 'card' && settle.direction === 'paid' ? Number(settle.card_id) || null : null,
+            card_discount_pct: Number(settle.card_discount_pct || 0),
+          },
         },
       });
       if (Number(friend.linked_user_id) > 0) {
@@ -4105,31 +4073,6 @@
           method: 'POST',
           body: { session_key: sessionKey, friend_ids: [Number(friend.id)] },
         });
-      }
-      if (settle.record_finance) {
-        if (settle.finance_target === 'card' && settle.direction === 'paid' && Number(settle.card_id || 0) > 0) {
-          const cardId = Number(settle.card_id || 0);
-          await api('/api/cc/txns', {
-            method: 'POST',
-            body: {
-              card_id: cardId,
-              txn_date: settlementDate,
-              description: `Settlement - ${String(friend.name || 'Friend').trim()}`,
-              amount,
-              discount_pct: Number(settle.card_discount_pct || 0),
-              source: 'live_split_settlement',
-            },
-          });
-        } else if (settle.finance_target === 'expense' && Number(settle.bank_account_id || 0) > 0) {
-          await api('/api/bank-accounts/adjust-balance', {
-            method: 'POST',
-            body: {
-              bank_account_id: Number(settle.bank_account_id || 0),
-              amount: settle.direction === 'received' ? amount : -amount,
-              note: `Settlement - ${String(friend.name || 'Friend').trim()}`,
-            },
-          });
-        }
       }
       state.settle = null;
       state.settleBusy = false;
@@ -7770,22 +7713,10 @@ function paymentManagerPreview(people, mode) {
       btn.innerHTML = '<span style="font-size:11px;line-height:1">...</span>';
     }
     try {
-      await api('/api/expenses', {
-        method: 'POST',
-        body: {
-          item_name: String(details || 'Shared split').trim(),
-          amount: Number(amount),
-          purchase_date: String(date || todayLocalIso()),
-          is_extra: String(type || '').toLowerCase() === 'extra',
-          bank_account_id: null,
-        },
+      const result = await api(`/api/live-split/groups/${Number(groupId)}/add-to-expense`, {
+        method: 'POST', body: { is_extra: String(type || '').toLowerCase() === 'extra' },
       });
-      if (Number(groupId) > 0) {
-        await api(`/api/live-split/groups/${Number(groupId)}/expense-status`, {
-          method: 'POST',
-          body: { added: true },
-        });
-      }
+      if (!result?.success) throw new Error(result?.error || 'Could not add share');
       if (btn) {
         btn.disabled = true;
         btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/></svg>';

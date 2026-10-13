@@ -43,6 +43,10 @@ function fixture(failAt=0) {
     withTransaction:async fn=>{const before=finance.length;current=committed.map(g=>({...g}));try{const result=await fn(client);committed=current;return result;}catch(err){current=[];finance.length=before;throw err;}},
     addExpense:async(uid,data,c)=>{assert.equal(c,client);finance.push({kind:'expense',data});},
     adjustBankBalance:async(uid,id,delta,c)=>{assert.equal(c,client);finance.push({kind:'bank',id,delta});},
+    syncSourceBankPayment:async(c,adjust,data)=>{
+      assert.equal(c,client);assert.equal(data.source,'payment_manager');assert.equal(data.sourceId,1);
+      await adjust(data.userId,data.bankId,data.amount,c);
+    },
     pgBillingDb:{addCcTxn:async(uid,data,c)=>{assert.equal(c,client);finance.push({kind:'card',data});if(failAt==='card')throw Error('card failed');}},
     normalizeDateValue:v=>v,normalizeText:v=>{if(!v)throw Error('Missing description');return v;},validationError:message=>Error(message),
     insertLiveSplitSplitsWithSequenceRecovery:async(c,id,splits)=>{if(id===failAt)throw Error('insert failed');current.find(g=>g.id===id).splits=splits;},
