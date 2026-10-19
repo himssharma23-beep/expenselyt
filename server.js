@@ -105,6 +105,8 @@ app.get('/runtime-config.js', (_req, res) => {
   );
 });
 
+app.use(require('./routes/mobile-version'));
+
 app.get('/api/public/plans', (req, res) => {
   Promise.resolve(pgDb.getPlans()).then((plans) => {
     res.json({ plans: plans.filter((p) => p.is_active) });

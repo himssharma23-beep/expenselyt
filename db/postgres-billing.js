@@ -887,7 +887,9 @@ async function getCcCurrentCycle(userId, cardId) {
     const card = cardR.rows[0];
     if (!card) return null;
     let cycle = await getCurrentCycleSnapshot(cardId, userId, card, client);
-    if (!cycle) return { card, cycle: null, txns: [] };
+    // The detail page needs a persisted cycle for import, PDF, and payment actions,
+    // even before the card has its first transaction.
+    if (!cycle) cycle = await getOrCreateCurrentCycle(cardId, userId, client);
     if (cycle.status === 'open') {
       await updateCycleTotals(cycle.id, client);
       const refreshedCycleR = await client.query('SELECT * FROM cc_cycles WHERE id = $1 LIMIT 1', [cycle.id]);

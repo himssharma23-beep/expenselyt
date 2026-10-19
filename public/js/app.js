@@ -14019,7 +14019,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
           </td>
         </tr>`;
       }).join('')
-    : `<tr><td colspan="7" class="empty-td">No transactions this cycle. Add one below.</td></tr>`;
+    : `<tr><td colspan="7" class="empty-td">No transactions this cycle. Use Add Transaction or Import Excel to get started.</td></tr>`;
   const txnCards = txns.length
     ? txns.map((t) => {
         const srcBadge = t.source !== 'manual'
@@ -14043,7 +14043,7 @@ function renderCcCurrentCycle(card, cycle, txns) {
           </div>
         </div>`;
       }).join('')
-    : `<div class="cc-empty-card">No transactions this cycle. Add one below.</div>`;
+    : `<div class="cc-empty-card">No transactions this cycle. Use Add Transaction or Import Excel to get started.</div>`;
 
   return `
     <div class="cc-cycle-summary">

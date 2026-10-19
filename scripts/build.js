@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const filesToCheck = [
   'server.js',
   'routes/auth.js',
+  'routes/mobile-version.js',
   'routes/api.js',
   'db/postgres-auth.js',
   'db/postgres-core.js',
