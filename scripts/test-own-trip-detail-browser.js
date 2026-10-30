@@ -27,6 +27,10 @@ const fs=require('fs'),path=require('path'),os=require('os'),assert=require('nod
   await page.evaluate(()=>selectOwnTripTab('payments'));assert.match(await page.$eval('.ot-total-row',e=>e.textContent),/20.00/);
   await page.evaluate(()=>selectOwnTripTab('settlement'));assert.match(await page.$eval('.ot-transfer',e=>e.textContent),/Deepak pays Himanshu.*30.00/);
   await page.evaluate(()=>selectOwnTripTab('packing'));assert.equal((await page.$$('.packing-member')).length,2);await page.screenshot({path:path.join(os.tmpdir(),'own-trip-detail-packing.png'),fullPage:true});
+  await page.evaluate(()=>{_tripDetail.checklist.items=Array.from({length:30},(_,i)=>({id:i+1,title:'Packing item '+(i+1)}));selectOwnTripTab('packing');document.querySelector('.packing-reminders').open=true;});
+  const sidebarPosition=await page.evaluate(()=>({membersBottom:document.querySelector('.packing-members').getBoundingClientRect().bottom,reminderTop:document.querySelector('.packing-reminders').getBoundingClientRect().top,tableBottom:document.querySelector('.packing-table-wrap').getBoundingClientRect().bottom}));
+  assert.ok(sidebarPosition.reminderTop-sidebarPosition.membersBottom<=20,'Reminders stay immediately below members with a long checklist');
+  assert.ok(sidebarPosition.reminderTop<sidebarPosition.tableBottom,'Reminders must not fall below the checklist');
   await page.setViewport({width:390,height:844});for(const tab of ['itinerary','packing','expenses','payments','settlement']){await page.evaluate(t=>selectOwnTripTab(t),tab);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=390),true,tab+' must not overflow mobile viewport');}
   await page.evaluate(()=>{_tripDetail={..._tripDetail,isOwner:false,userPermission:'view'};selectOwnTripTab('expenses');});assert.equal((await page.$$('.ot-item-actions')).length,0);assert.equal((await page.$$('.ot-section .ot-primary')).length,0);
   assert.deepEqual(errors,[]);console.log('Trip detail browser checks passed: tabs, days, quick add, currency, balances, packing, permissions, narrow layout.');

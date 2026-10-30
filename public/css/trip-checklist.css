@@ -1,3 +1,4 @@
+.packing-sidebar{display:contents}
 .packing-panel{padding:20px;margin-bottom:20px;border:1px solid #e7eeea;box-shadow:0 5px 20px #183e2910;overflow:hidden}.packing-scroll-hint{display:none}
 .packing-heading{display:flex;align-items:center;gap:12px;margin-bottom:18px}.packing-title-icon{width:40px;height:40px;border-radius:12px;background:#e6f2eb;color:#276445;display:grid;place-items:center;font-size:22px;flex-shrink:0}
 .packing-heading-copy{flex:1;min-width:0}.packing-heading h3{font-size:17px;margin:0 0 4px;color:var(--t1)}.packing-heading p{font-size:12px;color:var(--t2);margin:0;line-height:1.5}
