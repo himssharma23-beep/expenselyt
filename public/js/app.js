@@ -1364,6 +1364,7 @@ let divideSelected = new Set();
 let dividePaidBy = 'self';
 
 function canAccessTab(tab) {
+  if (tab === 'smartcapture') return Object.values(window.captureAvailability?.permissions || {}).some(Boolean);
   if (_userRole === 'admin') return true;
   if (tab === 'admin') return false;
   if (tab === 'tenants') return _accessiblePages.includes('tenants') || _accessiblePages.includes('societies');
@@ -1477,6 +1478,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshApprovalBadges().catch(() => {});
   checkAppUpdateStatus().catch(() => {});
   loadTab();
+  if (typeof refreshCaptureAvailability === 'function') refreshCaptureAvailability();
   // Auto-apply recurring entries for the current month (silent, runs in background)
   api('/api/recurring/apply', { method: 'POST' }).then(r => {
     if (r?.applied > 0) toast(`${r.applied} recurring entr${r.applied === 1 ? 'y' : 'ies'} applied for this month`, 'success');
@@ -1938,6 +1940,7 @@ function loadTab() {
   }
   if (currentTab === 'dashboard') loadDashboard();
   else if (currentTab === 'expenses') loadExpenses();
+  else if (currentTab === 'smartcapture') loadTransactionCapture();
   else if (currentTab === 'friends') selectedFriend ? loadFriendDetail() : loadFriends();
   else if (currentTab === 'divide') loadDivide();
   else if (currentTab === 'livesplit') {
@@ -8030,6 +8033,7 @@ function renderTripList() {
               <div style="font-size:15px;font-weight:800;color:#1E6B49">${escHtml(trip.destination || trip.name || '-')}</div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
                 ${tripCategoryChip(trip.category)}
+                ${renderTripPackingIndicator(trip.packing_summary)}
                 ${countdownText ? `<span class="trip-ledger-inline-chip" style="background:#E1F4EA;color:#267453">&#9702; ${escHtml(countdownText)}</span>` : ''}
               </div>
               ${sharedMeta}
@@ -8205,6 +8209,9 @@ async function openTripDetail(tripId) {
     toast('Trip not found', 'error');
     return;
   }
+  data.trip.checklist = await api(`/api/trips/${tripId}/checklist`);
+  data.trip.packing_summary = tripPackingSummary(data.trip.checklist);
+  if (String(_selectedTripId) !== String(tripId)) return;
   _tripDetail = data.trip;
   const detailMembers = Array.isArray(_tripDetail.members) ? _tripDetail.members : [];
   _tripExpSel = new Set(detailMembers.map((member) => _memberKey(member)));
@@ -8276,6 +8283,12 @@ function toggleTripItineraryCollapse() {
   renderTripDetail();
 }
 
+function tripExpenseDisplayMoney(expense) {
+  return tripExpenseMoney(expense, _currentUser?.currency_code || 'INR', _currentUser?.locale_code || 'en-IN');
+}
+function tripExpenseAmountHtml(expense) {
+  return `<div>${escHtml(fmtCur(expense.amount || 0))}</div>`;
+}
 function renderTripDetail() {
   const trip = _tripDetail;
   if (!trip) return;
@@ -8376,7 +8389,10 @@ function renderTripDetail() {
   const itineraryHtml = itineraryItems.length
     ? Object.entries(itineraryGroups).map(([dateKey, items]) => `
       <div class="card" style="padding:12px 14px;margin-bottom:10px">
-        <div style="font-size:14px;font-weight:800;margin-bottom:10px">${fmtDate(dateKey)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="font-size:14px;font-weight:800">${fmtDate(dateKey)} <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">${items.length} entries</span></div>
+          ${trip.isOwner ? `<div style="display:flex;gap:6px"><button class="btn btn-s btn-sm" onclick="showTripItineraryModal(null,${Number(trip.id)},'${escHtml(normalizeInputDate(dateKey))}')">+ Add on this date</button><button class="btn btn-g btn-sm" onclick="showTripItineraryMoveDate('${escHtml(normalizeInputDate(dateKey))}')">Change date</button></div>` : ''}
+        </div>
         <div style="display:flex;flex-direction:column;gap:8px">
           ${items.map((item) => `
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff">
@@ -8468,12 +8484,12 @@ function renderTripDetail() {
                 <td>${fmtTripExpenseDateTime(item.expense_date, item.created_at)}</td>
                 <td style="font-weight:600">${escHtml(item.details || '-')}</td>
                 <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
-                <td class="td-m">${item.unit_price != null ? fmtCur(item.unit_price) : '-'}</td>
-                <td class="td-m" style="font-weight:700">${fmtCur(item.amount || 0)}</td>
+                <td class="td-m">${escHtml(tripExpenseDisplayMoney(item).price || '-')}</td>
+                <td class="td-m" style="font-weight:700">${tripExpenseAmountHtml(item)}</td>
                 <td>
                   <div>${escHtml(item.notes || '-')}</div>
                   <div style="margin-top:4px;font-size:11px;color:var(--t3)">Paid by: ${escHtml(item.paid_by_name || 'You')}</div>
-                  ${shouldShowTripSharedDetails(item) ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${fmtCur(split.share_amount)}`).join(' | '))}</div>` : ''}
+                  ${shouldShowTripSharedDetails(item) ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${tripExpenseDisplayMoney(item).share(split.share_amount)}`).join(' | '))}</div>` : ''}
                 </td>
               </tr>
             `).join('')}</tbody>
@@ -8525,7 +8541,7 @@ function renderTripDetail() {
                   <td style="font-weight:600">${escHtml(item.details || 'Settlement')}</td>
                   <td>${escHtml(item.paid_by_name || 'You')}</td>
                   <td>${escHtml(receiverNames)}</td>
-                  <td class="td-m" style="font-weight:700">${fmtCur(item.amount || 0)}</td>
+                  <td class="td-m" style="font-weight:700">${tripExpenseAmountHtml(item)}</td>
                   <td>${escHtml(item.notes || '-')}</td>
                 </tr>
               `;
@@ -8662,6 +8678,7 @@ function renderTripDetail() {
         </div>
       </div>
       ${_tripItineraryCollapsed ? '' : itineraryHtml}
+      <div id="tripPackingPanel">${renderTripPacking(trip)}</div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div>
@@ -8740,6 +8757,17 @@ function tripSharePermissionPill(permission, active, onclick, disabled = false) 
   >${permission === 'edit' ? 'Can Edit' : 'View Only'}</button>`;
 }
 
+function tripChecklistShareControls(user, tripId) {
+  const trip = _tripDetail && String(_tripDetail.id) === String(tripId) ? _tripDetail : _trips.find(t => String(t.id) === String(tripId));
+  const members = tripChecklistMemberOptions(trip || {}).filter(m => !m.user_id || m.user_id === Number(user.linked_user_id || user.id));
+  const uid = Number(user.linked_user_id || user.id);
+  const selected = user.checklist_member_key || matchTripChecklistMember(user, members);
+  return `<div style="margin-top:10px;padding:10px;background:#f2f7f4;border-radius:9px">
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600"><input type="checkbox" id="tripChecklistAllow_${uid}" ${user.checklist_can_check ? 'checked' : ''}> Can check their own checklist</label>
+    <label class="fl" style="margin-top:8px;font-size:11px">Trip member<select class="fi" id="tripChecklistMember_${uid}" style="font-size:12px"><option value="">Not a trip member</option>${members.map(m => `<option value="${escHtml(m.key)}" ${m.key === selected ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('')}</select></label>
+    <div style="font-size:10px;color:var(--t3);margin-top:5px">Name match suggested. Confirm the member before enabling. Applies only to their checklist.</div>
+  </div>`;
+}
 function tripDirectSharedUsersHtml(sharedUsers = [], tripId) {
   if (!sharedUsers.length) {
     return '<div style="font-size:12px;color:var(--t3);padding:8px 0">This trip is not shared with any app users yet.</div>';
@@ -8749,6 +8777,8 @@ function tripDirectSharedUsersHtml(sharedUsers = [], tripId) {
       <div style="min-width:0;flex:1">
         <div style="font-size:14px;font-weight:700;color:var(--text)">${escHtml(user.display_name || user.member_name || 'User')}</div>
         <div style="font-size:12px;color:var(--t3);margin-top:3px">@${escHtml(user.username || 'unknown')} · ${escHtml(user.permission === 'edit' ? 'Can edit' : 'View only')}</div>
+        ${tripChecklistShareControls(user, tripId)}
+        <button class="btn btn-s btn-sm" style="margin-top:8px" onclick="tripShareWithUser(${Number(tripId)}, ${Number(user.linked_user_id)}, '${user.permission === 'edit' ? 'edit' : 'view'}')">Save checklist access</button>
       </div>
       <button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripUnshareUser(${Number(tripId)}, ${Number(user.id)})">Unshare</button>
     </div>
@@ -8779,6 +8809,7 @@ function tripShareSearchUsers(tripId) {
           <div style="min-width:0;flex:1">
             <div style="font-size:13px;font-weight:700">${escHtml(user.display_name || user.username || 'User')}</div>
             <div style="font-size:11px;color:var(--t3)">@${escHtml(user.username || 'unknown')}</div>
+            ${tripChecklistShareControls(user, tripId)}
           </div>
           <button class="btn btn-p btn-sm" onclick="tripShareWithUser(${Number(tripId)}, ${Number(user.id)})">Share</button>
         </div>
@@ -8867,11 +8898,14 @@ async function showTripShareModal(tripId = null) {
   `);
 }
 
-async function tripShareWithUser(tripId, linkedUserId) {
-  const permission = document.getElementById('tripSharePermission')?.value || 'view';
+async function tripShareWithUser(tripId, linkedUserId, existingPermission = '') {
+  const permission = existingPermission || document.getElementById('tripSharePermission')?.value || 'view';
+  const checklist_can_check = !!document.getElementById(`tripChecklistAllow_${linkedUserId}`)?.checked;
+  const checklist_member_key = document.getElementById(`tripChecklistMember_${linkedUserId}`)?.value || null;
+  if (checklist_can_check && !checklist_member_key) { toast('Choose their trip member to allow checklist updates', 'warning'); return; }
   const result = await api(`/api/trips/${tripId}/shared-users`, {
     method: 'POST',
-    body: { linked_user_id: Number(linkedUserId), permission },
+    body: { linked_user_id: Number(linkedUserId), permission, checklist_can_check, checklist_member_key },
   });
   if (result?.error) {
     toast(result.error, 'error');
@@ -8923,6 +8957,7 @@ async function deleteTripShareLink(linkId, tripId) {
   await showTripShareModal(tripId);
 }
 
+let _tripModalExistingMembers = [];
 async function showTripModal(tripId = null) {
   let trip = null;
   if (tripId) {
@@ -8940,6 +8975,7 @@ async function showTripModal(tripId = null) {
   const startDateValue = trip?.start_date ? normalizeInputDate(trip.start_date) : todayStr();
   const endDateValue = trip?.end_date ? normalizeInputDate(trip.end_date) : '';
   const memberValue = trip?.members?.map((member) => member.member_name).join('\n') || '';
+  _tripModalExistingMembers = trip?.members || [];
   openModal(trip ? 'Edit Trip' : 'Add Trip', `
     <div class="fg">
       <label class="fl full">Destination *
@@ -8989,7 +9025,10 @@ async function saveTripModal(tripId = null) {
     category: document.getElementById('tripCategory')?.value.trim() || null,
     transport_mode: document.getElementById('tripTransportMode')?.value.trim() || null,
     total_distance: document.getElementById('tripDistance')?.value || null,
-    members: tripParseMembersInput(document.getElementById('tripMembers')?.value),
+    members: tripParseMembersInput(document.getElementById('tripMembers')?.value).map(name => {
+      const existing = _tripModalExistingMembers.find(member => String(member.member_name).trim().toLowerCase() === name.toLowerCase());
+      return existing ? { ...existing, member_name: name } : name;
+    }),
     notes: document.getElementById('tripNotes')?.value.trim() || null,
   };
   if (!body.destination) {
@@ -9014,7 +9053,7 @@ async function saveTripModal(tripId = null) {
   if (tripId && wasDetailView) await openTripDetail(tripId);
 }
 
-async function showTripItineraryModal(itemId = null, tripId = null) {
+async function showTripItineraryModal(itemId = null, tripId = null, selectedDate = null) {
   const targetTripId = tripId || _selectedTripId;
   if (!targetTripId) {
     toast('Open a trip first', 'warning');
@@ -9030,7 +9069,7 @@ async function showTripItineraryModal(itemId = null, tripId = null) {
     syncTripListRowFromDetail(_tripDetail);
   }
   const item = itemId ? getTripItineraryItemById(itemId) : null;
-  const defaultDate = item?.itinerary_date ? normalizeInputDate(item.itinerary_date) : normalizeInputDate(_tripDetail?.start_date || todayStr());
+  const defaultDate = normalizeInputDate(item?.itinerary_date || selectedDate || _tripDetail?.start_date || todayStr());
   openModal(item ? 'Edit Itinerary' : 'Add Itinerary', `
     <div class="fg">
       <label class="fl full">Activity / Title *
@@ -9059,6 +9098,24 @@ async function showTripItineraryModal(itemId = null, tripId = null) {
   `);
 }
 
+function showTripItineraryMoveDate(fromDate) {
+  if (!_tripDetail?.isOwner) return;
+  const count = (_tripDetail.itinerary_items || []).filter(i => normalizeInputDate(i.itinerary_date) === fromDate).length;
+  openModal('Change itinerary date', `<p style="font-size:13px;color:var(--t2);margin-bottom:16px">Move all <b>${count} entries</b> from <b>${escHtml(fmtDate(fromDate))}</b>. Times and details stay the same. Entries already on the new date will be kept.</p><label class="fl">New date<input class="fi" id="tripItineraryMoveTo" type="date" value="${escHtml(fromDate)}"></label><div class="fa" style="margin-top:18px"><button id="tripItineraryMoveSave" class="btn btn-p" onclick="moveTripItineraryDate('${escHtml(fromDate)}',${Number(_tripDetail.id)})">Move ${count} entries</button><button class="btn btn-g" onclick="closeModal()">Cancel</button></div>`);
+}
+async function moveTripItineraryDate(fromDate, tripId) {
+  const toDate = document.getElementById('tripItineraryMoveTo')?.value;
+  if (!toDate || toDate === fromDate) { toast('Choose a different date', 'warning'); return; }
+  const button = document.getElementById('tripItineraryMoveSave');
+  if (button) button.disabled = true;
+  try {
+    const result = await api(`/api/trips/${tripId}/itinerary/move-date`, { method: 'PUT', body: { from_date: fromDate, to_date: toDate } });
+    if (!result?.success) { toast(result?.error || 'Could not move itinerary entries', 'error'); return; }
+    closeModal();
+    await openTripDetail(tripId);
+    toast(`${result.count} itinerary entries moved`, 'success');
+  } finally { if (button) button.disabled = false; }
+}
 async function saveTripItinerary(itemId = null, tripId = null) {
   const targetTripId = tripId || _selectedTripId;
   const body = {
@@ -9667,8 +9724,8 @@ async function previewTripExpenseExcelImport(tripId = null) {
           <td>${escHtml(expense.expense_type || '-')}</td>
           <td>${escHtml(expense.details || '-')}</td>
           <td class="td-m">${expense.quantity != null ? escHtml(String(expense.quantity)) : '-'}</td>
-          <td class="td-m">${expense.unit_price != null ? fmtCur(expense.unit_price) : '-'}</td>
-          <td class="td-m">${fmtCur(expense.amount || 0)}</td>
+          <td class="td-m">${escHtml(tripExpenseDisplayMoney(expense).price || '-')}</td>
+          <td class="td-m">${tripExpenseAmountHtml(expense)}</td>
         </tr>`).join('')}</tbody>
       </table></div>
     </div>
@@ -11403,6 +11460,7 @@ function _renderAdminUserCard(u) {
     </div>
     ${auditText}
     <div class="admin-user-actions">
+      <button class="btn btn-s btn-sm" onclick="showCapturePermissions(${Number(u.id)})">Capture permissions</button>
       <button class="btn btn-s btn-sm" onclick="showAdminUserModal(${u.id},'${safeDisplayName}','${safeMobile}',${u.is_active?1:0},${u.deleted_at ? 1 : 0})">Edit</button>
       ${canImpersonate ? `<button class="btn btn-p btn-sm" onclick="adminImpersonateUser(${u.id},'${safeDisplayName}')">Impersonate</button>` : ''}
       <button class="btn btn-s btn-sm" onclick="adminGenOtp(${u.id})">OTP</button>

@@ -5230,6 +5230,8 @@ async function getTrips(userId) {
              'linked_user_id', tm.linked_user_id,
              'member_name', tm.member_name,
              'permission', CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END,
+             'checklist_member_key', tm.checklist_member_key,
+             'checklist_can_check', tm.checklist_can_check,
              'display_name', COALESCE(u.display_name, u.username, tm.member_name),
              'username', u.username
            )
@@ -5267,6 +5269,8 @@ async function getTrips(userId) {
           display_name: item?.display_name || item?.member_name || '',
           username: item?.username || '',
           permission: item?.permission || 'view',
+          checklist_member_key: item?.checklist_member_key || null,
+          checklist_can_check: !!item?.checklist_can_check,
         }))
       : [],
     member_share_totals: Array.isArray(row.member_share_totals_json)
@@ -5326,6 +5330,8 @@ async function getTripById(userId, tripId) {
          tm.id,
          tm.linked_user_id,
          tm.member_name,
+         tm.checklist_member_key,
+         tm.checklist_can_check,
          CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END AS permission,
          COALESCE(u.display_name, u.username, tm.member_name) AS display_name,
          u.username
@@ -5414,6 +5420,8 @@ async function getTripById(userId, tripId) {
       display_name: row.display_name || row.member_name || '',
       username: row.username || '',
       permission: row.permission || 'view',
+      checklist_member_key: row.checklist_member_key || null,
+      checklist_can_check: !!row.checklist_can_check,
     })),
     itinerary_items: itineraryR.rows.map((row) => ({
       id: Number(row.id),
@@ -5539,6 +5547,25 @@ async function addTripItineraryItem(userId, tripId, data) {
   });
 }
 
+async function moveTripItineraryDate(userId, tripId, data = {}) {
+  const realDate = (value, label) => {
+    const date = normalizeDateValue(value, label);
+    const parsed = new Date(`${date}T00:00:00Z`);
+    if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw validationError(`${label} must be a valid date`);
+    return date;
+  };
+  const from = realDate(data.from_date, 'Current date');
+  const to = realDate(data.to_date, 'New date');
+  if (from === to) throw validationError('Choose a different date');
+  return withTransaction(async client => {
+    await _assertTripOwner(userId, tripId, client);
+    const moved = await client.query(`UPDATE trip_itinerary_items SET itinerary_date = $3, updated_at = NOW()
+      WHERE trip_id = $1 AND itinerary_date = $2 RETURNING id`, [tripId, from, to]);
+    if (!moved.rows.length) throw validationError('No itinerary entries remain on this date. Refresh and try again.');
+    await client.query('UPDATE trips SET updated_at = NOW() WHERE id = $1', [tripId]);
+    return moved.rows.length;
+  });
+}
 async function updateTripItineraryItem(userId, itemId, data) {
   return withTransaction(async (client) => {
     const currentR = await client.query(
@@ -5952,6 +5979,8 @@ async function getTripSharedUsers(ownerId, tripId) {
        tm.id,
        tm.linked_user_id,
        tm.member_name,
+       tm.checklist_member_key,
+       tm.checklist_can_check,
        CASE WHEN tm.permission = 'share_edit' THEN 'edit' ELSE 'view' END AS permission,
        COALESCE(u.display_name, u.username, tm.member_name) AS display_name,
        u.username
@@ -5969,10 +5998,12 @@ async function getTripSharedUsers(ownerId, tripId) {
     display_name: row.display_name || row.member_name || '',
     username: row.username || '',
     permission: row.permission || 'view',
+      checklist_member_key: row.checklist_member_key || null,
+      checklist_can_check: !!row.checklist_can_check,
   }));
 }
 
-async function shareTripWithUser(ownerId, tripId, targetUserId, permission = 'view') {
+async function shareTripWithUser(ownerId, tripId, targetUserId, permission = 'view', checklist = {}) {
   const uid = Number(targetUserId || 0);
   if (!(uid > 0)) throw validationError('Select a valid app user');
   if (uid === Number(ownerId || 0)) throw validationError('You cannot share a trip with yourself');
@@ -5983,6 +6014,19 @@ async function shareTripWithUser(ownerId, tripId, targetUserId, permission = 'vi
   if (!target) throw validationError('Selected user was not found');
   const storedPermission = normalizeTripSharedUserPermission(permission, 'view');
   const label = String(target.display_name || target.username || 'User').trim() || 'User';
+  if (checklist.can_check !== undefined && typeof checklist.can_check !== 'boolean') throw validationError('Checklist permission must be true or false');
+  const canCheck = checklist.can_check === true;
+  let memberKey = checklist.member_key || null;
+  if (canCheck || memberKey) {
+    const roster = await query(`SELECT member_name, linked_user_id FROM trip_members WHERE trip_id = $1 AND permission NOT IN ('share_view', 'share_edit')`, [tripId]);
+    const { tripChecklistMemberOptions, matchTripChecklistMember } = require('../public/js/trip-checklist-identity');
+    const members = tripChecklistMemberOptions({ members: roster.rows });
+    memberKey = memberKey || matchTripChecklistMember(target, members);
+    const member = members.find(m => m.key === memberKey);
+    if (!member || (member.user_id && member.user_id !== uid)) throw validationError('Choose this user’s trip member before allowing checklist updates');
+    const used = await query(`SELECT id FROM trip_members WHERE trip_id = $1 AND linked_user_id <> $2 AND checklist_member_key = $3 AND checklist_can_check AND permission IN ('share_view', 'share_edit')`, [tripId, uid, memberKey]);
+    if (canCheck && used.rows.length) throw validationError('This checklist is already assigned to another shared user');
+  }
   const existingR = await query(
     `SELECT id
      FROM trip_members
@@ -5996,17 +6040,19 @@ async function shareTripWithUser(ownerId, tripId, targetUserId, permission = 'vi
     await query(
       `UPDATE trip_members
        SET member_name = $1,
-           permission = $2
+           permission = $2,
+           checklist_can_check = $4,
+           checklist_member_key = $5
        WHERE id = $3`,
-      [label, storedPermission, Number(existingR.rows[0].id)]
+      [label, storedPermission, Number(existingR.rows[0].id), canCheck, memberKey]
     );
     return Number(existingR.rows[0].id);
   }
   const result = await query(
-    `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission)
-     VALUES ($1, NULL, $2, $3, $4)
+    `INSERT INTO trip_members (trip_id, friend_id, member_name, linked_user_id, permission, checklist_can_check, checklist_member_key)
+     VALUES ($1, NULL, $2, $3, $4, $5, $6)
      RETURNING id`,
-    [tripId, label, uid, storedPermission]
+    [tripId, label, uid, storedPermission, canCheck, memberKey]
   );
   return Number(result.rows[0].id);
 }
@@ -10114,6 +10160,7 @@ module.exports = {
   updateTrip,
   deleteTrip,
   addTripItineraryItem,
+  moveTripItineraryDate,
   updateTripItineraryItem,
   deleteTripItineraryItem,
   addTripExpense,

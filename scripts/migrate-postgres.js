@@ -20,6 +20,9 @@ async function main() {
   const client = await pool.connect();
   try {
     await client.query(sql);
+    await client.query(fs.readFileSync(path.join(__dirname, '..', 'db', 'trip-checklist.sql'), 'utf8'));
+    // New capture is an optional migration; existing deployments keep their normal migration path.
+    if (process.argv.includes('--capture')) await client.query(fs.readFileSync(path.join(__dirname, '..', 'db', 'transaction-capture.sql'), 'utf8'));
     console.log('Postgres schema applied successfully.');
   } finally {
     client.release();

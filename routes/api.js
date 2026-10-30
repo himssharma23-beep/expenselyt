@@ -5277,6 +5277,7 @@ router.post('/public/society-portal/elections/:electionId/vote', requireSocietyP
 });
 
 // All API routes require auth
+router.use('/capture', require('./transaction-capture')({ parseAi: parseExpenseMessageWithOpenAi, scanReceipt: scanReceiptFile, transcribe: transcribeAudioWithOpenAi, pdfText: extractPdfStatementText }));
 router.use(requireAuth);
 
 // ─── EXPENSES ────────────────────────────────────────────────
@@ -8003,8 +8004,12 @@ router.get('/reports/months', async (req, res) => {
 });
 
 // ─── TRIPS ───────────────────────────────────────────────────
+router.use('/trips', require('./trip-checklist'));
 router.get('/trips', async (req, res) => {
-  try { res.json({ trips: await Promise.resolve(getCoreDb().getTrips(req.session.userId)) }); }
+  try {
+    const trips = await Promise.resolve(getCoreDb().getTrips(req.session.userId));
+    res.json({ trips: await require('../db/trip-checklist').summarizeTrips(req.session.userId, trips) });
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -8046,6 +8051,13 @@ router.post('/trips/:id/itinerary', async (req, res) => {
   try {
     const id = await Promise.resolve(getCoreDb().addTripItineraryItem(req.session.userId, req.params.id, req.body || {}));
     res.json({ success: true, id });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
+router.put('/trips/:id/itinerary/move-date', async (req, res) => {
+  try {
+    const count = await getCoreDb().moveTripItineraryDate(req.session.userId, req.params.id, req.body || {});
+    res.json({ success: true, count });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
 });
 
@@ -8406,7 +8418,8 @@ router.post('/trips/:id/shared-users', async (req, res) => {
       req.session.userId,
       req.params.id,
       req.body?.linked_user_id,
-      req.body?.permission || 'view'
+      req.body?.permission || 'view',
+      { can_check: req.body?.checklist_can_check, member_key: req.body?.checklist_member_key }
     ));
     res.json({ success: true, share_id });
   } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }

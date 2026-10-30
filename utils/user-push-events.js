@@ -496,4 +496,5 @@ async function runPushNotificationCycle() {
 
 module.exports = {
   runPushNotificationCycle,
+  createAndSendUserNotification,
 };

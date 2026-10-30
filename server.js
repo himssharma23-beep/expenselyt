@@ -361,6 +361,10 @@ async function runRecurringCycle() {
 }
 
 setTimeout(() => {
+  const packingReminders = () => require('./utils/trip-checklist-reminders').runTripChecklistReminders()
+    .catch(err => console.error('[trip-packing]', err.message));
+  packingReminders();
+  setInterval(packingReminders, 60 * 1000);
   runMonthlyEmailCycle().catch(() => {});
   runPushCycle().catch(() => {});
   runRecurringCycle().catch(() => {});
