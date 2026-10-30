@@ -7758,7 +7758,7 @@ function tripMembersPreview(members = [], maxVisible = 2) {
 
 function tripMemberOptions(rows = []) {
   const names = [...new Set((rows || [])
-    .flatMap((trip) => (trip.member_share_totals || trip.members || []).map((member) => String(member?.member_name || '').trim()))
+    .flatMap((trip) => [...(trip.members || []), ...(trip.member_share_totals || [])].map((member) => String(member?.member_name || member?.name || '').trim()))
     .filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
   return names;
@@ -7801,7 +7801,7 @@ function tripExpenseTypeDatalist(selected = '') {
   return TRIP_EXPENSE_TYPES.map((type) => `<option value="${escHtml(type)}" ${selected === type ? 'selected' : ''}></option>`).join('');
 }
 
-function tripFilteredRows() {
+function tripFilteredRows(ignoreStatus = false) {
   return (_trips || []).filter((trip) => {
     if (tripsFilters.member !== 'all') {
       const desired = String(tripsFilters.member || '').trim().toLowerCase();
@@ -7813,7 +7813,10 @@ function tripFilteredRows() {
         .map((name) => name.toLowerCase());
       if (!members.some((name) => name === desired)) return false;
     }
-    if (tripsFilters.status !== 'all' && String(trip.status || '').toLowerCase() !== tripsFilters.status) return false;
+    if (!ignoreStatus && tripsFilters.status !== 'all' && ownTripStatus(trip) !== tripsFilters.status) return false;
+    if (tripsFilters.packing === 'missing' && trip.packing_summary?.item_count > 0) return false;
+    if (tripsFilters.packing === 'incomplete' && (!trip.packing_summary?.total_checks || !trip.packing_summary.remaining)) return false;
+    if (tripsFilters.packing === 'complete' && (!trip.packing_summary?.total_checks || trip.packing_summary.remaining > 0)) return false;
     if (tripsFilters.category !== 'all' && String(trip.category || '').toLowerCase() !== String(tripsFilters.category).toLowerCase()) return false;
     if (tripsFilters.transport !== 'all' && String(trip.transport_mode || '').toLowerCase() !== String(tripsFilters.transport).toLowerCase()) return false;
     if (tripsFilters.search) {
@@ -7901,14 +7904,7 @@ function tripFindListItem(tripId) {
 }
 
 function tripRowMenuItems(trip) {
-  const canEditTrip = !!(trip.isOwner || trip.userPermission !== 'view');
-  return `
-    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'share');closeTripRowMenu()">&#128257; Share trip</button>` : ''}
-    ${canEditTrip ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'itinerary');closeTripRowMenu()">&#9776; Add itinerary</button>` : ''}
-    <button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'pdf');closeTripRowMenu()">&#128196; Download PDF</button>
-    ${canEditTrip ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'settle');closeTripRowMenu()">&#8377; Settle trip</button>` : ''}
-    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item" onclick="handleTripRowAction(${trip.id}, 'edit');closeTripRowMenu()">&#9998; Edit trip</button>` : ''}
-    ${trip.isOwner ? `<button type="button" class="trip-ledger-menu-item danger" onclick="handleTripRowAction(${trip.id}, 'delete');closeTripRowMenu()">&#128465; Delete trip</button>` : ''}`;
+  return ownTripRowMenuItems(trip);
 }
 
 function tripRowMenuDocumentClick(event) {
@@ -7923,6 +7919,8 @@ function closeTripRowMenu() {
   if (menu) menu.remove();
   _tripRowMenuTripId = null;
   document.removeEventListener('click', tripRowMenuDocumentClick, true);
+  document.removeEventListener('keydown', ownTripMenuKeydown);
+  document.querySelectorAll('.own-more[aria-expanded="true"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   window.removeEventListener('resize', closeTripRowMenu);
   window.removeEventListener('scroll', closeTripRowMenu, true);
 }
@@ -7941,7 +7939,10 @@ function toggleTripRowMenu(event, tripId) {
   if (!trip) return;
   const menu = document.createElement('div');
   menu.id = 'tripRowFloatingMenu';
-  menu.className = 'trip-ledger-menu-list trip-ledger-floating-menu';
+  menu.className = 'trip-ledger-menu-list trip-ledger-floating-menu own-list-menu';
+  menu.setAttribute('role', 'menu');
+  trigger.setAttribute('aria-expanded', 'true');
+  document.addEventListener('keydown', ownTripMenuKeydown);
   menu.innerHTML = tripRowMenuItems(trip);
   document.body.appendChild(menu);
   const rect = trigger.getBoundingClientRect();
@@ -7970,11 +7971,17 @@ function tripRowActionMenu(trip) {
 }
 
 async function loadTrips() {
-  const data = await api('/api/trips');
-  _trips = data?.trips || [];
-  _selectedTripId = null;
-  _tripDetail = null;
-  renderTripList();
+  try {
+    const data = await api('/api/trips');
+    if (!Array.isArray(data?.trips)) throw new Error(data?.error || 'Invalid trip list response');
+    _trips = data.trips;
+    _selectedTripId = null;
+    _tripDetail = null;
+    ownTripsLoadError = '';
+    renderTripList();
+  } catch (error) {
+    showOwnTripsLoadFailure(error.message);
+  }
 }
 
 function setTripsFilter(key, value) {
@@ -7984,210 +7991,7 @@ function setTripsFilter(key, value) {
 }
 
 function renderTripList() {
-  const activeEl = document.activeElement;
-  const preserveTripSearchFocus = activeEl?.id === 'tripsSearchInput';
-  const preservedTripSearchSelection = preserveTripSearchFocus
-    ? {
-        start: Number(activeEl.selectionStart || 0),
-        end: Number(activeEl.selectionEnd || 0),
-      }
-    : null;
-  const memberOptions = tripMemberOptions(_trips || []);
-  const filtered = tripFilteredRows().sort((a, b) => {
-    const aTime = a?.start_date ? new Date(normalizeInputDate(a.start_date)).getTime() : 0;
-    const bTime = b?.start_date ? new Date(normalizeInputDate(b.start_date)).getTime() : 0;
-    if (bTime !== aTime) return bTime - aTime;
-    return String(a?.destination || a?.name || '').localeCompare(String(b?.destination || b?.name || ''));
-  });
-  _tripsFiltered = filtered;
-  const totalPages = Math.max(1, Math.ceil(filtered.length / TRIPS_PAGE_SIZE));
-  tripsPage = Math.min(tripsPage, totalPages);
-  const start = (tripsPage - 1) * TRIPS_PAGE_SIZE;
-  const pageRows = filtered.slice(start, start + TRIPS_PAGE_SIZE);
-  const displayMember = tripsFilters.member || 'all';
-  const totalSpend = filtered.reduce((sum, trip) => sum + tripDisplayAmount(trip, displayMember), 0);
-
-  const tableRows = pageRows.map((trip) => {
-    const startText = trip.start_date ? fmtDate(trip.start_date) : '-';
-    const endText = trip.end_date ? fmtDate(trip.end_date) : '-';
-    const datesText = trip.start_date && trip.end_date
-      ? `${startText}<br>${endText}`
-      : (trip.start_date || trip.end_date ? `${startText !== '-' ? startText : endText}` : '-');
-    const countdownText = tripStartsInLabel(trip.start_date);
-    const displayAmount = tripDisplayAmount(trip, displayMember);
-    const isShared = trip.is_owner === false || trip.isOwner === false;
-    const nights = trip.start_date && trip.end_date
-      ? Math.max(1, Math.round((new Date(`${normalizeInputDate(trip.end_date)}T00:00:00`).getTime() - new Date(`${normalizeInputDate(trip.start_date)}T00:00:00`).getTime()) / 86400000))
-      : 0;
-    const sharedMeta = isShared
-      ? `<div style="margin-top:5px;font-size:12px;color:var(--blue);font-weight:700">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>`
-      : '';
-    const tone = tripCardTone(trip.status, 0);
-    return `
-      <tr>
-        <td class="trip-actions-cell" style="width:160px;min-width:160px;white-space:nowrap">${tripRowActionMenu(trip)}</td>
-        <td style="min-width:250px">
-          <div class="trip-ledger-destination-cell">
-            <span class="trip-ledger-row-icon trip-ledger-row-icon-${tone}">${tripRowIconGlyph(trip)}</span>
-            <div style="min-width:0">
-              <div style="font-size:15px;font-weight:800;color:#1E6B49">${escHtml(trip.destination || trip.name || '-')}</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-                ${tripCategoryChip(trip.category)}
-                ${renderTripPackingIndicator(trip.packing_summary)}
-                ${countdownText ? `<span class="trip-ledger-inline-chip" style="background:#E1F4EA;color:#267453">&#9702; ${escHtml(countdownText)}</span>` : ''}
-              </div>
-              ${sharedMeta}
-            </div>
-          </div>
-        </td>
-        <td style="min-width:145px;white-space:normal;line-height:1.35;color:var(--t2)">
-          <div>${datesText}</div>
-          <div style="margin-top:4px;font-size:12px;color:var(--t3)">${nights ? `${nights} night${nights !== 1 ? 's' : ''}` : '-'}</div>
-        </td>
-        <td class="td-m" style="font-weight:800;color:#1E6B49;min-width:160px">${fmtCur(displayAmount)}</td>
-        <td style="min-width:135px">${tripStatusBadge(trip.status)}</td>
-        <td style="min-width:150px">${tripMemberInitials(trip.members, 3)}</td>
-      </tr>
-    `;
-  }).join('');
-
-  const pagination = totalPages > 1
-    ? `<div class="pagination" style="margin-top:14px">
-        <button class="pg-btn" ${tripsPage <= 1 ? 'disabled' : ''} onclick="tripsPage=${tripsPage - 1};renderTripList()">&larr; Prev</button>
-        <div class="pg-info">
-          <span class="pg-range">${start + 1}&ndash;${Math.min(start + TRIPS_PAGE_SIZE, filtered.length)} of ${filtered.length}</span>
-          <div class="pg-pages">
-            ${paginationPages(tripsPage, totalPages).map((page) => page === '...'
-              ? `<span class="pg-ellipsis">...</span>`
-              : `<button class="pg-num ${page === tripsPage ? 'active' : ''}" onclick="tripsPage=${page};renderTripList()">${page}</button>`
-            ).join('')}
-          </div>
-        </div>
-        <button class="pg-btn" ${tripsPage >= totalPages ? 'disabled' : ''} onclick="tripsPage=${tripsPage + 1};renderTripList()">Next &rarr;</button>
-      </div>`
-    : '';
-
-  document.getElementById('main').innerHTML = `
-    <div class="tab-content trip-ledger-page">
-      <div class="trip-ledger-banner">
-        <div class="trip-ledger-brand">
-          <div class="trip-ledger-brand-title">TripLedger</div>
-          <div class="trip-ledger-brand-sub">Travel expense tracker</div>
-        </div>
-        <div class="trip-ledger-banner-actions">
-          <button class="btn btn-s" onclick="downloadTripsPdf(_tripsFiltered)">&#128196; PDF</button>
-          <button class="btn btn-s" onclick="showTripExcelImport()">&#128194; Import Excel</button>
-          <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
-        </div>
-      </div>
-
-      <div class="trip-ledger-head-copy">
-        <div style="font-size:22px;font-weight:900;color:var(--t1)">My Trips</div>
-        <div style="font-size:13px;color:var(--t2);margin-top:4px">Track your own trips and any trips shared with you, including members, distance, and spend.</div>
-      </div>
-
-      <div class="trip-ledger-stats">
-        <div class="trip-ledger-stat-card trip-ledger-stat-green">
-          <div class="trip-ledger-stat-icon">&#9702;</div>
-          <div class="trip-ledger-stat-label">Total Trips</div>
-          <div class="trip-ledger-stat-value">${filtered.length}</div>
-          <div class="trip-ledger-stat-meta">all time</div>
-        </div>
-        <div class="trip-ledger-stat-card trip-ledger-stat-blue">
-          <div class="trip-ledger-stat-icon">&#128197;</div>
-          <div class="trip-ledger-stat-label">Upcoming / Ongoing</div>
-          <div class="trip-ledger-stat-value">${filtered.filter((trip) => ['pending', 'upcoming', 'ongoing'].includes(String(trip.status || '').toLowerCase())).length}</div>
-          <div class="trip-ledger-stat-meta">planned ahead</div>
-        </div>
-        <div class="trip-ledger-stat-card trip-ledger-stat-amber">
-          <div class="trip-ledger-stat-icon">&#10003;</div>
-          <div class="trip-ledger-stat-label">Completed</div>
-          <div class="trip-ledger-stat-value">${filtered.filter((trip) => String(trip.status || '').toLowerCase() === 'completed').length}</div>
-          <div class="trip-ledger-stat-meta">trips done</div>
-        </div>
-        <div class="trip-ledger-stat-card trip-ledger-stat-violet">
-          <div class="trip-ledger-stat-icon">&#8377;</div>
-          <div class="trip-ledger-stat-label">Tracked Spend</div>
-          <div class="trip-ledger-stat-value" style="color:#7B45F2">${fmtCur(totalSpend)}</div>
-          <div class="trip-ledger-stat-meta">total expenditure</div>
-        </div>
-      </div>
-
-      <div class="card trip-ledger-filter-card">
-        <div class="trip-ledger-filter-grid">
-          <label class="fl" style="margin:0;font-size:12px">Search
-            <input id="tripsSearchInput" class="fi trip-ledger-filter-input" placeholder="Destination, members, transport..." value="${escHtml(tripsFilters.search)}" oninput="setTripsFilter('search', this.value)">
-          </label>
-          <label class="fl" style="margin:0;font-size:12px">User
-            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('member', this.value)">${tripOptionsHtml(memberOptions, tripsFilters.member, true, 'All users')}</select>
-          </label>
-          <label class="fl" style="margin:0;font-size:12px">Status
-            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('status', this.value)">${tripOptionsHtml(TRIP_STATUS_OPTIONS, tripsFilters.status, true, 'All statuses')}</select>
-          </label>
-          <label class="fl" style="margin:0;font-size:12px">Category
-            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('category', this.value)">${tripOptionsHtml(TRIP_CATEGORY_OPTIONS, tripsFilters.category, true, 'All categories')}</select>
-          </label>
-          <label class="fl" style="margin:0;font-size:12px">Transport
-            <select class="fi trip-ledger-filter-input" onchange="setTripsFilter('transport', this.value)">${tripOptionsHtml(TRIP_TRANSPORT_OPTIONS, tripsFilters.transport, true, 'All modes')}</select>
-          </label>
-          <button
-            class="btn btn-g trip-ledger-clear-btn trip-ledger-clear-icon-btn"
-            type="button"
-            title="Clear filters"
-            aria-label="Clear filters"
-            onclick="tripsFilters={search:'',status:'all',category:'all',transport:'all',member:'all'};tripsPage=1;renderTripList()"
-          >&#10227;</button>
-        </div>
-      </div>
-
-      ${pageRows.length ? `
-        <div class="card trip-ledger-table-card">
-          <div class="trip-ledger-table-head">
-            <div>
-              <div style="font-size:18px;font-weight:800;color:var(--t1)">All Trips</div>
-              <div style="font-size:12px;color:var(--t3);margin-top:3px">Sorted by most recent first</div>
-            </div>
-            <span class="badge" style="padding:6px 12px;background:#F4F6F6;color:#8B9297;font-weight:700">${filtered.length} trip${filtered.length !== 1 ? 's' : ''}</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th style="width:160px;min-width:160px">Actions</th>
-                  <th>Destination</th>
-                  <th>Dates</th>
-                  <th class="td-m">Total Expenditure</th>
-                  <th>Status</th>
-                  <th>Members</th>
-                </tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-          </div>
-        </div>
-      ` : `
-        <div class="card" style="text-align:center;padding:36px 20px;color:var(--t3)">
-          <div style="font-size:16px;font-weight:700;color:var(--t2);margin-bottom:6px">No trips yet</div>
-          <div style="font-size:13px;margin-bottom:14px">Create your first trip to track destination, trip status, distance, and expense totals.</div>
-          <button class="btn btn-p" onclick="showTripModal()">+ Add Trip</button>
-        </div>
-      `}
-      ${pagination}
-    </div>
-  `;
-
-  if (preserveTripSearchFocus) {
-    const nextInput = document.getElementById('tripsSearchInput');
-    if (nextInput) {
-      nextInput.focus();
-      if (preservedTripSearchSelection) {
-        const nextLength = nextInput.value.length;
-        const startSel = Math.min(preservedTripSearchSelection.start, nextLength);
-        const endSel = Math.min(preservedTripSearchSelection.end, nextLength);
-        nextInput.setSelectionRange(startSel, endSel);
-      }
-    }
-  }
+  renderOwnTripsListing();
 }
 
 function handleTripRowAction(tripId, action, el) {
@@ -8290,427 +8094,7 @@ function tripExpenseAmountHtml(expense) {
   return `<div>${escHtml(fmtCur(expense.amount || 0))}</div>`;
 }
 function renderTripDetail() {
-  const trip = _tripDetail;
-  if (!trip) return;
-  const canEdit = !!(trip.isOwner || trip.userPermission !== 'view');
-  const canManageExpenses = canEdit && canEditTripExpensesByStatus(trip.status);
-  const members = trip.members || [];
-  const allTripExpenses = Array.isArray(trip.expenses) ? trip.expenses : [];
-  const settlementEntries = allTripExpenses.filter((expense) => isTripSettlementExpense(expense));
-  const spendingExpenseCount = allTripExpenses.filter((expense) => !isTripSettlementExpense(expense)).length;
-  const memberShareTotals = buildTripMemberShareTotals(trip);
-  const groups = getOrderedTripExpenseGroups(trip.id, trip.expense_groups || []);
-  const collapsedGroups = new Set(getTripCollapsedGroups(trip.id, groups));
-  const memberShareKey = (member) => String(member?.id ?? _memberKey(member) ?? '');
-  const memberNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  const peopleMap = {};
-  const memberByName = new Map();
-  const currentUserId = Number(_currentUserId || window?._currentUser?.id || 0);
-  members.forEach((member) => {
-    const key = memberShareKey(member);
-    peopleMap[key] = { name: member.member_name, totalShare: 0, totalGave: 0, totalReceivedSettlement: 0 };
-    memberByName.set(memberNameKey(member.member_name), key);
-  });
-  allTripExpenses.forEach((expense) => {
-    const settlementMode = isTripSettlementExpense(expense);
-    (expense.splits || []).forEach((split) => {
-      const byNameKey = memberByName.get(memberNameKey(split.member_name));
-      const matchedMember = byNameKey
-        ? members.find((member) => memberShareKey(member) === byNameKey)
-        : members.find((member) => {
-            const stableKey = memberShareKey(member);
-            return String(split.member_key) === stableKey || String(split.member_key) === String(_memberKey(member));
-          });
-      const targetKey = byNameKey || (matchedMember ? memberShareKey(matchedMember) : String(split.member_key || ''));
-      if (!peopleMap[targetKey]) return;
-      if (settlementMode) peopleMap[targetKey].totalReceivedSettlement += Number(split.share_amount || 0);
-      else peopleMap[targetKey].totalShare += Number(split.share_amount || 0);
-    });
-    const paidByNameKey = memberByName.get(memberNameKey(expense.paid_by_name));
-    const paidByMember = paidByNameKey
-      ? members.find((member) => memberShareKey(member) === paidByNameKey)
-      : members.find((member) => {
-          const stableKey = memberShareKey(member);
-          return String(expense.paid_by_key) === stableKey || String(expense.paid_by_key) === String(_memberKey(member));
-        });
-    const paidByKey = paidByNameKey || (paidByMember ? memberShareKey(paidByMember) : String(expense.paid_by_key || ''));
-    if (peopleMap[paidByKey]) peopleMap[paidByKey].totalGave += Number(expense.amount || 0);
-  });
-  const selfMemberKey = (() => {
-    const linked = members.find((member) => Number(member?.linked_user_id || 0) > 0 && Number(member.linked_user_id) === currentUserId);
-    return linked ? memberShareKey(linked) : '';
-  })();
-  const memberChips = members.length
-    ? members.map((member) => {
-        const key = memberShareKey(member);
-        const totals = memberShareTotals.find((row) => String(row.member_key) === key) || { share_total: 0 };
-        const initial = escHtml(String(member.member_name || '?').trim().charAt(0).toUpperCase() || '?');
-        return `<div class="trip-detail-member-card">
-          <div class="trip-detail-member-avatar">${initial}</div>
-          <div class="trip-detail-member-name">${escHtml(member.member_name)}</div>
-          <div class="trip-detail-member-label">Share</div>
-          <div class="trip-detail-member-share">${fmtCur(totals.share_total || 0)}</div>
-        </div>`;
-      }).join('')
-    : '<span style="font-size:13px;color:var(--t3)">No members added.</span>';
-  const transportLabel = escHtml(trip.transport_mode || '-');
-  const sharedUsers = Array.isArray(trip.shared_users) ? trip.shared_users : [];
-  const sharedAccessBlockHtml = trip.isOwner
-    ? (sharedUsers.length
-      ? `
-          <div class="trip-detail-side-meta-row">
-            <div class="trip-detail-side-icon">&#128101;</div>
-            <div style="min-width:0;flex:1">
-              <div class="trip-detail-side-label">Shared With</div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-            ${sharedUsers.map((user) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid #d8e8df;background:#f3f9f6;font-size:12px;font-weight:700;color:var(--text)">${escHtml(user.display_name || user.member_name || 'User')} <span style="color:var(--t3);font-weight:600">${escHtml(user.permission === 'edit' ? 'edit' : 'view')}</span></span>`).join('')}
-              </div>
-            </div>
-          </div>
-        `
-      : '')
-    : `
-        <div class="trip-detail-side-meta-row">
-          <div class="trip-detail-side-icon">&#128274;</div>
-          <div style="min-width:0;flex:1">
-            <div class="trip-detail-side-label">Shared Access</div>
-            <div class="trip-detail-side-value" style="margin-top:6px">Shared by ${escHtml(trip.owner_name || 'Owner')}</div>
-            <div class="trip-detail-side-meta">${escHtml(trip.userPermission === 'edit' ? 'Can edit trip details and expenses' : 'View-only access')}</div>
-          </div>
-        </div>`;
-
-  const itineraryItems = Array.isArray(trip.itinerary_items) ? trip.itinerary_items : [];
-  const itineraryGroups = itineraryItems.reduce((acc, item) => {
-    const key = item.itinerary_date || '';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(item);
-    return acc;
-  }, {});
-  const itineraryHtml = itineraryItems.length
-    ? Object.entries(itineraryGroups).map(([dateKey, items]) => `
-      <div class="card" style="padding:12px 14px;margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-          <div style="font-size:14px;font-weight:800">${fmtDate(dateKey)} <span style="font-size:11px;font-weight:400;color:var(--t3);margin-left:6px">${items.length} entries</span></div>
-          ${trip.isOwner ? `<div style="display:flex;gap:6px"><button class="btn btn-s btn-sm" onclick="showTripItineraryModal(null,${Number(trip.id)},'${escHtml(normalizeInputDate(dateKey))}')">+ Add on this date</button><button class="btn btn-g btn-sm" onclick="showTripItineraryMoveDate('${escHtml(normalizeInputDate(dateKey))}')">Change date</button></div>` : ''}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${items.map((item) => `
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff">
-              ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-self:stretch;align-items:flex-start">
-                <button class="trip-icon-btn" title="Edit itinerary" aria-label="Edit itinerary" onclick="showTripItineraryModal(${item.id})">
-                  <span class="trip-icon-btn-glyph">&#9998;</span>
-                </button>
-                <button class="trip-icon-btn danger" title="Delete itinerary" aria-label="Delete itinerary" onclick="tripDeleteItinerary(${item.id})">
-                  <span class="trip-icon-btn-glyph">&#128465;</span>
-                </button>
-              </div>` : ''}
-              <div style="min-width:0;flex:1">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-                  <span style="font-size:12px;font-weight:700;color:var(--em)">${escHtml(fmtTripItineraryTimeRange(item))}</span>
-                  <span style="font-size:14px;font-weight:700">${escHtml(item.title || '')}</span>
-                </div>
-                ${item.location ? `<div style="font-size:12px;color:var(--t2);margin-bottom:3px">${escHtml(item.location)}</div>` : ''}
-                ${item.notes ? `<div style="font-size:12px;color:var(--t3);line-height:1.45">${escHtml(item.notes)}</div>` : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `).join('')
-    : `<div class="card" style="text-align:center;color:var(--t3);padding:24px 18px">No itinerary planned yet. Add date and time slots to plan this trip in advance.</div>`;
-
-  const groupHtml = groups.length
-    ? groups.map((group, index) => {
-      const typeKey = tripGroupTypeKey(group.type);
-      const groupTypeArg = JSON.stringify(String(group.type || ''));
-      const isCollapsed = collapsedGroups.has(typeKey);
-      const activeSort = getTripExpenseGroupSort(trip.id, group.type);
-      const sortedItems = sortTripGroupItems(group.items || [], activeSort);
-      const itemCount = sortedItems.length;
-      return `
-      <div class="card trip-group-card" style="margin-bottom:14px">
-        <div class="trip-group-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <button
-            type="button"
-            onclick='toggleTripExpenseGroupCollapse(${groupTypeArg})'
-            class="trip-group-toggle"
-            style="display:flex;align-items:center;gap:10px;background:none;border:none;padding:0;cursor:pointer;text-align:left;min-width:0"
-            aria-expanded="${isCollapsed ? 'false' : 'true'}"
-          >
-            <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:var(--bg2);border:1px solid var(--br);font-size:14px;color:var(--t2)">${isCollapsed ? '&#9656;' : '&#9662;'}</span>
-            <span>
-              <span style="display:block;font-size:18px;font-weight:800">${escHtml(group.type)}</span>
-              <span style="display:block;font-size:12px;color:var(--t3)">${itemCount} item${itemCount !== 1 ? 's' : ''}${isCollapsed ? ' hidden' : ''}</span>
-            </span>
-          </button>
-          <div class="trip-group-meta" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-            <div class="trip-group-sort-actions" style="display:flex;align-items:center;gap:6px">
-              <button class="trip-icon-btn" title="Move group up" aria-label="Move group up" onclick='moveTripExpenseGroup(${groupTypeArg}, "up")' ${index === 0 ? 'disabled' : ''} style="${index === 0 ? 'opacity:.45;cursor:not-allowed' : ''}">
-                <span class="trip-icon-btn-glyph">&#8593;</span>
-              </button>
-              <button class="trip-icon-btn" title="Move group down" aria-label="Move group down" onclick='moveTripExpenseGroup(${groupTypeArg}, "down")' ${index === groups.length - 1 ? 'disabled' : ''} style="${index === groups.length - 1 ? 'opacity:.45;cursor:not-allowed' : ''}">
-                <span class="trip-icon-btn-glyph">&#8595;</span>
-              </button>
-            </div>
-            <div style="font-size:16px;font-weight:800;color:var(--green)">Subtotal: ${fmtCur(group.total || 0)}</div>
-          </div>
-        </div>
-        ${isCollapsed ? '' : `
-        <div class="table-wrap" style="margin-top:12px">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:132px;min-width:132px">Actions</th>
-                ${tripGroupSortHeader(group.type, activeSort, 'date', 'Date')}
-                ${tripGroupSortHeader(group.type, activeSort, 'details', 'Details')}
-                ${tripGroupSortHeader(group.type, activeSort, 'qty', 'Qty', 'td-m')}
-                ${tripGroupSortHeader(group.type, activeSort, 'price', 'Price', 'td-m')}
-                ${tripGroupSortHeader(group.type, activeSort, 'total', 'Total', 'td-m')}
-                ${tripGroupSortHeader(group.type, activeSort, 'notes', 'Notes')}
-              </tr>
-            </thead>
-            <tbody>${sortedItems.map((item) => `
-              <tr>
-                <td class="trip-actions-cell">
-                  <div class="trip-table-actions" role="group" aria-label="Trip expense actions">
-                    ${canManageExpenses ? `<button class="trip-icon-btn" title="Edit expense" aria-label="Edit expense" onclick="showTripExpenseModal(${item.id})">
-                      <span class="trip-icon-btn-glyph">&#9998;</span>
-                    </button>` : ''}
-                    ${canManageExpenses ? `<button class="trip-icon-btn danger" title="Delete expense" aria-label="Delete expense" onclick="tripDeleteExpense(${item.id})">
-                      <span class="trip-icon-btn-glyph">&#128465;</span>
-                    </button>` : ''}
-                  </div>
-                </td>
-                <td>${fmtTripExpenseDateTime(item.expense_date, item.created_at)}</td>
-                <td style="font-weight:600">${escHtml(item.details || '-')}</td>
-                <td class="td-m">${item.quantity != null ? escHtml(String(item.quantity)) : '-'}</td>
-                <td class="td-m">${escHtml(tripExpenseDisplayMoney(item).price || '-')}</td>
-                <td class="td-m" style="font-weight:700">${tripExpenseAmountHtml(item)}</td>
-                <td>
-                  <div>${escHtml(item.notes || '-')}</div>
-                  <div style="margin-top:4px;font-size:11px;color:var(--t3)">Paid by: ${escHtml(item.paid_by_name || 'You')}</div>
-                  ${shouldShowTripSharedDetails(item) ? `<div style="margin-top:2px;font-size:11px;color:var(--t3)">Shared: ${escHtml(item.splits.map((split) => `${split.member_name}: ${tripExpenseDisplayMoney(item).share(split.share_amount)}`).join(' | '))}</div>` : ''}
-                </td>
-              </tr>
-            `).join('')}</tbody>
-          </table>
-        </div>
-        `}
-      </div>
-    `;
-    }).join('')
-    : `<div class="card" style="text-align:center;color:var(--t3);padding:28px 18px">${settlementEntries.length ? 'No spending expenses yet. Payment / settlement entries are shown separately below.' : 'No trip expenses yet. Add line items to see grouped totals here.'}</div>`;
-
-  const settlementHtml = settlementEntries.length
-    ? `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px">
-        <div>
-          <div style="font-size:18px;font-weight:800">Payments / Settlements</div>
-          <div style="font-size:13px;color:var(--t2)">Member-to-member payments. These update balances but do not increase the trip grand total.</div>
-        </div>
-      </div>
-      <div class="card trip-group-card">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:132px;min-width:132px">Actions</th>
-                <th>Date</th>
-                <th>Details</th>
-                <th>Paid By</th>
-                <th>Received By</th>
-                <th class="td-m">Amount</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>${settlementEntries.map((item) => {
-              const receiverNames = (item.splits || []).map((split) => split.member_name).filter(Boolean).join(' | ') || '-';
-              return `
-                <tr>
-                  <td class="trip-actions-cell">
-                    <div class="trip-table-actions" role="group" aria-label="Trip settlement actions">
-                      ${canManageExpenses ? `<button class="trip-icon-btn" title="Edit payment" aria-label="Edit payment" onclick="showTripExpenseModal(${item.id})">
-                        <span class="trip-icon-btn-glyph">&#9998;</span>
-                      </button>` : ''}
-                      ${canManageExpenses ? `<button class="trip-icon-btn danger" title="Delete payment" aria-label="Delete payment" onclick="tripDeleteExpense(${item.id})">
-                        <span class="trip-icon-btn-glyph">&#128465;</span>
-                      </button>` : ''}
-                    </div>
-                  </td>
-                  <td>${fmtTripExpenseDateTime(item.expense_date, item.created_at)}</td>
-                  <td style="font-weight:600">${escHtml(item.details || 'Settlement')}</td>
-                  <td>${escHtml(item.paid_by_name || 'You')}</td>
-                  <td>${escHtml(receiverNames)}</td>
-                  <td class="td-m" style="font-weight:700">${tripExpenseAmountHtml(item)}</td>
-                  <td>${escHtml(item.notes || '-')}</td>
-                </tr>
-              `;
-            }).join('')}</tbody>
-          </table>
-        </div>
-      </div>
-    `
-    : '';
-  const settlementSummaryRows = Object.entries(peopleMap)
-    .map(([key, person]) => {
-      const totalShare = Math.round(Number(person?.totalShare || 0) * 100) / 100;
-      const totalGave = Math.round(Number(person?.totalGave || 0) * 100) / 100;
-      const totalReceivedSettlement = Math.round(Number(person?.totalReceivedSettlement || 0) * 100) / 100;
-      const net = Math.round((totalGave - totalShare - totalReceivedSettlement) * 100) / 100;
-      return {
-        key,
-        name: person?.name || 'Member',
-        isSelf: selfMemberKey && key === selfMemberKey,
-        totalShare,
-        totalGave,
-        totalReceivedSettlement,
-        net,
-      };
-    })
-    .sort((a, b) => {
-      if (a.isSelf && !b.isSelf) return -1;
-      if (!a.isSelf && b.isSelf) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  const settlementSummaryHtml = settlementSummaryRows.length
-    ? `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px">
-        <div>
-          <div style="font-size:18px;font-weight:800">Settlement Summary</div>
-          <div style="font-size:13px;color:var(--t2)">Share, paid amount, and current net balance for each trip member.</div>
-        </div>
-      </div>
-      <div class="card trip-group-card" style="padding:0;overflow:hidden">
-        ${settlementSummaryRows.map((person, index) => {
-          const netColor = person.net > 0.005 ? 'var(--green)' : person.net < -0.005 ? 'var(--red)' : 'var(--t3)';
-          const netLabel = person.net > 0.005
-            ? `+${fmtCur(person.net)}`
-            : person.net < -0.005
-              ? `${fmtCur(Math.abs(person.net))} owed`
-              : 'Settled';
-          return `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 20px;${index < settlementSummaryRows.length - 1 ? 'border-bottom:1px solid var(--line);' : ''}">
-              <div style="min-width:0;flex:1">
-                <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(person.name)}${person.isSelf ? ' <span style="font-size:12px;color:var(--t3);font-weight:700">(me)</span>' : ''}</div>
-                <div style="font-size:13px;color:var(--t3);margin-top:3px">Share ${fmtCur(person.totalShare)} · Paid ${fmtCur(person.totalGave)}</div>
-              </div>
-              <div style="font-size:16px;font-weight:900;color:${netColor};text-align:right;white-space:nowrap">${netLabel}</div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `
-    : '';
-
-  document.getElementById('main').innerHTML = `
-    <div class="tab-content trip-detail-ledger-page" data-trip-detail-view="1">
-      <div class="trip-detail-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
-        <div class="trip-detail-title-block">
-          <button class="btn btn-g btn-sm" onclick="renderTripList()" style="margin-bottom:10px">My Trips</button>
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
-            <div style="min-width:0;flex:1">
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                <div style="font-size:24px;font-weight:800">
-                  ${escHtml(trip.destination || trip.name || '')}${trip.total_distance != null ? ` <span style="font-size:18px;font-weight:700;color:var(--t2)">(${escHtml(String(trip.total_distance))} km)</span>` : ''}
-                </div>
-                ${tripStatusBadge(trip.status)}
-                ${!trip.isOwner ? `<span class="chip active" style="font-size:11px;padding:6px 10px">Shared</span>` : ''}
-              </div>
-              <div style="font-size:13px;color:var(--t2);margin-top:4px">${trip.start_date ? fmtDate(trip.start_date) : '-'} ${trip.end_date ? `to ${fmtDate(trip.end_date)}` : ''}${tripStartsInLabel(trip.start_date) ? ` <span style="margin-left:8px;color:var(--green);font-weight:700">${escHtml(tripStartsInLabel(trip.start_date))}</span>` : ''}</div>
-            </div>
-            <div class="trip-detail-actions trip-detail-actions-desktop" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-              ${trip.isOwner ? `<button class="trip-icon-btn" title="Edit trip" aria-label="Edit trip" onclick="showTripModal(${trip.id})">
-                <span class="trip-icon-btn-glyph">&#9998;</span>
-              </button>` : ''}
-              ${trip.isOwner ? `<button class="trip-icon-btn" title="Share trip" aria-label="Share trip" onclick="showTripShareModal(${trip.id})">
-                <span class="trip-icon-btn-glyph">&#128279;</span>
-              </button>` : ''}
-              <button class="trip-icon-btn" title="Download PDF" aria-label="Download PDF" onclick="downloadTripDetailPdf()">
-                <span class="trip-icon-btn-glyph" style="font-size:11px">PDF</span>
-              </button>
-              ${trip.isOwner ? `<button class="trip-icon-btn danger" title="Delete trip" aria-label="Delete trip" onclick="tripDelete(${trip.id})">
-                <span class="trip-icon-btn-glyph">&#128465;</span>
-              </button>` : ''}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="trip-detail-summary-layout">
-        <div class="card trip-detail-members-panel">
-          <div class="trip-detail-panel-label">Trip Members</div>
-          <div class="trip-detail-members-grid">${memberChips}</div>
-          ${trip.notes ? `<div style="margin-top:6px;font-size:11px;color:var(--t2);line-height:1.35">${escHtml(trip.notes)}</div>` : ''}
-        </div>
-        <div class="trip-detail-side-stack">
-          <div class="card trip-detail-total-panel">
-            <div class="trip-detail-panel-label">Grand Total</div>
-            <div class="trip-detail-total-value">${fmtCur(trip.grand_total || 0)}</div>
-            <div class="trip-detail-total-meta">${spendingExpenseCount} item${spendingExpenseCount !== 1 ? 's' : ''}${settlementEntries.length ? ` · ${settlementEntries.length} payment${settlementEntries.length !== 1 ? 's' : ''}` : ''}</div>
-          </div>
-          <div class="card trip-detail-side-info-panel">
-            <div class="trip-detail-side-meta-row">
-              <div class="trip-detail-side-icon trip-detail-side-icon-transport">${tripRowIconGlyph(trip)}</div>
-              <div style="min-width:0;flex:1">
-                <div class="trip-detail-side-label">Transport</div>
-                <div class="trip-detail-side-value">${transportLabel}</div>
-              </div>
-            </div>
-            ${sharedAccessBlockHtml}
-          </div>
-        </div>
-      </div>
-      <div class="trip-detail-actions-mobile" style="margin-bottom:14px">
-        ${canManageExpenses ? '<button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>' : ''}
-        ${canEdit ? '<button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>' : ''}
-        <button class="btn btn-s btn-sm" onclick="downloadTripDetailPdf()">PDF</button>
-      </div>
-      
-
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-        <div>
-          <div style="font-size:18px;font-weight:800">Itinerary</div>
-          <div style="font-size:13px;color:var(--t2)">Plan trip activities by date and time before you travel.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          ${canEdit ? '<button class="btn btn-s btn-sm" onclick="showTripItineraryModal()">+ Add Itinerary</button>' : ''}
-          <button class="btn btn-g btn-sm" onclick="toggleTripItineraryCollapse()">${_tripItineraryCollapsed ? 'Show Itinerary' : 'Hide Itinerary'}</button>
-        </div>
-      </div>
-      ${_tripItineraryCollapsed ? '' : itineraryHtml}
-      <div id="tripPackingPanel">${renderTripPacking(trip)}</div>
-
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-        <div>
-          <div style="font-size:18px;font-weight:800">Expense Breakdown</div>
-          <div style="font-size:13px;color:var(--t2)">Subtotals by expense type, with each trip item visible underneath.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-          ${canEdit ? `<button class="btn btn-s btn-sm" onclick="showTripSettlementModal(${trip.id})">Settle Trip</button>` : ''}
-          ${canManageExpenses ? '<button class="btn btn-p btn-sm" onclick="showTripExpenseModal()">+ Add Expense</button>' : ''}
-          ${canEdit && (trip.expenses || []).length ? `<button class="btn btn-s btn-sm" onclick="showTripBulkShareModal()">Bulk Edit Shares</button>` : ''}
-          ${canEdit ? `<button class="btn btn-s btn-sm" onclick="showTripExpenseExcelImport(${trip.id})">Import Excel</button>` : ''}
-          ${trip.isOwner && (trip.expenses || []).length ? `<button class="btn btn-s btn-sm" style="color:var(--red);border-color:#f0c7c7;background:#fff6f6" onclick="tripDeleteAllExpenses()">Delete All Expenses</button>` : ''}
-        </div>
-      </div>
-      ${groupHtml}
-      ${settlementHtml}
-      ${settlementSummaryHtml}
-    </div>
-  `;
-  if (preserveTripSearchFocus) {
-    requestAnimationFrame(() => {
-      const searchInput = document.getElementById('tripsSearchInput');
-      if (!searchInput) return;
-      searchInput.focus();
-      if (preservedTripSearchSelection) {
-        const nextLength = String(searchInput.value || '').length;
-        const start = Math.min(preservedTripSearchSelection.start, nextLength);
-        const end = Math.min(preservedTripSearchSelection.end, nextLength);
-        searchInput.setSelectionRange(start, end);
-      }
-    });
-  }
+  if (_tripDetail) renderOwnTripDetail(_tripDetail);
 }
 
 async function downloadTripPdfById(tripId) {
@@ -8958,7 +8342,7 @@ async function deleteTripShareLink(linkId, tripId) {
 }
 
 let _tripModalExistingMembers = [];
-async function showTripModal(tripId = null) {
+async function showTripModal(tripId = null, duplicate = false) {
   let trip = null;
   if (tripId) {
     if (_tripDetail && String(_tripDetail.id) === String(tripId)) {
@@ -8972,11 +8356,13 @@ async function showTripModal(tripId = null) {
       trip = result.trip;
     }
   }
+  if (duplicate && trip) trip = { ...trip, id: null, destination: `${trip.destination || trip.name || 'Trip'} (copy)`, status: 'upcoming' };
   const startDateValue = trip?.start_date ? normalizeInputDate(trip.start_date) : todayStr();
   const endDateValue = trip?.end_date ? normalizeInputDate(trip.end_date) : '';
   const memberValue = trip?.members?.map((member) => member.member_name).join('\n') || '';
   _tripModalExistingMembers = trip?.members || [];
-  openModal(trip ? 'Edit Trip' : 'Add Trip', `
+  openModal(duplicate ? 'Duplicate Trip' : trip ? 'Edit Trip' : 'Add Trip', `
+    ${duplicate ? '<p style="font-size:12px;color:var(--t2);margin-bottom:16px">Create a new trip with these details and members. Expenses and packing lists start fresh.</p>' : ''}
     <div class="fg">
       <label class="fl full">Destination *
         <input class="fi" id="tripDestination" placeholder="Manali, Shimla, Thailand..." value="${escHtml(trip?.destination || trip?.name || '')}">
@@ -9009,7 +8395,7 @@ async function showTripModal(tripId = null) {
       </label>
     </div>
     <div class="fa" style="margin-top:16px">
-      <button class="btn btn-p" onclick="saveTripModal(${trip?.id || 'null'})">${trip ? 'Save Changes' : 'Create Trip'}</button>
+      <button class="btn btn-p" onclick="saveTripModal(${trip?.id || 'null'})">${trip?.id ? 'Save Changes' : 'Create Trip'}</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>
   `);

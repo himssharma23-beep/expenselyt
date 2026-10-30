@@ -43,6 +43,8 @@ async function refreshTripPacking() {
   if (_tripDetail !== trip) return;
   trip.checklist = checklist;
   trip.packing_summary = tripPackingSummary(checklist);
+  const packingBadge = document.querySelector(".ot-tabs button[onclick=\"selectOwnTripTab('packing')\"] span");
+  if (packingBadge) packingBadge.textContent = (trip.packing_summary?.percent || 0) + '%';
   if (typeof syncTripListRowFromDetail === 'function') syncTripListRowFromDetail(trip);
   const panel = document.getElementById('tripPackingPanel');
   if (panel) {

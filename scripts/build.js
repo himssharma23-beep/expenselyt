@@ -5,6 +5,9 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 const filesToCheck = [
+  'public/js/trip-detail-model.js',
+  'public/js/own-trip-detail.js',
+  'public/js/own-trips-list.js',
   'public/js/trip-checklist-identity.js',
   'public/js/trip-expense-currency.js',
   'routes/trip-checklist.js',
