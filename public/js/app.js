@@ -23094,6 +23094,7 @@ function syncSelectedSchoolKidClass() {
   }
 }
 
+
 async function fetchSchoolKidDetail(id) {
   const numericId = Number(id);
   if (!numericId) {
