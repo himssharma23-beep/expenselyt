@@ -1,3 +1,4 @@
+const { normalizeSocietyBankDetails } = require('../utils/society-bank-details');
 const crypto = require('crypto');
 const { bankEntryDate } = require('../utils/bank-entry-date');
 const { syncSourceBankPayment } = require('./source-bank-payment');
@@ -6903,6 +6904,7 @@ async function ensureSocietyTables() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, name)
     )`);
+  await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS bank_details JSONB NOT NULL DEFAULT '{}'::jsonb`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS start_month TEXT`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_layout_key TEXT`);
   await query(`ALTER TABLE societies ADD COLUMN IF NOT EXISTS map_floor_plots_json TEXT`);
@@ -7300,7 +7302,7 @@ function mapSocietyElectionRow(row, { revealVotes = false, includeVoters = false
 async function getSocietyOwnedByUser(userId, societyId) {
   await ensureSocietyTables();
   const result = await query(
-    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, bank_details, created_at, updated_at
      FROM societies
      WHERE id = $1 AND user_id = $2
      LIMIT 1`,
@@ -7315,6 +7317,7 @@ async function listSocieties(userId) {
     `SELECT s.id,
             s.name,
             s.location,
+            s.bank_details,
             s.start_month,
             s.map_layout_key,
             s.map_floor_plots_json,
@@ -7373,6 +7376,7 @@ async function listSocieties(userId) {
     id: Number(row.id),
     name: row.name,
     location: row.location || '',
+    bank_details: row.bank_details || {},
     start_month: row.start_month || '',
     map_layout_key: row.map_layout_key || '',
     map_floor_plots: parseSocietyFloorPlotsConfig(row.map_floor_plots_json),
@@ -7400,6 +7404,7 @@ async function listAdminSocieties() {
             s.user_id,
             s.name,
             s.location,
+            s.bank_details,
             s.start_month,
             s.map_layout_key,
             s.show_shops_in_map,
@@ -7427,6 +7432,7 @@ async function listAdminSocieties() {
     user_id: Number(row.user_id),
     name: row.name,
     location: row.location || '',
+    bank_details: row.bank_details || {},
     start_month: row.start_month || '',
     map_layout_key: row.map_layout_key || '',
     show_shops_in_map: row.show_shops_in_map !== false,
@@ -7446,7 +7452,7 @@ async function listAdminSocieties() {
 async function adminUpdateSociety(userId, societyId, data = {}) {
   await ensureSocietyTables();
   const result = await query(
-    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at
+    `SELECT id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, bank_details, created_at, updated_at
      FROM societies
      WHERE id = $1
      LIMIT 1`,
@@ -7473,10 +7479,10 @@ async function createSociety(userId, data = {}) {
   const showMapInPortal = data.show_map_in_portal !== false;
   const showExpenseAttachmentsInPortal = data.show_expense_attachments_in_portal !== false;
   const result = await query(
-    `INSERT INTO societies (user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [userId, name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson != null ? mapFloorPlotsJson : null, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal]
+    `INSERT INTO societies (user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, bank_details, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, bank_details, created_at, updated_at`,
+    [userId, name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson != null ? mapFloorPlotsJson : null, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, data.show_elections_in_portal !== false, showExpenseAttachmentsInPortal, JSON.stringify(normalizeSocietyBankDetails(data.bank_details))]
   );
   return result.rows[0];
 }
@@ -7500,10 +7506,10 @@ async function updateSociety(userId, societyId, data = {}) {
     : current.show_expense_attachments_in_portal !== false;
   const result = await query(
     `UPDATE societies
-     SET name = $1, location = $2, start_month = $3, map_layout_key = $4, map_floor_plots_json = $5, show_shops_in_map = $6, pdf_shops_mode = $7, pdf_shops_summary_text = $8, show_map_in_portal = $9, show_elections_in_portal = $10, show_expense_attachments_in_portal = $11, updated_at = NOW()
+     SET name = $1, location = $2, start_month = $3, map_layout_key = $4, map_floor_plots_json = $5, show_shops_in_map = $6, pdf_shops_mode = $7, pdf_shops_summary_text = $8, show_map_in_portal = $9, show_elections_in_portal = $10, show_expense_attachments_in_portal = $11, bank_details = $14, updated_at = NOW()
      WHERE id = $12 AND user_id = $13
-     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, created_at, updated_at`,
-    [name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId]
+     RETURNING id, user_id, name, location, start_month, map_layout_key, map_floor_plots_json, show_shops_in_map, pdf_shops_mode, pdf_shops_summary_text, show_map_in_portal, show_elections_in_portal, show_expense_attachments_in_portal, bank_details, created_at, updated_at`,
+    [name, location, startMonth || null, mapLayoutKey || null, mapFloorPlotsJson, showShopsInMap, pdfShopsMode, pdfShopsSummaryText, showMapInPortal, showElectionsInPortal, showExpenseAttachmentsInPortal, societyId, userId, JSON.stringify(normalizeSocietyBankDetails(data.bank_details, current.bank_details))]
   );
   return result.rows[0] || null;
 }
@@ -8854,6 +8860,7 @@ async function getSocietyDetail(userId, societyId, options = {}) {
       id: Number(society.id),
       name: society.name,
       location: society.location || '',
+      bank_details: society.bank_details || {},
       start_month: startMonth || '',
       map_layout_key: society.map_layout_key || '',
       map_floor_plots: parseSocietyFloorPlotsConfig(society.map_floor_plots_json),

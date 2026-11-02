@@ -1313,6 +1313,7 @@ CREATE TABLE IF NOT EXISTS live_split_nudge_usage (
 CREATE INDEX IF NOT EXISTS idx_live_split_nudge_usage_user_created ON live_split_nudge_usage (user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS societies (
+  bank_details JSONB NOT NULL DEFAULT '{}'::jsonb,
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,

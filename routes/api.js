@@ -1,3 +1,4 @@
+const { normalizeSocietyBankDetails, societyQrImageExtension } = require('../utils/society-bank-details');
 const { buildLiveSplitFriendPdfPayload } = require('../utils/live-split-friend-pdf');
 const { buildWebReport } = require('../utils/web-pdf-reports');
 const { createPdfReportApi } = require('../utils/pdf-report-api');
@@ -9891,6 +9892,7 @@ router.put('/admin/societies/:id', requireAdmin, async (req, res) => {
     const society = await Promise.resolve(getCoreDb().adminUpdateSociety(req.session.userId, req.params.id, req.body || {}));
     res.json({ success: true, society });
   } catch (err) {
+    discardSocietyQrUpload(req);
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not update society.' });
   }
 });
@@ -12609,11 +12611,32 @@ router.get('/societies', async (req, res) => {
   }
 });
 
-router.post('/societies', async (req, res) => {
+function societySettingsBody(req) {
+  let body = req.body || {};
+  if (typeof body.payload === 'string') {
+    try { body = JSON.parse(body.payload); } catch { throw Object.assign(new Error('Invalid society settings'), {statusCode:400}); }
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('Invalid society settings'), {statusCode:400});
+  if (body.bank_details !== undefined) body.bank_details = normalizeSocietyBankDetails(body.bank_details);
+  if (req.file) {
+    const ext = societyQrImageExtension(req.file);
+    const filename = 'qr-' + crypto.randomBytes(18).toString('hex') + ext;
+    req.societyQrUpload = path.join(ensureSocietyUploadDir(), filename);
+    fs.writeFileSync(req.societyQrUpload, req.file.buffer);
+    body.bank_details = {...(body.bank_details || {}), qr_image_path:'/uploads/societies/' + filename};
+  }
+  return body;
+}
+function discardSocietyQrUpload(req) {
+  if (req.societyQrUpload) fs.rmSync(req.societyQrUpload, {force:true});
+}
+
+router.post('/societies', withSocietyExpenseUpload, async (req, res) => {
   try {
-    const society = await Promise.resolve(pgCoreDb.createSociety(req.session.userId, req.body || {}));
+    const society = await Promise.resolve(pgCoreDb.createSociety(req.session.userId, societySettingsBody(req)));
     res.json({ success: true, society });
   } catch (err) {
+    discardSocietyQrUpload(req);
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not create society.' });
   }
 });
@@ -12629,9 +12652,9 @@ router.get('/societies/:id', async (req, res) => {
   }
 });
 
-router.put('/societies/:id', async (req, res) => {
+router.put('/societies/:id', withSocietyExpenseUpload, async (req, res) => {
   try {
-    const society = await Promise.resolve(pgCoreDb.updateSociety(req.session.userId, req.params.id, req.body || {}));
+    const society = await Promise.resolve(pgCoreDb.updateSociety(req.session.userId, req.params.id, societySettingsBody(req)));
     res.json({ success: true, society });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not update society.' });

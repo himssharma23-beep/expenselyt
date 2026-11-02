@@ -5,6 +5,9 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 const filesToCheck = [
+  'utils/society-mobile-pdf.js',
+  'utils/society-bank-details.js',
+  'utils/shared-pdf-html.js',
   'public/js/trip-detail-model.js',
   'public/js/own-trip-detail.js',
   'public/js/own-trips-list.js',

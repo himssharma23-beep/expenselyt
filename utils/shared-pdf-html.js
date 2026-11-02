@@ -1,3 +1,4 @@
+const { buildSocietyCustomMobilePdf } = require('./society-mobile-pdf');
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -879,7 +880,7 @@ function buildSocietyHelpers(prefs = {}) {
     if (scope === 'all') return allExpenses;
     if (scope === 'selected') {
       const wanted = new Set((months || []).map((monthKey) => String(monthKey)));
-      return allExpenses.filter((expense) => wanted.has(String(expense.month_key || '').slice(0, 7)));
+      return allExpenses.filter((expense) => wanted.has(String(expense.month_key || expense.expense_date || '').slice(0, 7)));
     }
     return Array.isArray(detail?.month_expenses) ? detail.month_expenses : [];
   }
@@ -1437,142 +1438,7 @@ function buildSocietyPdfHtml(action, detail = {}, options = {}, prefs = {}) {
   }
 
   if (action === 'custom') {
-    const matrixMonths = (options.matrix_months || []).length ? options.matrix_months : (detail?.matrix_months || []);
-    const memberScope = String(options.member_scope || 'all');
-    const scopedMembers = filterMembers(detail, memberScope, matrixMonths);
-    const pdfMembers = collapsePdfShopMembers(detail, scopedMembers, matrixMonths);
-    const scopedExpenses = resolveExpenseScope(detail, options.expense_scope || 'current', options.expense_months || []);
-    const includeSummary = options.include_summary !== false;
-    const includeReport = !!options.include_report;
-    const includeMatrix = !!options.include_matrix;
-    const includeExpenses = !!options.include_expenses;
-    const parts = [];
-    const balanceRows = memberBalanceRows(detail);
-    const settlementRows = memberSettlementRows(detail);
-
-    if (includeReport || includeExpenses) {
-      const rightLabel = includeReport && includeExpenses ? 'Collection & expense report' : includeReport ? 'All-time report' : 'Expense history';
-      parts.push(renderSectionBand(includeReport ? 'Monthly Summary' : 'All Expenses', rightLabel));
-      if (includeReport && includeExpenses) {
-        parts.push(`
-          <div class="table-card">
-            ${renderTable(['Month', 'Paid Members', 'Collected', 'Expenses', 'Balance'], monthSummaryRows(detail, detail?.totals?.member_count || 0, { coloredPaidColumn: true }), {
-              numericColumns: [2, 3, 4],
-              rawHtmlColumns: [1],
-              nowrapColumns: [2, 3, 4],
-              columnWidths: ['20%', '18%', '21%', '21%', '20%'],
-              footer: [['All Time Total', '-', fmtCur(detail?.totals?.overall_collected || 0), fmtCur(detail?.totals?.overall_spent || 0), fmtCur(detail?.totals?.overall_balance || 0)]],
-            })}
-          </div>
-        `);
-        const expenseRightLabel = options.expense_scope === 'all'
-          ? 'Till today'
-          : options.expense_scope === 'selected'
-            ? `Selected months: ${((options.expense_months || []).map((monthKey) => monthLabel(monthKey)).join(', ') || 'None')}`
-            : `Current month: ${monthLabel(detail?.selected_month)}`;
-        parts.push('<div class="spacer"></div>');
-        parts.push(renderSectionBand('All Expenses', expenseRightLabel));
-        parts.push(`
-          <div class="table-card">
-            ${renderTable(['Date', 'Description', 'Category', 'Amount'], scopedExpenses.map((expense) => [
-              createFormatters(prefs).fmtDate(expense.expense_date),
-              expense.title || '-',
-              expense.category || '-',
-              fmtCur(expense.amount || 0),
-            ]), {
-              numericColumns: [3],
-              nowrapColumns: [0, 3],
-              columnWidths: ['17%', '41%', '20%', '22%'],
-              footer: [['', 'Total Expenses', '', fmtCur(scopedExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0))]],
-            })}
-          </div>
-        `);
-      } else if (includeReport) {
-        parts.push(`
-          <div class="table-card">
-            ${renderTable(['Month', 'Paid Members', 'Collected', 'Expenses', 'Balance'], monthSummaryRows(detail, detail?.totals?.member_count || 0, { coloredPaidColumn: true }), {
-              numericColumns: [2, 3, 4],
-              rawHtmlColumns: [1],
-              nowrapColumns: [2, 3, 4],
-              columnWidths: ['20%', '18%', '21%', '21%', '20%'],
-              footer: [['All Time Total', '-', fmtCur(detail?.totals?.overall_collected || 0), fmtCur(detail?.totals?.overall_spent || 0), fmtCur(detail?.totals?.overall_balance || 0)]],
-            })}
-          </div>
-        `);
-      } else {
-        parts.push(`
-          <div class="table-card">
-            ${renderTable(['Date', 'Title', 'Category', 'Notes', 'Amount'], expenseRows(scopedExpenses), {
-              numericColumns: [4],
-              nowrapColumns: [0, 4],
-              columnWidths: ['15%', '25%', '18%', '24%', '18%'],
-              footer: [['', 'Total Expenses', '', '', fmtCur(scopedExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0))]],
-            })}
-          </div>
-        `);
-      }
-    }
-
-    if (includeMatrix) {
-      const rows = pdfMembers.map((member) => [
-        memberLabel(member),
-        ...matrixMonths.map((monthKey) => compactMoney((member.contributions_by_month || {})[monthKey] || 0)),
-        fmtCur(matrixScopeTotal(member, matrixMonths)),
-      ]);
-      parts.push('<div class="spacer"></div>');
-      parts.push(renderSectionBand('Contribution Matrix', matrixMonths.length ? selectedPeriodRange(matrixMonths) : 'No months selected'));
-      parts.push(`<div class="months-note">Months shown: ${escapeHtml(matrixMonths.map((monthKey) => monthLabel(monthKey, true)).join(', ') || 'No months selected')}</div>`);
-      parts.push(`
-        <div class="table-card">
-          ${renderTable(['Member', ...matrixMonths.map((monthKey) => monthLabel(monthKey, true)), 'Total'], rows, {
-            compact: true,
-            numericColumns: [...matrixMonths.map((_, index) => index + 1), matrixMonths.length + 1],
-            nowrapColumns: [...matrixMonths.map((_, index) => index + 1), matrixMonths.length + 1],
-          })}
-        </div>
-      `);
-    }
-
-    if (includeReport) {
-      parts.push('<div class="spacer"></div>');
-      parts.push(renderSectionBand('Member Ledger', 'Gross, settled and remaining'));
-      parts.push(`
-        <div class="table-card">
-          ${renderTable(['Member', 'Gross Owed', 'Settled', 'Remaining', 'Expenses', 'Settlements'], balanceRows, {
-            numericColumns: [1, 2, 3, 4, 5],
-            nowrapColumns: [1, 2, 3, 4, 5],
-            columnWidths: ['30%', '14%', '14%', '14%', '14%', '14%'],
-            footer: [['Totals', fmtCur(detail?.totals?.member_owed_gross_total || 0), fmtCur(detail?.totals?.member_settled_total || 0), fmtCur(detail?.totals?.member_owed_total || 0), '', '']],
-          })}
-        </div>
-      `);
-      parts.push('<div class="spacer"></div>');
-      parts.push(renderSectionBand('Settlement History', 'How balances were adjusted'));
-      parts.push(`
-        <div class="table-card">
-          ${renderTable(['Date', 'Member', 'Mode', 'Notes', 'Amount'], settlementRows, {
-            numericColumns: [4],
-            nowrapColumns: [0, 4],
-            columnWidths: ['16%', '24%', '16%', '26%', '18%'],
-            footer: [['', '', '', 'Settled Total', fmtCur(detail?.totals?.member_settled_total || 0)]],
-          })}
-        </div>
-      `);
-    }
-
-    return buildPdfShell({
-      hero: renderHero({
-        title: detail?.society?.name || 'Society',
-        location: detail?.society?.location || 'Not added',
-        metaRight: `${Number(detail?.totals?.member_count || 0)} Members`,
-        period: includeExpenses && options.expense_scope === 'current'
-          ? monthLabel(detail?.selected_month)
-          : (matrixMonths.length ? selectedPeriodRange(matrixMonths) : societyPeriodRange(detail)),
-        cards: includeSummary ? statCardsData(detail, options.expense_scope === 'current' && !includeReport ? 'month' : 'overall') : [],
-      }),
-      landscape: true,
-      body: parts.join(''),
-    });
+    return buildSocietyCustomMobilePdf(detail, options, prefs, buildSocietyHelpers(prefs));
   }
 
   if (action === 'map') {

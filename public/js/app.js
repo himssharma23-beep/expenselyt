@@ -21745,6 +21745,7 @@ function renderSocietiesPage() {
         <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;scrollbar-width:none;-ms-overflow-style:none">
           ${tabsHtml}
         </div>
+        ${societyBankDetailsHtml(selected.society)}
         ${activeSection}
       </div>`;
   })() : `
@@ -21870,6 +21871,33 @@ async function changeSocietyMonth(monthKey) {
   await loadSocieties();
 }
 
+function societyBankDetailsHtml(society) {
+  const b = society?.bank_details || {};
+  if (!Object.values(b).some(Boolean)) return '';
+  return `<details class="card" style="padding:14px 16px"><summary style="cursor:pointer;font-size:13px;font-weight:700">Society bank details</summary><div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px"><div style="font-size:12px;line-height:1.9">${[['Bank',b.bank_name],['Account number',b.account_number],['Customer number',b.customer_number],['Established',b.established_date ? fmtDate(b.established_date) : '']].filter(([,v])=>v).map(([k,v])=>`<div><span style="color:var(--t3)">${k}:</span> ${escHtml(v)}</div>`).join('')}</div>${b.qr_image_path ? `<img src="${escHtml(b.qr_image_path)}" alt="Society payment QR code" style="width:150px;height:150px;object-fit:contain;background:white">` : ''}</div></details>`;
+}
+function societyBankFieldsHtml(society) {
+  const b=society.bank_details || {};
+  return `<div class="fl full" style="font-weight:700;margin-top:8px">Bank details (optional)</div>
+    <label class="fl">Bank name<input class="fi" id="societyBankName" maxlength="120" value="${escHtml(b.bank_name||'')}"></label>
+    <label class="fl">Account number<input class="fi" id="societyAccountNumber" maxlength="80" value="${escHtml(b.account_number||'')}"></label>
+    <label class="fl">Customer number<input class="fi" id="societyCustomerNumber" maxlength="80" value="${escHtml(b.customer_number||'')}"></label>
+    <label class="fl">Date of establishment<input class="fi" id="societyEstablishedDate" type="date" value="${escHtml(b.established_date||'')}"></label>
+    <label class="fl full">Payment QR image (PNG, JPEG or WebP, up to 5 MB)<input class="fi" type="file" id="societyQrFile" accept="image/png,image/jpeg,image/webp" onchange="previewSocietyQr()"></label>
+    <input type="hidden" id="societyQrPath" value="${escHtml(b.qr_image_path||'')}">
+    <div class="fl full"><img id="societyQrPreview" src="${escHtml(b.qr_image_path||'')}" alt="Society payment QR preview" style="width:150px;height:150px;object-fit:contain;${b.qr_image_path?'':'display:none'}"><button type="button" class="btn btn-g btn-sm" onclick="clearSocietyQr()">Remove QR image</button></div>`;
+}
+function clearSocietyQr() {
+  document.getElementById('societyQrFile').value=''; document.getElementById('societyQrPath').value='';
+  document.getElementById('societyQrPreview').style.display='none';
+}
+function previewSocietyQr() {
+  const input=document.getElementById('societyQrFile'), file=input.files?.[0];
+  if (!file) return;
+  if (file.size>5*1024*1024 || !['image/png','image/jpeg','image/webp'].includes(file.type)) {input.value='';toast('Choose a PNG, JPEG or WebP image up to 5 MB','warning');return;}
+  const reader=new FileReader(); reader.onload=()=>{const image=document.getElementById('societyQrPreview');if(image){image.src=reader.result;image.style.display='block';}};reader.readAsDataURL(file);
+}
+
 function showSocietyModal(id = null) {
   const society = id ? (_societiesList.find((item) => String(item.id) === String(id)) || {}) : {};
   const layoutOptions = [
@@ -21882,6 +21910,7 @@ function showSocietyModal(id = null) {
       <label class="fl full">Society Name *<input class="fi" id="societyName" value="${escHtml(society.name || '')}" placeholder="e.g. Green Avenue RWA"></label>
       <label class="fl full">Location<input class="fi" id="societyLocation" value="${escHtml(society.location || '')}" placeholder="e.g. Sector 22, Chandigarh"></label>
       <label class="fl">Start Month (optional)<input class="fi" type="month" id="societyStartMonth" value="${escHtml(society.start_month || '')}"></label>
+      ${societyBankFieldsHtml(society)}
       <label class="fl">Map Layout
         <select class="fi" id="societyMapLayout">${layoutOptions}</select>
       </label>
@@ -21922,6 +21951,13 @@ function showSocietyModal(id = null) {
 
 async function saveSociety(id = null) {
   const body = {
+    bank_details: {
+      bank_name: document.getElementById('societyBankName')?.value.trim() || '',
+      account_number: document.getElementById('societyAccountNumber')?.value.trim() || '',
+      customer_number: document.getElementById('societyCustomerNumber')?.value.trim() || '',
+      established_date: document.getElementById('societyEstablishedDate')?.value || '',
+      qr_image_path: document.getElementById('societyQrPath')?.value || '',
+    },
     name: document.getElementById('societyName')?.value?.trim() || '',
     location: document.getElementById('societyLocation')?.value?.trim() || '',
     start_month: document.getElementById('societyStartMonth')?.value || '',
@@ -21933,9 +21969,18 @@ async function saveSociety(id = null) {
     show_elections_in_portal: document.getElementById('societyShowElectionsInPortal')?.checked !== false,
   };
   if (!body.name) { toast('Society name is required', 'warning'); return; }
-  const result = id
-    ? await api(`/api/societies/${Number(id)}`, { method: 'PUT', body })
-    : await api('/api/societies', { method: 'POST', body });
+  const file=document.getElementById('societyQrFile')?.files?.[0];
+  let result;
+  if (file) {
+    if(file.size>5*1024*1024){toast('QR image must be at most 5 MB','warning');return;}
+    const fd=new FormData();fd.append('payload',JSON.stringify(body));fd.append('attachment',file);
+    try {
+      const response=await fetch(id ? '/api/societies/'+Number(id) : '/api/societies',{method:id?'PUT':'POST',body:fd,credentials:'same-origin'});
+      result=await response.json();
+    } catch {toast('Could not upload society QR image','error');return;}
+  } else result = id
+    ? await api('/api/societies/'+Number(id),{method:'PUT',body})
+    : await api('/api/societies',{method:'POST',body});
   if (!result?.success) { toast(result?.error || 'Could not save society.', 'error'); return; }
   closeModal();
   _selectedSocietyId = Number(result?.society?.id || id || _selectedSocietyId);
@@ -22799,6 +22844,7 @@ function showSocietyCustomPdfModal() {
       <span style="font-size:13px;color:var(--t2)">${escHtml(societyMonthLabel(monthKey))}</span>
     </label>`).join('');
   openModal('Custom Society PDF', `
+    <p style="font-size:12px;color:var(--t3);margin-bottom:12px">Only checked sections are included. Summary and Report use all-time data; Matrix and Expenses follow their own month selections.</p>
     <div class="fg">
       <div class="fl full" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
         <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff">
@@ -22818,9 +22864,9 @@ function showSocietyCustomPdfModal() {
           <span>Expenses</span>
         </label>
       </div>
-      <label class="fl full">Members to show
+      <label class="fl full">Active members to show
         <select class="fi" id="societyPdfMemberScope">
-          <option value="all">All members</option>
+          <option value="all">All active members</option>
           <option value="paid">Paid members only</option>
           <option value="unpaid">Not paid members only</option>
         </select>
@@ -22829,6 +22875,7 @@ function showSocietyCustomPdfModal() {
         <div style="font-size:12px;font-weight:700;color:var(--t2);margin-bottom:8px">Matrix months to show</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">${monthChecks || '<div style="color:var(--t3)">No months available.</div>'}</div>
       </div>
+      <div class="fl full" style="font-size:12px;color:var(--t3)">Only active members are listed. Totals include active and inactive members.</div>
       <label class="fl full">Expenses to show
         <select class="fi" id="societyPdfExpenseScope" onchange="toggleSocietyCustomExpenseMonths()">
           <option value="current">Current month only</option>
