@@ -2234,6 +2234,6 @@ async function downloadSocietyCustomPdf(options = {}) {
 // All report definitions live on the server; clients provide filters and screen snapshots only.
 async function downloadSharedWebReport(report, args = [], data = {}) {
   return renderSharedPdfFileWindow({ template: 'web-report', payload: { report, args, data,
-    currency: (typeof _currentUser !== 'undefined' && _currentUser?.currency_code) || 'INR',
+    currency: data.currency_code || (typeof _currentUser !== 'undefined' && _currentUser?.currency_code) || 'INR',
   } }, 'PDF Export', report.replace(/^download/, '').replace(/Pdf$/, ''));
 }

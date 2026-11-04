@@ -7711,6 +7711,7 @@ router.post('/live-split/trips', async (req, res) => {
   try {
     const id = await Promise.resolve(
       getCoreDb().createLiveSplitTrip(req.session.userId, {
+        currency_code: req.body?.currency_code,
         name: req.body?.name,
         start_date: req.body?.start_date,
         end_date: req.body?.end_date,
@@ -7792,6 +7793,7 @@ router.post('/live-split/groups', async (req, res) => {
     if (!details || !total_amount || !Array.isArray(splits)) return res.status(400).json({ error: 'Missing fields' });
     const id = await Promise.resolve(
       getCoreDb().addLiveSplitGroup(req.session.userId, {
+        currency_code: req.body.currency_code,
         finance: req.body.finance || null,
         divide_date,
         details,

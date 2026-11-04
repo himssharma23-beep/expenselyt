@@ -38,15 +38,16 @@ test('actual web and mobile export handlers submit identical reports', { skip: !
   const scoped = { filteredEvents: events, tripSections: [], total: 20975 };
   const common = { buildRowEvents: () => events, buildLiveSplitFriendPdfScopedData: () => scoped, toLocalIsoDate: value => value };
   let webReport;
-  const web = vm.createContext({ ...common, findVisibleRow: () => row, loadTripLedgersForSummaryEvents: async () => {}, getLiveSplitFriendPdfDateBounds: () => ({ min: '2026-09-01', max: '2026-09-30' }), _currentUser: { currency_code: 'INR' }, toast: () => assert.fail('Unexpected web error'), renderSharedPdfFileWindow: async report => { webReport = report; } });
+  const web = vm.createContext({ ...common, state:{currency:'INR'}, findVisibleRow: () => row, loadTripLedgersForSummaryEvents: async () => {}, getLiveSplitFriendPdfDateBounds: () => ({ min: '2026-09-01', max: '2026-09-30' }), _currentUser: { currency_code: 'CAD' }, toast: () => assert.fail('Unexpected web error'), renderSharedPdfFileWindow: async report => { webReport = report; } });
   const webSource = fs.readFileSync(path.join(__dirname, '../public/js/live-split.js'), 'utf8');
   vm.runInContext(webSource.slice(webSource.indexOf('  async function liveSplitDownloadFriendPdf('), webSource.indexOf('  function liveSplitApplyFriendPdfPreset(')), web);
   await web.liveSplitDownloadFriendPdf('friend', '2026-09-01', '2026-09-30');
   let mobileReport;
-  const mobile = vm.createContext({ ...common, detailsRow: row, rowDetailTripLedgers: {}, groups: [], sharedGroups: [], liveTrips: [], friends: [], userName: 'Me', currentUser: { id: 1, currency_code: 'INR' }, setDetailPdfBusy: () => {}, setShowDetailPdfModal: () => {}, sanitizePdfFilename: value => value, Alert: { alert: (...args) => assert.fail(args.join(': ')) }, shareSharedTemplatePdf: async (template, payload) => { mobileReport = { template, payload }; } });
+  const mobile = vm.createContext({ ...common, liveSplitDisplayCurrency:'INR', detailsRow: row, rowDetailTripLedgers: {}, groups: [], sharedGroups: [], liveTrips: [], friends: [], userName: 'Me', currentUser: { id: 1, currency_code: 'INR' }, setDetailPdfBusy: () => {}, setShowDetailPdfModal: () => {}, sanitizePdfFilename: value => value, Alert: { alert: (...args) => assert.fail(args.join(': ')) }, shareSharedTemplatePdf: async (template, payload) => { mobileReport = { template, payload }; } });
   const mobileSource = fs.readFileSync(mobileFile, 'utf8');
   vm.runInContext(mobileSource.slice(mobileSource.indexOf('  async function exportLiveSplitFriendPdf('), mobileSource.indexOf('  async function saveTripManageSettings(')), mobile);
   await mobile.exportLiveSplitFriendPdf('2026-09-01', '2026-09-30');
   assert.deepEqual(JSON.parse(JSON.stringify(webReport)), JSON.parse(JSON.stringify(mobileReport)));
+  assert.equal(webReport.payload.currency,'INR');
   assert.equal(buildStructuredPdfHtml(buildLiveSplitFriendPdfPayload(webReport.payload)), buildStructuredPdfHtml(buildLiveSplitFriendPdfPayload(mobileReport.payload)));
 });

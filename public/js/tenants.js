@@ -61,10 +61,18 @@ function tenantSharedRoomInvoiceForMonth(tenant, invoiceMonth, { excludeTenantId
     .sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0] || null;
 }
 
+function tenantInvoiceReferenceDate(invoiceMonth, today) {
+  const month = String(invoiceMonth || '').trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return '';
+  const first = `${month}-01`;
+  const lastDay = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+  const last = `${month}-${String(lastDay).padStart(2, '0')}`;
+  // Current month: today's rate. Past/future months: the nearest date in that month.
+  return today < first ? first : today > last ? last : today;
+}
+
 function tenantChargeProfileForMonth(tenant, invoiceMonth) {
-  const targetDate = /^\d{4}-\d{2}$/.test(String(invoiceMonth || '').trim())
-    ? `${String(invoiceMonth).trim()}-01`
-    : '';
+  const targetDate = tenantInvoiceReferenceDate(invoiceMonth, tenantLocalDateValue(new Date()));
   const history = Array.isArray(tenant?.charge_history) ? tenant.charge_history : [];
   if (!targetDate) return history[0] || null;
   return history.find((row) => {
@@ -632,7 +640,7 @@ function tenantBulkInvoicePriorInvoice(tenant, monthKey) {
 }
 
 function tenantBulkInvoiceChargeProfile(tenant, monthKey) {
-  return tenantCurrentChargeProfile(tenant, `${String(monthKey || tenantCurrentMonthKey())}-01`) || tenant || {};
+  return tenantChargeProfileForMonth(tenant, monthKey || tenantCurrentMonthKey()) || tenant || {};
 }
 
 function tenantBulkInvoiceOtherItems(tenantId) {
@@ -666,12 +674,12 @@ function tenantBulkInvoiceEstimate(tenant, monthKey) {
   const currentUnits = Number(document.getElementById(`tenantBulkCurrentUnits_${tenantId}`)?.value || previousUnits);
   const usedUnits = Math.max(0, currentUnits - previousUnits);
   const electricityAmount = tenantDivideChargeAmount(
-    tenantNum(usedUnits * tenantNum(profile.electricity_unit_price || tenant?.electricity_unit_price || 0)),
+    tenantNum(usedUnits * tenantNum(profile.electricity_unit_price ?? tenant?.electricity_unit_price ?? 0)),
     splitConfig.divide_electricity,
     roommateCount
   );
   const recurringItems = tenantApplySplitToOtherChargeItems(
-    tenantNormalizeOtherChargeItems(profile.monthly_additional_charges || tenant?.monthly_additional_charges || []),
+    tenantNormalizeOtherChargeItems(profile.monthly_additional_charges ?? tenant?.monthly_additional_charges ?? []),
     splitConfig.divide_other,
     roommateCount
   );
@@ -684,10 +692,10 @@ function tenantBulkInvoiceEstimate(tenant, monthKey) {
   const otherItems = tenantBulkInvoiceOtherItems(tenantId);
   const otherTotal = tenantNum([...recurringItems, ...nextInvoiceItems, ...carryForwardItems, ...otherItems].reduce((sum, item) => sum + tenantNum(item.amount || 0), 0));
   const total = tenantNum(
-    tenantDivideChargeAmount(tenantNum(profile.rent_amount || tenant?.rent_amount || 0), splitConfig.divide_rent, roommateCount)
-    + tenantDivideChargeAmount(tenantNum(profile.sewerage_charge || tenant?.sewerage_charge || 0), splitConfig.divide_sewerage, roommateCount)
-    + tenantDivideChargeAmount(tenantNum(profile.water_charge || tenant?.water_charge || 0), splitConfig.divide_water, roommateCount)
-    + tenantDivideChargeAmount(tenantNum(profile.cleaning_charge || tenant?.cleaning_charge || 0), splitConfig.divide_cleaning, roommateCount)
+    tenantDivideChargeAmount(tenantNum(profile.rent_amount ?? tenant?.rent_amount ?? 0), splitConfig.divide_rent, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.sewerage_charge ?? tenant?.sewerage_charge ?? 0), splitConfig.divide_sewerage, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.water_charge ?? tenant?.water_charge ?? 0), splitConfig.divide_water, roommateCount)
+    + tenantDivideChargeAmount(tenantNum(profile.cleaning_charge ?? tenant?.cleaning_charge ?? 0), splitConfig.divide_cleaning, roommateCount)
     + electricityAmount
     + otherTotal
   );
@@ -1386,6 +1394,7 @@ function renderTenantInvoicesTab(building) {
           <div class="tenant-ledger-section-sub">Invoices keep a snapshot of rent and utility charges, so old invoices stay unchanged.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+          <button class="btn btn-s btn-sm" onclick="showTenantInvoiceSummaryModal()">Monthly Summary</button>
           <button class="btn btn-s btn-sm" onclick="showTenantMonthInvoiceExportModal(${Number(building?.id || 0)})">Month PDF / Share</button>
           <button class="btn btn-s btn-sm" onclick="showTenantBulkInvoiceModal()">Bulk Generate</button>
           ${composeTenantId ? `<button class="btn btn-p btn-sm" onclick="showTenantInvoiceModal(${Number(composeTenantId)})">Generate Invoice</button>` : ''}
@@ -2539,11 +2548,12 @@ function showTenantInvoiceModal(recordId, options = {}) {
   const readingDefaults = tenantInvoiceReadingDefaults(tenant, invoiceMonth);
   const previousUnits = readingDefaults.previousUnits;
   const currentUnits = readingDefaults.currentUnits;
+  const profile = tenantChargeProfileForMonth(tenant, invoiceMonth) || tenant;
   const tenantOptions = buildingTenants.map((item) => `<option value="${Number(item.id)}" ${String(item.id) === String(tenant.id) ? 'selected' : ''}>${escHtml(item.tenant_name || 'Tenant')}</option>`).join('');
   openModal(`Invoice - ${escHtml(tenant.tenant_name)}`, `
     <div class="card" style="padding:14px;margin-bottom:14px;background:#f7faf8">
       <div style="font-size:16px;font-weight:800;color:var(--t1)">${escHtml(tenant.tenant_name || 'Tenant')}</div>
-      <div id="tenantInvoiceMeta" style="font-size:12px;color:var(--t3);margin-top:4px">Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${previousUnits}${readingDefaults.sourceLabel ? ` • ${escHtml(readingDefaults.sourceLabel)}` : ''}</div>
+      <div id="tenantInvoiceMeta" style="font-size:12px;color:var(--t3);margin-top:4px">Rent ${fmtCur(profile.rent_amount ?? tenant.rent_amount ?? 0)} • Electricity ${fmtCur(profile.electricity_unit_price ?? tenant.electricity_unit_price ?? 0)}/unit • Previous units ${previousUnits}${readingDefaults.sourceLabel ? ` • ${escHtml(readingDefaults.sourceLabel)}` : ''}</div>
     </div>
     <div class="fg">
       <label class="fl full">Tenant
@@ -2596,6 +2606,7 @@ function updateTenantInvoiceModalReadings() {
   const tenant = tenantFindRecord(tenantId);
   if (!tenant) return;
   const defaults = tenantInvoiceReadingDefaults(tenant, invoiceMonth);
+  const profile = tenantChargeProfileForMonth(tenant, invoiceMonth) || tenant;
   const prevInput = document.getElementById('tenantInvoicePrevUnits');
   const currentInput = document.getElementById('tenantInvoiceCurrentUnits');
   const meta = document.getElementById('tenantInvoiceMeta');
@@ -2605,7 +2616,7 @@ function updateTenantInvoiceModalReadings() {
     currentInput.value = defaults.currentUnits === '' ? '' : String(defaults.currentUnits);
   }
   if (meta) {
-    meta.textContent = `Rent ${fmtCur(tenant.rent_amount || 0)} • Electricity ${fmtCur(tenant.electricity_unit_price || 0)}/unit • Previous units ${defaults.previousUnits}${defaults.sourceLabel ? ` • ${defaults.sourceLabel}` : ''}`;
+    meta.textContent = `Rent ${fmtCur(profile.rent_amount ?? tenant.rent_amount ?? 0)} • Electricity ${fmtCur(profile.electricity_unit_price ?? tenant.electricity_unit_price ?? 0)}/unit • Previous units ${defaults.previousUnits}${defaults.sourceLabel ? ` • ${defaults.sourceLabel}` : ''}`;
   }
 }
 
@@ -3014,6 +3025,41 @@ function tenantMonthInvoiceShareLinksHtml(links = []) {
         </div>
       </div>`;
   }).join('');
+}
+
+function showTenantInvoiceSummaryModal(month = tenantCurrentMonthKey()) {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  if (!building) return;
+  const summary = tenantInvoiceSummary.build(getTenantBuildingInvoices(building), month);
+  openModal('Monthly Invoice Summary', `
+    <label class="fl">Month<input class="fi" type="month" id="tenantSummaryMonth" value="${escHtml(month)}" onchange="showTenantInvoiceSummaryModal(this.value)"></label>
+    <p style="font-size:12px;color:var(--t3)">${escHtml(building.name)} · Saved invoices for this month, including tenants now inactive.</p>
+    ${summary.tenants.length ? `
+      <button class="btn btn-p btn-sm" onclick="copyTenantInvoiceSummary('all')">Copy all</button>
+      <div style="display:grid;gap:12px;margin-top:14px">
+        ${summary.tenants.map((tenant, index) => `<div class="card" style="padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b>${escHtml(tenant.name)}</b><button class="btn btn-s btn-sm" onclick="copyTenantInvoiceSummary(${index})">Copy tenant</button></div>
+          <pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7;margin:10px 0 0">${escHtml(tenant.text)}</pre>
+        </div>`).join('')}
+        <div class="card" style="padding:14px;background:var(--bg)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b>Totals</b><button class="btn btn-s btn-sm" onclick="copyTenantInvoiceSummary('totals')">Copy totals</button></div>
+          <pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7;margin-bottom:0">${escHtml(summary.totalsText)}</pre>
+        </div>
+      </div>` : '<p>No saved invoices for this month. Generate invoices first to include their rent and meter readings.</p>'}
+    <div class="fa"><button class="btn btn-s" onclick="closeModal()">Close</button></div>`);
+}
+
+async function copyTenantInvoiceSummary(part) {
+  const building = tenantFindBuilding(_selectedTenantBuildingId);
+  const month = document.getElementById('tenantSummaryMonth')?.value;
+  if (!building || !month) return;
+  const summary = tenantInvoiceSummary.build(getTenantBuildingInvoices(building), month);
+  const text = part === 'all' ? summary.text : part === 'totals' ? summary.totalsText : summary.tenants[Number(part)]?.text;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Summary copied', 'success');
+  } catch (_err) { toast('Could not copy. Select the summary text and copy it.', 'error'); }
 }
 
 async function showTenantMonthInvoiceExportModal(buildingId = _selectedTenantBuildingId) {

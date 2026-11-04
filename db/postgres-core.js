@@ -1,3 +1,4 @@
+const { ensureLiveSplitCurrencySchema, liveSplitWriteCurrency } = require('./live-split-currency');
 const { normalizeSocietyBankDetails } = require('../utils/society-bank-details');
 const crypto = require('crypto');
 const { bankEntryDate } = require('../utils/bank-entry-date');
@@ -1948,6 +1949,7 @@ async function getLiveSplitTripAccessRow(client, userId, tripId) {
 }
 
 async function getLiveSplitTripLedgerForUser(userId, tripId) {
+  await ensureLiveSplitCurrencySchema();
   const uid = Number(userId || 0);
   const tid = Number(tripId || 0);
   if (!(uid > 0) || !(tid > 0)) return null;
@@ -2279,6 +2281,7 @@ async function insertLiveSplitTripMemberRow(client, params) {
 }
 
 async function createLiveSplitTrip(userId, data) {
+  await ensureLiveSplitCurrencySchema();
   return withTransaction(async (client) => {
     const name = normalizeText(data?.name, 'Trip name', 120);
     const startDate = normalizeDateValue(data?.start_date, 'Start date');
@@ -2295,6 +2298,8 @@ async function createLiveSplitTrip(userId, data) {
       [userId, name, startDate, endDate, showAddToExpenseOption, notes]
     );
     const tripId = Number(tripResult.rows[0].id);
+    const currencyCode=await liveSplitWriteCurrency(client,userId,data);
+    await client.query('UPDATE live_split_trips SET currency_code=$1 WHERE id=$2',[currencyCode,tripId]);
 
     await ensureLiveSplitTripMembersIdSequence(client);
     await insertLiveSplitTripMemberRow(client, [tripId, null, 'You', userId, 'owner', true, userId]);
@@ -2308,6 +2313,7 @@ async function createLiveSplitTrip(userId, data) {
 }
 
 async function getLiveSplitTrips(userId) {
+  await ensureLiveSplitCurrencySchema();
   const result = await query(
     `SELECT DISTINCT
        t.*,
@@ -2629,6 +2635,7 @@ async function addLiveSplitTripToExpense(userId, tripId, data = {}) {
 }
 
 async function getLiveSplitGroups(userId) {
+  await ensureLiveSplitCurrencySchema();
   await canonicalizeLiveSplitFriendRowsForOwner(Number(userId));
   const result = await query(
     `SELECT
@@ -2885,6 +2892,7 @@ function inferLiveSplitModeLabel(mode, splits = []) {
 }
 
 async function getLiveSplitGroupDetailForUser(userId, groupId) {
+  await ensureLiveSplitCurrencySchema();
   const uid = Number(userId);
   const gid = Number(groupId);
   const groupResult = await query(
@@ -3178,6 +3186,7 @@ async function syncGroupFinance(client, groupId, finance = null, remove = false)
 }
 
 async function addLiveSplitGroup(userId, data) {
+  await ensureLiveSplitCurrencySchema();
   return withTransaction(async (client) => {
     const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
     const tripId = Number(data.trip_id || 0) > 0 ? Number(data.trip_id) : null;
@@ -3204,6 +3213,8 @@ async function addLiveSplitGroup(userId, data) {
       [userId, divideDate, data.details, data.paid_by, data.total_amount, data.heading || null, data.session_id || null, String(data.split_mode || 'equal'), tripId, !!data.owner_added_to_expense]
     );
     const groupId = Number(groupResult.rows[0].id);
+    const currencyCode = await liveSplitWriteCurrency(client, userId, data, tripId);
+    await client.query('UPDATE live_split_groups SET currency_code=$1 WHERE id=$2',[currencyCode,groupId]);
     await insertLiveSplitSplitsWithSequenceRecovery(client, groupId, normalizedSplits);
     await logLiveSplitGroupActivity(client, {
       groupId,
@@ -3858,6 +3869,7 @@ async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
 }
 
 async function getReceivedLiveSplitShares(userId) {
+  await ensureLiveSplitCurrencySchema();
   const ownerRowsR = await query(
     `WITH share_candidates AS (
        SELECT
@@ -4017,6 +4029,7 @@ async function getReceivedLiveSplitShares(userId) {
          g.details,
          g.paid_by,
          g.total_amount,
+         g.currency_code,
          g.split_mode,
          g.heading,
          g.session_id,
@@ -4097,6 +4110,7 @@ async function getReceivedLiveSplitShares(userId) {
          g.details,
          g.paid_by,
          g.total_amount,
+         g.currency_code,
          g.split_mode,
          g.heading,
          g.session_id,

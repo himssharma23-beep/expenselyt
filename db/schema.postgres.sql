@@ -434,6 +434,7 @@ CREATE INDEX IF NOT EXISTS idx_live_split_invites_target_email ON live_split_inv
 CREATE UNIQUE INDEX IF NOT EXISTS idx_live_split_invites_token_unique ON live_split_invites(invite_token) WHERE invite_token IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS live_split_groups (
+  currency_code TEXT,
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   divide_date DATE NOT NULL,
@@ -504,6 +505,7 @@ CREATE TABLE IF NOT EXISTS live_split_friend_activity (
 CREATE INDEX IF NOT EXISTS idx_live_split_friend_activity_friend ON live_split_friend_activity(owner_user_id, friend_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS live_split_trips (
+  currency_code TEXT,
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,

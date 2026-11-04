@@ -806,6 +806,16 @@ async function listTenantChargeHistory(clientOrQuery, tenantIds = []) {
   return result.rows.map(mapChargeHistoryRow);
 }
 
+function tenantInvoiceReferenceDate(invoiceMonth, today) {
+  const month = String(invoiceMonth || '').trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return '';
+  const first = `${month}-01`;
+  const lastDay = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+  const last = `${month}-${String(lastDay).padStart(2, '0')}`;
+  // Current month: today's rate. Past/future months: the nearest date in that month.
+  return today < first ? first : today > last ? last : today;
+}
+
 function pickChargeProfileForDate(chargeHistory = [], dateValue = '') {
   const target = String(dateValue || '').trim();
   const list = Array.isArray(chargeHistory) ? chargeHistory : [];
@@ -1879,7 +1889,7 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
   const building = await getBuildingOwnedByUser(userId, tenant.building_id);
   const room = await getRoomOwnedByUser(userId, tenant.room_id);
   const invoiceMonth = normalizeMonthKey(data.invoice_month || currentMonthKey());
-  const invoiceReferenceDate = `${invoiceMonth}-01`;
+  const invoiceReferenceDate = tenantInvoiceReferenceDate(invoiceMonth, currentDateValue());
   const chargeProfile = pickChargeProfileForDate(await listTenantChargeHistory({ query }, [tenantId]), invoiceReferenceDate);
   const currentUnits = normalizeInteger(data.current_electricity_units, 'Current electricity units', { min: 0, max: 100000000 });
   const extraElectricityUnits = normalizeInteger(
@@ -1888,7 +1898,7 @@ async function createOrUpdateTenantInvoice(userId, tenantId, data = {}) {
     { min: -100000000, max: 100000000 }
   );
   const recurringChargeItemsBase = normalizeOtherChargeItems(
-    Array.isArray(chargeProfile?.monthly_additional_charges) && chargeProfile.monthly_additional_charges.length
+    Array.isArray(chargeProfile?.monthly_additional_charges)
       ? chargeProfile.monthly_additional_charges
       : tenant.monthly_additional_charges
   );

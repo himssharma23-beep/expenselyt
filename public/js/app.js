@@ -1911,7 +1911,7 @@ function ensureTenantsScript() {
       return;
     }
     const script = document.createElement('script');
-    script.src = '/js/tenants.js?v=20260520b';
+    script.src = '/js/tenants.js?v=20261104-summary';
     script.async = false;
     script.dataset.appScript = 'tenants';
     script.onload = () => resolve();

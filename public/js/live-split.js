@@ -8,10 +8,13 @@
   ];
 
   const state = {
+    currency: '',
+    currencyCodes: [],
     friends: [],
     appFriends: [],
     groups: [],
     sharedGroups: [],
+    allSharedGroups: [],
     liveTrips: [],
     incomingInvites: [],
     outgoingInvites: [],
@@ -67,6 +70,16 @@
     tripLedgerCache: {},
   };
 
+  function fmtCur(value) { return formatLiveSplitMoney(value, state.currency || window._currentUser?.currency_code || 'INR'); }
+  function liveSplitApi(url, options={}) {
+    if (options.method === 'POST' && ['/api/live-split/groups','/api/live-split/trips'].includes(url) && options.body && typeof options.body === 'object') options={...options,body:{...options.body,currency_code:state.currency || window._currentUser?.currency_code || 'INR'}};
+    return api(url,options);
+  }
+  window.liveSplitSetCurrency = async function(code) {
+    if (!state.currencyCodes.includes(code)) return;
+    state.currency=code; state.rowDetailRef='';state.tripLedgerCache={};
+    await fetchData(); renderMain();
+  };
   function n(v) {
     const value = Number(v);
     return Number.isFinite(value) ? value : 0;
@@ -666,7 +679,7 @@
     const tid = Number(tripId || 0);
     if (!(tid > 0)) return null;
     if (!force && state.tripLedgerCache[tid]) return state.tripLedgerCache[tid];
-    const result = await api(`/api/live-split/trips/${tid}/ledger`);
+    const result = await liveSplitApi(`/api/live-split/trips/${tid}/ledger`);
     if (!result || result.error || !result.trip) {
       throw new Error(result?.error || 'Could not load trip details');
     }
@@ -1642,8 +1655,8 @@
   async function ensureFinanceOptionsLoaded(force = false, strict = false) {
     if (!force && (state.bankAccounts || []).length && (state.creditCards || []).length) return;
     const [banksResult, cardsResult] = await Promise.allSettled([
-      api('/api/banks'),
-      api('/api/cc/cards'),
+      liveSplitApi('/api/banks'),
+      liveSplitApi('/api/cc/cards'),
     ]);
     if (banksResult.status === 'fulfilled') {
       state.bankAccounts = Array.isArray(banksResult.value?.accounts) ? banksResult.value.accounts : [];
@@ -2079,7 +2092,7 @@
 
     await renderSharedPdfFileWindow({
       template: 'live-split-friend',
-      payload: { row: { name: row.name, linked_user_id: row.linked_user_id, amount: row.amount }, scoped, fromDate: safeFrom, toDate: safeTo, currency: (typeof _currentUser !== 'undefined' && _currentUser?.currency_code) || 'INR' },
+      payload: { row: { name: row.name, linked_user_id: row.linked_user_id, amount: row.amount }, scoped, fromDate: safeFrom, toDate: safeTo, currency: state.currency || 'INR' },
     }, `Live Split - ${row.name || 'Friend'}`, `Live_Split_${row.name || 'Friend'}_${safeFrom}_${safeTo}`);
 
   }
@@ -2749,7 +2762,7 @@
     }
     if (!event && numericToken > 0) {
       try {
-        const detail = await api(`/api/live-split/groups/${numericToken}`);
+        const detail = await liveSplitApi(`/api/live-split/groups/${numericToken}`);
         const groupFromId = detail?.group || null;
         if (groupFromId) {
           const sharedContext = !groupFromId?.is_owner ? resolveSharedGroupContext(groupFromId) : null;
@@ -2830,7 +2843,7 @@
     let group = null;
     if (event.group_id) {
       try {
-        const detail = await api(`/api/live-split/groups/${Number(event.group_id)}`);
+        const detail = await liveSplitApi(`/api/live-split/groups/${Number(event.group_id)}`);
         group = detail?.group || null;
         if (group) event.added_to_expense = !!group.added_to_expense;
       } catch (error) {
@@ -3108,7 +3121,7 @@
     element.dataset.loading = '1';
     content.textContent = 'Loading activity...';
     try {
-      const result = await api(`/api/live-split/friends/${view.rowFriendId}/activity`);
+      const result = await liveSplitApi(`/api/live-split/friends/${view.rowFriendId}/activity`);
       if (!element.isConnected || view !== friendDetailView) return;
       content.innerHTML = friendActivityHtml(result?.activities || []);
       element.dataset.loaded = '1';
@@ -3131,7 +3144,7 @@
     let events = buildRowEvents(row);
     if (!events.length) {
       try {
-        const sharedData = await api(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
+        const sharedData = await liveSplitApi(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
         if (Array.isArray(sharedData?.groups)) {
           state.sharedGroups = sharedData.groups;
           const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
@@ -3466,7 +3479,7 @@
     }
 
     const events = buildCanonicalTripEventsFromLedger(trip);
-    await downloadSharedWebReport('liveSplitTripReport', [], { trip, events });
+    await downloadSharedWebReport('liveSplitTripReport', [], { trip, events, currency_code: trip.currency_code || state.currency });
   }
 
   async function toggleTripSplitView(tripId) {
@@ -3928,14 +3941,14 @@
         card_discount_pct: Number(entry?.card_discount_pct || 0),
       },
     };
-    let createResult = await api('/api/live-split/groups', {
+    let createResult = await liveSplitApi('/api/live-split/groups', {
       method: 'POST',
       body: createBody,
     });
     if (createResult?.status === 409 && isLiveSplitDuplicateWarning(createResult)) {
       const shouldAddAgain = await confirmDialog(liveSplitDuplicateConfirmHtml(createResult.error));
       if (!shouldAddAgain) return { skipped: true };
-      createResult = await api('/api/live-split/groups', {
+      createResult = await liveSplitApi('/api/live-split/groups', {
         method: 'POST',
         body: { ...createBody, allow_duplicate: true },
       });
@@ -3949,7 +3962,7 @@
       .filter((friend) => friend && Number(friend.linked_user_id) > 0)
       .map((friend) => Number(friend.id));
     if (linkedFriendIds.length) {
-      const shareResult = await api('/api/live-split/groups/share-session', {
+      const shareResult = await liveSplitApi('/api/live-split/groups/share-session', {
         method: 'POST',
         body: { session_key: sessionKey, friend_ids: [...new Set(linkedFriendIds)] },
       });
@@ -4050,7 +4063,7 @@
     try {
       state.settleBusy = true;
       renderSettleModal();
-      await api('/api/live-split/groups', {
+      await liveSplitApi('/api/live-split/groups', {
         method: 'POST',
         body: {
           divide_date: settlementDate,
@@ -4069,7 +4082,7 @@
         },
       });
       if (Number(friend.linked_user_id) > 0) {
-        await api('/api/live-split/groups/share-session', {
+        await liveSplitApi('/api/live-split/groups/share-session', {
           method: 'POST',
           body: { session_key: sessionKey, friend_ids: [Number(friend.id)] },
         });
@@ -4099,6 +4112,7 @@
           <div class="summary-words">${net < 0 ? 'Overall you owe' : 'Overall you are owed'}</div>
         </div>
         <div class="filter-row">
+          <label style="font-size:12px;display:inline-flex;align-items:center;gap:6px">Currency <select aria-label="Live Split currency" class="fi" style="width:auto;padding:5px 8px" onchange="liveSplitSetCurrency(this.value)">${state.currencyCodes.map(code=>`<option value="${code}" ${code===state.currency?'selected':''}>${code}</option>`).join('')}</select></label>
           <button class="btn btn-p btn-sm" onclick="liveSplitOpenCreate()">+ Add Split</button>
           <button class="btn btn-s btn-sm" onclick="liveSplitOpenPaymentManager()">Payment manager</button>
           <div class="chip-group">
@@ -4120,12 +4134,12 @@
 
   async function fetchData() {
     const [friendResult, divideResult, sharedResult, incomingResult, outgoingResult, tripsResult] = await Promise.allSettled([
-      api('/api/live-split/friends'),
-      api('/api/live-split/groups'),
-      api(`/api/live-split/groups/shared?_=${Date.now()}`),
-      api('/api/live-split/invites/incoming'),
-      api('/api/live-split/invites/outgoing'),
-      api('/api/live-split/trips'),
+      liveSplitApi('/api/live-split/friends'),
+      liveSplitApi('/api/live-split/groups'),
+      liveSplitApi(`/api/live-split/groups/shared?_=${Date.now()}`),
+      liveSplitApi('/api/live-split/invites/incoming'),
+      liveSplitApi('/api/live-split/invites/outgoing'),
+      liveSplitApi('/api/live-split/trips'),
     ]);
     if (
       friendResult.status !== 'fulfilled'
@@ -4141,12 +4155,12 @@
         || 'Could not load live split'
       );
     }
-    let safeSharedGroups = Array.isArray(state.sharedGroups) ? state.sharedGroups : [];
+    let safeSharedGroups = Array.isArray(state.allSharedGroups) ? state.allSharedGroups : [];
     if (sharedResult.status === 'fulfilled' && Array.isArray(sharedResult.value?.groups)) {
       safeSharedGroups = sharedResult.value.groups;
     } else {
       try {
-        const retry = await api(`/api/live-split/groups/shared?_=${Date.now()}&retry=1`);
+        const retry = await liveSplitApi(`/api/live-split/groups/shared?_=${Date.now()}&retry=1`);
         if (Array.isArray(retry?.groups)) safeSharedGroups = retry.groups;
       } catch (_) {
         // Keep previous shared data if shared endpoint is temporarily unavailable.
@@ -4160,10 +4174,14 @@
     state.friends = friendResult.value?.friends || [];
     state.appFriends = state.friends.filter((friend) => Number(friend?.linked_user_id) > 0);
     state.groups = divideResult.value?.groups || [];
+    state.allSharedGroups = safeSharedGroups;
     state.sharedGroups = safeSharedGroups;
     state.incomingInvites = dedupeIncomingInvites(incomingData?.invites || []);
     state.outgoingInvites = outgoingData?.invites || [];
     state.liveTrips = tripsResult.status === 'fulfilled' ? (tripsResult.value?.trips || []) : [];
+    const scope=liveSplitCurrencyScope(state.groups,state.sharedGroups,state.liveTrips,window._currentUser?.currency_code || 'INR',state.currency);
+    state.currency=scope.currency;state.currencyCodes=scope.codes;
+    state.groups=scope.groups;state.sharedGroups=scope.sharedGroups;state.liveTrips=scope.trips;
     const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
     state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
     state.totals = {
@@ -4557,13 +4575,13 @@
       textKey(item.name) === textKey(name) &&
       (!targetId || !Number(item.linked_user_id) || Number(item.linked_user_id) === targetId));
     if (!friend) {
-      const result = await api('/api/live-split/friends', { method: 'POST', body: { name } });
+      const result = await liveSplitApi('/api/live-split/friends', { method: 'POST', body: { name } });
       if (result?.error || !Number(result?.id)) throw new Error(result?.error || `Could not load trip member ${name}`);
       friend = { id: Number(result.id), name };
       state.friends.push(friend);
     }
     if (targetId > 0 && Number(friend.linked_user_id) !== targetId) {
-      const result = await api(`/api/live-split/friends/${friend.id}/link-user`, {
+      const result = await liveSplitApi(`/api/live-split/friends/${friend.id}/link-user`, {
         method: 'PUT', body: { linked_user_id: targetId },
       });
       if (result?.error) throw new Error(result.error);
@@ -4579,7 +4597,7 @@
       const trip = await fetchTripLedger(tripId, true);
       await ensureFinanceOptionsLoaded();
       const selected = new Set();
-      const currentUser = getTripScanCurrentUser() || await api('/api/auth/me');
+      const currentUser = getTripScanCurrentUser() || await liveSplitApi('/api/auth/me');
       const selfId = Number(currentUser?.id || 0);
       if (!(selfId > 0)) throw new Error('Could not identify your account. Please refresh and try again.');
       for (const member of trip.members || []) {
@@ -5431,7 +5449,7 @@
       }
     }
     const members = buildVoiceTripMembersPayload(draft);
-          const result = await api('/api/live-split/trips', {
+          const result = await liveSplitApi('/api/live-split/trips', {
             method: 'POST',
             body: {
               name: String(draft?.name || '').trim() || 'Trip',
@@ -5537,7 +5555,7 @@
       state.tripSaveBusy = true;
       renderTripCreateModal();
       if (!createdTripId) {
-        const result = await api('/api/live-split/trips', {
+        const result = await liveSplitApi('/api/live-split/trips', {
           method: 'POST',
           body: {
             name,
@@ -6037,7 +6055,7 @@
               share_amount: Number(share.share || 0),
             };
           });
-        const result = await api(`/api/live-split/groups/${Number(group.id)}`, {
+        const result = await liveSplitApi(`/api/live-split/groups/${Number(group.id)}`, {
           method: 'PUT',
           body: {
             divide_date: toLocalIsoDate(row.divide_date, trip.start_date || todayLocalIso()),
@@ -6125,7 +6143,7 @@
     try {
       state.tripActionBusy = id;
       renderMain();
-      const result = await api(`/api/live-split/trips/${id}`, {
+      const result = await liveSplitApi(`/api/live-split/trips/${id}`, {
         method: 'PUT',
         body: { status: String(status || 'active').trim().toLowerCase() },
       });
@@ -6234,7 +6252,7 @@
     try {
       state.tripMemberBusy = true;
       renderTripMembersModal();
-      const result = await api(`/api/live-split/trips/${Number(trip.id)}`, {
+      const result = await liveSplitApi(`/api/live-split/trips/${Number(trip.id)}`, {
         method: 'PUT',
         body: {
           name: nextName,
@@ -6275,7 +6293,7 @@
     try {
       state.tripMemberBusy = true;
       renderTripMembersModal();
-      const result = await api(`/api/live-split/trips/${Number(trip.id)}/members`, {
+      const result = await liveSplitApi(`/api/live-split/trips/${Number(trip.id)}/members`, {
         method: 'POST',
         body: { members },
       });
@@ -6314,7 +6332,7 @@
     try {
       state.tripMemberBusy = true;
       renderTripMembersModal();
-      const result = await api(`/api/live-split/trips/${Number(tripId)}/members/${Number(memberId)}`, {
+      const result = await liveSplitApi(`/api/live-split/trips/${Number(tripId)}/members/${Number(memberId)}`, {
         method: 'DELETE',
       });
       if (!result || result.error) throw new Error(result?.error || 'Could not remove member');
@@ -6582,7 +6600,7 @@
 
   async function ensureFriendForUser(user) {
     if (isSelfCandidate(user)) throw new Error('You cannot add yourself to Live Split');
-    const allFriends = await api('/api/live-split/friends');
+    const allFriends = await liveSplitApi('/api/live-split/friends');
     const friends = allFriends?.friends || [];
     const linked = friends.find((friend) => Number(friend.linked_user_id) === Number(user.id));
     if (linked) return linked;
@@ -6590,10 +6608,10 @@
     const safeName = String(user.display_name || user.username || 'Friend').trim();
     let friend = friends.find((item) => String(item.name || '').trim().toLowerCase() === safeName.toLowerCase());
     if (!friend) {
-      const created = await api('/api/live-split/friends', { method: 'POST', body: { name: safeName } });
+      const created = await liveSplitApi('/api/live-split/friends', { method: 'POST', body: { name: safeName } });
       friend = { id: created?.id, name: safeName };
     }
-    await api(`/api/live-split/friends/${friend.id}/link-user`, {
+    await liveSplitApi(`/api/live-split/friends/${friend.id}/link-user`, {
       method: 'PUT',
       body: { linked_user_id: Number(user.id) },
     });
@@ -6613,7 +6631,7 @@
     state.invite.searched = false;
     renderInviteResults();
     try {
-      const data = await api(`/api/users/search?q=${encodeURIComponent(state.invite.query)}`);
+      const data = await liveSplitApi(`/api/users/search?q=${encodeURIComponent(state.invite.query)}`);
       state.invite.results = (data?.users || []).filter((item) => !isSelfCandidate(item)).slice(0, 20);
     } catch (_) {
       state.invite.results = [];
@@ -6637,7 +6655,7 @@
     state.createInvite.searched = false;
     renderCreateInviteResults();
     try {
-      const data = await api(`/api/users/search?q=${encodeURIComponent(state.createInvite.query)}`);
+      const data = await liveSplitApi(`/api/users/search?q=${encodeURIComponent(state.createInvite.query)}`);
       state.createInvite.results = (data?.users || []).filter((item) => !isSelfCandidate(item)).slice(0, 20);
     } catch (_) {
       state.createInvite.results = [];
@@ -6669,7 +6687,7 @@
     try {
       state.requestActionBusy = true;
       renderInviteResults();
-      const result = await api('/api/live-split/invite-user', {
+      const result = await liveSplitApi('/api/live-split/invite-user', {
         method: 'POST',
         body: { target_user_id: Number(user.id) },
       });
@@ -6702,7 +6720,7 @@
     try {
       state.requestActionBusy = true;
       if (document.getElementById('liveSplitInviteResults')) renderInviteResults();
-      const result = await api('/api/live-split/invite', {
+      const result = await liveSplitApi('/api/live-split/invite', {
         method: 'POST',
         body: { target: contact, fallback_name: name },
       });
@@ -6730,7 +6748,7 @@
     try {
       state.createRequestActionBusy = true;
       renderCreateInviteResults();
-      const data = await api(`/api/users/search?q=${encodeURIComponent(name)}`);
+      const data = await liveSplitApi(`/api/users/search?q=${encodeURIComponent(name)}`);
       const users = (data?.users || []).filter((user) => !isSelfCandidate(user));
       const exact = users.filter((user) => {
         const displayName = String(user.display_name || '').trim().toLowerCase();
@@ -6748,7 +6766,7 @@
           toast('Request already sent', 'warning');
           return;
         }
-        const result = await api('/api/live-split/invite-user', {
+        const result = await liveSplitApi('/api/live-split/invite-user', {
           method: 'POST',
           body: { target_user_id: Number(user.id) },
         });
@@ -6759,7 +6777,7 @@
         return;
       }
 
-      const result = await api('/api/live-split/friends', { method: 'POST', body: { name } });
+      const result = await liveSplitApi('/api/live-split/friends', { method: 'POST', body: { name } });
       if (!result?.success && !result?.id) throw new Error(result?.error || 'Could not add friend');
       await fetchData();
       renderMain();
@@ -6774,7 +6792,7 @@
 
   async function resendPendingInvite(id) {
     try {
-      const result = await api(`/api/live-split/invites/${Number(id)}/resend`, { method: 'POST' });
+      const result = await liveSplitApi(`/api/live-split/invites/${Number(id)}/resend`, { method: 'POST' });
       toast(result?.message || 'Invite sent again', 'success');
       await fetchData();
       renderMain();
@@ -6790,7 +6808,7 @@
     try {
       state.outgoingCancelBusy.add(inviteId);
       renderMain();
-      const result = await api(`/api/live-split/invites/${inviteId}/cancel`, { method: 'POST' });
+      const result = await liveSplitApi(`/api/live-split/invites/${inviteId}/cancel`, { method: 'POST' });
       if (!result?.success) throw new Error(result?.error || 'Could not cancel invite');
       await fetchData();
       renderMain();
@@ -6815,7 +6833,7 @@
     try {
       state.friendDeleteBusy.add(id);
       renderMain();
-      const result = await api(`/api/live-split/friends/${id}`, { method: 'DELETE' });
+      const result = await liveSplitApi(`/api/live-split/friends/${id}`, { method: 'DELETE' });
       if (!result?.success) throw new Error(result?.error || 'Could not delete user');
       closeModal();
       await fetchData();
@@ -6861,7 +6879,7 @@
     try {
       state.friendNudgeBusy.add(id);
       renderMain();
-      const result = await api(`/api/live-split/friends/${id}/nudge`, {
+      const result = await liveSplitApi(`/api/live-split/friends/${id}/nudge`, {
         method: 'POST',
         body: { amount, direction },
       });
@@ -7012,7 +7030,7 @@ function paymentManagerPreview(people, mode) {
     form.busy = true;
     renderPaymentManager();
     try {
-      const result = await api(`/api/live-split/payment-manager${post ? '' : '/preview'}`, { method: 'POST', body: { title: form.title, date: form.date, split_mode: form.split_mode, add_expense: form.add_expense, payment_source: form.payment_source, payment_account_id: form.payment_account_id, manager_key: form.manager_key, request_id: form.request_id, people: [...form.selected].map(key => ({ key, paid: form.paid[key] || 0, share_value: form.share_values[key] })) } });
+      const result = await liveSplitApi(`/api/live-split/payment-manager${post ? '' : '/preview'}`, { method: 'POST', body: { title: form.title, date: form.date, split_mode: form.split_mode, add_expense: form.add_expense, payment_source: form.payment_source, payment_account_id: form.payment_account_id, manager_key: form.manager_key, request_id: form.request_id, people: [...form.selected].map(key => ({ key, paid: form.paid[key] || 0, share_value: form.share_values[key] })) } });
       if (!result?.success) throw new Error(result?.error || 'Could not save payment manager split');
       if (post) { managerDraft = null; closeModal(); await loadLiveSplit(); toast('Entries added to friend transactions', 'success'); }
       else form.plan = result.plan;
@@ -7021,7 +7039,7 @@ function paymentManagerPreview(people, mode) {
   };
 
   async function openEditExpense(groupId) {
-    const detail = await api(`/api/live-split/groups/${Number(groupId)}`);
+    const detail = await liveSplitApi(`/api/live-split/groups/${Number(groupId)}`);
     if (!detail?.group) {
       toast(detail?.error || 'Expense not found', 'error');
       return;
@@ -7041,7 +7059,7 @@ function paymentManagerPreview(people, mode) {
       cancelEditedExpense();
       return;
     }
-    const detail = await api(`/api/live-split/groups/${Number(groupId)}`);
+    const detail = await liveSplitApi(`/api/live-split/groups/${Number(groupId)}`);
     const group = detail?.group;
     if (!group) {
       toast(detail?.error || 'Expense not found', 'error');
@@ -7072,7 +7090,7 @@ function paymentManagerPreview(people, mode) {
     try {
       state.tripActionBusy = id;
       renderMain();
-      const result = await api(`/api/live-split/trips/${id}`, { method: 'DELETE' });
+      const result = await liveSplitApi(`/api/live-split/trips/${id}`, { method: 'DELETE' });
       if (!result?.success) throw new Error(result?.error || 'Could not delete trip');
       closeModal();
       state.activeTripDetail = null;
@@ -7138,7 +7156,7 @@ function paymentManagerPreview(people, mode) {
     try {
       state.saveBusy = true;
       renderExpenseEditorModal();
-      const result = await api(`/api/live-split/groups/${Number(form.id)}`, {
+      const result = await liveSplitApi(`/api/live-split/groups/${Number(form.id)}`, {
         method: 'PUT',
         body: payload,
       });
@@ -7160,7 +7178,7 @@ function paymentManagerPreview(people, mode) {
     if (!id) return;
     if (!await confirmDialog('Delete this Live Split expense for everyone in it?')) return;
     try {
-      const result = await api(`/api/live-split/groups/${id}`, { method: 'DELETE' });
+      const result = await liveSplitApi(`/api/live-split/groups/${id}`, { method: 'DELETE' });
       if (!result?.success) throw new Error(result?.error || 'Could not delete expense');
       state.editExpense = null;
       closeModal();
@@ -7175,7 +7193,7 @@ function paymentManagerPreview(people, mode) {
     const name = decodeURIComponent(String(encodedName || '')).trim();
     if (!name) return;
     try {
-      const data = await api(`/api/users/search?q=${encodeURIComponent(name)}`);
+      const data = await liveSplitApi(`/api/users/search?q=${encodeURIComponent(name)}`);
       const users = (data?.users || []).filter((user) => !isSelfCandidate(user));
       const exact = users.filter((user) => {
         const dn = String(user.display_name || '').trim().toLowerCase();
@@ -7186,7 +7204,7 @@ function paymentManagerPreview(people, mode) {
         toast('Could not auto-match this pending name. Please use Add Split search and tap Request.', 'warning');
         return;
       }
-      const result = await api('/api/live-split/invite-user', {
+      const result = await liveSplitApi('/api/live-split/invite-user', {
         method: 'POST',
         body: { target_user_id: Number(exact[0].id) },
       });
@@ -7219,7 +7237,7 @@ function paymentManagerPreview(people, mode) {
     try {
       state.createRequestActionBusy = true;
       renderCreateInviteResults();
-      const result = await api('/api/live-split/invite-user', {
+      const result = await liveSplitApi('/api/live-split/invite-user', {
         method: 'POST',
         body: { target_user_id: Number(user.id) },
       });
@@ -7257,7 +7275,7 @@ function paymentManagerPreview(people, mode) {
     try {
       state.createRequestActionBusy = true;
       if (document.getElementById('liveSplitCreateInviteResults')) renderCreateInviteResults();
-      const result = await api('/api/live-split/invite', {
+      const result = await liveSplitApi('/api/live-split/invite', {
         method: 'POST',
         body: { target: raw, fallback_name: (isEmail ? raw.split('@')[0] : 'Friend') },
       });
@@ -7690,7 +7708,7 @@ function paymentManagerPreview(people, mode) {
   };
   window.liveSplitConfirmAddTripToExpense = async function liveSplitConfirmAddTripToExpense(type, tripId) {
     try {
-      const result = await api(`/api/live-split/trips/${Number(tripId)}/add-to-expense`, {
+      const result = await liveSplitApi(`/api/live-split/trips/${Number(tripId)}/add-to-expense`, {
         method: 'POST',
         body: {
           expense_type: String(type || '').toLowerCase() === 'extra' ? 'extra' : 'fair',
@@ -7713,7 +7731,7 @@ function paymentManagerPreview(people, mode) {
       btn.innerHTML = '<span style="font-size:11px;line-height:1">...</span>';
     }
     try {
-      const result = await api(`/api/live-split/groups/${Number(groupId)}/add-to-expense`, {
+      const result = await liveSplitApi(`/api/live-split/groups/${Number(groupId)}/add-to-expense`, {
         method: 'POST', body: { is_extra: String(type || '').toLowerCase() === 'extra' },
       });
       if (!result?.success) throw new Error(result?.error || 'Could not add share');
@@ -7842,7 +7860,7 @@ function paymentManagerPreview(people, mode) {
     if (document.hidden || typeof currentTab === 'undefined' || currentTab !== 'livesplit' || friendRefreshBusy) return;
     friendRefreshBusy = true;
     try {
-      const result = await api('/api/live-split/friends');
+      const result = await liveSplitApi('/api/live-split/friends');
       if (Array.isArray(result?.friends) && friendSignature(result.friends) !== friendSignature(state.friends)) {
         await fetchData();
         if (currentTab === 'livesplit') renderMain();

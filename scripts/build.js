@@ -5,6 +5,12 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 const filesToCheck = [
+  'public/js/tenant-invoice-summary.js',
+  'public/js/tenants.js',
+  'db/postgres-tenants.js',
+  'db/live-split-currency.js',
+  'public/js/live-split-currency.js',
+  'public/js/live-split.js',
   'utils/society-mobile-pdf.js',
   'utils/society-bank-details.js',
   'utils/shared-pdf-html.js',
