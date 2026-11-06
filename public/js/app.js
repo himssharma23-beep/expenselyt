@@ -5489,76 +5489,7 @@ async function printReport(level) {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function loadEMI() {
   const ccData = await api('/api/cc/cards');
-  const cards = ccData?.cards || [];
-  const ccChips = cards.map(c =>
-    `<button type="button" class="chip" id="emiCcChip_${c.id}" onclick="emiSetCard(${c.id})">${escHtml(c.bank_name)} ${escHtml(c.card_name)}${c.last4 ? ' --' + escHtml(c.last4) : ''}</button>`
-  ).join('');
-
-  document.getElementById('main').innerHTML = `
-    <div class="tab-content">
-      <div style="font-size:20px;font-weight:700;margin-bottom:16px">EMI Calculator</div>
-      <div class="card">
-        <div class="fg">
-          <label class="fl" style="flex:2">Loan Name<input class="fi" type="text" id="emiName" placeholder="e.g. Home Loan - HDFC"></label>
-          <label class="fl">Tag / Group<input class="fi" type="text" id="emiTag" placeholder="e.g. Home, Car, Personal"></label>
-        </div>
-        <div class="fg">
-          <label class="fl">Loan Amount (&#8377;)<input class="fi" type="number" id="emiP" placeholder="e.g. 200000"></label>
-          <label class="fl">Rate of Interest (% p.a.)<input class="fi" type="number" step="0.01" id="emiR" placeholder="e.g. 11.99"></label>
-          <label class="fl">Tenure (months)<input class="fi" type="number" id="emiN" placeholder="e.g. 24"></label>
-        </div>
-        <div class="fg">
-          <label class="fl">Processing / File Charges (&#8377;)<input class="fi" type="number" id="emiCharges" placeholder="e.g. 5000 (optional)" min="0"></label>
-          <label class="fc" style="align-self:flex-end;padding-bottom:4px"><input type="checkbox" id="emiChargesInc" checked><span>Include charges in principal (financed)</span></label>
-        </div>
-        <div class="fg">
-          <label class="fl" style="flex:3">Description (optional)<input class="fi" type="text" id="emiDesc" placeholder="e.g. Taken from HDFC on Mar 2026"></label>
-          <label class="fc" style="align-self:flex-end;padding-bottom:4px"><input type="checkbox" id="emiGST" onchange="_emiGstToggle()"><span>Add GST (18%) on interest</span></label>
-        </div>
-        <div class="fg">
-          <label class="fc" style="align-self:flex-end;padding-bottom:4px">
-            <input type="checkbox" id="emiPlannerAdvance">
-            <span>Show next month's EMI one month earlier in Planner</span>
-          </label>
-        </div>
-        <div class="card" style="margin-top:12px;background:var(--bg2);border:1px solid var(--br)">
-          <div style="font-size:18px;font-weight:700;color:var(--t1)">Credit Card Link (Optional)</div>
-          <div style="font-size:12px;color:var(--t3);margin-top:2px">Use this when the EMI or charges are billed to a credit card.</div>
-          <input type="hidden" id="emiCcId" value="">
-          <div style="margin-top:10px">
-            <div style="font-size:13px;font-weight:600;color:var(--t2);margin-bottom:8px">Charged to Credit Card</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <button type="button" class="chip active" id="emiCcChip_none" onclick="emiSetCard('')">None</button>
-              ${ccChips}
-            </div>
-            ${cards.length ? '' : '<div style="font-size:12px;color:var(--t3);margin-top:8px">No credit cards found. Add one in Credit Cards to link EMI billing.</div>'}
-          </div>
-          <div class="fg" id="emiGstOffsetWrap" style="display:none;margin-top:10px">
-            <label class="fl">EMI GST appears on
-              <select class="fi" id="emiGstOffset">
-                <option value="-1">Previous month's bill</option>
-                <option value="0">Same month's bill</option>
-                <option value="1">Next month's bill</option>
-              </select>
-            </label>
-          </div>
-          <div class="fg" id="emiCcChargesRow" style="display:none;margin-top:2px">
-            <label class="fl">File Processing Charges on CC (&#8377;)
-              <input class="fi" type="number" id="emiCcCharges" min="0" step="0.01" placeholder="0.00" oninput="_emiCalcProcGst()">
-            </label>
-            <label class="fl">Processing GST (%)
-              <input class="fi" type="number" id="emiCcChargesGst" min="0" max="100" step="0.01" placeholder="e.g. 18" oninput="_emiCalcProcGst()">
-            </label>
-            <label class="fl">GST Amount
-              <input class="fi" type="text" id="emiCcChargesGstAmt" readonly placeholder="-" style="background:var(--bg2);color:var(--t2)">
-            </label>
-          </div>
-        </div>
-        <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="calcEMI()">Calculate</button><button class="btn btn-g" onclick="loadEMI()">Reset</button></div>
-      </div>
-      <div id="emiResult"></div>
-    </div>`;
-  _emiGstToggle();
+  renderEmiCalculatorPage(ccData?.cards || []);
 }
 
 function emiSetCard(cardId) {
@@ -5588,14 +5519,20 @@ function _emiCalcProcGst() {
   if (el) el.value = (charges > 0 && gstPct > 0) ? `Rs ${gstAmt.toFixed(2)}` : '-';
 }
 
-function calcEMI() {
+function calcEMI(silent = false) {
   const loanAmt = parseFloat(document.getElementById('emiP').value);
   const R = parseFloat(document.getElementById('emiR').value);
-  const N = parseInt(document.getElementById('emiN').value);
+  const N = Number(document.getElementById('emiN').value);
   const gst = document.getElementById('emiGST').checked;
   const charges = parseFloat(document.getElementById('emiCharges').value) || 0;
   const chargesInc = document.getElementById('emiChargesInc').checked;
-  if (!loanAmt || !R || !N || loanAmt<=0 || R<=0 || N<=0) { toast('Enter valid values', 'warning'); return; }
+  if (!Number.isFinite(loanAmt) || !Number.isFinite(R) || !Number.isInteger(N) || loanAmt<=0 || R<0 || N<=0 || N>600 || charges<0) {
+    window._emiCalcResult = null;
+    window._emiCalcSchedule = [];
+    renderEmiCalculation();
+    if (!silent) toast('Enter a positive loan amount, a valid rate and 1 to 600 months', 'warning');
+    return;
+  }
 
   // Principal for EMI calculation: include charges if financed
   const P = chargesInc ? loanAmt + charges : loanAmt;
@@ -5626,96 +5563,26 @@ function calcEMI() {
   window._emiCalcResult = { P, loanAmt, charges, chargesInc, R, N, gst, emi, totI, totG, totAmt, grand };
   window._emiCalcSchedule = sched.map(s => ({ ...s })); // mutable copy
 
-  const chargeNote = charges > 0
-    ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
-        <span>Processing charges: <strong>${fmtCur(charges)}</strong></span>
-        <span style="opacity:0.7"> - ${chargesInc ? 'financed (included in principal &#8377;'+P.toLocaleString('en-IN')+')' : 'paid upfront (one-time, not in EMI)'}</span>
-       </div>`
-    : '';
-
-  document.getElementById('emiResult').innerHTML = `
-    <div class="emi-result" id="emiResultBanner">
-      ${buildCalcSummaryStats()}
-      ${chargeNote}
-    </div>
-    <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <div style="font-size:14px;color:var(--t2)">Save this EMI to track installments</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-p" onclick="saveEmiCalc(false)">Save EMI</button>
-          <button class="btn btn-s" onclick="saveEmiCalc(true)">Save &amp; Activate</button>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <div class="card-title" style="margin:0">EMI Schedule</div>
-        <button class="btn btn-s btn-sm" onclick="showCalcBulkEdit()">Bulk Edit EMI</button>
-      </div>
-      <div style="overflow-x:auto"><table id="calcSchedTable">
-        <thead><tr><th>#</th><th style="text-align:right">Interest</th><th style="text-align:right">Principal</th><th style="text-align:right">EMI</th><th style="text-align:right">GST</th><th style="text-align:right">Balance</th><th></th></tr></thead>
-        <tbody>${renderCalcSchedRows()}</tbody>
-      </table></div>
-    </div>`;
+  renderEmiCalculation();
 }
 
 function buildCalcSummaryStats() {
-  const c = window._emiCalcResult;
-  if (!c) return '';
-  const stat = (l, v, hl, sub) => `<div class="emi-stat"><div class="lbl">${l}${sub ? '<span style="font-size:9px;opacity:0.7;display:block">' + sub + '</span>' : ''}</div><div class="val ${hl ? 'hl' : ''}">${fmtCur(v)}</div></div>`;
-  const sched = window._emiCalcSchedule;
-  let monthlyEmi = c.emi, totI = c.totI, totG = c.totG, grand = c.grand;
-  if (sched && sched.length) {
-    // Grand Total = sum of all actual EMI amounts (woGST = EMI without GST) + GST + upfront
-    const totalEmiPaid = Math.round(sched.reduce((s, r) => s + (r.woGST || 0), 0) * 100) / 100;
-    totG = Math.round(sched.reduce((s, r) => s + (r.g || 0), 0) * 100) / 100;
-    // Total Interest = what you pay above the principal
-    totI = Math.round((totalEmiPaid - c.P) * 100) / 100;
-    const upfront = (!c.chargesInc && c.charges > 0) ? c.charges : 0;
-    grand = Math.round((totalEmiPaid + totG + upfront) * 100) / 100;
-    // Monthly EMI = most frequent woGST value
-    const freq = {};
-    sched.forEach(r => { const v = r.woGST; freq[v] = (freq[v] || 0) + 1; });
-    monthlyEmi = parseFloat(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
-  }
-  return stat('Monthly EMI', monthlyEmi, true) +
-    stat('Principal', c.P) +
-    stat('Total Interest', totI, false, c.gst ? 'excl. GST' : '') +
-    (c.gst ? stat('Total GST (18%)', totG) : '') +
-    stat('Grand Total', grand, false, c.charges > 0 && !c.chargesInc ? 'incl. &#8377;' + c.charges.toLocaleString('en-IN') + ' upfront charges' : '');
+  return emiCalculatorSummary();
 }
 
 function refreshCalcSummary() {
   const banner = document.getElementById('emiResultBanner');
-  if (!banner || !window._emiCalcResult) return;
-  // Rebuild just the stats part (first child nodes before chargeNote)
-  const c = window._emiCalcResult;
-  const chargeNote = c.charges > 0
-    ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.12);border-radius:8px;font-size:12px;margin-top:8px;width:100%">
-        <span>Processing charges: <strong>${fmtCur(c.charges)}</strong></span>
-        <span style="opacity:0.7"> - ${c.chargesInc ? 'financed (included in principal &#8377;' + c.P.toLocaleString('en-IN') + ')' : 'paid upfront (one-time, not in EMI)'}</span>
-       </div>`
-    : '';
-  banner.innerHTML = buildCalcSummaryStats() + chargeNote;
+  if (banner) banner.innerHTML = emiCalculatorSummary();
 }
 
 function renderCalcSchedRows() {
-  const s = window._emiCalcSchedule;
-  if (!s) return '';
-  return s.map((r, i) => `<tr style="background:${i%2===0?'var(--bg)':'var(--white)'}${r._edited?' outline:2px solid var(--amber) inset':''}">
-    <td style="text-align:center;font-weight:600;font-family:var(--mono)">${r.m}</td>
-    <td class="td-m">${r.interest.toFixed(2)}</td>
-    <td class="td-m">${r.princ.toFixed(2)}</td>
-    <td class="td-m" style="font-weight:700;color:${r._edited?'var(--amber)':'inherit'}">${(r.woGST||r.emi_amount||(r.interest+r.princ)).toFixed(2)} <button class="inst-edit-btn" title="Edit" onclick="showCalcRowEdit(${i})">Edit</button></td>
-    <td class="td-m">${r.g.toFixed(2)}</td>
-    <td class="td-m" style="font-weight:600">${r.bal.toFixed(2)}</td>
-    <td style="text-align:center">${r._edited?'<span style="font-size:10px;color:var(--amber);font-weight:600">edited</span>':''}</td>
-  </tr>`).join('');
+  return emiCalculatorScheduleRows();
 }
 
 function refreshCalcSchedTable() {
   const tbody = document.querySelector('#calcSchedTable tbody');
   if (tbody) tbody.innerHTML = renderCalcSchedRows();
+  emiCalculatorScheduleFooter();
 }
 
 function showCalcRowEdit(idx) {

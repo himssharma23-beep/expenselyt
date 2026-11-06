@@ -7688,6 +7688,15 @@ router.post('/live-split/groups/:id(\\d+)/expense-status', async (req, res) => {
   }
 });
 
+router.get('/live-split/currency-rates', async (_req, res) => {
+  try {
+    const rates = await Promise.resolve(getCoreDb().getAdminCurrencyRates());
+    res.json({ rates });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load saved currency rates.' });
+  }
+});
+
 router.get('/live-split/trips', async (req, res) => {
   try {
     const trips = await Promise.resolve(getCoreDb().getLiveSplitTrips(req.session.userId));

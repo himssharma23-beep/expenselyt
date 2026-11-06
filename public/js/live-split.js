@@ -9,7 +9,6 @@
 
   const state = {
     currency: '',
-    currencyCodes: [],
     friends: [],
     appFriends: [],
     groups: [],
@@ -52,6 +51,7 @@
     eventDetailContext: null,
     sort: 'az',
     friendFilter: 'hide_settled',
+    currencyRates: [],
     showCompletedTrips: false,
     tripCreate: null,
     tripManage: null,
@@ -75,11 +75,17 @@
     if (options.method === 'POST' && ['/api/live-split/groups','/api/live-split/trips'].includes(url) && options.body && typeof options.body === 'object') options={...options,body:{...options.body,currency_code:state.currency || window._currentUser?.currency_code || 'INR'}};
     return api(url,options);
   }
-  window.liveSplitSetCurrency = async function(code) {
-    if (!state.currencyCodes.includes(code)) return;
-    state.currency=code; state.rowDetailRef='';state.tripLedgerCache={};
-    await fetchData(); renderMain();
-  };
+  function activateCurrency(currency) {
+    const scope = liveSplitCurrencyScope(state.allGroups || state.groups, state.allSharedGroups, state.allTrips || state.liveTrips, window._currentUser?.currency_code || 'INR', currency);
+    state.currency = scope.currency;
+    state.groups = scope.groups; state.sharedGroups = scope.sharedGroups; state.liveTrips = scope.trips;
+    const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
+    state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
+    state.totals = {
+      oweToMe: r2(state.rows.filter(row => n(row.amount) > 0).reduce((sum,row) => sum + n(row.amount),0)),
+      iOwe: r2(state.rows.filter(row => n(row.amount) < 0).reduce((sum,row) => sum + Math.abs(n(row.amount)),0)),
+    };
+  }
   function n(v) {
     const value = Number(v);
     return Number.isFinite(value) ? value : 0;
@@ -3146,7 +3152,8 @@
       try {
         const sharedData = await liveSplitApi(`/api/live-split/groups/shared?_=${Date.now()}&recover=1`);
         if (Array.isArray(sharedData?.groups)) {
-          state.sharedGroups = sharedData.groups;
+          state.allSharedGroups = sharedData.groups;
+          state.sharedGroups = liveSplitCurrencyScope([], sharedData.groups, [], window._currentUser?.currency_code || 'INR', state.currency).sharedGroups;
           const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
           state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
           state.totals = summary.totals;
@@ -3490,8 +3497,8 @@
     await openTripDetails(tid);
   }
 
-  function renderRows() {
-    const rows = buildVisibleLiveSplitRows().filter((row) => {
+  function renderRows(nativeRows = null) {
+    const rows = (nativeRows || buildVisibleLiveSplitRows()).filter((row) => {
       if (String(state.friendFilter || 'all') === 'hide_settled') return Math.abs(n(row?.amount)) > 0.004;
       return true;
     });
@@ -4100,46 +4107,60 @@
   }
 
   function renderMain() {
-    const { oweToMe, iOwe } = state.totals;
-    const net = r2(oweToMe - iOwe);
     const main = document.getElementById('main');
     if (!main) return;
-    main.innerHTML = `
-      <div class="tab-content">
-        <div class="summary-card" style="text-align:center">
-          <div class="summary-label">NET BALANCE</div>
-          <div class="summary-amount" style="color:${typeof balColorLight === 'function' ? balColorLight(net) : (net >= 0 ? 'var(--green)' : 'var(--red)')}">${fmtCur(net)}</div>
-          <div class="summary-words">${net < 0 ? 'Overall you owe' : 'Overall you are owed'}</div>
-        </div>
-        <div class="filter-row">
-          <label style="font-size:12px;display:inline-flex;align-items:center;gap:6px">Currency <select aria-label="Live Split currency" class="fi" style="width:auto;padding:5px 8px" onchange="liveSplitSetCurrency(this.value)">${state.currencyCodes.map(code=>`<option value="${code}" ${code===state.currency?'selected':''}>${code}</option>`).join('')}</select></label>
-          <button class="btn btn-p btn-sm" onclick="liveSplitOpenCreate()">+ Add Split</button>
-          <button class="btn btn-s btn-sm" onclick="liveSplitOpenPaymentManager()">Payment manager</button>
-          <div class="chip-group">
-            <button class="chip ${state.sort === 'az' ? 'active' : ''}" onclick="liveSplitSetSort('az')">A-Z</button>
-            <button class="chip ${state.sort === 'high' ? 'active' : ''}" onclick="liveSplitSetSort('high')">Highest</button>
-            <button class="chip ${state.sort === 'low' ? 'active' : ''}" onclick="liveSplitSetSort('low')">Lowest</button>
-          </div>
-          <div class="chip-group">
-            <button class="chip ${state.friendFilter === 'all' ? 'active' : ''}" onclick="liveSplitSetFriendFilter('all')">All Friends</button>
-            <button class="chip ${state.friendFilter === 'hide_settled' ? 'active' : ''}" onclick="liveSplitSetFriendFilter('hide_settled')">${state.friendFilter === 'hide_settled' ? 'Show Settled Friends' : 'Hide Settled Friends'}</button>
-          </div>
-        </div>
-        <div>
-          ${renderRows()}
-        </div>
-        ${renderTripsSection()}
-      </div>`;
+    const preferred = window._currentUser?.currency_code || 'INR';
+    const sections = liveSplitCurrencySections(state.allGroups || state.groups, state.allSharedGroups || state.sharedGroups, state.allTrips || state.liveTrips, preferred);
+    const previous = state.currency;
+    const nativeSections = sections.map(section => {
+      activateCurrency(section.currency);
+      return { ...section, rows: state.rows.map(row => ({ ...row, has_activity: buildRowEvents(row).length > 0 })) };
+    });
+    const homeRows = liveSplitHomeRows(nativeSections, preferred);
+    const totals = liveSplitConvertedTotals(homeRows, preferred, state.currencyRates);
+    const tripSections = [];
+    const content = nativeSections.map(section => {
+      activateCurrency(section.currency);
+      state.rows = homeRows.filter(row => row.currency_code === section.currency);
+      const rows = renderRows(state.rows);
+      const trips = renderTripsSection();
+      if (section.trips.length || !nativeSections.some(item => item.trips.length) && section === nativeSections[0]) {
+        tripSections.push('<section data-live-split-trips data-live-split-currency="' + section.currency + '">' + trips + '</section>');
+      }
+      return state.rows.length ? '<section data-live-split-balances data-live-split-currency="' + section.currency + '"><div style="font-size:12px;font-weight:700;margin:16px 0 8px">' + section.currency + ' balances</div>' + rows + '</section>' : '';
+    }).join('');
+    main.innerHTML = '<div class="tab-content">' +
+      '<div class="summary-card" style="text-align:center" data-live-split-total-currency="' + totals.currency + '">' +
+      '<div class="summary-label">NET BALANCE (' + totals.currency + ')</div>' +
+      '<div class="summary-amount">' + (totals.complete ? formatLiveSplitMoney(totals.net, totals.currency) : '&mdash;') + '</div>' +
+      '<div class="summary-words">' + (totals.complete ? (totals.net < 0 ? 'Overall you owe' : 'Overall you are owed') + ' &middot; Converted to your currency using saved rates' : 'Total unavailable: missing saved rates for ' + totals.missing.join(', ')) + '</div></div>' +
+      '<div class="filter-row" data-live-split-currency="' + preferred + '">' +
+      '<button class="btn btn-p btn-sm" onclick="liveSplitOpenCreate()">+ Add Split</button>' +
+      '<button class="btn btn-s btn-sm" onclick="liveSplitOpenPaymentManager()">Payment manager</button>' +
+      '<div class="chip-group">' + [['az','A-Z'],['high','Highest'],['low','Lowest']].map(([key,label]) => '<button class="chip ' + (state.sort === key ? 'active' : '') + '" onclick="liveSplitSetSort(&apos;' + key + '&apos;)">' + label + '</button>').join('') + '</div>' +
+      '<div class="chip-group"><button class="chip ' + (state.friendFilter === 'all' ? 'active' : '') + '" onclick="liveSplitSetFriendFilter(&apos;all&apos;)">All Friends</button>' +
+      '<button class="chip ' + (state.friendFilter === 'hide_settled' ? 'active' : '') + '" onclick="liveSplitSetFriendFilter(&apos;hide_settled&apos;)">' + (state.friendFilter === 'hide_settled' ? 'Show Settled Friends' : 'Hide Settled Friends') + '</button></div></div>' + content + tripSections.join('') + '</div>';
+    activateCurrency(previous || preferred);
+    if (!main.dataset.liveSplitCurrencyEvents) {
+      main.dataset.liveSplitCurrencyEvents = 'true';
+      const activate = event => {
+        const section = event.target.closest('[data-live-split-currency]');
+        if (section) activateCurrency(section.dataset.liveSplitCurrency);
+      };
+      main.addEventListener('click', activate, true);
+      main.addEventListener('change', activate, true);
+    }
   }
 
   async function fetchData() {
-    const [friendResult, divideResult, sharedResult, incomingResult, outgoingResult, tripsResult] = await Promise.allSettled([
+    const [friendResult, divideResult, sharedResult, incomingResult, outgoingResult, tripsResult, ratesResult] = await Promise.allSettled([
       liveSplitApi('/api/live-split/friends'),
       liveSplitApi('/api/live-split/groups'),
       liveSplitApi(`/api/live-split/groups/shared?_=${Date.now()}`),
       liveSplitApi('/api/live-split/invites/incoming'),
       liveSplitApi('/api/live-split/invites/outgoing'),
       liveSplitApi('/api/live-split/trips'),
+      liveSplitApi('/api/live-split/currency-rates'),
     ]);
     if (
       friendResult.status !== 'fulfilled'
@@ -4171,6 +4192,7 @@
     if (sharedResult.status !== 'fulfilled') {
       toast('Some shared split details are delayed. Pull to refresh once.', false);
     }
+    if (ratesResult.status === 'fulfilled' && Array.isArray(ratesResult.value?.rates)) state.currencyRates = ratesResult.value.rates;
     state.friends = friendResult.value?.friends || [];
     state.appFriends = state.friends.filter((friend) => Number(friend?.linked_user_id) > 0);
     state.groups = divideResult.value?.groups || [];
@@ -4179,15 +4201,10 @@
     state.incomingInvites = dedupeIncomingInvites(incomingData?.invites || []);
     state.outgoingInvites = outgoingData?.invites || [];
     state.liveTrips = tripsResult.status === 'fulfilled' ? (tripsResult.value?.trips || []) : [];
-    const scope=liveSplitCurrencyScope(state.groups,state.sharedGroups,state.liveTrips,window._currentUser?.currency_code || 'INR',state.currency);
-    state.currency=scope.currency;state.currencyCodes=scope.codes;
-    state.groups=scope.groups;state.sharedGroups=scope.sharedGroups;state.liveTrips=scope.trips;
-    const summary = computeLiveSplitRows(state.friends, state.groups, state.sharedGroups);
-    state.rows = buildVisibleLiveSplitRowsFromSummary(summary.rows, state.friends);
-    state.totals = {
-      oweToMe: r2(state.rows.filter((row) => n(row?.amount) > 0).reduce((sum, row) => sum + n(row.amount), 0)),
-      iOwe: r2(state.rows.filter((row) => n(row?.amount) < 0).reduce((sum, row) => sum + Math.abs(n(row.amount)), 0)),
-    };
+    state.allGroups = state.groups;
+    state.allTrips = state.liveTrips;
+    activateCurrency(state.currency);
+
   }
 
   async function loadLiveSplit() {
@@ -5664,6 +5681,8 @@
     const financeDefaults = resolveTripBulkEditFinanceDefaults(trip);
     state.tripBulkEdit = {
       trip_id: tid,
+      selected: { divide_date: false, details: false, paid_by: false, finance: false },
+      details: '',
       paid_by: defaults.paid_by,
       divide_date: defaults.divide_date,
       finance_target: financeDefaults.finance_target,
@@ -5679,13 +5698,13 @@
         id: Number(group.id),
         index: index + 1,
         paid_by: String(group?.paid_by || defaults.paid_by || editor.paid_by || 'You').trim() || 'You',
-        divide_date: toLocalIsoDate(group?.divide_date || defaults.divide_date || trip?.start_date || todayLocalIsoDate()),
+        divide_date: toLocalIsoDate(group?.divide_date || defaults.divide_date || trip?.start_date || todayLocalIso()),
         details: String(group?.details || group?.heading || editor.details || 'Split expense').trim(),
         total_amount: Number(group?.total_amount || 0),
-        finance_target: String(group?.finance_target || financeDefaults.finance_target || 'none'),
-        bank_account_id: Number(group?.bank_account_id || financeDefaults.bank_account_id || 0) || null,
-        card_id: Number(group?.card_id || financeDefaults.card_id || 0) || null,
-        card_discount_pct: Number(group?.card_discount_pct || financeDefaults.card_discount_pct || 0) || 0,
+        finance_target: String(group?.finance_target || 'none'),
+        bank_account_id: Number(group?.bank_account_id || 0) || null,
+        card_id: Number(group?.card_id || 0) || null,
+        card_discount_pct: Number(group?.card_discount_pct || 0) || 0,
       };
     });
     renderTripBulkEditModal();
@@ -5803,6 +5822,14 @@
     const form = state.tripBulkEdit;
     const rows = Array.isArray(state.tripBulkEditRows) ? state.tripBulkEditRows : [];
     if (!form || !rows.length) return;
+    if (form.selected?.divide_date && !/^\d{4}-\d{2}-\d{2}$/.test(form.divide_date || '')) {
+      toast('Choose a date to apply', 'warning');
+      return;
+    }
+    if (form.selected?.details && !String(form.details || '').trim()) {
+      toast('Enter a name / description to apply', 'warning');
+      return;
+    }
     const financeTarget = String(form.finance_target || 'none') === 'card'
       ? 'card'
       : String(form.finance_target || 'none') === 'expense'
@@ -5811,15 +5838,11 @@
     const bankAccountId = financeTarget === 'expense' ? (Number(form.bank_account_id || 0) || null) : null;
     const cardId = financeTarget === 'card' ? (Number(form.card_id || 0) || null) : null;
     const cardDiscountPct = financeTarget === 'card' ? Number(form.card_discount_pct || 0) : 0;
-    state.tripBulkEditRows = rows.map((row) => ({
-      ...row,
-      paid_by: String(form.paid_by || 'You').trim() || 'You',
-      divide_date: toLocalIsoDate(form.divide_date || row.divide_date || todayLocalIsoDate(), todayLocalIsoDate()),
-      finance_target: financeTarget,
-      bank_account_id: bankAccountId,
-      card_id: cardId,
-      card_discount_pct: cardDiscountPct,
-    }));
+    state.tripBulkEditRows = rows.map((row) => liveSplitBulkEdit.apply(row, {
+      ...form,
+      divide_date: toLocalIsoDate(form.divide_date, todayLocalIso()),
+      finance_target: financeTarget, bank_account_id: bankAccountId, card_id: cardId, card_discount_pct: cardDiscountPct,
+    }, form.selected || {}));
   }
 
   function setTripBulkEditHeaderField(field, value) {
@@ -5848,7 +5871,6 @@
     } else {
       state.tripBulkEdit[field] = value || '';
     }
-    applyTripBulkEditHeaderToRows();
     renderTripBulkEditModal();
   }
 
@@ -5877,6 +5899,11 @@
         </div>
         <div style="padding:14px;border:1px solid #d8deea;border-radius:14px;background:#fff;display:grid;gap:12px">
           <div style="font-size:13px;font-weight:900;color:var(--t1)">Apply To All Rows</div>
+          <div style="font-size:12px;color:var(--t3)">Choose fields, enter values, then apply. Other fields stay as they are.</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            ${[['divide_date', 'Date'], ['details', 'Name / description'], ['paid_by', 'Paid by'], ['finance', 'Payment source']].map(([key, label]) => `<label><input type="checkbox" ${form.selected?.[key] ? 'checked' : ''} onchange="liveSplitTripBulkEditSelect('${key}', this.checked)"> ${label}</label>`).join('')}
+          </div>
+          ${form.selected?.details ? `<label class="fl">Name / description for all<input class="fi" value="${escHtml(form.details || '')}" onchange="liveSplitTripBulkEditField('details', this.value)"></label>` : ''}
           <div class="fg">
             <label class="fl">Date for All
               <input class="fi" type="date" value="${escHtml(state.tripBulkEdit?.divide_date || trip.start_date || todayLocalIso())}" onchange="liveSplitTripBulkEditField('divide_date', this.value)">
@@ -5919,7 +5946,7 @@
             </div>
           ` : ''}
           <div class="fa" style="justify-content:flex-end">
-            <button class="btn btn-s" onclick="liveSplitTripBulkEditApplyHeader()">Apply To All Rows</button>
+            <button class="btn btn-s" onclick="liveSplitTripBulkEditApplyHeader()">Apply selected fields to all rows</button>
           </div>
         </div>
         <div style="display:grid;gap:10px">
@@ -6016,7 +6043,7 @@
       </div>
       <div class="fa" style="margin-top:14px">
         <button class="btn btn-g" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-p" ${state.tripActionBusy ? 'disabled' : ''} onclick="liveSplitTripBulkEditSave()">${state.tripActionBusy ? liveSplitBusyLabel('Saving...') : 'Apply To All Rows'}</button>
+        <button class="btn btn-p" ${state.tripActionBusy ? 'disabled' : ''} onclick="liveSplitTripBulkEditSave()">${state.tripActionBusy ? liveSplitBusyLabel('Saving...') : 'Save changes'}</button>
       </div>
     `);
   }
@@ -6064,21 +6091,21 @@
             total_amount: Number(group?.total_amount || 0),
             split_mode: String(row.splitMode || row.split_mode || group?.split_mode || 'equal'),
             trip_id: Number(group?.trip_id || 0) || null,
-            heading: String(group?.heading || group?.details || '').trim() || null,
+            heading: String(row.details !== String(group?.details || group?.heading || '').trim() ? row.details : (group?.heading || group?.details || '')).trim() || null,
             splits,
-            finance_target: String(row.finance_target || form.finance_target || 'none') === 'card'
+            finance_target: String(row.finance_target || 'none') === 'card'
               ? 'card'
-              : String(row.finance_target || form.finance_target || 'none') === 'expense'
+              : String(row.finance_target || 'none') === 'expense'
                 ? 'expense'
                 : 'none',
-            bank_account_id: String(row.finance_target || form.finance_target || 'none') === 'expense'
-              ? (Number(row.bank_account_id || form.bank_account_id || 0) || null)
+            bank_account_id: String(row.finance_target || 'none') === 'expense'
+              ? (Number(row.bank_account_id || 0) || null)
               : null,
-            card_id: String(row.finance_target || form.finance_target || 'none') === 'card'
-              ? (Number(row.card_id || form.card_id || 0) || null)
+            card_id: String(row.finance_target || 'none') === 'card'
+              ? (Number(row.card_id || 0) || null)
               : null,
-            card_discount_pct: String(row.finance_target || form.finance_target || 'none') === 'card'
-              ? Number(row.card_discount_pct || form.card_discount_pct || 0)
+            card_discount_pct: String(row.finance_target || 'none') === 'card'
+              ? Number(row.card_discount_pct || 0)
               : 0,
             allow_duplicate: true,
           },
@@ -6167,6 +6194,8 @@
     state.tripManage = {
       trip_id: id,
       name: String(trip.name || '').trim(),
+      start_date: toLocalIsoDate(trip.start_date, todayLocalIso()),
+      end_date: trip.end_date ? toLocalIsoDate(trip.end_date) : '',
       show_add_to_expense_option: trip.show_add_to_expense_option !== false,
       selected: new Set(),
     };
@@ -6188,6 +6217,10 @@
           Trip Name
           <input class="fi" value="${escHtml(form.name || '')}" ${canManage ? '' : 'disabled'} placeholder="Trip name" onchange="liveSplitTripManageField('name', this.value)">
         </label>
+        <div class="fg">
+          <label class="fl">Start date<input class="fi" type="date" value="${escHtml(form.start_date || '')}" ${canManage ? '' : 'disabled'} onchange="liveSplitTripManageField('start_date', this.value)"></label>
+          <label class="fl">End date<input class="fi" type="date" value="${escHtml(form.end_date || '')}" ${canManage ? '' : 'disabled'} onchange="liveSplitTripManageField('end_date', this.value)"></label>
+        </div>
         <div style="padding:12px;border:1px solid var(--line);border-radius:12px;background:#f8fcfa">
           <label class="fc" style="align-items:flex-start">
             <input type="checkbox" ${form.show_add_to_expense_option !== false ? 'checked' : ''} ${canManage ? '' : 'disabled'} onchange="liveSplitTripToggleExpenseOptionEdit(this.checked)">
@@ -6249,6 +6282,10 @@
       toast('Trip name is required', 'warning');
       return;
     }
+    if (!form.start_date || (form.end_date && form.end_date < form.start_date)) {
+      toast('Choose a start date and an end date on or after it', 'warning');
+      return;
+    }
     try {
       state.tripMemberBusy = true;
       renderTripMembersModal();
@@ -6256,6 +6293,8 @@
         method: 'PUT',
         body: {
           name: nextName,
+          start_date: form.start_date,
+          end_date: form.end_date || null,
           show_add_to_expense_option: form.show_add_to_expense_option !== false,
         },
       });
@@ -7342,6 +7381,11 @@ function paymentManagerPreview(people, mode) {
     if (!state.tripCreate) return;
     state.tripCreate.show_add_to_expense_option = !!checked;
     renderTripCreateModal();
+  };
+  window.liveSplitTripBulkEditSelect = function(field, checked) {
+    if (!state.tripBulkEdit) return;
+    state.tripBulkEdit.selected = { ...state.tripBulkEdit.selected, [field]: !!checked };
+    renderTripBulkEditModal();
   };
   window.liveSplitTripBulkEditField = function liveSplitTripBulkEditField(field, value) {
     if (!state.tripBulkEdit) return;
