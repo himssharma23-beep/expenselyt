@@ -1,6 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
+const vm=require('node:vm');
 const {liveSplitCurrencyScope,liveSplitCurrencySections,liveSplitHomeRows,liveSplitConvertedTotals,formatLiveSplitMoney}=require('../public/js/live-split-currency');
 const {liveSplitWriteCurrency}=require('../db/live-split-currency');
 
@@ -85,4 +86,19 @@ test('the combined top total does not depend on the friend visibility filter',()
  const rows=[{currency_code:'INR',amount:-6800},{currency_code:'CAD',amount:25},{currency_code:'CAD',amount:0}];
  const rates=[{currency_code:'CAD',rate_to_inr:68}];
  assert.deepEqual(liveSplitConvertedTotals(rows,'CAD',rates),liveSplitConvertedTotals(rows.filter(row=>row.amount),'CAD',rates));
+});
+
+test('mobile totals use the updated authenticated profile over a stale screen profile',()=>{
+ const source=fs.readFileSync('C:/P/ExpenseManager_mobile/src/screens/LiveSplitScreen.js','utf8');
+ const declaration=source.match(/const accountTotals = useMemo\([^\n]+/);
+ assert.ok(declaration);
+ const rows=[{currency_code:'INR',amount:6800},{currency_code:'CAD',amount:25}];
+ const run=(authenticatedUser,currentUser)=>{
+   const context=vm.createContext({authenticatedUser,currentUser,allVisibleSummaryRows:rows,currencyRates:[{currency_code:'CAD',rate_to_inr:68}],liveSplitConvertedTotals,useMemo:fn=>fn()});
+   return vm.runInContext(declaration[0]+'\naccountTotals;',context);
+ };
+ assert.equal(run({currency_code:'CAD'},{currency_code:'INR'}).currency,'CAD');
+ assert.equal(run({currency_code:'CAD'},{currency_code:'INR'}).net,125);
+ assert.equal(run({currency_code:'INR'},{currency_code:'CAD'}).net,8500);
+ assert.equal(run(null,{currency_code:'CAD'}).net,125);
 });

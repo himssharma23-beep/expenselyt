@@ -1442,6 +1442,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (user && user.display_name) {
       _currentUserId = user.id || null;
       _currentUser = user;
+      window._currentUser = user;
       if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
       renderUserBox();
       renderImpersonationBanner();
@@ -1553,6 +1554,7 @@ async function refreshCurrentUser() {
   const user = await api('/api/auth/me');
   if (user) {
     _currentUser = user;
+    window._currentUser = user;
     _currentUserId = user.id || null;
     if (typeof setCurrencyPrefs === 'function') setCurrencyPrefs(user);
     renderUserBox();
@@ -1865,6 +1867,7 @@ async function saveProfileSettings() {
   closeModal();
   toast('Profile updated', 'success');
   if (currentTab === 'expenses') loadExpenses();
+  else if (currentTab === 'livesplit' && typeof loadLiveSplit === 'function') await loadLiveSplit();
 }
 
 async function deleteOwnAccount() {
