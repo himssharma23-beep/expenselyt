@@ -1360,6 +1360,7 @@ async function getExpenses(userId, filters = {}) {
   const result = await query(
     `SELECT
         e.*,
+        to_char(e.purchase_date, 'YYYY-MM-DD') AS purchase_date,
         ba.bank_name AS bank_name,
         ba.account_name AS account_name,
         CASE
@@ -1443,6 +1444,7 @@ async function getExpenseById(userId, id, client = null) {
   const result = await run.query(
     `SELECT
         e.*,
+        to_char(e.purchase_date, 'YYYY-MM-DD') AS purchase_date,
         ba.bank_name AS bank_name,
         ba.account_name AS account_name,
         CASE
@@ -3185,9 +3187,9 @@ async function syncGroupFinance(client, groupId, finance = null, remove = false)
     { adjustBankBalance, addExpense, updateExpense, deleteExpense, formatDateOnlyValue, billing: pgBillingDb }, groupId, finance, remove);
 }
 
-async function addLiveSplitGroup(userId, data) {
+async function addLiveSplitGroup(userId, data, transaction = null) {
   await ensureLiveSplitCurrencySchema();
-  return withTransaction(async (client) => {
+  const save = async (client) => {
     const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
     const tripId = Number(data.trip_id || 0) > 0 ? Number(data.trip_id) : null;
     const ownerUserId = Number(userId);
@@ -3235,7 +3237,8 @@ async function addLiveSplitGroup(userId, data) {
     });
     await syncGroupFinance(client, groupId, data.finance || null);
     return groupId;
-  });
+  };
+  return transaction ? save(transaction) : withTransaction(save);
 }
 
 async function normalizeLiveSplitGroupSplitsForOwner(client, ownerUserId, splits = []) {

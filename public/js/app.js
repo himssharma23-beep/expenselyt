@@ -5726,6 +5726,7 @@ async function saveEmiCalc(andActivate) {
     gst_rate: c.gst ? 18 : 0, total_gst: c.totG,
     total_amount: c.totAmt, grand_total: c.grand,
     planner_advance_month: plannerAdvanceMonth ? 1 : 0,
+    upfront_charge: c.chargesInc ? 0 : c.charges,
     credit_card_id: ccId ? parseInt(ccId) : null,
     gst_month_offset: (ccId && c.gst && gstOffset) ? parseInt(gstOffset) : 0,
     cc_processing_charge: ccId && ccCharges > 0 ? ccCharges : null,
@@ -12634,6 +12635,7 @@ function renderEmiCard(r) {
         <div class="emi-card-actions">
           ${r.status === 'saved' ? '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
           <button class="btn btn-s btn-sm" title="Edit EMI info" onclick="event.stopPropagation();showEditEmiInfoModal(${r.id})">Edit</button>
+          ${!r.for_friend ? `<button class="btn btn-s btn-sm" onclick="event.stopPropagation();openEmiFriendSplit(${Number(r.id)})">Split with friends</button>` : ''}
           ${(!r.for_friend && (r.status === 'active' || r.status === 'pending')) ? (
             r.expenses_added
               ? '<button class="emi-action-pill emi-action-pill-green" title="Expenses added - click to re-add" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">In Expenses</button>'

@@ -94,6 +94,22 @@ function fixture() {
   };
 }
 
+test('EMI share-only expense posts once, follows edits, and does not charge a bank or card',async()=>{
+  const db=fixture();
+  await db.save({}, {add_expense:true});
+  assert.equal(db.state().expenses.length,1);
+  assert.equal(db.state().expenses[0].amount,60);
+  await db.save({}, {add_expense:true});
+  assert.equal(db.state().expenses.length,1);
+  await db.save({total_amount:120});
+  assert.equal(db.state().expenses[0].amount,80);
+  assert.equal(db.state().banks[1],1000);
+  assert.equal(db.state().cards.length,0);
+  assert.equal(db.state().history.length,0);
+  await db.save({},null,true);
+  assert.equal(db.state().expenses[0].deleted_at,true);
+});
+
 test('bank payment and personal share update in place and are removed together', async () => {
   const db = fixture();
   await db.save({}, { bank_account_id: 1, add_expense: true });

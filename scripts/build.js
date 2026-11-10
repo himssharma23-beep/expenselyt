@@ -5,6 +5,9 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 const filesToCheck = [
+  'db/emi-friend-split.js',
+  'public/js/emi-friend-split-model.js',
+  'public/js/emi-friend-split-ui.js',
   'public/js/emi-calculator-ui.js',
   'public/js/live-split-bulk-edit.js',
   'public/js/tenant-invoice-summary.js',

@@ -650,6 +650,7 @@ CREATE TABLE IF NOT EXISTS emi_records (
   gst_month_offset INTEGER NOT NULL DEFAULT 0,
   cc_processing_charge NUMERIC(14,2),
   cc_processing_gst_pct NUMERIC(8,4),
+  upfront_charge NUMERIC(14,2),
   expenses_added BOOLEAN NOT NULL DEFAULT FALSE,
   for_friend BOOLEAN NOT NULL DEFAULT FALSE,
   friend_name TEXT,
@@ -672,6 +673,13 @@ CREATE TABLE IF NOT EXISTS emi_installments (
   bank_account_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_emi_inst ON emi_installments(emi_id);
+CREATE TABLE IF NOT EXISTS emi_friend_splits (
+  emi_id BIGINT PRIMARY KEY REFERENCES emi_records(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id),
+  group_id BIGINT NOT NULL REFERENCES live_split_groups(id) ON DELETE CASCADE,
+  total_amount NUMERIC(14,2) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS bank_accounts (
   id BIGSERIAL PRIMARY KEY,

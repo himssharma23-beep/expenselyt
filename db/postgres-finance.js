@@ -12,6 +12,12 @@ function _localDate(dt) {
   return `${y}-${m}-${d}`;
 }
 
+function ccDateValue(value) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : _localDate(value);
+  const text = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
 function normalizeBankAccountId(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -49,7 +55,7 @@ async function findExactCycle(run, cardId, userId, cycleStart, cycleEnd) {
 
 async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
   // Normalize txnDate to a YYYY-MM-DD string (pg may return DATE columns as Date objects inside transactions)
-  const dateStr = txnDate instanceof Date ? _localDate(txnDate) : String(txnDate || '').slice(0, 10);
+  const dateStr = ccDateValue(txnDate);
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
 
   const run = client || { query };
@@ -94,8 +100,9 @@ async function getCcCycleForDate(cardId, userId, txnDate, client = null) {
 }
 
 async function getNextCcCycle(cardId, userId, currentCycle, client = null) {
-  if (!currentCycle?.cycle_end) return null;
-  const cycleEndDate = new Date(`${String(currentCycle.cycle_end).slice(0, 10)}T00:00:00`);
+  const cycleEnd = ccDateValue(currentCycle?.cycle_end);
+  if (!cycleEnd) return null;
+  const cycleEndDate = new Date(`${cycleEnd}T00:00:00`);
   if (Number.isNaN(cycleEndDate.getTime())) return null;
   cycleEndDate.setDate(cycleEndDate.getDate() + 1);
   return getCcCycleForDate(cardId, userId, _localDate(cycleEndDate), client);
@@ -254,9 +261,10 @@ async function insertEmiCcTxns(userId, emiId, client = null) {
       const gstCycle = Number(rec.gst_month_offset || 0) === 1
         ? await getNextCcCycle(rec.credit_card_id, userId, cycle, client)
         : cycle;
+      if (!gstCycle) throw new Error('Could not determine the credit card bill for EMI GST');
       if (gstCycle) {
         const gstDate = Number(rec.gst_month_offset || 0) === 1
-          ? String(gstCycle.cycle_start).slice(0, 10)
+          ? ccDateValue(gstCycle.cycle_start)
           : inst.due_date;
         await run.query(
           `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
@@ -291,22 +299,23 @@ async function insertEmiCcTxns(userId, emiId, client = null) {
         const processingGstCycle = Number(rec.gst_month_offset || 0) === 1
           ? await getNextCcCycle(rec.credit_card_id, userId, firstCycle, client)
           : firstCycle;
+        if (!processingGstCycle) throw new Error('Could not determine the credit card bill for processing GST');
         await run.query(
           `INSERT INTO cc_txns (user_id, card_id, cycle_id, txn_date, description, amount, discount_pct, discount_amount, net_amount, source, source_id)
            VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $6, 'emi', $7)`,
           [
             userId,
             rec.credit_card_id,
-            processingGstCycle?.id || firstCycle.id,
-            Number(rec.gst_month_offset || 0) === 1 && processingGstCycle?.cycle_start
-              ? String(processingGstCycle.cycle_start).slice(0, 10)
+            processingGstCycle.id,
+            Number(rec.gst_month_offset || 0) === 1
+              ? ccDateValue(processingGstCycle.cycle_start)
               : firstInst.due_date,
             `${rec.name} - File Processing GST`,
             gstAmt,
             emiId,
           ]
         );
-        updatedCycles.add(processingGstCycle?.id || firstCycle.id);
+        updatedCycles.add(processingGstCycle.id);
       }
     }
   }
@@ -344,13 +353,14 @@ async function insertEmiExpenses(userId, emiId, isExtra = 0, expenseCategory = n
 }
 
 async function saveEmiRecord(userId, data) {
+  await require('./emi-friend-split').ensureSchema();
   const result = await query(
     `INSERT INTO emi_records (
        user_id, name, description, principal, annual_rate, tenure_months, monthly_emi, total_interest, gst_rate, total_gst,
        total_amount, grand_total, tag, credit_card_id, gst_month_offset, cc_processing_charge, cc_processing_gst_pct,
-       for_friend, friend_name, planner_advance_month
+       for_friend, friend_name, planner_advance_month, upfront_charge
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      RETURNING id`,
     [
       userId, data.name, data.description || null, data.principal, data.annual_rate, data.tenure_months,
@@ -358,6 +368,7 @@ async function saveEmiRecord(userId, data) {
       data.total_amount, data.grand_total, data.tag || null, data.credit_card_id || null,
       data.gst_month_offset || 0, data.cc_processing_charge || null, data.cc_processing_gst_pct || null,
       !!data.for_friend, data.friend_name || null, data.planner_advance_month ? 1 : 0,
+      data.upfront_charge != null ? Math.max(0,Number(data.upfront_charge)||0) : null,
     ]
   );
   return Number(result.rows[0].id);

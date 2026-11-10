@@ -22,6 +22,7 @@ const pgPetrolDb = require('../db/postgres-petrol');
 const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
+const emiFriendSplitDb = require('../db/emi-friend-split');
 const pgAdminNotificationsDb = require('../db/postgres-admin-notifications');
 const pgPortalAccessDb = require('../db/postgres-portal-access');
 const { assertPostgresConfigured } = require('../db/provider');
@@ -7649,6 +7650,15 @@ router.post('/live-split/invites/:id/resend', async (req, res) => {
 });
 
 // Both clients use this calculation and atomic posting path.
+router.get('/emi/records/:id(\\d+)/friend-split', async (req, res) => {
+  try { res.json({ success:true, quote:await emiFriendSplitDb.getQuote(req.session.userId,req.params.id) }); }
+  catch(error) { res.status(error.statusCode||500).json({error:error.message}); }
+});
+router.post('/emi/records/:id(\\d+)/friend-split', async (req, res) => {
+  try { res.json({ success:true, ...await emiFriendSplitDb.create(req.session.userId,req.params.id,req.body||{}) }); }
+  catch(error) { res.status(error.statusCode||500).json({error:error.message}); }
+});
+
 router.post('/live-split/payment-manager/preview', async (req, res) => {
   try { res.json({ success: true, plan: await getCoreDb().paymentManagerSplit(req.session.userId, req.body || {}, false) }); }
   catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
