@@ -12609,6 +12609,16 @@ async function doEmiImport() {
 
 function renderEmiCard(r) {
   const isExpanded = String(_emiExpandedId) === String(r.id);
+  const icons = {
+    edit:'<path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5"/>',
+    split:'<circle cx="8" cy="7" r="3"/><path d="M2 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6m1 4a5 5 0 0 1 4 5v2"/>',
+    expense:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2Z"/><path d="M9 8h6M9 12h6"/>',
+    card:'<rect x="2" y="4" width="20" height="16" rx="3"/><path d="M2 9h20M6 15h3"/>',
+    pdf:'<path d="M14 2H5v20h14V7Z"/><path d="M14 2v6h5M12 11v7m-3-3 3 3 3-3"/>',
+    trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
+    details:isExpanded?'<path d="m6 15 6-6 6 6"/>':'<path d="m6 9 6 6 6-6"/>'
+  };
+  const action=(icon,label,handler,state='')=>`<button type="button" class="emi-icon-action ${state}" title="${label}" aria-label="${label}" onclick="event.stopPropagation();${handler}"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icons[icon]}</svg></button>`;
   const statusMeta = {
     active:    { color: 'var(--green)',   label: 'Active',      barColor: 'var(--green)',   bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.25)' },
     pending:   { color: '#6c8ebf',        label: 'Not Started', barColor: '#6c8ebf',        bg: 'rgba(108,142,191,0.07)', border: 'rgba(108,142,191,0.3)' },
@@ -12637,27 +12647,15 @@ function renderEmiCard(r) {
           ${r.description ? '<div class="emi-card-desc">' + escHtml(r.description) + '</div>' : ''}
         </div>
         <div class="emi-card-actions">
-          ${r.status === 'saved' ? '<button class="btn btn-s btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
-          <button class="btn btn-s btn-sm" title="Edit EMI info" onclick="event.stopPropagation();showEditEmiInfoModal(${r.id})">Edit</button>
-          ${!r.for_friend ? `<button class="btn btn-s btn-sm" onclick="event.stopPropagation();openEmiFriendSplit(${Number(r.id)})">Split with friends</button>` : ''}
-          ${(!r.for_friend && (r.status === 'active' || r.status === 'pending')) ? (
-            r.expenses_added
-              ? '<button class="emi-action-pill emi-action-pill-green" title="Expenses added - click to re-add" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',1)">In Expenses</button>'
-              : '<button class="btn btn-s btn-sm" title="Add installments to expenses" onclick="event.stopPropagation();showAddEmiExpensesModal(' + r.id + ',0)">Expenses</button>'
-          ) : ''}
-          ${(r.status === 'active' || r.status === 'pending' || r.status === 'completed') ? (
-            r.credit_card_id
-              ? '<button class="emi-action-pill emi-action-pill-blue" title="Added to credit card billing - click to change card" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',' + (r.credit_card_id || 0) + ',' + (r.gst_rate || 0) + ')">In Credit Card</button>'
-              : '<button class="btn btn-s btn-sm" title="Add to credit card EMI billing" onclick="event.stopPropagation();showAddEmiToCreditCardModal(' + r.id + ',0,' + (r.gst_rate || 0) + ')">Card EMI</button>'
-          ) : ''}
-          ${r.status === 'active' ? (() => { const next = (r.installments||[]).find(i => i.paid_amount === 0); return next ? '<button class="btn btn-p btn-sm" onclick="event.stopPropagation();showPayInstallmentModal(' + next.id + ',' + next.emi_amount + ',' + r.id + ')">Pay #' + next.installment_no + '</button>' : ''; })() : ''}
-          <button class="btn btn-s btn-sm" onclick="event.stopPropagation();downloadEmiDetailPdf(${r.id})">PDF</button>
-          <button class="btn-del emi-card-delete" onclick="event.stopPropagation();deleteEmiRecord(${r.id})">Delete</button>
-          <button
-            class="btn btn-g btn-sm emi-card-toggle"
-            title="${isExpanded ? 'Collapse details' : 'Expand details'}"
-            onclick="event.stopPropagation();_emiExpandedId=(String(_emiExpandedId)===String(${r.id})?null:${r.id});reRenderEmiCard(${r.id})"
-          >${isExpanded ? 'Hide' : 'Details'}</button>
+          ${r.status === 'saved' ? '<button class="btn btn-p btn-sm" onclick="event.stopPropagation();showActivateModal(' + r.id + ')">Activate</button>' : ''}
+          ${action('edit','Edit EMI info','showEditEmiInfoModal('+r.id+')')}
+          ${!r.for_friend ? action('split','Split with friends','openEmiFriendSplit('+r.id+')') : ''}
+          ${!r.for_friend&&['active','pending'].includes(r.status) ? action('expense',r.expenses_added?'In Expenses - add again':'Add installments to Expenses','showAddEmiExpensesModal('+r.id+','+(r.expenses_added?1:0)+')',r.expenses_added?'is-added':'') : ''}
+          ${['active','pending','completed'].includes(r.status) ? action('card',r.credit_card_id?'In Credit Card - change card':'Add to credit card EMI billing','showAddEmiToCreditCardModal('+r.id+','+(r.credit_card_id||0)+','+(r.gst_rate||0)+')',r.credit_card_id?'is-linked':'') : ''}
+          ${r.status === 'active' ? (() => { const next = (r.installments||[]).find(i => i.paid_amount === 0); return next ? '<button class="btn btn-p btn-sm emi-pay-action" onclick="event.stopPropagation();showPayInstallmentModal(' + next.id + ',' + next.emi_amount + ',' + r.id + ')">Pay #' + next.installment_no + '</button>' : ''; })() : ''}
+          ${action('pdf','Download EMI PDF','downloadEmiDetailPdf('+r.id+')')}
+          ${action('trash','Delete EMI','deleteEmiRecord('+r.id+')','is-danger')}
+          ${action('details',isExpanded?'Collapse details':'Expand details','_emiExpandedId=(String(_emiExpandedId)===String('+r.id+')?null:'+r.id+');reRenderEmiCard('+r.id+')')}
         </div>
       </div>
       <div class="emi-card-meta">

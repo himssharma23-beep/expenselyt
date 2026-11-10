@@ -4323,7 +4323,20 @@ tfoot td { padding:10px 14px; border-top:2px solid var(--border); background:var
 .emi-card-badge-blue { color:var(--blue); background:rgba(59,130,246,0.12); }
 .emi-card-badge-muted { color:var(--t3); background:var(--bg); }
 .emi-card-desc { font-size:12px; color:var(--t3); margin-top:4px; line-height:1.4; }
-.emi-card-actions { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:nowrap; width:100%; }
+.emi-card-actions { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap; width:100%; min-width:0; }
+.emi-card-actions .emi-icon-action { display:inline-flex; align-items:center; justify-content:center; flex:0 0 36px; width:36px; height:36px; padding:8px; border:1px solid var(--border); border-radius:9px; background:var(--white); color:var(--em); cursor:pointer; }
+.emi-icon-action svg { width:18px; height:18px; pointer-events:none; }
+.emi-card-actions .emi-icon-action:hover { background:var(--bg); border-color:var(--em); }
+.emi-card-actions .emi-icon-action:focus-visible { outline:2px solid var(--em); outline-offset:2px; }
+.emi-card-actions .emi-icon-action.is-added { color:var(--green); background:#e0f0e6; }
+.emi-card-actions .emi-icon-action.is-linked { color:var(--blue); background:#e5edff; }
+.emi-card-actions .emi-icon-action.is-danger { color:var(--red); }
+.emi-card-actions .btn.emi-pay-action { min-height:36px; }
+@media (max-width:600px) {
+  .emi-card-header { padding:14px; }
+  .emi-card-actions .emi-icon-action { flex-basis:44px; width:44px; height:44px; }
+  .emi-card-actions .btn.emi-pay-action { min-height:44px; }
+}
 .emi-card-actions .btn,
 .emi-card-actions .btn-del,
 .emi-card-actions .emi-action-pill { min-height:32px; flex:0 0 auto; }
