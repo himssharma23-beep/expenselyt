@@ -2307,6 +2307,10 @@ async function loadExpenses() {
 
   const data = await api('/api/expenses' + qs);
   if (!data) return;
+  if (data.error || !Array.isArray(data.expenses)) {
+    document.getElementById('main').innerHTML = `<div class="tab-content"><div class="card" style="padding:24px"><h3>Could not load expenses</h3><p>${escHtml(data.error || 'Please try again.')}</p><button class="btn btn-p" onclick="loadExpenses()">Retry</button></div></div>`;
+    return;
+  }
   if (!_expenseCategories.length) {
     try { await loadExpenseCategories(); } catch (_) {}
   }

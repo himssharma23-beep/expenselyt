@@ -31,7 +31,23 @@ test('expense list and edit payload preserve November 1 instead of serializing O
     assert.equal(payload.amount,649);
   }
   assert.match(calls[0].sql,/to_char\(purchase_date, 'MM'\) = \$3/);
+  assert.match(calls[0].sql,/ORDER BY e\.purchase_date DESC, e\.id DESC/);
   assert.deepEqual(Array.from(calls[0].params),[1,'2026','11']);
+});
+
+test('failed expense request shows a retry message instead of a zero total and undefined count',async()=>{
+  const app=fs.readFileSync('public/js/app.js','utf8');
+  const start=app.indexOf('async function loadExpenses()');
+  const stop=app.indexOf('  if (!_expenseCategories.length)',start);
+  assert.ok(start>=0&&stop>start);
+  const main={innerHTML:''};
+  const context=vm.createContext({expFilters:{year:2026,month:10,spendType:'all'},_bankAccounts:[{}],_ccCards:[{}],document:{getElementById:()=>main},escHtml:value=>value,api:async()=>({success:false,error:'Expenses are temporarily unavailable'})});
+  vm.runInContext(app.slice(start,stop)+'}',context);
+  await context.loadExpenses();
+  assert.match(main.innerHTML,/Could not load expenses/);
+  assert.match(main.innerHTML,/Expenses are temporarily unavailable/);
+  assert.match(main.innerHTML,/Retry/);
+  assert.doesNotMatch(main.innerHTML,/undefined|TOTAL EXPENSES/);
 });
 
 test('expense display keeps calendar dates stable across month and year boundaries',()=>{

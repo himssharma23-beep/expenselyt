@@ -1428,7 +1428,7 @@ async function getExpenses(userId, filters = {}) {
        LIMIT 1
      ) AS card_lookup ON TRUE
      WHERE ${where.map((clause) => clause.replace(/\buser_id\b/g, 'e.user_id')).join(' AND ')} AND e.deleted_at IS NULL
-     ORDER BY purchase_date DESC, id DESC`,
+     ORDER BY e.purchase_date DESC, e.id DESC`,
     params
   );
   return result.rows.map((row) => ({
