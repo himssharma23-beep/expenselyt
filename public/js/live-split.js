@@ -7031,6 +7031,7 @@ function paymentManagerPreview(people, mode) {
     </section>`);
   }
   window.liveSplitOpenPaymentManager = async () => {
+    if (typeof window.openPaymentWorkbooks === 'function') return window.openPaymentWorkbooks();
     try { await ensureFinanceOptionsLoaded(true, true); }
     catch (error) { toast(error.message, 'error'); return; }
     managerDraft = { title: '', date: todayLocalIso(), selected: new Set(['self']), paid: {}, share_values: {}, split_mode: 'equal', add_expense: false, payment_source: 'none', payment_account_id: '', manager_key: 'self', request_id: typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `web-${Date.now()}-${Math.random().toString(36).slice(2)}`, busy: false, plan: null };

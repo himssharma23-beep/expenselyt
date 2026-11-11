@@ -23,6 +23,7 @@ const pgOpsDb = require('../db/postgres-ops');
 const pgBillingDb = require('../db/postgres-billing');
 const pgFinanceDb = require('../db/postgres-finance');
 const emiFriendSplitDb = require('../db/emi-friend-split');
+const paymentWorkbooks = require('../db/payment-manager-workbooks');
 const pgAdminNotificationsDb = require('../db/postgres-admin-notifications');
 const pgPortalAccessDb = require('../db/postgres-portal-access');
 const { assertPostgresConfigured } = require('../db/provider');
@@ -7657,6 +7658,27 @@ router.get('/emi/records/:id(\\d+)/friend-split', async (req, res) => {
 router.post('/emi/records/:id(\\d+)/friend-split', async (req, res) => {
   try { res.json({ success:true, ...await emiFriendSplitDb.create(req.session.userId,req.params.id,req.body||{}) }); }
   catch(error) { res.status(error.statusCode||500).json({error:error.message}); }
+});
+
+router.get('/live-split/payment-workbooks', async (req,res)=>{
+  try {res.json({success:true,workbooks:await paymentWorkbooks.list(req.session.userId)});}
+  catch(error){res.status(error.statusCode||500).json({error:error.message});}
+});
+router.get('/live-split/payment-workbooks/:id(\\d+)', async (req,res)=>{
+  try {res.json({success:true,workbook:await paymentWorkbooks.get(req.session.userId,req.params.id)});}
+  catch(error){res.status(error.statusCode||500).json({error:error.message});}
+});
+router.post('/live-split/payment-workbooks', async (req,res)=>{
+  try {res.json({success:true,workbook:await paymentWorkbooks.save(req.session.userId,null,req.body||{})});}
+  catch(error){res.status(error.statusCode||500).json({error:error.message});}
+});
+router.put('/live-split/payment-workbooks/:id(\\d+)', async (req,res)=>{
+  try {res.json({success:true,workbook:await paymentWorkbooks.save(req.session.userId,req.params.id,req.body||{})});}
+  catch(error){res.status(error.statusCode||500).json({error:error.message});}
+});
+router.patch('/live-split/payment-workbooks/:id(\\d+)/checklist', async (req,res)=>{
+  try {res.json({success:true,workbook:await paymentWorkbooks.checklist(req.session.userId,req.params.id,req.body||{})});}
+  catch(error){res.status(error.statusCode||500).json({error:error.message});}
 });
 
 router.post('/live-split/payment-manager/preview', async (req, res) => {

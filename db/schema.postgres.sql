@@ -446,6 +446,24 @@ CREATE TABLE IF NOT EXISTS live_split_groups (
   owner_added_to_expense BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE TABLE IF NOT EXISTS payment_manager_workbooks (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_key TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  document JSONB NOT NULL,
+  posting_links JSONB NOT NULL DEFAULT '{}',
+  posted_hash TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id,client_key)
+);
+CREATE TABLE IF NOT EXISTS payment_manager_workbook_payments (
+  id BIGSERIAL PRIMARY KEY,
+  workbook_id BIGINT NOT NULL REFERENCES payment_manager_workbooks(id) ON DELETE CASCADE,
+  expense_key TEXT NOT NULL,
+  UNIQUE(workbook_id,expense_key)
+);
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE live_split_groups ADD COLUMN IF NOT EXISTS split_mode TEXT NOT NULL DEFAULT 'equal';

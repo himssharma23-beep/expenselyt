@@ -3581,10 +3581,10 @@ async function syncSingleLiveSplitGroupShares(client, ownerUserId, groupId, frie
   }
 }
 
-async function updateLiveSplitGroup(userId, groupId, data) {
+async function updateLiveSplitGroup(userId, groupId, data, transaction = null) {
   const uid = Number(userId);
   const gid = Number(groupId);
-  return withTransaction(async (client) => {
+  const save = async (client) => {
     const divideDate = normalizeDateValue(data.divide_date, 'Divide date');
     const accessResult = await client.query(
       `SELECT g.id, g.user_id, g.divide_date, g.details, g.paid_by, g.total_amount, g.split_mode, g.trip_id
@@ -3714,11 +3714,12 @@ async function updateLiveSplitGroup(userId, groupId, data) {
     });
     await syncGroupFinance(client, gid);
     return gid;
-  });
+  };
+  return transaction ? save(transaction) : withTransaction(save);
 }
 
-async function deleteLiveSplitGroup(userId, id) {
-  await withTransaction(async (client) => {
+async function deleteLiveSplitGroup(userId, id, transaction = null) {
+  const save = async (client) => {
     const own = await client.query(
       `SELECT g.id, g.user_id, g.details, g.divide_date, g.total_amount
        FROM live_split_groups g
@@ -3771,7 +3772,8 @@ async function deleteLiveSplitGroup(userId, id) {
     await client.query('DELETE FROM live_split_group_shares WHERE group_id = $1', [id]);
     await client.query('DELETE FROM live_split_splits WHERE group_id = $1', [id]);
     await client.query('DELETE FROM live_split_groups WHERE id = $1', [id]);
-  });
+  };
+  return transaction ? save(transaction) : withTransaction(save);
 }
 
 async function syncLiveSplitSessionShares(userId, sessionKey, friendIds = []) {
@@ -10162,6 +10164,7 @@ module.exports = {
   markLiveSplitExpenseAdded,
   addLiveSplitShareToExpense,
   paymentManagerSplit,
+  syncSingleLiveSplitGroupShares,
   addLiveSplitGroup,
   updateLiveSplitGroup,
   deleteLiveSplitGroup,

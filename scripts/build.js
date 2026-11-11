@@ -5,6 +5,9 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 const filesToCheck = [
+  'db/payment-manager-workbooks.js',
+  'public/js/payment-manager-workbook-model.js',
+  'public/js/payment-manager-workbooks.js',
   'db/emi-friend-split.js',
   'public/js/emi-friend-split-model.js',
   'public/js/emi-friend-split-ui.js',
